@@ -780,3 +780,87 @@ class SqlUserDailyCost(Base):
     cost_usd: Mapped[float] = mapped_column(Float, nullable=False)
     ask_approved_usd: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
     updated_at: Mapped[int] = mapped_column(Integer)
+
+
+class SqlMemoryCompartment(Base):
+    """A named, directly-queryable/appendable memory bucket (FU1, ADR-0132).
+
+    Compartments namespace durable agent memory by ``scope`` (one of
+    ``agent`` / ``team`` / ``topic`` — ``tenant`` is deferred per ADR-0132)
+    and ``owner`` (the scope-specific id, e.g. an agent slug).
+    ``half_life_seconds`` drives the per-compartment exponential weight
+    decay; ``read_floor`` / ``archive_floor`` are the recall and eviction
+    thresholds.
+    """
+
+    __tablename__ = "memory_compartments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    owner: Mapped[str] = mapped_column(String(128), nullable=False)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    half_life_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    read_floor: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.1")
+    archive_floor: Mapped[float] = mapped_column(Float, nullable=False, server_default="0.05")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope", "owner", "name", name="uq_memory_compartments_scope_owner_name"
+        ),
+        CheckConstraint(
+            "scope in ('agent', 'team', 'topic')", name="ck_memory_compartments_scope"
+        ),
+    )
+
+
+class SqlMemory(Base):
+    """A durable, weighted, decaying memory inside a compartment (FU1, ADR-0132).
+
+    ``weight`` is the salience; effective recall weight decays as
+    ``weight * exp(-(now - last_accessed_at) / compartment.half_life_seconds)``.
+    ``embedding`` is a portable ``Text`` column on SQLite and a ``vector(384)``
+    column on PostgreSQL (the FU1 migration alters the type + adds the ivfflat
+    index on PG only); semantic recall therefore runs on PG, lexical (FTS5) on
+    SQLite. ``meta`` maps to the ``metadata`` column (``metadata`` is reserved on
+    the declarative base).
+    """
+
+    __tablename__ = "memories"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    compartment_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("memory_compartments.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    search_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    weight: Mapped[float] = mapped_column(Float, nullable=False, server_default="1.0")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_accessed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    access_count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    source_conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_compaction_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    salience: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    archived: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
+    embedding_model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_memories_compartment_archived_weight",
+            "compartment_id",
+            "archived",
+            "weight",
+        ),
+        Index(
+            "ix_memories_compartment_archived_created",
+            "compartment_id",
+            "archived",
+            "created_at",
+        ),
+        Index("ix_memories_source_conversation_id", "source_conversation_id"),
+    )

@@ -6,6 +6,8 @@ from omnigent.db.db_models import (
     SqlConversation,
     SqlConversationItem,
     SqlFile,
+    SqlMemory,
+    SqlMemoryCompartment,
     SqlSessionPermission,
     SqlUser,
 )
@@ -16,6 +18,8 @@ __all__ = [
     "SqlConversation",
     "SqlConversationItem",
     "SqlFile",
+    "SqlMemory",
+    "SqlMemoryCompartment",
     "SqlSessionPermission",
     "SqlUser",
 ]
