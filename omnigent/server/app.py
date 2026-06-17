@@ -972,12 +972,23 @@ def create_app(
                 otel_publisher=server_metrics_otel,
             )
         )
+
+        # FU1 (BDP-2147, ADR-0132): periodic agent-memory maintenance —
+        # flush reinforcement then run the decay/eviction sweep, guarded by a
+        # PG advisory lock (no-op on SQLite). Single-replica today; the lock
+        # keeps it correct under a future shared registry.
+        from omnigent.runtime.memory_maintenance import memory_maintenance_loop
+
+        memory_maintenance_task = asyncio.create_task(memory_maintenance_loop())
         try:
             yield
         finally:
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task
+            memory_maintenance_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await memory_maintenance_task
             # Stop in-flight background managed-sandbox launches so a
             # slow provision doesn't outlive the ASGI shutdown (the
             # sandbox itself, if already provisioned, is reaped by the
