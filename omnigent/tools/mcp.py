@@ -51,7 +51,7 @@ from mcp.types import (
 from mcp.types import Tool as McpToolDef
 
 from omnigent.runner.identity import strip_runner_auth_secrets
-from omnigent.spec.types import MCPServerConfig, RetryPolicy
+from omnigent.spec.types import MCPOAuthConfig, MCPServerConfig, RetryPolicy
 
 _T = TypeVar("_T")
 
@@ -120,6 +120,83 @@ def _resolve_databricks_token(profile: str) -> str:
         raise RuntimeError(
             f"Failed to resolve Databricks token from profile {profile!r}: {exc}"
         ) from exc
+
+
+# Cache of minted OAuth client-credentials tokens, keyed by the
+# distinguishing parts of the request: (token_url, client_id, resource,
+# scopes). Value is (access_token, expiry_epoch). Module-level so reconnects
+# and sibling connections to the same MCP reuse a still-valid token instead of
+# minting one per connect. Refreshed when within _OAUTH_REFRESH_SKEW of expiry.
+_oauth_token_cache: dict[tuple[str, str, str | None, tuple[str, ...]], tuple[str, float]] = {}
+
+# Refresh a cached token this many seconds before it actually expires, so an
+# in-flight connection never presents a token that lapses mid-handshake.
+_OAUTH_REFRESH_SKEW = 60.0
+
+
+def _resolve_oauth_token(oauth: "MCPOAuthConfig") -> str:
+    """
+    Mint (or reuse a cached) OAuth 2.0 bearer token via ``client_credentials``.
+
+    Lets a headless agent authenticate to an OAuth-protected MCP server
+    (e.g. an OpenIddict resource server like ByteDesk.Mcp) without a human
+    login. POSTs the ``client_credentials`` grant to ``oauth.token_url``,
+    caches the token until shortly before its ``expires_in``, and refreshes it
+    on the next call after that. Mirrors the ``_resolve_databricks_token`` path
+    but is provider-agnostic.
+
+    :param oauth: The OAuth client-credentials config.
+    :returns: A bearer token string.
+    :raises RuntimeError: If the token endpoint errors or returns no token.
+    """
+    key = (oauth.token_url, oauth.client_id, oauth.resource, tuple(oauth.scopes))
+    cached = _oauth_token_cache.get(key)
+    now = time.time()
+    if cached is not None and cached[1] - now > _OAUTH_REFRESH_SKEW:
+        return cached[0]
+
+    form: dict[str, str] = {
+        "grant_type": "client_credentials",
+        "client_id": oauth.client_id,
+    }
+    if oauth.client_secret:
+        form["client_secret"] = oauth.client_secret
+    if oauth.scopes:
+        form["scope"] = " ".join(oauth.scopes)
+    if oauth.resource:
+        form["resource"] = oauth.resource
+
+    try:
+        import httpx
+
+        resp = httpx.post(
+            oauth.token_url,
+            data=form,
+            headers={"Accept": "application/json"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:  # noqa: BLE001 — surface a clear connection-time error
+        raise RuntimeError(
+            f"Failed to mint OAuth client-credentials token from "
+            f"{oauth.token_url!r} (client {oauth.client_id!r}): {exc}"
+        ) from exc
+
+    token = payload.get("access_token")
+    if not token:
+        raise RuntimeError(
+            f"OAuth token endpoint {oauth.token_url!r} returned no access_token "
+            f"(keys: {sorted(payload)})"
+        )
+    # expires_in is seconds-from-now; default to a conservative 5min when the
+    # server omits it so we still refresh rather than caching forever.
+    try:
+        expires_in = float(payload.get("expires_in", 300))
+    except (TypeError, ValueError):
+        expires_in = 300.0
+    _oauth_token_cache[key] = (token, now + expires_in)
+    return token
 
 
 # Seconds to wait after tripping before allowing a single
@@ -902,6 +979,10 @@ class McpServerConnection:
         if self.config.databricks_profile is not None:
             token = _resolve_databricks_token(self.config.databricks_profile)
             # Explicit Authorization header wins — don't overwrite.
+            merged.setdefault("Authorization", f"Bearer {token}")
+        if self.config.oauth is not None:
+            token = _resolve_oauth_token(self.config.oauth)
+            # Explicit Authorization header (or a databricks token) wins.
             merged.setdefault("Authorization", f"Bearer {token}")
         return merged or None
 

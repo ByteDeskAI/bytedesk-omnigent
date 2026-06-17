@@ -37,6 +37,7 @@ from omnigent.spec.types import (
     LabelDef,
     LLMConfig,
     LocalToolInfo,
+    MCPOAuthConfig,
     MCPServerConfig,
     ModalityConfig,
     Phase,
@@ -2445,6 +2446,33 @@ def _parse_inline_mcp_servers(
                     code=ErrorCode.INVALID_INPUT,
                 )
             databricks_profile = str(raw_profile)
+        # Optional OAuth client-credentials auth — mints a bearer token at
+        # connection time from token_url (provider-agnostic; e.g. an OpenIddict
+        # resource server). Secret-bearing fields are env-expanded like headers.
+        oauth: MCPOAuthConfig | None = None
+        if isinstance(raw_auth, dict) and str(raw_auth.get("type", "")) == "oauth":
+            scalars: dict[str, str] = {}
+            for k in ("token_url", "client_id", "client_secret", "resource"):
+                v = raw_auth.get(k)
+                if v is not None:
+                    scalars[k] = str(v)
+            scalars = expand_env_vars(scalars) if expand_env and scalars else scalars
+            for req in ("token_url", "client_id"):
+                if not scalars.get(req):
+                    raise OmnigentError(
+                        f"Inline MCP server {name!r} auth type 'oauth' requires a "
+                        f"'{req}' field",
+                        code=ErrorCode.INVALID_INPUT,
+                    )
+            raw_scopes = raw_auth.get("scopes") or []
+            scope_list = raw_scopes if isinstance(raw_scopes, list) else [raw_scopes]
+            oauth = MCPOAuthConfig(
+                token_url=scalars["token_url"],
+                client_id=scalars["client_id"],
+                client_secret=scalars.get("client_secret", ""),
+                scopes=[str(s) for s in scope_list],
+                resource=scalars.get("resource"),
+            )
         servers.append(
             MCPServerConfig(
                 name=name,
@@ -2459,6 +2487,7 @@ def _parse_inline_mcp_servers(
                 headers=headers,
                 env=env,
                 databricks_profile=databricks_profile,
+                oauth=oauth,
             )
         )
     return servers

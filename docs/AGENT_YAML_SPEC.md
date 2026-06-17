@@ -160,6 +160,28 @@ tools:
       Authorization: Bearer ${TOKEN}
 ```
 
+For an OAuth-protected MCP server (e.g. an OpenIddict resource server), use
+`auth: {type: oauth}` so a headless agent mints + caches + refreshes a bearer
+token via the `client_credentials` grant instead of carrying a static token:
+
+```yaml
+tools:
+  platform:
+    type: mcp
+    url: http://bytedesk-mcp:46463/mcp
+    auth:
+      type: oauth
+      token_url: https://identity.bytedesk.ai/connect/token
+      client_id: omnigent-mcp
+      client_secret: ${BYTEDESK_MCP_CLIENT_SECRET}   # env-expanded at parse time
+      scopes: [mcp.read, mcp.write]
+      resource: bytedesk-mcp                          # optional RFC 8707 indicator
+```
+
+`token_url` and `client_id` are required; `client_secret` is env-expanded like
+`headers`. An explicit `Authorization` header (or a `databricks_profile`) wins
+over the minted token if both are set.
+
 ### Python function tool
 
 ```yaml
