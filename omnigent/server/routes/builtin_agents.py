@@ -57,6 +57,7 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
     managers: list = []
     department: str | None = None
     title: str | None = None
+    workflow: bool = False
     # Prefer the stored entity's description; fall back to the spec's
     # top-level description when the stored value is unset (single-file
     # YAML agents don't persist it at registration today). Lets the
@@ -109,6 +110,10 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
             department = str(_dept) if _dept else None
             _title = _params.get("title")
             title = str(_title) if _title else None
+            # Workflow/orchestrator agents (BDP-2180/2181) carry params.workflow:
+            # true. The platform reads this to keep them off the org chart while
+            # still listing them in omnigent's picker (BDP-2187).
+            workflow = bool(_params.get("workflow"))
     except Exception:  # noqa: BLE001 — spec load failure must not break the list
         _logger.debug(
             "Failed to load spec for agent %s; mcp_servers/skills will be empty",
@@ -130,6 +135,7 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
         managers=managers,
         department=department,
         title=title,
+        workflow=workflow,
     )
 
 

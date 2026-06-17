@@ -204,6 +204,11 @@ class AgentObject(BaseModel):
     managers: list[dict[str, Any]] = Field(default_factory=list)
     department: str | None = None
     title: str | None = None
+    # True when the bundle's ``params.workflow`` is true — i.e. this is a
+    # workflow/orchestrator agent (BDP-2180/2181), not a person. The platform
+    # uses it to keep workflows off the org chart / roster while still listing
+    # them in omnigent's own picker (BDP-2187). Defaults False (employees).
+    workflow: bool = False
 
 
 # ── Session Policies ───────────────────────────────────────────
