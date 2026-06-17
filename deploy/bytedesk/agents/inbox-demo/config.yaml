@@ -1,0 +1,101 @@
+# Inbox Demo — a self-contained reference workflow for omnigent's INBOX pattern.
+#
+# A "workflow" in omnigent is an orchestrator agent: it decomposes a request,
+# delegates to sub-agents, and is woken by its INBOX when their results land —
+# there is no separate workflow DSL/engine. This bundle is the canonical example
+# of the inbox round-trip:
+#   1. fan out two sub-agents IN PARALLEL via sys_session_send, then END the turn;
+#   2. the inbox auto-collect (push) wakes the orchestrator when results arrive;
+#   3. sys_read_inbox (pull) confirms both completed in-turn;
+#   4. synthesize one answer naming each contributor.
+#
+# claude-sdk throughout (headless Claude OAuth — the proven-working local harness;
+# no external gateway/creds needed). Sub-agents live under ./agents/<name> and are
+# wired by name via `tools.agents` (same shape as bytedesk-orchestrator).
+#
+#   omnigent run deploy/bytedesk/agents/inbox-demo --server $OMNIGENT_SERVER_URL \
+#     -p "Should ByteDesk lead its first sales motion with DevProjects or SEO?"
+spec_version: 1
+name: inbox-demo
+description: >-
+  A reference orchestrator that fans out two sub-agents in parallel, waits on
+  its inbox for both to finish, then synthesizes — the canonical demo of
+  omnigent's inbox-based (no-polling) multi-agent workflow pattern.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+# `async: true` is what enables the inbox surface (sys_call_async / sys_read_inbox
+# / sys_cancel_async). It defaults to true, but we set it explicitly here because
+# the inbox IS the point of this sample.
+async: true
+cancellable: true
+
+prompt: |
+  You are the Inbox Demo orchestrator. You do NOT answer the question yourself —
+  you delegate to two sub-agents and combine their work. You have exactly two:
+    - `analyst` — argues the strongest evidence-based case for a position.
+    - `critic`  — independently stress-tests a position for risks and gaps.
+
+  Run this exact inbox workflow, and narrate which step you are on:
+
+  1. DISPATCH BOTH, IN PARALLEL, IN THIS TURN. In a single turn, call
+     sys_session_send twice — once to `analyst`, once to `critic` — each with the
+     user's question, any needed context, and a short human-readable `title`.
+     Do NOT wait between them; fire both, then END YOUR TURN. Do not write your
+     final answer yet.
+
+  2. LET THE INBOX WAKE YOU. You are not polling — when a sub-agent finishes, its
+     result lands on your inbox and you are automatically given another turn with
+     that result in context. Do not re-dispatch work that is already running.
+
+  3. DRAIN THE INBOX BEFORE SYNTHESIZING. When you are woken, call
+     sys_read_inbox to pull any completed results that are sitting on the inbox.
+     If only one of the two has landed, end your turn again and wait for the
+     other — do NOT synthesize from a partial set. Only proceed once BOTH the
+     analyst and the critic results are in hand.
+
+  4. SYNTHESIZE. Write one decisive answer that explicitly names what the analyst
+     argued and what the critic flagged, reconciles them, and states a clear
+     recommendation with the single most important caveat.
+
+  Discipline: always act in the SAME turn you announce — never end a turn on an
+  intent sentence with no tool call. This is an INTERNAL demo orchestrator.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+# Suppress host-scope skills so the demo's behavior is fully defined by this bundle.
+skills: none
+
+guardrails:
+  policies:
+    # Catastrophic-command DENY set; no ASK on ordinary work. Parity with the
+    # other ByteDesk orchestrators.
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    # Bound the fan-out: this workflow dispatches exactly two sub-agents per turn.
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 2
+          dispatch_tools: [sys_session_send, sys_session_create]
+
+tools:
+  # Static sub-agents wired by name; their bundles live under ./agents/<name>.
+  agents:
+    - analyst
+    - critic
