@@ -41,6 +41,7 @@ from omnigent.db.utils import (
     now_epoch,
     strip_nul_bytes,
 )
+from omnigent.stores.memory_store.embeddings import Embedder, format_vector
 
 _logger = logging.getLogger(__name__)
 
@@ -98,15 +99,20 @@ def _effective_weight(
 class SqlAlchemyMemoryStore:
     """Durable compartmented weighted-decay memory; omnigent is the sole writer."""
 
-    def __init__(self, storage_location: str) -> None:
+    def __init__(self, storage_location: str, *, embedder: Embedder | None = None) -> None:
         """
         :param storage_location: SQLAlchemy database URI (the same engine the
             conversation store uses), e.g. ``"sqlite:///omnigent.db"`` or
             ``"postgresql+psycopg://user:pass@host/db"``.
+        :param embedder: Optional embedding backend. When present, ``append``
+            embeds-on-write and ``query`` uses semantic (pgvector) recall on
+            PostgreSQL. ``None`` (the default, and the only path on SQLite)
+            keeps recall lexical.
         """
         self._engine = get_or_create_engine(storage_location)
         self._session = make_managed_session_maker(self._engine)
         self._is_sqlite = self._engine.dialect.name == "sqlite"
+        self._embedder = embedder
         ensure_memories_fts_table(self._engine)
 
     @property
@@ -213,6 +219,20 @@ class SqlAlchemyMemoryStore:
         now = now if now is not None else now_epoch()
         content = strip_nul_bytes(content)
         st = strip_nul_bytes(search_text if search_text is not None else content)
+        # Embed-on-write (T5): semantic recall stores the vector alongside the
+        # row. Best-effort — a failed embed never blocks the durable write
+        # (recall falls back to lexical for that row).
+        if embedding is None and self._embedder is not None:
+            try:
+                embedding = format_vector(self._embedder.embed([st])[0])
+                embedding_model_version = (
+                    embedding_model_version or self._embedder.model_version
+                )
+            except Exception:  # noqa: BLE001
+                _logger.warning(
+                    "embed-on-write failed; storing memory without embedding",
+                    exc_info=True,
+                )
         with self._session() as session:
             comp = self._get_or_create_compartment(
                 session,
@@ -308,59 +328,100 @@ class SqlAlchemyMemoryStore:
             ).scalar_one_or_none()
             if comp is None:
                 return []
-            candidate_ids = self._lexical_candidate_ids(
-                session, comp.id, query, limit * 5
-            )
-            if not candidate_ids:
+            # id -> relevance (1.0 lexical; cosine similarity on the PG
+            # semantic path). Composite recall score = relevance x decayed
+            # weight; the read floor drops sub-floor rows (real fall-off).
+            candidates = self._candidates(session, comp, query, limit * 5)
+            if not candidates:
                 return []
             rows = (
                 session.execute(
                     select(SqlMemory).where(
-                        SqlMemory.id.in_(candidate_ids),
+                        SqlMemory.id.in_(list(candidates)),
                         SqlMemory.archived.is_(False),
                     )
                 )
                 .scalars()
                 .all()
             )
-            hits: list[MemoryHit] = []
+            scored: list[tuple[float, MemoryHit]] = []
             dropped_sub_floor = 0
             for r in rows:
                 ew = _effective_weight(
                     r.weight, r.last_accessed_at, comp.half_life_seconds, now
                 )
-                if ew < comp.read_floor:
+                composite = candidates.get(r.id, 1.0) * ew
+                if composite < comp.read_floor:
                     dropped_sub_floor += 1
                     continue
-                hits.append(
-                    MemoryHit(
-                        id=r.id,
-                        compartment_id=r.compartment_id,
-                        content=r.content,
-                        weight=r.weight,
-                        effective_weight=ew,
-                        created_at=r.created_at,
-                        last_accessed_at=r.last_accessed_at,
-                        source_conversation_id=r.source_conversation_id,
-                        source_compaction_id=r.source_compaction_id,
+                scored.append(
+                    (
+                        composite,
+                        MemoryHit(
+                            id=r.id,
+                            compartment_id=r.compartment_id,
+                            content=r.content,
+                            weight=r.weight,
+                            effective_weight=ew,
+                            created_at=r.created_at,
+                            last_accessed_at=r.last_accessed_at,
+                            source_conversation_id=r.source_conversation_id,
+                            source_compaction_id=r.source_compaction_id,
+                        ),
                     )
                 )
-            hits.sort(key=lambda h: h.effective_weight, reverse=True)
-            returned = hits[:limit]
+            scored.sort(key=lambda s: s[0], reverse=True)
+            returned = [hit for _, hit in scored[:limit]]
             # Recall observability (T13): counts make decay/floor tuning
             # falsifiable rather than guessed (ADR-0132 / Hermes lesson).
+            mode = "semantic" if (self._embedder is not None and not self._is_sqlite) else "lexical"
             _logger.info(
-                "memory_query scope=%s owner=%s name=%s candidates=%d "
+                "memory_query scope=%s owner=%s name=%s mode=%s candidates=%d "
                 "considered=%d dropped_sub_floor=%d returned=%d",
                 scope,
                 owner,
                 name,
-                len(candidate_ids),
+                mode,
+                len(candidates),
                 len(rows),
                 dropped_sub_floor,
                 len(returned),
             )
             return returned
+
+    def _candidates(self, session, comp, query: str, limit: int) -> dict[str, float]:
+        """Candidate memory ids -> relevance for *comp*.
+
+        Semantic (pgvector cosine similarity) when an embedder is attached and
+        the dialect is PostgreSQL; otherwise lexical (relevance 1.0).
+        """
+        if self._embedder is not None and not self._is_sqlite:
+            return self._semantic_candidates(session, comp.id, query, limit)
+        return {mid: 1.0 for mid in self._lexical_candidate_ids(session, comp.id, query, limit)}
+
+    def _semantic_candidates(
+        self, session, compartment_id: str, query: str, limit: int
+    ) -> dict[str, float]:
+        """PostgreSQL pgvector cosine retrieval — id -> cosine similarity.
+
+        Uses the ivfflat index the migration adds. Verified by the opt-in
+        Postgres integration suite + the in-cluster slice proof (T14);
+        unreachable on SQLite (guarded by the dialect check in
+        :meth:`_candidates`).
+        """
+        assert self._embedder is not None  # guarded by _candidates
+        qvec = format_vector(self._embedder.embed([query])[0])
+        stmt = text(
+            "SELECT id, 1 - (embedding <=> CAST(:qvec AS vector)) AS sim "
+            "FROM memories "
+            "WHERE compartment_id = :cid AND archived = false "
+            "AND embedding IS NOT NULL "
+            "ORDER BY embedding <=> CAST(:qvec AS vector) LIMIT :lim"
+        )
+        rows = session.execute(
+            stmt, {"qvec": qvec, "cid": compartment_id, "lim": limit}
+        ).fetchall()
+        return {row[0]: float(row[1]) for row in rows}
 
     def _lexical_candidate_ids(
         self, session, compartment_id: str, query: str, limit: int

@@ -197,6 +197,9 @@ dev = [
     # explicitly rather than relied on transitively (via mypy).
     "pathspec>=0.12",
 ]
+memory = [
+    "fastembed>=0.4,<1",
+]
 
 [project.scripts]
 # Unified entry point. `omnigent` is the click-based CLI that absorbs
