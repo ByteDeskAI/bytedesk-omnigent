@@ -842,6 +842,34 @@ class SkillSpec:
 
 
 @dataclass
+class MCPOAuthConfig:
+    """
+    OAuth 2.0 client-credentials auth for an HTTP MCP server.
+
+    Lets a headless agent reach an OAuth-protected MCP (e.g. an OpenIddict
+    resource server like ByteDesk.Mcp) without a human login: the connection
+    mints a short-lived bearer token from ``token_url`` via the
+    ``client_credentials`` grant, caches it, and refreshes it before expiry —
+    the same shape as the ``databricks_profile`` path, but provider-agnostic.
+
+    :param token_url: OAuth token endpoint, e.g.
+        ``"https://identity.bytedesk.ai/connect/token"``.
+    :param client_id: OAuth client id.
+    :param client_secret: OAuth client secret (redacted in ``repr``).
+    :param scopes: Scopes to request, space-joined into the ``scope`` param.
+        Empty omits ``scope``.
+    :param resource: Optional ``resource`` indicator (RFC 8707) — some
+        servers (OpenIddict) require it to mint a resource-scoped token.
+    """
+
+    token_url: str
+    client_id: str
+    client_secret: str = field(default="", repr=False)
+    scopes: list[str] = field(default_factory=list)
+    resource: str | None = None
+
+
+@dataclass
 class MCPServerConfig:
     """
     An MCP server declaration from ``tools/mcp/<name>.yaml``.
@@ -921,6 +949,10 @@ class MCPServerConfig:
     # ``Authorization`` header. Mutually usable with ``headers``:
     # explicit headers win if both set ``Authorization``.
     databricks_profile: str | None = None
+    # OAuth client-credentials auth — mints + caches + refreshes a bearer
+    # token at connection time and injects it as ``Authorization``. Like
+    # ``databricks_profile``, explicit ``headers`` win if both set it.
+    oauth: "MCPOAuthConfig | None" = None
     # Stdio-only fields.
     command: str | None = None
     args: list[str] = field(default_factory=list)
@@ -947,6 +979,7 @@ class MCPServerConfig:
             f"MCPServerConfig(name={self.name!r}, transport={self.transport!r}, "
             f"url={self.url!r}, headers={redacted_headers!r}, "
             f"databricks_profile={self.databricks_profile!r}, "
+            f"oauth={self.oauth!r}, "
             f"command={self.command!r}, args={self.args!r}, "
             f"env={redacted_env!r}, "
             f"timeout={self.timeout!r}, retry={self.retry!r})"
