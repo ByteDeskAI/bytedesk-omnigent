@@ -1,0 +1,22 @@
+# Sub-agent of inbox-demo. Independently stress-tests a position for risks and gaps.
+spec_version: 1
+name: critic
+description: A critic that independently stress-tests a position for risks and gaps.
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+prompt: |
+  You are a rigorous critic. Given a question, do NOT pick a side to cheerlead —
+  stress-test the likely positions: name the top 3 risks, hidden assumptions, or
+  failure modes, and for each say what evidence would change your mind. End with
+  the one consideration a decision-maker most overlooks. Be concise. You are one
+  input to an orchestrator that will combine you with an analyst.
+async: true
+cancellable: true
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+skills: none
