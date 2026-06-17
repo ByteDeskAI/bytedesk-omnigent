@@ -105,21 +105,28 @@ guardrails:
             - prospect-source-mapper
             - outreach-intelligence-specialist
 
-# TOOLS — GATED until the omnigent tool layer + auth exist (Wave 2: BDP-2182 platform/
-# team/office/ops MCP behind an omnigent OAuth client + BYTEDESK_MCP_TOKEN; BDP-2183 the
-# Google Workspace MCP via WIF + domain-wide delegation). This workflow needs:
+# TOOLS. The ByteDesk platform MCP is LIVE below (BDP-2182 OAuth client+token+Identity
+# grant; BDP-2184 flip). The Google Workspace MCP (google_workspace_* tools) stays GATED
+# on BDP-2183 (WIF + domain-wide delegation). This workflow uses:
 #     - bytedesk_prospect_research_config_materialize
 #     - bytedesk_office_customer_lookup
 #     - bytedesk_ops_ledger_query
 #     - google_workspace_sheets_create
 #     - google_workspace_sheets_values_update
 #     - bytedesk_confluence_page_create
-# Uncomment + wire the matching tool blocks in BDP-2184. Canonical platform-MCP block
-# (parser RAISES on an unresolved ${VAR}, so it MUST stay commented until the token is
-# seeded — exactly like the chief-of-staff bundle):
-# tools:
-#   bytedesk-platform:
-#     type: mcp
-#     url: http://bytedesk-mcp:46463/mcp
-#     headers:
-#       Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"
+# Platform-action MCP (ByteDesk.Mcp) — LIVE via the generic `oauth` provider (BDP-2182,
+# ADR-0138): mints + caches + refreshes a short-lived Identity client_credentials JWT at
+# connection time. Only the durable client_secret is a ${VAR} (omnigent-server env from
+# Infisical /omnigent-mcp), so the spec parse-expands safely. Dedicated `omnigent-mcp`
+# service client (BDP-2170 collapse) — one omnigent identity for every bundle. The
+# google_workspace_* tools above are NOT wired yet (BDP-2183).
+tools:
+  bytedesk-platform:
+    type: mcp
+    url: http://mcp/mcp                              # in-cluster Service (not the 46463 topology port)
+    auth:
+      type: oauth
+      token_url: ${BYTEDESK_IDENTITY_TOKEN_URL}      # http://identity/connect/token
+      client_id: omnigent-mcp                        # dedicated omnigent service client (BDP-2182)
+      client_secret: ${OMNIGENT_MCP_CLIENT_SECRET}   # Infisical /omnigent-mcp (operator-hydrated)
+      scopes: [mcp.read, mcp.write, mcp.admin]
