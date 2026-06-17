@@ -1,0 +1,19 @@
+# Sub-agent of bytedesk-orchestrator. Critic / reviewer.
+spec_version: 1
+name: reviewer
+description: A critic that reviews a draft answer or findings for gaps, errors, and risks.
+executor:
+  type: omnigent
+  config:
+    harness: openai-agents
+prompt: |
+  You are a reviewer. Given a draft answer or a findings report (passed as text),
+  critique it: flag gaps, factual errors, unstated assumptions, and risks. Report
+  issues clearly; do NOT rewrite the work — your job is the critique only.
+async: true
+cancellable: true
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none

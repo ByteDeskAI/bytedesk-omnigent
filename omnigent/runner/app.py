@@ -823,6 +823,104 @@ async def _auto_create_pi_terminal(
     return terminal_view
 
 
+async def _auto_create_grok_terminal(
+    session_id: str,
+    resource_registry: SessionResourceRegistry,
+    publish_event: Callable[[str, dict[str, Any]], None],
+    *,
+    server_client: httpx.AsyncClient | None = None,
+) -> "SessionResourceView":
+    """
+    Auto-create a Grok TUI terminal for a grok-native session.
+
+    Launches the bare ``grok`` command which auto-starts a leader daemon at
+    ``~/.grok/leader.sock``.  The grok-native harness executor attaches to
+    that leader to inject prompts into the TUI session.
+
+    :param session_id: Session/conversation identifier.
+    :param resource_registry: Session resource registry for launching the
+        terminal.
+    :param publish_event: Runner session event publisher.
+    :param server_client: Runner Omnigent server client.
+    :returns: Created terminal resource view.
+    """
+    from omnigent.grok_native_bridge import grok_leader_socket_for_session
+    from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
+
+    grok_bin = os.environ.get("HARNESS_GROK_BIN", "grok")
+    # Per-conversation leader socket so the executor only ever sees THIS
+    # conversation's TUI session (no cross-wiring across concurrent convs).
+    leader_socket = str(grok_leader_socket_for_session(session_id))
+
+    workspace = os.getcwd()
+    if server_client is not None:
+        try:
+            resp = await server_client.get(f"/v1/sessions/{session_id}")
+            if resp.status_code == 200:
+                data = resp.json()
+                ws = (data.get("session") or data).get("workspace")
+                if ws and isinstance(ws, str):
+                    workspace = ws
+        except Exception:  # noqa: BLE001
+            pass
+
+    terminal_view = await resource_registry.launch_required_terminal(
+        session_id=session_id,
+        terminal_name="grok",
+        session_key="main",
+        resource_role="grok_native",
+        spec=TerminalEnvSpec(
+            os_env=OSEnvSpec(type="caller_process", cwd=workspace),
+            command=grok_bin,
+            # The TUI MUST run on the same per-conversation leader socket the
+            # harness executor attaches to, so the executor sees the session the
+            # TUI creates. ``grok`` only honors ``--leader-socket`` as a CLI flag
+            # (the HARNESS_* env var is Omnigent's, not grok's) — with [cli]
+            # use_leader=true this makes the TUI auto-spawn its leader here.
+            args=["--leader-socket", leader_socket],
+            env={"HARNESS_GROK_LEADER_SOCKET": leader_socket},
+            scrollback=100_000,
+            tmux_allow_passthrough=True,
+            tmux_start_on_attach=False,
+        ),
+    )
+    publish_event(
+        session_id,
+        {
+            "type": "session.resource.created",
+            "resource": session_resource_view_to_dict(terminal_view),
+        },
+    )
+    # Advertise the TUI's tmux target so the harness executor can send-keys the
+    # first user message into the pane (bootstrapping the TUI's resident
+    # session); subsequent turns are delivered over ACP session/prompt, which
+    # the TUI also renders. Best-effort — chat still works via the executor's
+    # self-owned-session fallback if this is unavailable.
+    try:
+        from omnigent.grok_native_bridge import (
+            bridge_dir_for_session_id,
+            write_tmux_target,
+        )
+
+        terminal_registry = resource_registry.terminal_registry
+        instance = (
+            terminal_registry.get(session_id, "grok", "main")
+            if terminal_registry is not None
+            else None
+        )
+        if instance is not None and getattr(instance, "running", False):
+            write_tmux_target(
+                bridge_dir_for_session_id(session_id),
+                socket_path=instance.socket_path,
+                tmux_target=instance.tmux_target,
+            )
+            _logger.info("Published grok tmux target for session %s", session_id)
+    except Exception:  # noqa: BLE001
+        _logger.debug("grok tmux target publish failed", exc_info=True)
+    _logger.info("Auto-created grok terminal for session %s", session_id)
+    return terminal_view
+
+
 async def _auto_create_codex_terminal(
     session_id: str,
     resource_registry: SessionResourceRegistry,
@@ -4194,6 +4292,7 @@ def create_runner_app(
     _session_comment_relays: dict[str, Any] = {}
     _codex_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     _pi_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
+    _grok_terminal_ensure_locks: dict[str, asyncio.Lock] = {}
     # Per-session lock guarding the claude-native terminal auto-create in
     # ``create_session``. Two ``POST /v1/sessions`` calls can land
     # concurrently on a host-launched runner — ``_on_runner_connect``
@@ -5035,6 +5134,10 @@ def create_runner_app(
                 from omnigent.pi_native_bridge import build_pi_native_spawn_env
 
                 spawn_env = build_pi_native_spawn_env(session_id)
+            if harness_name == "grok-native" and spawn_env is None:
+                from omnigent.grok_native_bridge import build_grok_native_spawn_env
+
+                spawn_env = build_grok_native_spawn_env(session_id)
             _session_spec_cache[session_id] = spec_entry
             from omnigent.llms.context_window import get_model_context_window
             from omnigent.runtime.workflow import _resolve_spec_model
@@ -5343,6 +5446,36 @@ def create_runner_app(
                     finally:
                         _publish_terminal_pending(_publish_event, session_id, False)
 
+        if harness_name == "grok-native":
+            _grok_ensure_lock = _grok_terminal_ensure_locks.setdefault(session_id, asyncio.Lock())
+            async with _grok_ensure_lock:
+                _tr = resource_registry.terminal_registry
+                _has_grok_terminal = (
+                    _tr is not None and _tr.get(session_id, "grok", "main") is not None
+                )
+                if not _has_grok_terminal:
+                    _publish_terminal_pending(_publish_event, session_id, True)
+                    try:
+                        await _auto_create_grok_terminal(
+                            session_id,
+                            resource_registry,
+                            _publish_event,
+                            server_client=server_client,
+                        )
+                    except Exception as exc:
+                        _logger.exception(
+                            "Failed to auto-create grok terminal for %s",
+                            session_id,
+                        )
+                        _publish_native_terminal_start_error(
+                            _publish_event,
+                            session_id,
+                            "Grok",
+                            exc,
+                        )
+                    finally:
+                        _publish_terminal_pending(_publish_event, session_id, False)
+
         # Auto-bootstrap the Omnigent REPL terminal for non-native
         # (SDK-harness) top-level sessions: host the framework's own TUI
         # (``omnigent attach``) in a tmux pane so the web UI can embed it
@@ -5604,6 +5737,7 @@ def create_runner_app(
         _codex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
+        _grok_terminal_ensure_locks.pop(session_id, None)
         _repl_terminal_ensure_locks.pop(session_id, None)
         _interrupted_sessions.discard(session_id)
 
@@ -10171,6 +10305,36 @@ def create_runner_app(
                 content=session_resource_view_to_dict(terminal_view),
             )
 
+        if body.get("ensure_native_terminal") and terminal_name == "grok" and session_key == "main":
+            grok_terminal_id = terminal_resource_id("grok", "main")
+            ensure_lock = _grok_terminal_ensure_locks.setdefault(session_id, asyncio.Lock())
+            async with ensure_lock:
+                existing = await resource_registry.get_terminal_resource(
+                    session_id, grok_terminal_id
+                )
+                if existing is not None:
+                    return JSONResponse(
+                        status_code=200,
+                        content=session_resource_view_to_dict(existing),
+                    )
+                try:
+                    terminal_view = await _auto_create_grok_terminal(
+                        session_id,
+                        resource_registry,
+                        _publish_event,
+                        server_client=server_client,
+                    )
+                except Exception as exc:
+                    _logger.exception(
+                        "Grok terminal ensure failed for session=%s",
+                        session_id,
+                    )
+                    return _native_terminal_start_error_response(exc, "Grok")
+            return JSONResponse(
+                status_code=200,
+                content=session_resource_view_to_dict(terminal_view),
+            )
+
         from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
 
         cwd_override = body.get("cwd")
@@ -11597,6 +11761,7 @@ def create_runner_app(
         _codex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
+        _grok_terminal_ensure_locks.pop(session_id, None)
         _repl_terminal_ensure_locks.pop(session_id, None)
         await resource_registry.cleanup_session(session_id)
         return JSONResponse(
@@ -11649,6 +11814,7 @@ def create_runner_app(
         _codex_terminal_ensure_locks.pop(session_id, None)
         _claude_terminal_ensure_locks.pop(session_id, None)
         _pi_terminal_ensure_locks.pop(session_id, None)
+        _grok_terminal_ensure_locks.pop(session_id, None)
         _repl_terminal_ensure_locks.pop(session_id, None)
         # Close terminals with ``session.resource.deleted`` events BEFORE
         # cleanup_session — cleanup_conversation would silently pop them

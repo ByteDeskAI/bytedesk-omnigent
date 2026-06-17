@@ -1,0 +1,34 @@
+# LOCAL-DEV ingress: http://omnigent.bytedesk.localhost -> omnigent-server.
+#
+# Mirrors the bytedesk-openclaw.localhost ingress (ingressClassName: public =
+# ingress-nginx bound to 127.0.0.1; *.localhost resolves to loopback per RFC
+# 6761, so the browser reaches it with no /etc/hosts entry). The proxy-buffering
+# off + long read/send timeouts are REQUIRED for omnigent's SSE streaming
+# (agent token streams) and long-lived UI connections — same as openclaw.
+#
+# LOCAL ONLY: prod exposes omnigent via its own domain through Fleet, so this
+# lives in the local-dev overlay, never in the prod base.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omnigent
+  labels:
+    app.kubernetes.io/name: omnigent-server
+    app.kubernetes.io/part-of: bytedesk-omnigent
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: public
+  rules:
+    - host: omnigent.bytedesk.localhost
+      http:
+        paths:
+          - backend:
+              service:
+                name: omnigent-server
+                port:
+                  number: 80
+            path: /
+            pathType: Prefix

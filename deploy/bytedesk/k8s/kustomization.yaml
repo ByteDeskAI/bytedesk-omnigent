@@ -1,0 +1,39 @@
+# ByteDesk Omnigent — base manifests (namespace: bytedesk).
+#
+# DEPLOY MODEL (mirrors OpenClaw exactly):
+#   • LOCAL  MicroK8s : kubectl apply -k deploy/bytedesk/k8s/   (this base)
+#   • PROD   RKE2     : Fleet reconciles deploy/bytedesk/fleet/production/
+#                       (a Kustomize overlay over THIS base — Harbor image,
+#                        pipeline-managed tag, pull secret), via the
+#                        bytedesk-omnigent-production GitRepo registered in
+#                        bytedesk-platform/infra/gitops/fleet/.
+#
+# This is a SEPARATE Fleet bundle, NOT part of the platform Helm chart — the
+# same pattern OpenClaw uses, so omnigent slots into OpenClaw's deployment niche
+# for a clean eventual cutover. It runs in the `bytedesk` namespace alongside
+# OpenClaw (which keeps serving until cutover).
+#
+# The `bytedesk` namespace is created by the platform Helm install — do NOT
+# recreate it here.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bytedesk
+# `labels` (not the deprecated `commonLabels`) with includeSelectors:false —
+# add metadata labels to every resource WITHOUT injecting them into immutable
+# spec.selectors. commonLabels mutated the postgres Service selector to include
+# these labels while the pod/StatefulSet kept the narrow label, dropping the
+# Service's endpoints (headless DNS went empty → server could not resolve the
+# DB). Selectors must come ONLY from each manifest's own spec.selector.
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: bytedesk-omnigent
+      bytedesk.ai/component: agent-runtime
+    includeSelectors: false
+resources:
+  - postgres.yaml
+  - config.yaml
+  - server.yaml
+  - host.yaml
+  # secret.example.yaml is intentionally NOT listed — copy it to secret.yaml,
+  # fill values, and `kubectl apply -f secret.yaml` (gitignored) for local.
+  # In prod the secrets are Infisical/SOPS-reconciled (see README + fleet overlay).

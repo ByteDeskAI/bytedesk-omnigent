@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from omnigent._wrapper_labels import (
     CLAUDE_NATIVE_WRAPPER_VALUE,
     CODEX_NATIVE_WRAPPER_VALUE,
+    GROK_NATIVE_WRAPPER_VALUE,
     PI_NATIVE_WRAPPER_VALUE,
     UI_MODE_LABEL_KEY,
     UI_MODE_TERMINAL_VALUE,
@@ -65,10 +66,23 @@ PI_NATIVE_CODING_AGENT = NativeCodingAgent(
     terminal_name="pi",
 )
 
+# ByteDesk: native xAI Grok Build CLI (ACP over ``grok agent stdio``),
+# subscription OAuth via ~/.grok/auth.json. Renders terminal-first like Codex.
+GROK_NATIVE_CODING_AGENT = NativeCodingAgent(
+    key="grok",
+    display_name="Grok",
+    agent_name="grok-native-ui",
+    harness="grok-native",
+    wrapper_label=GROK_NATIVE_WRAPPER_VALUE,
+    terminal_name="grok",
+    subagent_wrapper_label="grok-native-ui-subagent",
+)
+
 NATIVE_CODING_AGENTS: tuple[NativeCodingAgent, ...] = (
     CLAUDE_NATIVE_CODING_AGENT,
     CODEX_NATIVE_CODING_AGENT,
     PI_NATIVE_CODING_AGENT,
+    GROK_NATIVE_CODING_AGENT,
 )
 
 _BY_AGENT_NAME = {agent.agent_name: agent for agent in NATIVE_CODING_AGENTS}

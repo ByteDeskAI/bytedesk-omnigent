@@ -4,7 +4,7 @@ export const WRAPPER_LABEL_KEY = "omnigent.wrapper";
 export const UI_MODE_LABEL_KEY = "omnigent.ui";
 export const UI_MODE_TERMINAL_VALUE = "terminal";
 
-export type NativeCodingAgentIconKind = "claude" | "codex" | "pi";
+export type NativeCodingAgentIconKind = "claude" | "codex" | "pi" | "grok";
 export type NativeCodingAgentCapability = "permissionMode" | "approvalMode";
 
 export interface NativeCodingAgentSpec {
@@ -47,6 +47,18 @@ export const NATIVE_CODING_AGENTS = [
     displayName: "Pi",
     iconKind: "pi",
     sortRank: 30,
+  },
+  {
+    // ByteDesk: native xAI Grok Build CLI (ACP over `grok agent stdio`),
+    // subscription OAuth via ~/.grok/auth.json. Renders terminal-first.
+    key: "grok",
+    agentName: "grok-native-ui",
+    harness: "grok-native",
+    wrapperLabel: "grok-native-ui",
+    displayName: "Grok",
+    iconKind: "grok",
+    sortRank: 40,
+    capabilities: ["approvalMode"],
   },
 ] as const satisfies readonly NativeCodingAgentSpec[];
 
@@ -132,3 +144,4 @@ export function nativeAgentHasCapability(
 ): boolean {
   return nativeCodingAgentForAvailableAgent(agent)?.capabilities?.includes(capability) ?? false;
 }
+

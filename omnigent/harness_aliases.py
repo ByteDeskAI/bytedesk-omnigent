@@ -15,6 +15,8 @@ HARNESS_ALIASES: dict[str, str] = {
     # canonical id is "antigravity" (matches the registry / workflow type).
     "agy": "antigravity",
     "google-antigravity": "antigravity",
+    # ByteDesk: "grok" shorthand → the canonical native Grok Build CLI harness.
+    "grok": "grok-native",
 }
 
 # Canonical native-CLI harness spellings. These harnesses type messages into

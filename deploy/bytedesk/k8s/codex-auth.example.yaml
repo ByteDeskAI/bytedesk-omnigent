@@ -1,0 +1,26 @@
+# Codex OAuth credential for the omnigent host pool.
+#
+# Omnigent's codex harness uses the codex CLI's SUBSCRIPTION auth (it strips
+# OPENAI_API_KEY to force this). The credential is the file `codex login` writes
+# to ~/.codex/auth.json. OpenClaw's codex auth is NOT reusable here — it's an
+# encrypted OpenClaw auth-profile (bytedesk-openclaw-secrets/auth-profiles.json),
+# a different format from the codex CLI's auth.json.
+#
+# BEST: create the Secret straight from your local file (tokens never leave your box):
+#   kubectl -n bytedesk create secret generic codex-auth \
+#     --from-file=auth.json="$HOME/.codex/auth.json"
+#
+# (Run `codex login` first if you don't have ~/.codex/auth.json. Same Codex/ChatGPT
+# subscription account OpenClaw uses: ryan.helms@bytedesk.ai.)
+#
+# The host stages this into a WRITABLE ~/.codex so the codex CLI can refresh the
+# token in place. gitignored: codex-auth.yaml. In PROD: Infisical/SOPS-reconciled.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: codex-auth
+  namespace: bytedesk
+type: Opaque
+stringData:
+  auth.json: |
+    PASTE-THE-CONTENTS-OF-~/.codex/auth.json-HERE (or prefer the --from-file command above)

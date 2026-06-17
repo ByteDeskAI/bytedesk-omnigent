@@ -1,0 +1,63 @@
+# Production Fleet overlay for the Omnigent deployment.
+#
+# Reconciled onto the prod RKE2 cluster by Fleet via the bytedesk-omnigent-production
+# GitRepo (registered in bytedesk-platform/infra/gitops/fleet/bytedesk-delivery-gitrepos.yaml).
+# This overlay is the SINGLE owner of the omnigent runtime in production — TeamCity
+# builds the image and bumps the tag below per release (fleet-update-omnigent.sh).
+# Mirrors bytedesk-openclaw/fleet/production/kustomization.yaml.
+#
+# What this overlay changes vs the base deploy/bytedesk/k8s/ manifests:
+#   - server + runner run the custom Harbor image
+#     (registry.prod.bytedesk.ai/bytedesk/bytedesk-omnigent:<tag>), tag kept in
+#     lockstep with the platform release version by the pipeline (newTag below).
+#   - Harbor pull secret (harbor-prod-pull-secret) added to both pod specs.
+#   - imagePullPolicy → Always for prod.
+#
+# Secrets (omnigent-secrets, omnigent-runner-secrets) are NOT in this bundle —
+# they are Infisical-operator / SOPS reconciled into the bytedesk namespace in
+# prod, exactly like bytedesk-openclaw-secrets. See README "Productionize".
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bytedesk
+resources:
+  - ../../k8s
+images:
+  - name: localhost:32000/bytedesk-omnigent-server
+    newName: registry.prod.bytedesk.ai/bytedesk/bytedesk-omnigent-server
+    newTag: 0.14.0 # pipeline-managed: matches the platform release version
+  - name: localhost:32000/bytedesk-omnigent-host
+    newName: registry.prod.bytedesk.ai/bytedesk/bytedesk-omnigent-host
+    newTag: 0.14.0 # pipeline-managed: matches the platform release version
+patches:
+  - target:
+      kind: Deployment
+      name: omnigent-server
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: omnigent-server
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: harbor-prod-pull-secret
+            containers:
+              - name: server
+                imagePullPolicy: Always
+  - target:
+      kind: Deployment
+      name: omnigent-host
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: omnigent-host
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: harbor-prod-pull-secret
+            containers:
+              - name: host
+                imagePullPolicy: Always

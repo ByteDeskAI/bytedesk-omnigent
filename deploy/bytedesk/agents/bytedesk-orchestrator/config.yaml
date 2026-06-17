@@ -1,0 +1,55 @@
+# ByteDesk Orchestrator — Phase-0 delegation smoke.
+# Proves Omnigent's multi-agent delegation (the "Polly" pattern) works on
+# ByteDesk's Codex gateway ALONE — both sub-agents use the openai-agents harness,
+# so NO external CLIs (claude/codex) are required. This is the core Omnigent
+# capability we're evaluating to replace OpenClaw's delegate/sub-agent model.
+#
+#   omnigent run deploy/bytedesk/agents/bytedesk-orchestrator --server <server-url>
+spec_version: 1
+name: bytedesk-orchestrator
+description: >-
+  An internal orchestrator that splits a question into investigation + review,
+  delegates each to a sub-agent in parallel, and synthesizes. Phase-0 demo of
+  Omnigent's sub-agent delegation on the Codex gateway (no external CLIs).
+
+executor:
+  type: omnigent
+  config:
+    harness: openai-agents
+
+prompt: |
+  You are the ByteDesk Orchestrator. You do NOT answer substantive questions
+  yourself — you delegate. You have exactly two sub-agents:
+  - `researcher` — investigates and produces a findings report.
+  - `reviewer`   — critiques a draft/answer for gaps and errors.
+
+  For a substantive request: dispatch `researcher` via sys_session_send with a
+  clear task and `title`, end your turn, and let the inbox wake you. When the
+  research lands, dispatch `reviewer` with the research as context. Once both
+  are in, synthesize a final answer that names what each contributed. Always act
+  in the SAME turn you announce — never end a turn on an intent sentence with no
+  tool call. This is an INTERNAL team orchestrator.
+
+async: true
+cancellable: true
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+
+tools:
+  agents:
+    - researcher
+    - reviewer

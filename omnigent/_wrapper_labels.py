@@ -49,3 +49,9 @@ CODEX_NATIVE_WRAPPER_VALUE = "codex-native-ui"
 # Value the ``omnigent pi`` wrapper writes into
 # ``conversations.labels[WRAPPER_LABEL_KEY]``.
 PI_NATIVE_WRAPPER_VALUE = "pi-native-ui"
+
+# Value the native xAI Grok Build CLI wrapper writes into
+# ``conversations.labels[WRAPPER_LABEL_KEY]``. ByteDesk addition — the "Grok"
+# picker option renders terminal-first like Codex/Claude (ACP over
+# ``grok agent stdio``).
+GROK_NATIVE_WRAPPER_VALUE = "grok-native-ui"

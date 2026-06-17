@@ -1,0 +1,165 @@
+# Omnigent HOST = the execution side. The server (server.yaml) is control-plane-only
+# and never runs agents; a HOST dials in over the WS tunnel (/v1/hosts/{id}/tunnel),
+# registers in the `hosts` table, and spawns runner subprocesses that execute agent
+# turns. Deploying this makes the UI host menu show a connected host automatically
+# ("prewired") — no manual `omni host` on a laptop.
+#
+# Image: the same public ghcr server image — it ships the full `omnigent` package
+# (CLI + the pure-Python openai-agents/claude-sdk harnesses). Native CLI harnesses
+# (claude-native/codex/pi) would need the `--target host` image's baked CLIs; for
+# ByteDesk's openai-agents → Codex path the server image is sufficient.
+#
+# Connecting needs NO model creds and (with OMNIGENT_AUTH_ENABLED=0) NO token — the
+# host registers anonymously as the local user. Model creds are added only when we
+# run a real turn (envFrom omnigent-runner-secrets, optional, wired in Stage B).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omnigent-host
+  labels:
+    app.kubernetes.io/name: omnigent-host
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  # SCALABLE HOST POOL: each replica registers as its own host (host_id from its
+  # own config), so replicas=N gives N fungible hosts in the menu — scale with
+  # `kubectl -n bytedesk scale deploy/omnigent-host --replicas=N`. All replicas
+  # share ONE LLM-credential Secret (envFrom below), so every host runs agents
+  # with the same configured provider creds. Fungible workers → RollingUpdate.
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-host
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-host
+        app.kubernetes.io/part-of: bytedesk-omnigent
+    spec:
+      containers:
+        - name: host
+          # HOST-target image (public): bakes the claude/codex/pi CLIs + git/tmux/bwrap
+          # + IS_SANDBOX, so ALL harnesses work (native CLI + pure-Python), not just
+          # the server image's openai-agents/claude-sdk. This is the correct image for
+          # an execution host.
+          # ByteDesk-built host image (Dockerfile --target host): bakes the omnigent pkg
+          # (incl. the grok-native harness) + claude/codex/pi/grok CLIs + git/tmux/bwrap.
+          # Built locally to the MicroK8s registry; prod overlay → Harbor. Until built, the
+          # running cluster is overridden to ghcr.io/omnigent-ai/omnigent-host:latest at apply time.
+          image: localhost:32000/bytedesk-omnigent-host:local # image-managed
+          imagePullPolicy: IfNotPresent
+          # The native-terminal harnesses (claude-native/codex/pi) run the agent CLI
+          # inside Omnigent's linux_bwrap sandbox, which needs CAP_SYS_ADMIN + unconfined
+          # seccomp/AppArmor for its mount-namespace ops (bwrap failed with "make / slave:
+          # Permission denied" otherwise). privileged is the simplest grant; the bytedesk
+          # ns has no PodSecurity restriction. Tighten later to capabilities:[SYS_ADMIN] +
+          # seccompProfile/AppArmor Unconfined if least-privilege is wanted. (Without this,
+          # only the headless harnesses openai-agents/claude-sdk work — no bwrap needed.)
+          securityContext:
+            privileged: true
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              # Public omnigent-host image ships WITHOUT bwrap; the linux_bwrap sandbox
+              # needs it. ByteDesk's own host image bakes it (Dockerfile host target runs
+              # `apt install bubblewrap`) — this startup install is the stopgap for the
+              # public image only.
+              command -v bwrap >/dev/null 2>&1 || { echo "[host] installing bubblewrap"; apt-get update -qq && apt-get install -y -qq bubblewrap; }
+              # Codex OAuth: stage the codex-CLI auth.json (from `codex login`) into a
+              # WRITABLE ~/.codex so the codex CLI can refresh its token in place. The
+              # runner inherits HOME, so it reads ~/.codex/auth.json. Omnigent strips
+              # OPENAI_API_KEY (codex_executor _CODEX_ENV_DENY_EXACT) to force this
+              # subscription auth instead of an API key.
+              if [ -f /etc/codex-auth/auth.json ]; then
+                mkdir -p "$HOME/.codex" && cp /etc/codex-auth/auth.json "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json" && echo "[host] codex auth.json staged into ~/.codex (subscription OAuth)";
+              else
+                echo "[host] no codex auth.json mounted — codex harness unavailable until the codex-auth Secret is provided";
+              fi
+              # Grok Build CLI (xAI). Not baked in the public image — install via npm
+              # (@xai-official/grok; avoids the Cloudflare-walled x.ai/cli host). ByteDesk's
+              # own host image should bake it. Grok OAuth = subscription auth in ~/.grok/auth.json
+              # (from `grok login`); stage it into a WRITABLE ~/.grok so the CLI refreshes in place.
+              command -v grok >/dev/null 2>&1 || { echo "[host] installing grok CLI (@xai-official/grok)"; npm install -g @xai-official/grok >/dev/null 2>&1 || echo "[host] grok npm install FAILED"; }
+              if [ -f /etc/grok-auth/auth.json ]; then
+                mkdir -p "$HOME/.grok" && cp /etc/grok-auth/auth.json "$HOME/.grok/auth.json" && chmod 600 "$HOME/.grok/auth.json" && echo "[host] grok auth.json staged into ~/.grok (subscription OAuth)";
+              else
+                echo "[host] no grok auth.json mounted — grok harness unavailable until the grok-auth Secret is provided";
+              fi
+              # Grok TUI leader mode. The grok-native TUI-bridge needs the bare
+              # `grok` TUI (launched per conversation in the Terminal panel) to
+              # auto-spawn a SHARED leader at ~/.grok/leader.sock, so the harness
+              # executor can attach over `agent stdio --leader-socket` and drive
+              # the TUI's resident session (panel mirrors the chat). That is gated
+              # ONLY by [cli] use_leader in config.toml — there is no env/CLI knob
+              # for the top-level TUI — so ensure it before any TUI launches.
+              GROK_CFG="$HOME/.grok/config.toml"; mkdir -p "$HOME/.grok"
+              if ! grep -qE '^[[:space:]]*use_leader' "$GROK_CFG" 2>/dev/null; then
+                if grep -qE '^\[cli\]' "$GROK_CFG" 2>/dev/null; then
+                  sed -i 's/^\[cli\]/[cli]\nuse_leader = true/' "$GROK_CFG";
+                else
+                  printf '\n[cli]\nuse_leader = true\n' >> "$GROK_CFG";
+                fi
+                echo "[host] enabled grok [cli] use_leader=true (TUI leader mode for the bridge)";
+              fi
+              echo "[host] connecting to $OMNIGENT_SERVER_URL"
+              exec omnigent host --server "$OMNIGENT_SERVER_URL"
+          env:
+            - name: OMNIGENT_SERVER_URL
+              value: http://omnigent-server.bytedesk.svc.cluster.local
+            - name: OMNIGENT_AUTH_ENABLED
+              value: "0"
+            # claude-sdk under root needs this; harmless for openai-agents.
+            - name: IS_SANDBOX
+              value: "1"
+            # Writable HOME so the host can persist ~/.omnigent/config.yaml (its identity).
+            - name: HOME
+              value: /var/omni-home
+            - name: OMNIGENT_CONFIG_HOME
+              value: /var/omni-home/.omnigent
+            - name: OMNIGENT_DATA_DIR
+              value: /var/omni-home/data
+            # Forward extra provider/gateway env to spawned runners beyond the
+            # built-in HARNESS_CREDENTIAL_ENV_VARS (OPENAI_API_KEY/OPENAI_BASE_URL/
+            # ANTHROPIC_*/GEMINI_API_KEY are forwarded by default). Add the
+            # openai-agents wrap vars here if you use them instead of OPENAI_*.
+            - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
+              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL"
+          # SHARED LLM/AI credentials — ONE Secret, every host replica gets it,
+          # and the host forwards these to every runner/agent it spawns. Drop the
+          # real key into this single Secret and all hosts run with it. optional
+          # so hosts still CONNECT before creds are set (creds only gate running turns).
+          envFrom:
+            - secretRef:
+                name: omnigent-host-credentials
+                optional: true
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 2Gi
+          volumeMounts:
+            - name: omni-home
+              mountPath: /var/omni-home
+            # Codex OAuth credential (from `codex login`). optional: host runs
+            # without it; codex harness becomes usable once the Secret exists.
+            - name: codex-auth
+              mountPath: /etc/codex-auth
+              readOnly: true
+            - name: grok-auth
+              mountPath: /etc/grok-auth
+              readOnly: true
+      volumes:
+        - name: omni-home
+          emptyDir: {}
+        - name: codex-auth
+          secret:
+            secretName: codex-auth
+            optional: true
+        - name: grok-auth
+          secret:
+            secretName: grok-auth
+            optional: true
