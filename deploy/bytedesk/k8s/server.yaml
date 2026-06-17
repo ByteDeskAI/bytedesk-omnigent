@@ -73,6 +73,23 @@ spec:
             # for a shared instance.
             - name: OMNIGENT_AUTH_ENABLED
               value: "0"
+            # ByteDesk platform MCP auth (BDP-2169, ADR-0138). Maya's
+            # `bytedesk-platform` MCP tool uses the generic `oauth`
+            # client-credentials provider (BDP-2182), which mints + refreshes a
+            # JWT against ByteDesk.Identity at connection time. token_url is
+            # non-secret in-cluster DNS (plain env); the client secret is
+            # Infisical-operator-managed (omnigent-mcp-secrets ← /omnigent-mcp).
+            # optional: true so a not-yet-hydrated secret degrades to "Maya's
+            # MCP tool unavailable" (her config parse skips, logged) rather than
+            # blocking the whole server.
+            - name: BYTEDESK_IDENTITY_TOKEN_URL
+              value: http://identity/connect/token
+            - name: OMNIGENT_MCP_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: omnigent-mcp-secrets
+                  key: OMNIGENT_MCP_CLIENT_SECRET
+                  optional: true
             # Built-in agents the new-session picker (GET /v1/agents) seeds at
             # startup, ON TOP OF the packaged set (claude-native-ui, codex-native-ui,
             # polly). Each os.pathsep(:)-separated entry is ONE bundle dir — the

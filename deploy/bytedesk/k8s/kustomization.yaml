@@ -34,6 +34,10 @@ resources:
   - config.yaml
   - server.yaml
   - host.yaml
+  # Infisical-operator-managed MCP client secret (BDP-2169, ADR-0138). A CR
+  # (pointer to Infisical /omnigent-mcp), NOT a raw secret value, so it IS
+  # tracked here — the operator hydrates omnigent-mcp-secrets.
+  - omnigent-mcp-secret.yaml
   # secret.example.yaml is intentionally NOT listed — copy it to secret.yaml,
   # fill values, and `kubectl apply -f secret.yaml` (gitignored) for local.
   # In prod the secrets are Infisical/SOPS-reconciled (see README + fleet overlay).
