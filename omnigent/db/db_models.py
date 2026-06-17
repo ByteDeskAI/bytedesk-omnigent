@@ -63,6 +63,12 @@ class SqlAgent(Base):
         ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=True,
     )
+    # Per-agent migration tier marker (FU5 SoT cutover, ADR-0133/0136). NULL =
+    # OpenClaw-resident (default); "migrated" = omnigent is the SoT for this
+    # agent's domains. Mutable (params are immutable, so the flip-able marker
+    # lives here, written via AgentStore.set_sot_tier — never inferred from
+    # store presence).
+    sot_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     __table_args__ = (
         Index("ix_agents_created_at", "created_at"),
