@@ -140,6 +140,10 @@ class AgentObject(BaseModel):
     :param object: Fixed resource type, always ``"agent"``.
     :param name: Human-readable agent name,
         e.g. ``"research-agent"``.
+    :param display_name: Optional human display name sourced from the
+        bundle's ``params.displayName`` (e.g. ``"Maya Chen"``). The Web
+        UI new-session picker prefers it over the slug ``name``. ``None``
+        when the bundle sets no ``params.displayName`` or can't be loaded.
     :param version: Monotonic version counter. Starts at 1,
         incremented on each update.
     :param description: Optional free-text description of the
@@ -183,6 +187,7 @@ class AgentObject(BaseModel):
     id: str
     object: str = "agent"
     name: str
+    display_name: str | None = None
     version: int = 1
     description: str | None = None
     created_at: int

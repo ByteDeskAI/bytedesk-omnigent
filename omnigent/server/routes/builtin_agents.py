@@ -53,6 +53,7 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
     skills: list[SkillSummary] = []
     terminals: list[str] = []
     harness: str | None = None
+    display_name: str | None = None
     # Prefer the stored entity's description; fall back to the spec's
     # top-level description when the stored value is unset (single-file
     # YAML agents don't persist it at registration today). Lets the
@@ -89,6 +90,12 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
         # Kind for the Add Agent picker (Codex vs Claude). Stays None
         # when the bundle can't be loaded (the except below).
         harness = loaded.spec.executor.harness_kind
+        # Human display name from the bundle's params (params.displayName),
+        # e.g. "Maya Chen" — the Web UI picker prefers it over the slug name.
+        _params = loaded.spec.params or {}
+        if isinstance(_params, dict):
+            _dn = _params.get("displayName")
+            display_name = str(_dn) if _dn else None
     except Exception:  # noqa: BLE001 — spec load failure must not break the list
         _logger.debug(
             "Failed to load spec for agent %s; mcp_servers/skills will be empty",
@@ -98,6 +105,7 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
     return AgentObject(
         id=agent.id,
         name=agent.name,
+        display_name=display_name,
         version=agent.version,
         description=description,
         created_at=agent.created_at,

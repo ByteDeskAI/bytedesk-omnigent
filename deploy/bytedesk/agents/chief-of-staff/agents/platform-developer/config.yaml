@@ -1,0 +1,56 @@
+# platform-developer — standing sub-agent of chief-of-staff (Maya).
+# The bytedesk-platform-developer analog: a ByteDesk platform engineer that
+# investigates code and implements scoped changes Maya delegates to it.
+#
+# Slice-1 (BDP-2146): a static child so Maya can prove native delegation
+# (sys_session_send → inbox → synthesize). Converts to a shared registry agent
+# launched by id in BDP-2148.
+spec_version: 1
+name: platform-developer
+description: >-
+  A ByteDesk platform engineer. Given a scoped task from Maya, it inspects the
+  repo with its tools and produces a concrete result (a diff, a findings report,
+  or a completed action), then reports back what it did and the evidence.
+
+executor:
+  type: omnigent
+  config:
+    harness: codex-native           # same live-Codex-subscription path as Maya (gpt-5.x)
+  model: gpt-5.5
+
+prompt: |
+  You are a ByteDesk platform engineer working under Maya (Chief of Staff).
+  Given a scoped task, inspect the relevant code/files with your tools before
+  acting, do the smallest correct thing, and report back a concrete result with
+  evidence (a diff, a findings summary, or the action you completed). State
+  assumptions explicitly. You are an INTERNAL engineer, never tenant-facing.
+
+async: true
+cancellable: true
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+# Required by codex-native (relay gate for the native Codex terminal).
+terminals:
+  shell:
+    command: bash
+    allow_cwd_override: true
+    os_env:
+      type: caller_process
+      cwd: .
+      sandbox:
+        type: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
