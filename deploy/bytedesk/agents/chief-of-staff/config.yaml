@@ -120,17 +120,22 @@ tools:
   # gated by the allowed_subagents policy above. No static child copy here —
   # one bundle = one source of truth.
 
-  # ── Platform-action tool — ENABLE in the same ticket once the omnigent-maya
-  #    Identity OAuth client is provisioned and the runner has BYTEDESK_MCP_TOKEN.
-  #    NOTE: omnigent's parser (expand_env=True at deploy) RAISES on an unresolved
-  #    ${VAR}, so this stays commented until the token exists — otherwise even the
-  #    identity/delegation smoke would fail to parse. `url` MUST be a literal
-  #    (the inline-MCP parser expands ${VAR} only in headers/env, not url).
-  #    ByteDesk.Mcp exposes INTERNAL platform services (identity/customers/sales/
-  #    dev/tools/...), NOT Jira/Confluence/Drive — pick the first real action from
-  #    those. Confirm the in-cluster service DNS before enabling.
-  # bytedesk-platform:
-  #   type: mcp
-  #   url: http://bytedesk-mcp:46463/mcp        # prod: https://platform.bytedesk.ai/mcp
-  #   headers:
-  #     Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"
+  # ── Platform-action tool (BDP-2169, ADR-0138). ByteDesk.Mcp exposes INTERNAL
+  #    platform services (identity/customers/sales/dev/tools/...). It requires an
+  #    Identity-issued JWT (client_credentials, ~5-min TTL), so we use the generic
+  #    `oauth` MCP auth provider (BDP-2182): it mints + caches + refreshes the JWT
+  #    at connection time — NOT a static ${VAR} token (which would die in 5 min).
+  #    client_secret is the only ${VAR} (a durable secret in the pod env, so it
+  #    parse-expands safely); the short-lived JWT is never in the spec. Slice-1
+  #    reuses Maya's existing `openclaw-chief-of-staff` client (BDP-2170 → a
+  #    dedicated `omnigent-maya` client). `url` is the in-cluster Service `mcp`
+  #    (port 80), not the 46463 topology port.
+  bytedesk-platform:
+    type: mcp
+    url: http://mcp/mcp                              # prod: https://platform.bytedesk.ai/mcp
+    auth:
+      type: oauth
+      token_url: ${BYTEDESK_IDENTITY_TOKEN_URL}      # e.g. http://identity/connect/token
+      client_id: openclaw-chief-of-staff
+      client_secret: ${OMNIGENT_MCP_CLIENT_SECRET}   # Infisical /omnigent-mcp (operator-hydrated)
+      scopes: [mcp.read, mcp.write, mcp.admin]
