@@ -106,7 +106,10 @@ worktree — touches the release pipeline, so review before it goes live):
    to `infra/gitops/fleet/bytedesk-delivery-gitrepos.yaml` (copy the
    `bytedesk-openclaw-production` block; `paths: [deploy/bytedesk/fleet/production]`).
 2. **Dockerfile** — `infra/docker/bytedesk-omnigent/Dockerfile` (builds the fork
-   image + bakes `deploy/bytedesk/agents/`), mirroring `infra/docker/bytedesk-openclaw/Dockerfile`.
+   image + bakes `deploy/bytedesk/agents/` to **`/build/deploy/bytedesk/agents`**),
+   mirroring `infra/docker/bytedesk-openclaw/Dockerfile`. The bake path MUST be
+   `/build/...` so the `OMNIGENT_BUILTIN_AGENT_DIRS` env in `k8s/server.yaml`
+   (which seeds the agent picker) resolves identically in prod and local-dev.
 3. **TeamCity build** — `.teamcity/scripts/build-omnigent.sh` (clone fork → buildx →
    push `registry.prod.bytedesk.ai/bytedesk/bytedesk-omnigent:<tag>`), mirroring
    `build-openclaw.sh`; call it from `release-cut.sh`.

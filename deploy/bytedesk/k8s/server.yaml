@@ -73,6 +73,28 @@ spec:
             # for a shared instance.
             - name: OMNIGENT_AUTH_ENABLED
               value: "0"
+            # Built-in agents the new-session picker (GET /v1/agents) seeds at
+            # startup, ON TOP OF the packaged set (claude-native-ui, codex-native-ui,
+            # polly). Each os.pathsep(:)-separated entry is ONE bundle dir — the
+            # loader does NOT scan a parent folder — registered as a built-in under
+            # the dir name (server/app.py _ensure_extra_builtin_agents). Without
+            # this the ByteDesk team is invisible in the picker (the BDP-2146
+            # durable-seeding gap: a one-off `kubectl set env` was wiped by every
+            # rollout/apply). Seeding is content-aware + idempotent, so a redeploy
+            # refreshes a changed spec; a missing/stale entry is logged and skipped,
+            # never blocking startup — so this list is safe even where a bundle
+            # isn't present.
+            #
+            # Path = /build/deploy/bytedesk/agents/<id>: /build is the source-mount
+            # root in BOTH environments — the local-dev overlay hostPath-mounts this
+            # repo at /build, and the prod fork image (infra/docker/bytedesk-omnigent/
+            # Dockerfile, see deploy/bytedesk/README.md "Productionize") bakes
+            # deploy/bytedesk/agents at /build. KEEP THIS LIST IN SYNC when you add
+            # or remove a persona bundle under deploy/bytedesk/agents/. (Excludes the
+            # phase-0 scaffolds bytedesk-orchestrator / bytedesk-engineer /
+            # platform-developer, which are templates, not picker personas.)
+            - name: OMNIGENT_BUILTIN_AGENT_DIRS
+              value: "/build/deploy/bytedesk/agents/chief-of-staff:/build/deploy/bytedesk/agents/backend-development-lead:/build/deploy/bytedesk/agents/brand-and-creative-director:/build/deploy/bytedesk/agents/bytedesk-platform-developer:/build/deploy/bytedesk/agents/client-research-lead:/build/deploy/bytedesk/agents/content-marketing-lead:/build/deploy/bytedesk/agents/customer-success-and-support-lead:/build/deploy/bytedesk/agents/delivery-manager:/build/deploy/bytedesk/agents/devex-and-docs-lead:/build/deploy/bytedesk/agents/devprojects-support-resolver:/build/deploy/bytedesk/agents/hr-org-designer:/build/deploy/bytedesk/agents/icp-scoring-analyst:/build/deploy/bytedesk/agents/lifecycle-email-marketing-lead:/build/deploy/bytedesk/agents/marketing-director:/build/deploy/bytedesk/agents/outreach-intelligence-specialist:/build/deploy/bytedesk/agents/platform-architect:/build/deploy/bytedesk/agents/product-ops-director:/build/deploy/bytedesk/agents/prospect-source-mapper:/build/deploy/bytedesk/agents/quality-and-release-lead:/build/deploy/bytedesk/agents/revops-and-kpi-manager:/build/deploy/bytedesk/agents/sales-enablement-lead:/build/deploy/bytedesk/agents/seo-geo-growth-lead:/build/deploy/bytedesk/agents/video-content-producer:/build/deploy/bytedesk/agents/web-design-director:/build/deploy/bytedesk/agents/web-development-lead"
           ports:
             - name: http
               containerPort: 8000
