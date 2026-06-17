@@ -489,3 +489,15 @@ class SqlAlchemyMemoryStore:
                     r.archived = True
                     archived += 1
         return archived
+
+    def exists_for_compaction(self, compaction_id: str) -> bool:
+        """Whether a memory already captured this compaction item (dedup, T10)."""
+        if not compaction_id:
+            return False
+        with self._session() as session:
+            row = session.execute(
+                select(SqlMemory.id)
+                .where(SqlMemory.source_compaction_id == compaction_id)
+                .limit(1)
+            ).first()
+            return row is not None
