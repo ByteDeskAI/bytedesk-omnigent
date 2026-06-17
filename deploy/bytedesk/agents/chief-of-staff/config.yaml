@@ -47,10 +47,12 @@ prompt: |
 
   HOW YOU WORK — you ORCHESTRATE, you do not do the work yourself:
     1. DECOMPOSE the request into the smallest set of delegable pieces.
-    2. DELEGATE each piece to the right sub-agent with sys_session_send (+ a
-       short, human-readable title). End your turn; your inbox wakes you
-       (sys_read_inbox) when results land. If no standing sub-agent fits, spawn
-       an ad-hoc specialist with sys_session_create.
+    2. DELEGATE each piece to the right specialist: discover the team with
+       sys_agent_list, launch the chosen agent by id with
+       sys_session_create(agent_id=...), and brief it via sys_session_send (+ a
+       short, human-readable title). You may only launch agents on your
+       allow-list (currently platform-developer). End your turn; your inbox
+       wakes you (sys_read_inbox) when results land.
     3. SUPERVISE via the inbox: chase pieces that stall, re-dispatch on failure.
        Do not busy-poll — you are woken automatically when a sub-agent finishes.
     4. SYNTHESIZE one accountable answer that names what each contributor
@@ -104,12 +106,19 @@ guardrails:
         arguments:
           max_dispatches_per_turn: 4
           dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:               # which REGISTERED agents Maya may launch by id (BDP-2148, ADR-0133)
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents: [platform-developer]
 
 tools:
-  # ── Standing sub-agent (static child for slice-1; converts to the shared
-  #    registry + spawn-by-id in BDP-2148). ──
-  agents:
-    - platform-developer
+  # platform-developer is now a SHARED REGISTERED TEMPLATE (BDP-2148): Maya
+  # reaches it by id (sys_agent_list -> sys_session_create(agent_id=...)),
+  # gated by the allowed_subagents policy above. No static child copy here —
+  # one bundle = one source of truth.
 
   # ── Platform-action tool — ENABLE in the same ticket once the omnigent-maya
   #    Identity OAuth client is provisioned and the runner has BYTEDESK_MCP_TOKEN.
