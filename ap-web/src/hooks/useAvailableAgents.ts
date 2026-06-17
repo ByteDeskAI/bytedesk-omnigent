@@ -44,6 +44,7 @@ function displayNameForAgent(name: string, harness?: string | null): string {
 interface BuiltinAgentWire {
   id: string;
   name: string;
+  display_name?: string | null;
   description?: string | null;
   harness?: string | null;
   skills?: { name: string; description: string }[];
@@ -67,7 +68,9 @@ async function fetchBuiltinAgents(): Promise<AvailableAgent[]> {
   return body.data.map((a) => ({
     id: a.id,
     name: a.name,
-    display_name: displayNameForAgent(a.name, a.harness),
+    // Prefer the bundle's params.displayName (server-projected) over the
+    // slug-derived label, so e.g. chief-of-staff shows as "Maya Chen".
+    display_name: a.display_name ?? displayNameForAgent(a.name, a.harness),
     description: a.description ?? null,
     harness: a.harness ?? null,
     skills: a.skills ?? [],
