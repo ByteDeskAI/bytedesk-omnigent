@@ -1,0 +1,124 @@
+# Client Onboarding & Drive Workspace Provisioning — omnigent workflow (BDP-2181, epic BDP-2180).
+# Department: integrations · owner: delivery-manager · cadence: event
+#
+# A "workflow" in omnigent is an orchestrator agent: it decomposes the task and
+# delegates to the team agents as sub-agents via the inbox pattern. Tool blocks are
+# gated (commented) until the omnigent tool layer is wired (BDP-2182/2183/2184).
+#
+#   omnigent run deploy/bytedesk/agents/client-onboarding-drive-provisioning --server $OMNIGENT_SERVER_URL -p "..."
+spec_version: 1
+name: client-onboarding-drive-provisioning
+description: >-
+  Client Onboarding & Drive Workspace Provisioning — On a won deal or new DevProjects/SEO trial, stamp out a full Google Drive client folder, seed the kickoff docs, and open the Jira/Confluence delivery surface in one pass.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+# Workflow metadata (stock free-form params; readable by the org-chart + tools).
+params:
+  workflow: true
+  orchestrator: delivery-manager
+  department: "integrations"
+  cadence: event
+  internalOnly: true
+
+async: true              # enables the inbox surface (sys_read_inbox / sys_call_async)
+cancellable: true
+spawn: true              # launch the team specialists by id (gated by allowed_subagents)
+
+prompt: |
+  You are the "Client Onboarding & Drive Workspace Provisioning" workflow — an omnigent orchestrator that runs the ByteDesk
+  delivery-manager (Jordan Blake) automation:
+  On a won deal or new DevProjects/SEO trial, stamp out a full Google Drive client folder, seed the kickoff docs, and open the Jira/Confluence delivery surface in one pass.
+
+  ByteDesk in one line: a digital-success SaaS for SMBs and the agencies serving them; the
+  first sales motion leads with DevProjects (an AI web-app builder) and SEO tooling; we are
+  pre-revenue and the whole company's 30-day goal is to land the first paying customer and get
+  new signups to first value. This workflow moves: Drives 'get new signups to first value' and week-1 activation >=50% — every new customer lands with a populated workspace and a tracked kickoff within minutes instead of days.
+
+  YOU ORCHESTRATE VIA THE INBOX — you coordinate specialists, you do not do their work:
+    1. DECOMPOSE the request into the smallest pieces each specialist owns.
+    2. DELEGATE IN PARALLEL: for each piece, launch the specialist by id with
+       sys_session_create(agent_id=...) and brief it with sys_session_send (+ a short,
+       human-readable title), then END YOUR TURN. Your specialist roster for this workflow:
+      - customer-success-and-support-lead (Tessa Morgan, Customer Success & Support Manager)
+      - sales-enablement-lead (Marcus Grant, Revenue Director)
+      - devex-and-docs-lead (Samir Patel, DevEx and Docs Lead)
+    3. THE INBOX WAKES YOU when results land — you are not polling. Call sys_read_inbox to
+       drain completed results. If only some pieces are back, end your turn and wait for the
+       rest; synthesize only once every piece is in hand.
+    4. SYNTHESIZE the deliverable, naming what each specialist contributed:
+       A provisioned per-client Drive folder (replicated from the Active Clients template) with merged kickoff brief Doc, tracker Sheet, internal-shared; a linked Jira delivery Task and a Confluence client-context page; and a DM to the account owner with the links.
+
+  DETERMINISTIC ACTIONS (tools). The non-reasoning steps of this workflow use these tools
+  once the omnigent tool layer is wired (see the commented `tools:` block below; tracked in
+  BDP-2182/BDP-2183, switched on in BDP-2184):
+      google_workspace_drive_replicate_template, google_workspace_drive_file_create, google_workspace_drive_share_internal, google_workspace_docs_template_merge, google_workspace_docs_template_seed, google_workspace_sheets_create, bytedesk_office_customer_lookup, bytedesk_jira_issue_create, bytedesk_confluence_page_create, bytedesk_office_dm_post
+  Until those are wired, produce the fully synthesized plan/draft and name exactly which tool
+  call each step will make (so the run is one uncomment away from executing for real).
+
+  Trigger: Deal moves to Won in sales / a DevProjects or SEO trial is activated (customer.activated event from the platform), or Maya hands off a new client to delivery.
+  Cadence: event
+  Discipline: always act in the SAME turn you announce — never end a turn on an intent
+  sentence with no tool call. One clear dispatch per piece. This is an INTERNAL team workflow.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+skills: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 3
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:               # which registered team agents this workflow may launch
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - customer-success-and-support-lead
+            - sales-enablement-lead
+            - devex-and-docs-lead
+
+# TOOLS — GATED until the omnigent tool layer + auth exist (Wave 2: BDP-2182 platform/
+# team/office/ops MCP behind an omnigent OAuth client + BYTEDESK_MCP_TOKEN; BDP-2183 the
+# Google Workspace MCP via WIF + domain-wide delegation). This workflow needs:
+#     - google_workspace_drive_replicate_template
+#     - google_workspace_drive_file_create
+#     - google_workspace_drive_share_internal
+#     - google_workspace_docs_template_merge
+#     - google_workspace_docs_template_seed
+#     - google_workspace_sheets_create
+#     - bytedesk_office_customer_lookup
+#     - bytedesk_jira_issue_create
+#     - bytedesk_confluence_page_create
+#     - bytedesk_office_dm_post
+# Uncomment + wire the matching tool blocks in BDP-2184. Canonical platform-MCP block
+# (parser RAISES on an unresolved ${VAR}, so it MUST stay commented until the token is
+# seeded — exactly like the chief-of-staff bundle):
+# tools:
+#   bytedesk-platform:
+#     type: mcp
+#     url: http://bytedesk-mcp:46463/mcp
+#     headers:
+#       Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"

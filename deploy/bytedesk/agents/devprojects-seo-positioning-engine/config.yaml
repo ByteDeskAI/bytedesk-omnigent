@@ -1,0 +1,127 @@
+# DevProjects + SEO Positioning & Message Engine — omnigent workflow (BDP-2181, epic BDP-2180).
+# Department: Marketing · owner: marketing-director · cadence: on-demand
+#
+# A "workflow" in omnigent is an orchestrator agent: it decomposes the task and
+# delegates to the team agents as sub-agents via the inbox pattern. Tool blocks are
+# gated (commented) until the omnigent tool layer is wired (BDP-2182/2183/2184).
+#
+#   omnigent run deploy/bytedesk/agents/devprojects-seo-positioning-engine --server $OMNIGENT_SERVER_URL -p "..."
+spec_version: 1
+name: devprojects-seo-positioning-engine
+description: >-
+  DevProjects + SEO Positioning & Message Engine — Claire orchestrates a multi-agent deliberation to lock the DevProjects + SEO positioning, validate it against the real ICP and product reality, and publish a single source-of-truth messaging house that every downstream marketing asset inherits.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+# Workflow metadata (stock free-form params; readable by the org-chart + tools).
+params:
+  workflow: true
+  orchestrator: marketing-director
+  department: "Marketing"
+  cadence: on-demand
+  internalOnly: true
+
+async: true              # enables the inbox surface (sys_read_inbox / sys_call_async)
+cancellable: true
+spawn: true              # launch the team specialists by id (gated by allowed_subagents)
+
+prompt: |
+  You are the "DevProjects + SEO Positioning & Message Engine" workflow — an omnigent orchestrator that runs the ByteDesk
+  marketing-director (Claire Donovan) automation:
+  Claire orchestrates a multi-agent deliberation to lock the DevProjects + SEO positioning, validate it against the real ICP and product reality, and publish a single source-of-truth messaging house that every downstream marketing asset inherits.
+
+  ByteDesk in one line: a digital-success SaaS for SMBs and the agencies serving them; the
+  first sales motion leads with DevProjects (an AI web-app builder) and SEO tooling; we are
+  pre-revenue and the whole company's 30-day goal is to land the first paying customer and get
+  new signups to first value. This workflow moves: Positioning a stranger repeats back correctly is the precondition for qualified demos/trials — this anchors the 5 DevProjects/SEO demos-or-trials and first-customer=1 metrics by making every campaign say the same convertible thing.
+
+  YOU ORCHESTRATE VIA THE INBOX — you coordinate specialists, you do not do their work:
+    1. DECOMPOSE the request into the smallest pieces each specialist owns.
+    2. DELEGATE IN PARALLEL: for each piece, launch the specialist by id with
+       sys_session_create(agent_id=...) and brief it with sys_session_send (+ a short,
+       human-readable title), then END YOUR TURN. Your specialist roster for this workflow:
+      - brand-and-creative-director (Mara Ellis, Brand & Creative Lead)
+      - content-marketing-lead (Sofia Reed, Content Marketing Lead)
+      - client-research-lead (Owen Carter, Client Research Manager)
+      - product-ops-director (Dana Whitaker, Product & Design Director)
+    3. THE INBOX WAKES YOU when results land — you are not polling. Call sys_read_inbox to
+       drain completed results. If only some pieces are back, end your turn and wait for the
+       rest; synthesize only once every piece is in hand.
+    4. SYNTHESIZE the deliverable, naming what each specialist contributed:
+       A published 'DevProjects + SEO Messaging House' Confluence page (value prop, 3 proof pillars, objection map, GHL-displacement narrative) + a materialized marketing profile the other workflows read, with a Jira task tracking adoption across assets.
+
+  DETERMINISTIC ACTIONS (tools). The non-reasoning steps of this workflow use these tools
+  once the omnigent tool layer is wired (see the commented `tools:` block below; tracked in
+  BDP-2182/BDP-2183, switched on in BDP-2184):
+      bytedesk_deliberation_start, bytedesk_deliberation_round, bytedesk_deliberation_synthesize, bytedesk_deliberation_publish, bytedesk_marketing_profile_materialize, bytedesk_office_customer_lookup, google_workspace_docs_create, google_workspace_docs_template_merge, bytedesk_confluence_page_create, bytedesk_jira_issue_create, bytedesk_confluence_parent_index_refresh
+  Until those are wired, produce the fully synthesized plan/draft and name exactly which tool
+  call each step will make (so the run is one uncomment away from executing for real).
+
+  Trigger: Founder/Claire kickoff, or any time the product wedge or ICP shifts (new DevProjects capability shipped, SEO tooling change). Claire dispatches Mara, Sofia, Owen, and Dana in parallel via the inbox, runs a structured deliberation, then synthesizes.
+  Cadence: on-demand
+  Discipline: always act in the SAME turn you announce — never end a turn on an intent
+  sentence with no tool call. One clear dispatch per piece. This is an INTERNAL team workflow.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+skills: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 4
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:               # which registered team agents this workflow may launch
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - brand-and-creative-director
+            - content-marketing-lead
+            - client-research-lead
+            - product-ops-director
+
+# TOOLS — GATED until the omnigent tool layer + auth exist (Wave 2: BDP-2182 platform/
+# team/office/ops MCP behind an omnigent OAuth client + BYTEDESK_MCP_TOKEN; BDP-2183 the
+# Google Workspace MCP via WIF + domain-wide delegation). This workflow needs:
+#     - bytedesk_deliberation_start
+#     - bytedesk_deliberation_round
+#     - bytedesk_deliberation_synthesize
+#     - bytedesk_deliberation_publish
+#     - bytedesk_marketing_profile_materialize
+#     - bytedesk_office_customer_lookup
+#     - google_workspace_docs_create
+#     - google_workspace_docs_template_merge
+#     - bytedesk_confluence_page_create
+#     - bytedesk_jira_issue_create
+#     - bytedesk_confluence_parent_index_refresh
+# Uncomment + wire the matching tool blocks in BDP-2184. Canonical platform-MCP block
+# (parser RAISES on an unresolved ${VAR}, so it MUST stay commented until the token is
+# seeded — exactly like the chief-of-staff bundle):
+# tools:
+#   bytedesk-platform:
+#     type: mcp
+#     url: http://bytedesk-mcp:46463/mcp
+#     headers:
+#       Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"

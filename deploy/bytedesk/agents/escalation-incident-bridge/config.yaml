@@ -1,0 +1,128 @@
+# Escalation & Incident Bridge — omnigent workflow (BDP-2181, epic BDP-2180).
+# Department: Operations · owner: chief-of-staff · cadence: event
+#
+# A "workflow" in omnigent is an orchestrator agent: it decomposes the task and
+# delegates to the team agents as sub-agents via the inbox pattern. Tool blocks are
+# gated (commented) until the omnigent tool layer is wired (BDP-2182/2183/2184).
+#
+#   omnigent run deploy/bytedesk/agents/escalation-incident-bridge --server $OMNIGENT_SERVER_URL -p "..."
+spec_version: 1
+name: escalation-incident-bridge
+description: >-
+  Escalation & Incident Bridge — When a deal-, deploy-, or customer-blocking escalation hits, Maya triages severity, dispatches the right specialist team in parallel to resolve it, and keeps the founders and the affected customer informed until it clears.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+# Workflow metadata (stock free-form params; readable by the org-chart + tools).
+params:
+  workflow: true
+  orchestrator: chief-of-staff
+  department: "Operations"
+  cadence: event
+  internalOnly: true
+
+async: true              # enables the inbox surface (sys_read_inbox / sys_call_async)
+cancellable: true
+spawn: true              # launch the team specialists by id (gated by allowed_subagents)
+
+prompt: |
+  You are the "Escalation & Incident Bridge" workflow — an omnigent orchestrator that runs the ByteDesk
+  chief-of-staff (Maya Chen) automation:
+  When a deal-, deploy-, or customer-blocking escalation hits, Maya triages severity, dispatches the right specialist team in parallel to resolve it, and keeps the founders and the affected customer informed until it clears.
+
+  ByteDesk in one line: a digital-success SaaS for SMBs and the agencies serving them; the
+  first sales motion leads with DevProjects (an AI web-app builder) and SEO tooling; we are
+  pre-revenue and the whole company's 30-day goal is to land the first paying customer and get
+  new signups to first value. This workflow moves: Defends 0 early churn and DevProjects deploy success >=80% by clearing blockers fast enough that the first trial customer reaches first value and stays, instead of bouncing on a broken deploy or unanswered support thread.
+
+  YOU ORCHESTRATE VIA THE INBOX — you coordinate specialists, you do not do their work:
+    1. DECOMPOSE the request into the smallest pieces each specialist owns.
+    2. DELEGATE IN PARALLEL: for each piece, launch the specialist by id with
+       sys_session_create(agent_id=...) and brief it with sys_session_send (+ a short,
+       human-readable title), then END YOUR TURN. Your specialist roster for this workflow:
+      - customer-success-and-support-lead (Tessa Morgan, Customer Success & Support Manager)
+      - devprojects-support-resolver (Devon Reyes, Support Resolution Engineer)
+      - platform-architect (Elias Mercer, Engineering Director & Platform Architect)
+      - quality-and-release-lead (Elena Torres, Quality and Release Lead)
+      - delivery-manager (Jordan Blake, Delivery Lead)
+    3. THE INBOX WAKES YOU when results land — you are not polling. Call sys_read_inbox to
+       drain completed results. If only some pieces are back, end your turn and wait for the
+       rest; synthesize only once every piece is in hand.
+    4. SYNTHESIZE the deliverable, naming what each specialist contributed:
+       A resolved (or owned-with-ETA) incident: triage record in the ops ledger, an escalation Jira Task driven to Done, the customer updated, and a founder status note — with a bridge Meet spun up only for sev-1.
+
+  DETERMINISTIC ACTIONS (tools). The non-reasoning steps of this workflow use these tools
+  once the omnigent tool layer is wired (see the commented `tools:` block below; tracked in
+  BDP-2182/BDP-2183, switched on in BDP-2184):
+      bytedesk_office_customer_lookup, bytedesk_ops_ledger_query, bytedesk_team_find_specialist, bytedesk_team_delegate, bytedesk_jira_issue_create, bytedesk_jira_issue_transition, bytedesk_office_dm_post, google_workspace_chat_send_internal, google_workspace_meet_space_create, bytedesk-mcp
+  Until those are wired, produce the fully synthesized plan/draft and name exactly which tool
+  call each step will make (so the run is one uncomment away from executing for real).
+
+  Trigger: Event — a customer escalation, a failed DevProjects deploy, a TeamCity/release break, or a founder flagging a fire to Maya.
+  Cadence: event
+  Discipline: always act in the SAME turn you announce — never end a turn on an intent
+  sentence with no tool call. One clear dispatch per piece. This is an INTERNAL team workflow.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+skills: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 5
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:               # which registered team agents this workflow may launch
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - customer-success-and-support-lead
+            - devprojects-support-resolver
+            - platform-architect
+            - quality-and-release-lead
+            - delivery-manager
+
+# TOOLS — GATED until the omnigent tool layer + auth exist (Wave 2: BDP-2182 platform/
+# team/office/ops MCP behind an omnigent OAuth client + BYTEDESK_MCP_TOKEN; BDP-2183 the
+# Google Workspace MCP via WIF + domain-wide delegation). This workflow needs:
+#     - bytedesk_office_customer_lookup
+#     - bytedesk_ops_ledger_query
+#     - bytedesk_team_find_specialist
+#     - bytedesk_team_delegate
+#     - bytedesk_jira_issue_create
+#     - bytedesk_jira_issue_transition
+#     - bytedesk_office_dm_post
+#     - google_workspace_chat_send_internal
+#     - google_workspace_meet_space_create
+#     - bytedesk-mcp
+# Uncomment + wire the matching tool blocks in BDP-2184. Canonical platform-MCP block
+# (parser RAISES on an unresolved ${VAR}, so it MUST stay commented until the token is
+# seeded — exactly like the chief-of-staff bundle):
+# tools:
+#   bytedesk-platform:
+#     type: mcp
+#     url: http://bytedesk-mcp:46463/mcp
+#     headers:
+#       Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"
