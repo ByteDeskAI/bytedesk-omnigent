@@ -206,6 +206,14 @@ class MemoryQueryTool(Tool):
             )
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
+        # Out-of-band reinforcement: record recalled ids for a batched, off-path
+        # flush (T8). This is in-memory only — the recall above stayed a pure
+        # DB read; no last_accessed_at / access_count write happens inline.
+        if hits:
+            from omnigent.db.utils import now_epoch
+            from omnigent.stores.memory_store import get_reinforcement_buffer
+
+            get_reinforcement_buffer().record([h.id for h in hits], now=now_epoch())
         results = [
             {
                 "content": hit.content,
