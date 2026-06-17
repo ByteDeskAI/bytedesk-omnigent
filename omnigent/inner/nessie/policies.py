@@ -568,6 +568,67 @@ def worktree_guard(
     return _evaluate
 
 
+def allowed_subagents(
+    *,
+    allowed_agents: tuple[str, ...] = (),
+    deny_reason: str = (
+        "This agent may only launch sub-agents on its allow-list. Discover an "
+        "allowed agent with sys_agent_list and launch it with "
+        "sys_session_create(agent_id=...)."
+    ),
+) -> Callable[[_Json], _Json]:
+    """
+    Factory: gate ``sys_session_create`` to an explicit agent allow-list.
+
+    The native replacement for OpenClaw ``subagents.allowAgents`` (ADR-0133).
+    Discovery (``sys_agent_list``) stays global; *reach* is gated here. DENIES a
+    ``sys_session_create`` whose ``agent_id`` is absent (a ``config_path`` /
+    bundle-file launch that bypasses the registry) or resolves to an agent not
+    in *allowed_agents*. Leaves ``sys_session_send`` untouched — its named
+    children are already bundle-local to the caller, not registry launches.
+
+    *allowed_agents* are authored as stable slugs (e.g.
+    ``"platform-developer"``); both the slug and its deterministic
+    :func:`~omnigent.db.utils.builtin_agent_id` are accepted, since
+    ``sys_agent_list`` surfaces the ``ag_<hash>`` id while specs read by slug.
+
+    :param allowed_agents: Slugs (and/or ``ag_`` ids) this agent may launch.
+    :param deny_reason: Human-facing reason returned on DENY.
+    :returns: An evaluator ``fn(event)`` returning a V0 decision.
+    """
+    from omnigent.db.utils import builtin_agent_id
+
+    allowed: set[str] = set(allowed_agents)
+    for slug in allowed_agents:
+        allowed.add(builtin_agent_id(slug))
+
+    def _evaluate(event: _Json) -> _Json:
+        """
+        Deny out-of-allow-list (or registry-bypassing) sub-agent launches.
+
+        :param event: V0 ``tool_call`` event for ``sys_session_create``.
+        :returns: ALLOW for an allow-listed ``agent_id``, DENY otherwise.
+        """
+        args = _tool_call(event, {"sys_session_create"})
+        if args is None:
+            return _ALLOW
+        agent_id = args.get("agent_id")
+        if not isinstance(agent_id, str) or not agent_id:
+            return _decision(
+                "DENY",
+                f"{deny_reason} Launch by agent_id (a registered agent), not a bundle path.",
+            )
+        if agent_id not in allowed:
+            return _decision(
+                "DENY",
+                f"{deny_reason} '{agent_id}' is not in the allow-list "
+                f"{sorted(allowed_agents)!r}.",
+            )
+        return _ALLOW
+
+    return _evaluate
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
@@ -600,5 +661,13 @@ POLICY_REGISTRY: list[dict[str, Any]] = [
         "description": "Blocks file writes (sys_os_write/edit, Claude/Codex native "
         "Write/Edit, and Pi native write/edit) outside the worker's git worktree to "
         "prevent cross-branch contamination",
+    },
+    {
+        "handler": "omnigent.inner.nessie.policies.allowed_subagents",
+        "kind": "factory",
+        "name": "Restrict Which Sub-Agents Can Be Launched",
+        "description": "Gates sys_session_create to an explicit agent-id/slug allow-list "
+        "(the native replacement for OpenClaw subagents.allowAgents); sub-agent discovery "
+        "stays global, reach is policy-gated per agent",
     },
 ]
