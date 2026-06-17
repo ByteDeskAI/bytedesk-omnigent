@@ -23,6 +23,7 @@ if TYPE_CHECKING:
         FileStore,
     )
     from omnigent.stores.comment_store import CommentStore
+    from omnigent.stores.memory_store import SqlAlchemyMemoryStore
     from omnigent.stores.policy_store import PolicyStore
     from omnigent.terminals import TerminalRegistry
     from omnigent.tools import ToolManager
@@ -87,6 +88,34 @@ def get_conversation_store() -> ConversationStore:
     store = _globals._conversation_store
     if store is None:
         raise RuntimeError("runtime not initialized — call init() first")
+    return store
+
+
+# Lazily-built, per-URI cache of the omnigent-native memory store (FU1,
+# ADR-0132). The memory plane shares the conversation store's database, so it
+# needs no separate ``init()`` wiring — it is constructed on first use from the
+# conversation store's ``storage_location`` and cached per URI (so a re-init
+# against a different DB, e.g. in tests, gets its own store).
+_memory_store_cache: dict[str, SqlAlchemyMemoryStore] = {}
+
+
+def get_memory_store() -> SqlAlchemyMemoryStore:
+    """
+    Return the omnigent-native agent memory store (FU1, ADR-0132).
+
+    Built lazily from the canonical conversation store's database URI and
+    cached per URI. Omnigent is the sole writer of durable agent memory.
+
+    :returns: The :class:`SqlAlchemyMemoryStore` for the active database.
+    :raises RuntimeError: If the runtime has not been initialized.
+    """
+    from omnigent.stores.memory_store import SqlAlchemyMemoryStore
+
+    location = get_conversation_store().storage_location
+    store = _memory_store_cache.get(location)
+    if store is None:
+        store = SqlAlchemyMemoryStore(location)
+        _memory_store_cache[location] = store
     return store
 
 

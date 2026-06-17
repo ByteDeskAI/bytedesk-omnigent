@@ -43,6 +43,11 @@ from omnigent.tools.builtins.load_skill import (
     format_skill_meta_text,
     list_skill_resources,
 )
+from omnigent.tools.builtins.memory import (
+    MemoryAppendTool,
+    MemoryCompartmentsListTool,
+    MemoryQueryTool,
+)
 from omnigent.tools.builtins.read_skill_file import (
     ReadSkillFileTool,
 )
@@ -66,6 +71,9 @@ __all__ = [
     "INSTANTIABLE_BUILTINS",
     "ListCommentsTool",
     "LoadSkillTool",
+    "MemoryAppendTool",
+    "MemoryCompartmentsListTool",
+    "MemoryQueryTool",
     "ReadSkillFileTool",
     "SysAgentDownloadTool",
     "SysAgentGetTool",
@@ -186,6 +194,10 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "download_file": _create_download_file,
     "search_conversations": _create_search_conversations,
     "export_agent": _create_export_agent,
+    # Omnigent-native agent memory plane (FU1, ADR-0132). No spec config.
+    "memory_append": lambda config: MemoryAppendTool(),
+    "memory_query": lambda config: MemoryQueryTool(),
+    "memory_compartments_list": lambda config: MemoryCompartmentsListTool(),
     # Framework-owned: need runtime context. ``web_fetch`` is
     # constructed by ToolManager before reaching this registry.
     # ``list_comments`` and ``update_comment`` are auto-registered by
