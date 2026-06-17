@@ -609,7 +609,10 @@ export function agentHasInfo(agent: Agent | undefined, sessionId?: string | null
  */
 export function AgentInfoContent({ agent, sessionId }: AgentInfoProps) {
   const servers = agent?.mcp_servers ?? [];
-  const displayName = agent ? agentDisplayLabel(agent.name) : null;
+  // Prefer the server-provided human display name (params.displayName, e.g.
+  // "Maya Chen"); fall back to the slug-derived label for native wrappers /
+  // bundles that set none.
+  const displayName = agent ? (agent.display_name ?? agentDisplayLabel(agent.name)) : null;
   // Cumulative session spend, live from the store (seeded on bind, updated
   // by SSE ``session_usage``). ``null`` when the session is unpriced (no
   // turn priced yet) — omit the row rather than show "$0.00" / "—".

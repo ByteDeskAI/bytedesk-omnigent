@@ -1645,10 +1645,56 @@ class SessionLiveness:
     host_online: bool | None
 
 
+def _agent_display_names_for(
+    agent_ids: list[str],
+    agent_store: AgentStore,
+    agent_cache: AgentCache | None,
+) -> dict[str, str | None]:
+    """
+    Resolve human display names (``params.displayName``) for a set of agents.
+
+    Mirrors the read-time projection in ``_to_agent_object`` /
+    ``GET /v1/agents`` so session-bound list rows render the person's name
+    (e.g. ``"Maya Chen"``) instead of the slug. Loads each agent's spec via
+    the shared :class:`AgentCache` (cache hits after first load), deduped by
+    the caller passing distinct ids. Best-effort: a missing row or a spec that
+    fails to load is simply omitted (the client falls back to the slug) and
+    never breaks the session list.
+
+    :param agent_ids: Distinct agent ids to resolve.
+    :param agent_store: Store to fetch the agent row (for its bundle location).
+    :param agent_cache: Shared spec cache; ``None`` disables resolution.
+    :returns: Map from agent id to display name; ids with no
+        ``params.displayName`` are omitted.
+    """
+    out: dict[str, str | None] = {}
+    if agent_cache is None:
+        return out
+    for aid in agent_ids:
+        try:
+            agent = agent_store.get(aid)
+            if agent is None:
+                continue
+            loaded = agent_cache.load(
+                agent.id, agent.bundle_location, expand_env=agent.session_id is None
+            )
+            params = loaded.spec.params or {}
+            if isinstance(params, dict):
+                dn = params.get("displayName")
+                if dn:
+                    out[aid] = str(dn)
+        except Exception:  # noqa: BLE001 — never break the list on one bad spec
+            _logger.debug(
+                "display_name resolution failed for agent %s", aid, exc_info=True
+            )
+    return out
+
+
 def _build_session_list_item(
     conv: Conversation,
     *,
     agent_names_by_id: dict[str, str | None],
+    agent_display_names_by_id: dict[str, str | None],
     grants: list[SessionPermission],
     user_id: str | None,
     user_is_admin: bool,
@@ -1671,9 +1717,14 @@ def _build_session_list_item(
     :param conv: The persisted conversation entity. Must have a
         non-``None`` ``agent_id`` (i.e. be a session, not a plain
         conversation) — the caller filters these out beforehand.
-    :param agent_names_by_id: Map from agent id to display name, as
+    :param agent_names_by_id: Map from agent id to slug name, as
         returned by ``agent_store.get_names()``,
         e.g. ``{"ag_abc": "research-agent"}``.
+    :param agent_display_names_by_id: Map from agent id to human display
+        name (``params.displayName``), as returned by
+        :func:`_agent_display_names_for`, e.g. ``{"ag_abc": "Maya Chen"}``.
+        Missing/``None`` when the bundle sets none — the client then
+        falls back to the slug.
     :param grants: All permission grants for this conversation, as
         returned by ``permission_store.list_for_sessions()[conv.id]``.
         Empty list when permissions are disabled.
@@ -1708,6 +1759,7 @@ def _build_session_list_item(
         id=conv.id,
         agent_id=conv.agent_id,
         agent_name=agent_names_by_id.get(conv.agent_id),
+        agent_display_name=agent_display_names_by_id.get(conv.agent_id),
         status=_session_status_with_child_rollup(conv.id, child_session_ids),
         created_at=conv.created_at,
         updated_at=conv.updated_at,
@@ -12302,11 +12354,15 @@ def create_sessions_router(
         # In-memory lookup — no I/O, so batching avoids re-acquiring
         # the index's lock per row but otherwise has no DB cost.
         pending_counts = pending_elicitations.counts_for(conv_ids)
+        agent_display_names_by_id = await asyncio.to_thread(
+            _agent_display_names_for, unique_agent_ids, agent_store, agent_cache
+        )
         comments_fingerprints = await _comments_fingerprints_for(conv_ids)
         items: list[SessionListItem] = [
             _build_session_list_item(
                 conv,
                 agent_names_by_id=agent_names_by_id,
+                agent_display_names_by_id=agent_display_names_by_id,
                 grants=perms_by_conv.get(conv.id, []),
                 user_id=user_id,
                 user_is_admin=user_is_admin,
@@ -12433,10 +12489,14 @@ def create_sessions_router(
             _comments_fingerprints_for(conv_ids),
         )
         pending_counts = pending_elicitations.counts_for(conv_ids)
+        agent_display_names_by_id = await asyncio.to_thread(
+            _agent_display_names_for, unique_agent_ids, agent_store, agent_cache
+        )
         items = [
             _build_session_list_item(
                 conv,
                 agent_names_by_id=agent_names_by_id,
+                agent_display_names_by_id=agent_display_names_by_id,
                 grants=perms_by_conv.get(conv.id, []),
                 user_id=user_id,
                 user_is_admin=user_is_admin,
@@ -16944,6 +17004,10 @@ def create_sessions_router(
         # Harness/kind for the UI; None until the spec loads (mirrors the
         # GET /v1/agents catalog so both endpoints report it consistently).
         harness: str | None = None
+        # Human display name from the bundle's params.displayName, e.g.
+        # "Maya Chen" — mirrors the GET /v1/agents projection so a
+        # session-bound agent renders by its human name, not the slug.
+        display_name: str | None = None
         # Prefer the stored entity's description; fall back to the spec's
         # top-level description when the stored value is unset (single-file
         # YAML agents don't persist it at registration today). Lets the
@@ -16955,6 +17019,10 @@ def create_sessions_router(
                     agent.id, agent.bundle_location, expand_env=agent.session_id is None
                 )
                 harness = loaded.spec.executor.harness_kind
+                _params = loaded.spec.params or {}
+                if isinstance(_params, dict):
+                    _dn = _params.get("displayName")
+                    display_name = str(_dn) if _dn else None
                 if description is None:
                     description = loaded.spec.description
                 # Declared terminal names, in spec order — the Web UI
@@ -17001,6 +17069,7 @@ def create_sessions_router(
         return AgentObject(
             id=agent.id,
             name=agent.name,
+            display_name=display_name,
             version=agent.version,
             description=description,
             created_at=agent.created_at,
