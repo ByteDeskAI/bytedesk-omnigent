@@ -496,6 +496,24 @@ def generate_item_id(item_type: str) -> str:
     return f"{prefix}{uuid.uuid4().hex}"
 
 
+def generate_memory_id() -> str:
+    """
+    Generate a unique memory identifier (FU1, ADR-0132).
+
+    :returns: A string of the form ``"mem_<32-char hex>"``.
+    """
+    return f"mem_{uuid.uuid4().hex}"
+
+
+def generate_compartment_id() -> str:
+    """
+    Generate a unique memory-compartment identifier (FU1, ADR-0132).
+
+    :returns: A string of the form ``"mc_<32-char hex>"``.
+    """
+    return f"mc_{uuid.uuid4().hex}"
+
+
 # ── FTS (SQLite FTS5) ─────────────────────────────────
 
 _FTS_TABLE = "conversation_items_fts"
@@ -568,6 +586,74 @@ def delete_fts_by_conversation(session: Session, conversation_id: str) -> None:
         session.execute(
             text(f"DELETE FROM {_FTS_TABLE} WHERE conversation_id = :cid"),
             {"cid": conversation_id},
+        )
+
+
+# ── FTS for the agent memory plane (SQLite FTS5; FU1, ADR-0132) ──
+
+_MEMORIES_FTS_TABLE = "memories_fts"
+
+_CREATE_MEMORIES_FTS = text(
+    f"CREATE VIRTUAL TABLE IF NOT EXISTS {_MEMORIES_FTS_TABLE} USING fts5("
+    "memory_id UNINDEXED, compartment_id UNINDEXED, search_text)"
+)
+
+
+def ensure_memories_fts_table(engine: Engine) -> None:
+    """
+    Create the ``memories_fts`` FTS5 virtual table if on SQLite. Idempotent.
+
+    On non-SQLite dialects this is a no-op (Postgres uses the tsvector GIN
+    index created by the FU1 migration instead).
+
+    :param engine: The SQLAlchemy engine whose dialect is inspected.
+    """
+    if engine.dialect.name == "sqlite":
+        with engine.connect() as conn:
+            conn.execute(_CREATE_MEMORIES_FTS)
+            conn.commit()
+
+
+def insert_memory_fts(
+    session: Session,
+    memory_id: str,
+    compartment_id: str,
+    search_text: str,
+) -> None:
+    """
+    Dual-write a memory row into the ``memories_fts`` table (SQLite only).
+
+    On non-SQLite dialects this is a no-op.
+
+    :param session: An active SQLAlchemy session; its bound engine's dialect
+        decides whether to write.
+    :param memory_id: The memory id to index, e.g. ``"mem_a1b2c3..."``.
+    :param compartment_id: The owning compartment id, e.g. ``"mc_e4f5..."``.
+    :param search_text: Plain text to index for this memory.
+    """
+    if session.bind and session.bind.dialect.name == "sqlite":
+        session.execute(
+            text(
+                f"INSERT INTO {_MEMORIES_FTS_TABLE}"
+                "(memory_id, compartment_id, search_text) "
+                "VALUES (:mid, :cid, :st)"
+            ),
+            {"mid": memory_id, "cid": compartment_id, "st": search_text},
+        )
+
+
+def delete_memory_fts(session: Session, memory_id: str) -> None:
+    """
+    Remove a memory's ``memories_fts`` row (SQLite only). No-op elsewhere.
+
+    :param session: An active SQLAlchemy session; its bound engine's dialect
+        decides whether to delete.
+    :param memory_id: The memory id whose FTS row should be removed.
+    """
+    if session.bind and session.bind.dialect.name == "sqlite":
+        session.execute(
+            text(f"DELETE FROM {_MEMORIES_FTS_TABLE} WHERE memory_id = :mid"),
+            {"mid": memory_id},
         )
 
 
