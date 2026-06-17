@@ -106,6 +106,11 @@ class SqlAlchemyMemoryStore:
         self._is_sqlite = self._engine.dialect.name == "sqlite"
         ensure_memories_fts_table(self._engine)
 
+    @property
+    def engine(self):
+        """The underlying SQLAlchemy engine (used for advisory-lock coordination)."""
+        return self._engine
+
     # ── compartments ──────────────────────────────────────────────
 
     def _get_or_create_compartment(
