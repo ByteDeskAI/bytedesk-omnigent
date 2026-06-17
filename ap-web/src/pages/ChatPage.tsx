@@ -3901,8 +3901,13 @@ function AgentPicker({
   // is pure noise — drop it and let the dropdown be just the effort/model
   // controls.
   const showAgents = !isClaudeNative && (agents?.length ?? 0) > 1;
-  const rawAgentName = agents?.find((a) => a.id === selectedId)?.name ?? agents?.[0]?.name;
-  const agentDisplayName = rawAgentName ? agentDisplayLabel(rawAgentName) : rawAgentName;
+  const selectedAgent = agents?.find((a) => a.id === selectedId) ?? agents?.[0];
+  // Prefer the server-provided human display name (params.displayName, e.g.
+  // "Maya Chen"); fall back to the slug-derived label for native wrappers /
+  // bundles that set none.
+  const agentDisplayName = selectedAgent
+    ? (selectedAgent.display_name ?? agentDisplayLabel(selectedAgent.name))
+    : undefined;
   // Effective brain harness from the session snapshot (override-aware).
   // Only the SDK brain harnesses get a pill suffix — native wrappers
   // already use their own "Claude" branch below.

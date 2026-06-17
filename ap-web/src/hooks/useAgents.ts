@@ -39,6 +39,10 @@ export interface Agent {
   /** Human-readable name from the YAML's `name:` field, e.g. "hello_world".
    * Required by the spec_version: 1 parser, so always present. */
   name: string;
+  /** Human display name from the bundle's `params.displayName`, e.g.
+   * "Maya Chen". Prefer this over `name` (the slug) for any label.
+   * undefined/null when the bundle sets none — fall back to the slug. */
+  display_name?: string | null;
   description?: string | null;
   /** Harness/kind, e.g. "claude-native", "codex", "claude_sdk". null when
    * the spec couldn't be loaded. Only populated by `useSessionAgent`
@@ -60,6 +64,7 @@ interface SessionListItemWire {
   id: string;
   agent_id: string;
   agent_name?: string | null;
+  agent_display_name?: string | null;
 }
 
 interface SessionsListResponse {
@@ -87,6 +92,7 @@ async function fetchAgents(): Promise<Agent[]> {
     seen.set(session.agent_id, {
       id: session.agent_id,
       name: session.agent_name ?? session.agent_id,
+      display_name: session.agent_display_name ?? null,
     });
   }
   return Array.from(seen.values());
@@ -114,6 +120,7 @@ interface AgentObjectWire {
   id: string;
   object: "agent";
   name: string;
+  display_name?: string | null;
   description?: string | null;
   harness?: string | null;
   mcp_servers?: McpServerSummary[];
@@ -134,6 +141,7 @@ async function fetchSessionAgent(sessionId: string): Promise<Agent> {
   return {
     id: json.id,
     name: json.name,
+    display_name: json.display_name ?? null,
     description: json.description,
     harness: json.harness ?? null,
     mcp_servers: json.mcp_servers,
