@@ -126,16 +126,16 @@ tools:
   #    `oauth` MCP auth provider (BDP-2182): it mints + caches + refreshes the JWT
   #    at connection time — NOT a static ${VAR} token (which would die in 5 min).
   #    client_secret is the only ${VAR} (a durable secret in the pod env, so it
-  #    parse-expands safely); the short-lived JWT is never in the spec. Slice-1
-  #    reuses Maya's existing `openclaw-chief-of-staff` client (BDP-2170 → a
-  #    dedicated `omnigent-maya` client). `url` is the in-cluster Service `mcp`
-  #    (port 80), not the 46463 topology port.
+  #    parse-expands safely); the short-lived JWT is never in the spec. All
+  #    omnigent bundles now use the dedicated `omnigent-mcp` service client
+  #    (BDP-2170 collapse: one omnigent identity, not Maya-impersonation).
+  #    `url` is the in-cluster Service `mcp` (port 80), not the 46463 port.
   bytedesk-platform:
     type: mcp
     url: http://mcp/mcp                              # prod: https://platform.bytedesk.ai/mcp
     auth:
       type: oauth
       token_url: ${BYTEDESK_IDENTITY_TOKEN_URL}      # e.g. http://identity/connect/token
-      client_id: openclaw-chief-of-staff
+      client_id: omnigent-mcp
       client_secret: ${OMNIGENT_MCP_CLIENT_SECRET}   # Infisical /omnigent-mcp (operator-hydrated)
       scopes: [mcp.read, mcp.write, mcp.admin]
