@@ -120,6 +120,10 @@ def test_builtin_names_size_matches_registry() -> None:
                 "download_file",
                 "search_conversations",
                 "export_agent",
+                # Omnigent-native agent memory plane (FU1, ADR-0132).
+                "memory_append",
+                "memory_query",
+                "memory_compartments_list",
                 # Framework-owned (need runtime context, not
                 # user-instantiable). Policy ASKs surface as
                 # MCP-shape elicitations on the SSE stream and
