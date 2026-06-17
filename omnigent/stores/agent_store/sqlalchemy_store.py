@@ -201,6 +201,31 @@ class SqlAlchemyAgentStore(AgentStore):
             row.updated_at = now_epoch()
             return sql_agent_to_entity(row)
 
+    def set_sot_tier(self, agent_id: str, tier: str | None) -> bool:
+        """Set the per-agent migration tier marker (FU5 cutover, ADR-0133/0136).
+
+        The flip-able SoT marker (params are immutable, so it lives on the row).
+        ``None`` / ``"openclaw-resident"`` = OpenClaw is SoT; ``"migrated"`` =
+        omnigent is SoT for this agent's domains.
+
+        :param agent_id: The registered agent id.
+        :param tier: The tier marker, or ``None`` to clear it.
+        :returns: ``True`` if the agent exists and was updated, else ``False``.
+        """
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            if not row:
+                return False
+            row.sot_tier = tier
+            row.updated_at = now_epoch()
+            return True
+
+    def get_sot_tier(self, agent_id: str) -> str | None:
+        """Return the agent's migration tier marker, or ``None`` (resident/unset)."""
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            return row.sot_tier if row else None
+
     def delete(self, agent_id: str) -> bool:
         """
         Delete an agent by ID.
