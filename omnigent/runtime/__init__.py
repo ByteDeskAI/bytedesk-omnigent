@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from omnigent.runtime import _globals
 from omnigent.runtime.caps import RuntimeCaps
+from omnigent.stores.memory_store.pgvector import pgvector_installed as _pgvector_installed
 
 if TYPE_CHECKING:
     from omnigent.runner.resource_registry import SessionResourceRegistry
@@ -115,16 +116,29 @@ def get_memory_store() -> SqlAlchemyMemoryStore:
     location = get_conversation_store().storage_location
     store = _memory_store_cache.get(location)
     if store is None:
-        embedder = None
-        # Semantic recall is PostgreSQL-only (pgvector); SQLite stays lexical,
-        # so the embedding model is never loaded on local/dev/test.
-        if get_or_create_engine(location).dialect.name == "postgresql":
-            from omnigent.stores.memory_store.embeddings import FastEmbedEmbedder
-
-            embedder = FastEmbedEmbedder()
+        embedder = _select_memory_embedder(get_or_create_engine(location))
         store = SqlAlchemyMemoryStore(location, embedder=embedder)
         _memory_store_cache[location] = store
     return store
+
+
+def _select_memory_embedder(engine: Any):
+    """Return the semantic embedder for *engine*, or ``None`` for lexical recall.
+
+    Semantic recall needs PostgreSQL **with the pgvector extension installed**
+    (the migration only builds the ``vector`` column when pgvector is available).
+    SQLite, and a Postgres without the extension, stay lexical — so the embedding
+    model is never loaded there and recall never casts a ``TEXT`` column to
+    ``vector``. Mirrors the migration's pgvector gate via the shared probe.
+    """
+    if engine.dialect.name != "postgresql":
+        return None
+    with engine.connect() as conn:
+        if not _pgvector_installed(conn):
+            return None
+    from omnigent.stores.memory_store.embeddings import FastEmbedEmbedder
+
+    return FastEmbedEmbedder()
 
 
 def get_agent_store() -> AgentStore:

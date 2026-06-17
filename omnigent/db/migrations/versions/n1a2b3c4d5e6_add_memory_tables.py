@@ -12,14 +12,18 @@ Creates the FU1 compartmented, weighted, decaying memory plane (ADR-0132):
 - ``memories``: durable weighted memories with a ``search_text`` (FTS) column
   and an ``embedding`` column.
 
-Dialect-aware: on PostgreSQL the ``vector`` extension is created, the
-``embedding`` column is altered to ``vector(384)``, and an ivfflat + a
-``tsvector`` GIN index are added (created here, before any growth driver
-inserts rows, per ADR-0132). On SQLite the ``embedding`` column stays ``Text``
-(lexical-only recall via the ``memories_fts`` FTS5 table the store creates).
-All SQLite-incompatible DDL is guarded behind ``op.execute`` on the PG path,
-and the regular tables are created with inline constraints inside
-``op.create_table`` (SQLite-safe).
+Dialect- and capability-aware. On PostgreSQL **with pgvector available** the
+``vector`` extension is created, the ``embedding`` column is altered to
+``vector(384)``, and an ivfflat index is added; on **any** PostgreSQL a
+``tsvector`` GIN index is added for lexical recall (created here, before any
+growth driver inserts rows, per ADR-0132). On a PostgreSQL **without** pgvector
+the ``embedding`` column stays ``Text`` and recall degrades to lexical — the
+migration probes ``pg_available_extensions`` rather than assuming pgvector, so
+it never crash-loops on an instance that lacks the extension. On SQLite the
+``embedding`` column stays ``Text`` (lexical-only recall via the
+``memories_fts`` FTS5 table the store creates). All SQLite-incompatible DDL is
+guarded behind ``op.execute`` on the PG path, and the regular tables are created
+with inline constraints inside ``op.create_table`` (SQLite-safe).
 """
 
 from __future__ import annotations
@@ -38,10 +42,17 @@ _EMBEDDING_DIM = 384  # BAAI/bge-small-en-v1.5 (fastembed), in-pod, ADR-0132
 
 
 def upgrade() -> None:
+    from omnigent.stores.memory_store.pgvector import pgvector_available
+
     bind = op.get_bind()
     is_pg = bind.dialect.name == "postgresql"
+    # Semantic recall needs pgvector, which not every Postgres ships. Probe for
+    # it: when present we build the vector column + ivfflat; when absent we
+    # degrade to lexical recall (the tsvector GIN index below) so the migration
+    # succeeds on any Postgres instead of crash-looping on a missing extension.
+    has_vector = pgvector_available(bind)
 
-    if is_pg:
+    if has_vector:
         op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     op.create_table(
@@ -98,10 +109,9 @@ def upgrade() -> None:
         "ix_memories_source_conversation_id", "memories", ["source_conversation_id"]
     )
 
-    if is_pg:
-        # Semantic recall path: real pgvector column + ivfflat cosine index,
-        # plus a tsvector GIN index for lexical fallback — created up front,
-        # before any growth driver inserts rows (ADR-0132).
+    if has_vector:
+        # Semantic recall path: real pgvector column + ivfflat cosine index —
+        # created up front, before any growth driver inserts rows (ADR-0132).
         op.execute(
             "ALTER TABLE memories ALTER COLUMN embedding TYPE vector("
             f"{_EMBEDDING_DIM}) USING NULLIF(embedding, '')::vector"
@@ -110,6 +120,11 @@ def upgrade() -> None:
             "CREATE INDEX ix_memories_embedding ON memories "
             "USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100)"
         )
+
+    if is_pg:
+        # Lexical recall index — works with or without pgvector, so it is created
+        # on any Postgres (the ``embedding`` column stays TEXT when pgvector is
+        # absent and recall uses this tsvector GIN index alone).
         op.execute(
             "CREATE INDEX ix_memories_search_text_tsv ON memories "
             "USING gin (to_tsvector('english', coalesce(search_text, '')))"
