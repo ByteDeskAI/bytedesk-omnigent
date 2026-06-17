@@ -109,12 +109,20 @@ def get_memory_store() -> SqlAlchemyMemoryStore:
     :returns: The :class:`SqlAlchemyMemoryStore` for the active database.
     :raises RuntimeError: If the runtime has not been initialized.
     """
+    from omnigent.db.utils import get_or_create_engine
     from omnigent.stores.memory_store import SqlAlchemyMemoryStore
 
     location = get_conversation_store().storage_location
     store = _memory_store_cache.get(location)
     if store is None:
-        store = SqlAlchemyMemoryStore(location)
+        embedder = None
+        # Semantic recall is PostgreSQL-only (pgvector); SQLite stays lexical,
+        # so the embedding model is never loaded on local/dev/test.
+        if get_or_create_engine(location).dialect.name == "postgresql":
+            from omnigent.stores.memory_store.embeddings import FastEmbedEmbedder
+
+            embedder = FastEmbedEmbedder()
+        store = SqlAlchemyMemoryStore(location, embedder=embedder)
         _memory_store_cache[location] = store
     return store
 
