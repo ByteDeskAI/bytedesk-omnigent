@@ -1,0 +1,52 @@
+# ByteDesk Engineer — single-agent Phase-0 smoke.
+# Proves the fork can complete an agent turn on ByteDesk's Codex inference path.
+# Harness: openai-agents → the runner's HARNESS_OPENAI_AGENTS_* env (Codex gateway).
+# No sub-agents, no external CLIs — the most reliable first smoke.
+#
+#   omnigent run deploy/bytedesk/agents/bytedesk-engineer --server <server-url>
+spec_version: 1
+name: bytedesk-engineer
+description: >-
+  An internal ByteDesk engineering assistant. Answers technical questions and
+  can read files / run shell in its workspace. Phase-0 evaluation agent for the
+  Omnigent fork — the lane Omnigent is actually built for (internal coding/eng).
+
+# The brain runs on the openai-agents harness. No model pinned here — the runner
+# supplies it via HARNESS_OPENAI_AGENTS_MODEL (e.g. gpt-5.5) pointed at ByteDesk's
+# Codex-compatible gateway (HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL, USE_RESPONSES=0).
+executor:
+  type: omnigent
+  config:
+    harness: openai-agents
+
+prompt: |
+  You are the ByteDesk Engineer, an internal engineering assistant for the
+  ByteDesk platform team. You help ByteDesk's own engineers: answer technical
+  questions, read and explain code in your workspace, and run read-mostly shell
+  commands to investigate. You are running inside the Omnigent agent runtime as
+  a Phase-0 evaluation of whether Omnigent can replace OpenClaw.
+
+  Be concise and concrete. When asked to inspect something, use your shell/file
+  tools rather than guessing. State assumptions explicitly. You are an INTERNAL
+  team agent — never a tenant/customer-facing agent.
+
+async: true
+cancellable: true
+
+# Filesystem + shell access (registers sys_os_read/write/edit/shell).
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none # Phase 0. Harden to bwrap once the runner image ships it.
+
+# Catastrophic-command DENY set still applies; no ASK on ordinary pushes.
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false

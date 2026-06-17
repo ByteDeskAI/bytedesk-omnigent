@@ -49,6 +49,12 @@ _HARNESS_MODULES: dict[str, str] = {
     "pi": "omnigent.inner.pi_harness",
     # Native Pi TUI bridge used by ``omnigent pi``.
     "pi-native": "omnigent.inner.pi_native_harness",
+    # Native xAI Grok Build CLI bridge (ACP over ``grok agent stdio``) — the
+    # "Grok" picker option. Subscription OAuth via ~/.grok/auth.json. See
+    # omnigent/inner/grok_native_harness.py.
+    "grok-native": "omnigent.inner.grok_native_harness",
+    # User-facing alias accepted in specs / Omnigent harness dispatch.
+    "grok": "omnigent.inner.grok_native_harness",
     # Step 4e: openai-agents harness wrap. See
     # omnigent/inner/openai_agents_sdk_harness.py. Registry
     # key is the Omnigent-side spelling (``openai-agents``,

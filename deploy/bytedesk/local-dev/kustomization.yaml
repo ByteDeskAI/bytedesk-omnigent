@@ -1,0 +1,139 @@
+# ByteDesk Omnigent — LOCAL-DEV overlay (source-mounted, no image builds).
+#
+# WHY: omnigent installs editable (`uv pip install -e .`) with the venv's
+# PEP-660 finder mapping `omnigent -> /build/omnigent` by absolute path
+# (see __editable___omnigent_*_finder.py: MAPPING + "other nesting handled
+# by importlib via the parent path", so NEW modules resolve too). So a
+# hostPath mount of this repo at /build makes BOTH pods import the working
+# tree — and harness subprocesses re-import per conversation, so bridge /
+# executor edits hot-load with ZERO restart. Server-side edits (server/app.py
+# seeding, routes) need a `kubectl rollout restart deploy/omnigent-server`
+# (seconds), never an image rebuild.
+#
+# Images are PRODUCTION-ONLY: prod (deploy/bytedesk/fleet/production, a
+# separate overlay over ../../k8s) builds + ships the Harbor image via
+# TeamCity/Fleet. This overlay is a SIBLING of k8s/ (like fleet/), never on
+# the prod base path, so it is never reconciled to prod.
+#
+# APPLY (local MicroK8s):
+#   microk8s kubectl apply -k deploy/bytedesk/local-dev/
+#
+# SPA: the mount at /build shadows the baked bundle, so the SPA must be built
+# into the tree (omnigent/server/static/web-ui, which the server serves).
+#   One-shot:    cd ap-web && npm install && npm run build
+#   Hot-reload:  cd ap-web && ./node_modules/.bin/vite build --watch
+# The `--watch` build is the SPA analog of the server's watchfiles: it re-emits
+# the bundle into the mounted static dir on every source change (~2-3s); refresh
+# the browser to pick it up. One watcher feeds both pods (same hostPath). It is
+# a FILE WATCHER, not a dev server (no `npm run dev`), so the single
+# omnigent.bytedesk.localhost origin is preserved.
+#
+# We pin to the public ghcr images (they carry the venv + system tools +
+# baked CLIs); the omnigent PACKAGE comes from the mount, so the image tag
+# only provides dependencies, not our code.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: bytedesk
+resources:
+  - ../k8s
+  # Local-only ingress: http://omnigent.bytedesk.localhost -> omnigent-server.
+  - omnigent-ingress.yaml
+
+images:
+  - name: localhost:32000/bytedesk-omnigent-server
+    newName: ghcr.io/omnigent-ai/omnigent-server
+    newTag: latest
+  - name: localhost:32000/bytedesk-omnigent-host
+    newName: ghcr.io/omnigent-ai/omnigent-host
+    newTag: latest
+
+patches:
+  # Source-mount the repo at /build (the editable-install import root) on the
+  # server. Strategic merge: containers/volumes/volumeMounts merge by name, so
+  # this appends `omnigent-src` without disturbing artifacts/config.
+  - target:
+      kind: Deployment
+      name: omnigent-server
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: omnigent-server
+      spec:
+        template:
+          spec:
+            containers:
+              - name: server
+                # Auto-reload server code on .py change (watchfiles restarts the
+                # in-pod process in seconds — no `rollout restart`). The image
+                # entrypoint calls uvicorn.run(app_OBJECT,...) not a "module:app"
+                # import string, so uvicorn --reload can't engage; wrapping the
+                # whole process is the clean equivalent. --filter python ignores
+                # the SPA bundle under static/web-ui. Harness subprocesses already
+                # hot-reload (fresh import per conversation); this closes the gap
+                # for the long-lived server (seeding, spec validation, catalog).
+                command:
+                  - python
+                  - -m
+                  - watchfiles
+                  - --filter
+                  - python
+                  - python /app/entrypoint.py
+                  - /build/omnigent
+                env:
+                  # hostPath bind mounts don't always deliver inotify events into
+                  # the container; polling is reliable across the mount boundary.
+                  - name: WATCHFILES_FORCE_POLLING
+                    value: "true"
+                  # The local-dev ingress serves the UI from a *.localhost
+                  # subdomain, but the WS CSWSH guard only treats exact
+                  # "localhost"/loopback IPs as allowed in single-user local
+                  # mode — so it 403s the terminal + session-updates WebSockets
+                  # ("Bridge closed: code 1006"). Allowlist the ingress origin.
+                  - name: OMNIGENT_WS_ALLOWED_ORIGINS
+                    value: "http://omnigent.bytedesk.localhost"
+                  # The pods run as root; without this they write root-owned
+                  # __pycache__/*.pyc into the /build hostPath (= this repo),
+                  # which Ryan then can't manage. Disable bytecode caching so the
+                  # source mount stays user-owned. Harmless: modules re-import
+                  # per conversation anyway, so the .pyc cache buys ~nothing here.
+                  - name: PYTHONDONTWRITEBYTECODE
+                    value: "1"
+                volumeMounts:
+                  - name: omnigent-src
+                    mountPath: /build
+            volumes:
+              - name: omnigent-src
+                hostPath:
+                  path: /home/ryan/Documents/GitHub/ByteDeskAI/bytedesk-omnigent
+                  type: Directory
+  # Same mount on every host replica. Harness subprocesses spawned per
+  # conversation import from /build -> grok/bridge edits hot-load with no roll.
+  - target:
+      kind: Deployment
+      name: omnigent-host
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: omnigent-host
+      spec:
+        template:
+          spec:
+            containers:
+              - name: host
+                env:
+                  # Root pods would otherwise write root-owned __pycache__/*.pyc
+                  # into the /build hostPath (= this repo). Disable bytecode
+                  # caching so the source mount stays user-owned (the harness
+                  # re-imports per conversation, so the cache buys ~nothing).
+                  - name: PYTHONDONTWRITEBYTECODE
+                    value: "1"
+                volumeMounts:
+                  - name: omnigent-src
+                    mountPath: /build
+            volumes:
+              - name: omnigent-src
+                hostPath:
+                  path: /home/ryan/Documents/GitHub/ByteDeskAI/bytedesk-omnigent
+                  type: Directory

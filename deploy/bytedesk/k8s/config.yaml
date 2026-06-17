@@ -1,0 +1,20 @@
+# Non-secret omnigent server config (the YAML `omnigent server -c` reads).
+# Mounted at /etc/omnigent/config.yaml; server.yaml sets OMNIGENT_CONFIG to it.
+# Secrets (DATABASE_URL, harness creds) stay in the Secret, never here.
+#
+# In prod the fleet overlay can replace this via a configMapGenerator from
+# deploy/bytedesk/fleet/production/config/ (prod-correct values) — same pattern
+# as OpenClaw's bytedesk-openclaw-config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omnigent-config
+data:
+  config.yaml: |
+    artifact_location: /data/artifacts
+    # When auth is turned on (OIDC against Google Workspace fits ByteDesk), list
+    # operator identities here; a listed identity is promoted to admin on login.
+    # admins:
+    #   - ryan@helms.ai
+    # allowed_domains:
+    #   - helms.ai

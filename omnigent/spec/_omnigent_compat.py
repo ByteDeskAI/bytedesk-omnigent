@@ -81,6 +81,9 @@ OMNIGENT_HARNESSES = frozenset(
         "codex-native",
         "cursor",
         "databricks_supervisor",
+        # ByteDesk: native xAI Grok Build CLI bridge (ACP over `grok agent
+        # stdio`), registered in runtime/harnesses._HARNESS_MODULES.
+        "grok-native",
         "openai-agents",
         "open-responses",
         "pi",
@@ -89,7 +92,7 @@ OMNIGENT_HARNESSES = frozenset(
 )
 # User-facing aliases accepted in specs and normalized before runtime dispatch.
 OMNIGENT_HARNESS_ALIASES = frozenset(
-    {"claude", "native-pi", "openai-agents-sdk", "agy", "google-antigravity"}
+    {"claude", "native-pi", "openai-agents-sdk", "agy", "google-antigravity", "grok"}
 )
 _OMNIGENT_ACCEPTED_HARNESSES = OMNIGENT_HARNESSES | OMNIGENT_HARNESS_ALIASES
 

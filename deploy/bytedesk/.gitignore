@@ -1,0 +1,5 @@
+# Never commit filled secrets / env
+k8s/secret.yaml
+k8s/codex-auth.yaml
+env/runner.env
+*.local.yaml

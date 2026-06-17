@@ -199,6 +199,14 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
     {
         "PATH",
         "PYTHONPATH",
+        # Bytecode-write suppression. Not a secret — a filesystem-behavior flag.
+        # In source-mounted local dev the runner imports omnigent from a
+        # hostPath mount (= the dev's repo) as root; without forwarding this the
+        # runner writes root-owned __pycache__ into the working tree. Only set on
+        # the host when the deployment opts in (local-dev overlay), so prod —
+        # which never sets it — is unaffected.
+        "PYTHONDONTWRITEBYTECODE",
+        "PYTHONPYCACHEPREFIX",
         "HOME",
         "USER",
         "LOGNAME",

@@ -1,6 +1,7 @@
 import { BotIcon } from "lucide-react";
 import { ClaudeIcon } from "@/components/icons/ClaudeIcon";
 import { CodexIcon } from "@/components/icons/CodexIcon";
+import { GrokIcon } from "@/components/icons/GrokIcon";
 import { NessieIcon } from "@/components/icons/NessieIcon";
 import { PiIcon } from "@/components/icons/PiIcon";
 import type { ComponentType, SVGProps } from "react";
@@ -26,9 +27,11 @@ function iconForAgent(agent: AvailableAgent): ComponentType<SVGProps<SVGSVGEleme
   if (nativeAgent?.iconKind === "claude") return ClaudeIcon;
   if (nativeAgent?.iconKind === "codex") return CodexIcon;
   if (nativeAgent?.iconKind === "pi") return PiIcon;
+  if (nativeAgent?.iconKind === "grok") return GrokIcon;
   // A null harness (spec couldn't load) flows through to the bot fallback.
   if (agent.harness?.includes("codex")) return CodexIcon;
   if (agent.harness?.includes("claude")) return ClaudeIcon;
+  if (agent.harness?.includes("grok")) return GrokIcon;
   // Exact match — a substring check would false-match e.g. "openapi".
   if (agent.harness === "pi") return PiIcon;
   return BotIcon;

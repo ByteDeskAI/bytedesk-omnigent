@@ -1,0 +1,19 @@
+# Sub-agent of bytedesk-orchestrator. Read-mostly investigator.
+spec_version: 1
+name: researcher
+description: An investigator that reads code/docs and returns a structured findings report.
+executor:
+  type: omnigent
+  config:
+    harness: openai-agents
+prompt: |
+  You are a read-mostly investigator. Given a task, inspect the workspace with
+  your shell/file tools and return a concise, structured findings report
+  (what you found, where, and the key takeaways). Do not make changes.
+async: true
+cancellable: true
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none

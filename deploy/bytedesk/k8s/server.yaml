@@ -1,0 +1,112 @@
+# Omnigent SERVER = control plane only. Per deploy/docker/entrypoint.py it runs
+# in "external runners only" mode: it persists sessions/agents/policies, serves
+# the SPA + REST/SSE API, accepts runner WebSocket tunnels at /v1/runner/tunnel,
+# and NEVER executes agents itself. Agents run on the RUNNER (runner.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: omnigent-artifacts
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-server
+  labels:
+    app.kubernetes.io/name: omnigent-server
+spec:
+  selector:
+    app.kubernetes.io/name: omnigent-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: omnigent-server
+  labels:
+    app.kubernetes.io/name: omnigent-server
+spec:
+  # MUST stay 1 — the server uses an in-memory runner registry; >1 replica is
+  # unsupported until a shared registry (e.g. Redis) is added. (One of the gaps
+  # to build before omnigent can fully replace OpenClaw at scale.)
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-server
+    spec:
+      # imagePullSecrets is added by the prod fleet overlay (harbor-prod-pull-secret).
+      # Local MicroK8s pulls from localhost:32000 (no secret needed).
+      containers:
+        - name: server
+          # The `# image-managed` marker is what the prod fleet overlay's
+          # `images:` rewrite + TeamCity fleet-update-omnigent.sh target.
+          image: localhost:32000/bytedesk-omnigent-server:local # image-managed (Dockerfile default/runtime target)
+          imagePullPolicy: IfNotPresent
+          command: ["python", "/app/entrypoint.py"] # Dockerfile bakes the entrypoint here (COPY deploy/docker/entrypoint.py /app/entrypoint.py)
+          envFrom:
+            - secretRef:
+                name: omnigent-secrets # DATABASE_URL (+ cookie secret if auth on)
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "8000"
+            - name: ARTIFACT_DIR
+              value: /data/artifacts
+            - name: OMNIGENT_CONFIG
+              value: /etc/omnigent/config.yaml
+            # Phase 0: no login, single "local" user — fine for an internal,
+            # in-cluster / port-forwarded smoke. Flip to OIDC (Google Workspace)
+            # for a shared instance.
+            - name: OMNIGENT_AUTH_ENABLED
+              value: "0"
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            # First boot runs Alembic migrations before listening — give it room.
+            initialDelaySeconds: 90
+            periodSeconds: 15
+            failureThreshold: 6
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: artifacts
+              mountPath: /data/artifacts
+            - name: config
+              mountPath: /etc/omnigent
+              readOnly: true
+      volumes:
+        - name: artifacts
+          persistentVolumeClaim:
+            claimName: omnigent-artifacts
+        - name: config
+          configMap:
+            name: omnigent-config

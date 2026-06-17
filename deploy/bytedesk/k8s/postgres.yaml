@@ -1,0 +1,72 @@
+# Dedicated Postgres for omnigent — self-contained, like OpenClaw keeps its own
+# PVC state rather than sharing the platform DB. Keeps the evaluation decoupled
+# from the platform's primary Bitnami Postgres (clean teardown, independent
+# lifecycle). Single-replica matches omnigent's own single-replica server ceiling.
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-postgres
+  labels:
+    app.kubernetes.io/name: omnigent-postgres
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: omnigent-postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: 5432
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-postgres
+  labels:
+    app.kubernetes.io/name: omnigent-postgres
+spec:
+  serviceName: omnigent-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-postgres
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: omnigent-secrets # POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+          env:
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          ports:
+            - name: postgres
+              containerPort: 5432
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", 'pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB"']
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: pgdata
+              mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+    - metadata:
+        name: pgdata
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
