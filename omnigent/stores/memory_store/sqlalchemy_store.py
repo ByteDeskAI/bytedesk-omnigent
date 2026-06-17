@@ -27,7 +27,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 
 from omnigent.db.db_models import SqlMemory, SqlMemoryCompartment
 from omnigent.db.utils import (
@@ -239,6 +239,37 @@ class SqlAlchemyMemoryStore:
             )
             insert_memory_fts(session, mid, comp.id, st)
         return mid
+
+    # ── reinforcement (out-of-band; off the recall path) ──────────
+
+    def reinforce(self, memory_ids: list[str], *, now: int | None = None) -> int:
+        """Reset the decay clock for recalled memories (batched, out-of-band).
+
+        Sets ``last_accessed_at = now`` and increments ``access_count`` for the
+        given non-archived memories in a single batched UPDATE. Base ``weight``
+        is intentionally **not** inflated — recall slows aging (clock reset)
+        without immunizing a memory from decay (avoids the monotonic-up runaway;
+        ADR-0132 / Hermes lesson). Invoked by the reinforcement-buffer flush off
+        the recall path, never inline in :meth:`query`.
+
+        :param memory_ids: Memory ids to reinforce.
+        :param now: Current epoch seconds; defaults to :func:`now_epoch`.
+        :returns: The number of rows updated.
+        """
+        ids = [m for m in memory_ids if m]
+        if not ids:
+            return 0
+        now = now if now is not None else now_epoch()
+        with self._session() as session:
+            result = session.execute(
+                update(SqlMemory)
+                .where(SqlMemory.id.in_(ids), SqlMemory.archived.is_(False))
+                .values(
+                    last_accessed_at=now,
+                    access_count=SqlMemory.access_count + 1,
+                )
+            )
+        return result.rowcount or 0
 
     # ── read (PURE — no writes on this path) ───────────────────────
 

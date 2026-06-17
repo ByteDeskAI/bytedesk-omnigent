@@ -6,9 +6,18 @@ semantic-ready on PostgreSQL (tsvector GIN + a ``vector(384)`` column the
 migration adds). See :mod:`omnigent.stores.memory_store.sqlalchemy_store`.
 """
 
+from omnigent.stores.memory_store.reinforcement import (
+    ReinforcementBuffer,
+    get_reinforcement_buffer,
+)
 from omnigent.stores.memory_store.sqlalchemy_store import (
     MemoryHit,
     SqlAlchemyMemoryStore,
 )
 
-__all__ = ["MemoryHit", "SqlAlchemyMemoryStore"]
+__all__ = [
+    "MemoryHit",
+    "ReinforcementBuffer",
+    "SqlAlchemyMemoryStore",
+    "get_reinforcement_buffer",
+]
