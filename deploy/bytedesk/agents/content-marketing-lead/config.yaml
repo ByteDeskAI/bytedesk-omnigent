@@ -2,7 +2,8 @@
 #
 # Migrated from the OpenClaw roster (agent id == name: so the slug is stable
 # across OpenClaw + omnigent + the Office bridge). Human name lives in
-# params.displayName. Agent DEFINITION only — no skills/tools/subagents.
+# params.displayName. Agent DEFINITION only — identity + persona prompt.
+# Tool-calling orchestration is intentionally OUT — omnigent workflows own it.
 #
 #   omnigent run deploy/bytedesk/agents/content-marketing-lead --server http://omnigent.bytedesk.localhost
 spec_version: 1
