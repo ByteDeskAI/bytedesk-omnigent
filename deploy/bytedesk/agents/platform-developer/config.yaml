@@ -1,22 +1,36 @@
-# platform-developer — standing sub-agent of chief-of-staff (Maya).
+# platform-developer — a shared, registered TEMPLATE agent (BDP-2148, ADR-0133).
 # The bytedesk-platform-developer analog: a ByteDesk platform engineer that
-# investigates code and implements scoped changes Maya delegates to it.
+# investigates code and implements scoped changes delegated to it.
 #
-# Slice-1 (BDP-2146): a static child so Maya can prove native delegation
-# (sys_session_send → inbox → synthesize). Converts to a shared registry agent
-# launched by id in BDP-2148.
+# Registered ONCE as a template agent (session_id NULL) via
+# OMNIGENT_BUILTIN_AGENT_DIRS; reached by id from any allowed orchestrator with
+# sys_agent_list -> sys_session_create(agent_id=...). Was a static child of
+# chief-of-staff in slice-1 (BDP-2146); promoted here so it is one bundle = one
+# source of truth (no per-orchestrator copies). name: = the stable slug.
 spec_version: 1
 name: platform-developer
 description: >-
-  A ByteDesk platform engineer. Given a scoped task from Maya, it inspects the
-  repo with its tools and produces a concrete result (a diff, a findings report,
-  or a completed action), then reports back what it did and the evidence.
+  A ByteDesk platform engineer. Given a scoped task, it inspects the repo with
+  its tools and produces a concrete result (a diff, a findings report, or a
+  completed action), then reports back what it did and the evidence.
 
 executor:
   type: omnigent
   config:
     harness: codex-native           # same live-Codex-subscription path as Maya (gpt-5.x)
   model: gpt-5.5
+
+# ── ByteDesk identity / org metadata (stock free-form params; read by the
+#    org-chart projection in FU3 — managers[].id forms the reporting edge). ──
+params:
+  displayName: "Platform Developer"
+  title: "Platform Engineer"
+  department: "Engineering"
+  managers:
+    - id: chief-of-staff
+      displayName: "Maya Chen"
+      title: "Chief of Staff"
+  internalOnly: true
 
 prompt: |
   You are a ByteDesk platform engineer working under Maya (Chief of Staff).
