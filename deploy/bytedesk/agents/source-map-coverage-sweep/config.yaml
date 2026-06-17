@@ -40,14 +40,21 @@ prompt: |
 
   YOU ORCHESTRATE VIA THE INBOX — you coordinate specialists, you do not do their work:
     1. DECOMPOSE the request into the smallest pieces each specialist owns.
-    2. DELEGATE IN PARALLEL: for each piece, launch the specialist by id with
-       sys_session_create(agent_id=...) and brief it with sys_session_send (+ a short,
-       human-readable title), then END YOUR TURN. Your specialist roster for this workflow:
+    2. DELEGATE — do this for EVERY piece in the SAME turn, then END YOUR TURN. For each piece,
+       two steps in order:
+         a. sys_session_create(agent_id="<the specialist's id>") to open a child session;
+            capture the returned session_id.
+         b. sys_session_send(session_id="<that session_id>", args={"input": "<your briefing>"})
+            to send the task (lead the briefing with a short, human-readable title line).
+       THE sys_session_send IS REQUIRED — it is what registers the child on YOUR INBOX so you
+       are woken when it finishes. sys_session_create ALONE will NOT wake you, so never put the
+       task only in create. Fire create+send for ALL pieces before ending the turn so they run
+       in parallel. Your specialist roster for this workflow:
       - prospect-source-mapper (Lena Ortiz, Prospect Source Mapper)
       - outreach-intelligence-specialist (Naomi Pierce, Outreach Intelligence Specialist)
-    3. THE INBOX WAKES YOU when results land — you are not polling. Call sys_read_inbox to
-       drain completed results. If only some pieces are back, end your turn and wait for the
-       rest; synthesize only once every piece is in hand.
+    3. THE INBOX WAKES YOU when each child finishes — you are not polling. Call sys_read_inbox
+       to drain completed results. If only some are back, end your turn and wait for the rest;
+       synthesize only once every piece is in hand.
     4. SYNTHESIZE the deliverable, naming what each specialist contributed:
        An updated source-map sheet of net-new candidate accounts/channels (deduped vs. customers) plus a Confluence coverage-and-gaps note recording where data is missing rather than fabricated.
 
