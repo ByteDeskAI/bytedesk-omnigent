@@ -24,6 +24,7 @@ Recall is lexical here: SQLite FTS5 (``memories_fts``) and Postgres tsvector
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 
@@ -40,6 +41,8 @@ from omnigent.db.utils import (
     now_epoch,
     strip_nul_bytes,
 )
+
+_logger = logging.getLogger(__name__)
 
 _DAY = 86_400
 
@@ -321,11 +324,13 @@ class SqlAlchemyMemoryStore:
                 .all()
             )
             hits: list[MemoryHit] = []
+            dropped_sub_floor = 0
             for r in rows:
                 ew = _effective_weight(
                     r.weight, r.last_accessed_at, comp.half_life_seconds, now
                 )
                 if ew < comp.read_floor:
+                    dropped_sub_floor += 1
                     continue
                 hits.append(
                     MemoryHit(
@@ -341,7 +346,21 @@ class SqlAlchemyMemoryStore:
                     )
                 )
             hits.sort(key=lambda h: h.effective_weight, reverse=True)
-            return hits[:limit]
+            returned = hits[:limit]
+            # Recall observability (T13): counts make decay/floor tuning
+            # falsifiable rather than guessed (ADR-0132 / Hermes lesson).
+            _logger.info(
+                "memory_query scope=%s owner=%s name=%s candidates=%d "
+                "considered=%d dropped_sub_floor=%d returned=%d",
+                scope,
+                owner,
+                name,
+                len(candidate_ids),
+                len(rows),
+                dropped_sub_floor,
+                len(returned),
+            )
+            return returned
 
     def _lexical_candidate_ids(
         self, session, compartment_id: str, query: str, limit: int
