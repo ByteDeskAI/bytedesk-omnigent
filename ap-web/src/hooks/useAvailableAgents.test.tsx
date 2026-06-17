@@ -24,7 +24,11 @@ function mockResponse(body: unknown, init?: { ok?: boolean; status?: number }): 
 
 const fetchMock = vi.fn();
 
-const BUILTINS_URL = "/v1/agents";
+// Pinned with limit=100: GET /v1/agents defaults to a 20-row page, which would
+// silently drop built-ins beyond the first page (BDP-2168). The hook must
+// request the full set so e.g. chief-of-staff isn't truncated into the
+// slug-labelled session-scan path.
+const BUILTINS_URL = "/v1/agents?limit=100";
 const SCAN_URL = "/v1/sessions?limit=100&kind=any";
 
 /**
@@ -335,6 +339,43 @@ describe("useAvailableAgents", () => {
       .map((c) => c[0] as string)
       .filter((u) => u.endsWith("/agent"));
     expect(enrichCalls).toEqual(["/v1/sessions/conv_3/agent"]);
+  });
+
+  it("prefers the enriched agent's server display_name over the slug (BDP-2168)", async () => {
+    // A session-bound agent NOT present in the built-in page (e.g. truncated
+    // beyond limit) flows through the enrich path. It must render its
+    // server-projected params.displayName ("Maya Chen"), not the
+    // slug-capitalized "Chief-of-staff".
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({ object: "list", data: [], has_more: false }),
+      [SCAN_URL]: mockResponse({
+        object: "list",
+        data: [{ id: "conv_m", agent_id: "ag_cos", agent_name: "chief-of-staff" }],
+        has_more: false,
+      }),
+      "/v1/sessions/conv_m/agent": mockResponse({
+        id: "ag_cos",
+        object: "agent",
+        name: "chief-of-staff",
+        display_name: "Maya Chen",
+        harness: "claude-sdk",
+        skills: [],
+      }),
+    });
+
+    const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([
+      {
+        id: "ag_cos",
+        name: "chief-of-staff",
+        display_name: "Maya Chen",
+        description: null,
+        harness: "claude-sdk",
+        skills: [],
+      },
+    ]);
   });
 
   it("collapses same-named custom agents with distinct agent_ids to the newest session's row", async () => {

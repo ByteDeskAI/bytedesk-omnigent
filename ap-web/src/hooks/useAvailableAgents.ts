@@ -62,7 +62,12 @@ interface SessionListItemWire {
  * (see designs/BUILTIN_AGENTS.md).
  */
 async function fetchBuiltinAgents(): Promise<AvailableAgent[]> {
-  const res = await authenticatedFetch("/v1/agents");
+  // limit=100: GET /v1/agents defaults to a 20-row page, which silently drops
+  // built-ins beyond the first page (the ByteDesk team alone is 25 personas +
+  // the native wrappers). A truncated built-in then falls through to the
+  // session-scan path, which labels by slug — so e.g. chief-of-staff showed as
+  // "Chief-of-staff" instead of "Maya Chen". Matches scanSessionAgents' limit.
+  const res = await authenticatedFetch("/v1/agents?limit=100");
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const body = (await res.json()) as { data: BuiltinAgentWire[] };
   return body.data.map((a) => ({
@@ -121,6 +126,7 @@ async function scanSessionAgents(): Promise<ScannedSessionAgent[]> {
 interface AgentObjectWire {
   id: string;
   name: string;
+  display_name?: string | null;
   description?: string | null;
   harness?: string | null;
   skills?: { name: string; description: string }[];
@@ -151,7 +157,9 @@ async function enrichSessionAgent(scanned: ScannedSessionAgent): Promise<Availab
     const json = (await res.json()) as AgentObjectWire;
     return {
       ...fallback,
-      display_name: displayNameForAgent(json.name, json.harness),
+      // Prefer the server-projected params.displayName (e.g. "Maya Chen");
+      // fall back to the slug-derived label for bundles that set none.
+      display_name: json.display_name ?? displayNameForAgent(json.name, json.harness),
       description: json.description ?? null,
       harness: json.harness ?? null,
       skills: json.skills ?? [],

@@ -3973,7 +3973,7 @@ function AgentPicker({
                 )}
               >
                 <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <span className="truncate">{agentDisplayLabel(a.name)}</span>
+                  <span className="truncate">{a.display_name ?? agentDisplayLabel(a.name)}</span>
                   {a.description && (
                     <span className="truncate text-xs text-muted-foreground">{a.description}</span>
                   )}
