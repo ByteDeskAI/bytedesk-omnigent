@@ -54,6 +54,9 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
     terminals: list[str] = []
     harness: str | None = None
     display_name: str | None = None
+    managers: list = []
+    department: str | None = None
+    title: str | None = None
     # Prefer the stored entity's description; fall back to the spec's
     # top-level description when the stored value is unset (single-file
     # YAML agents don't persist it at registration today). Lets the
@@ -96,6 +99,16 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
         if isinstance(_params, dict):
             _dn = _params.get("displayName")
             display_name = str(_dn) if _dn else None
+            # Org metadata for the derived org chart (FU3, ADR-0134): managers
+            # stay as raw {id, displayName, title} objects (the platform side
+            # flattens to manager-id slugs); department/title are plain strings.
+            _mgrs = _params.get("managers")
+            if isinstance(_mgrs, list):
+                managers = [m for m in _mgrs if isinstance(m, dict)]
+            _dept = _params.get("department")
+            department = str(_dept) if _dept else None
+            _title = _params.get("title")
+            title = str(_title) if _title else None
     except Exception:  # noqa: BLE001 — spec load failure must not break the list
         _logger.debug(
             "Failed to load spec for agent %s; mcp_servers/skills will be empty",
@@ -114,6 +127,9 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
         mcp_servers=mcp_servers,
         skills=skills,
         terminals=terminals,
+        managers=managers,
+        department=department,
+        title=title,
     )
 
 
