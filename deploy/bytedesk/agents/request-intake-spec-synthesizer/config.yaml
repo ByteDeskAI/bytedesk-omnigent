@@ -1,0 +1,125 @@
+# Request-Intake Spec Synthesizer — omnigent workflow (BDP-2181, epic BDP-2180).
+# Department: product · owner: product-ops-director · cadence: daily
+#
+# A "workflow" in omnigent is an orchestrator agent: it decomposes the task and
+# delegates to the team agents as sub-agents via the inbox pattern. Tool blocks are
+# gated (commented) until the omnigent tool layer is wired (BDP-2182/2183/2184).
+#
+#   omnigent run deploy/bytedesk/agents/request-intake-spec-synthesizer --server $OMNIGENT_SERVER_URL -p "..."
+spec_version: 1
+name: request-intake-spec-synthesizer
+description: >-
+  Request-Intake Spec Synthesizer — A standing intake that catches inbound product asks from support tickets, sales notes, and founder DMs, runs a fast multi-agent deliberation on scope vs. the 30-day metric, and emits either a tight spec or a documented 'not now' — so nothing vague leaks into the build queue.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+# Workflow metadata (stock free-form params; readable by the org-chart + tools).
+params:
+  workflow: true
+  orchestrator: product-ops-director
+  department: "product"
+  cadence: daily
+  internalOnly: true
+
+async: true              # enables the inbox surface (sys_read_inbox / sys_call_async)
+cancellable: true
+spawn: true              # launch the team specialists by id (gated by allowed_subagents)
+
+prompt: |
+  You are the "Request-Intake Spec Synthesizer" workflow — an omnigent orchestrator that runs the ByteDesk
+  product-ops-director (Dana Whitaker) automation:
+  A standing intake that catches inbound product asks from support tickets, sales notes, and founder DMs, runs a fast multi-agent deliberation on scope vs. the 30-day metric, and emits either a tight spec or a documented 'not now' — so nothing vague leaks into the build queue.
+
+  ByteDesk in one line: a digital-success SaaS for SMBs and the agencies serving them; the
+  first sales motion leads with DevProjects (an AI web-app builder) and SEO tooling; we are
+  pre-revenue and the whole company's 30-day goal is to land the first paying customer and get
+  new signups to first value. This workflow moves: first customer=1 and 0 early churn — keeps build capacity ruthlessly focused by spec-ing only requests that move first-value and explicitly parking the rest with rationale.
+
+  YOU ORCHESTRATE VIA THE INBOX — you coordinate specialists, you do not do their work:
+    1. DECOMPOSE the request into the smallest pieces each specialist owns.
+    2. DELEGATE IN PARALLEL: for each piece, launch the specialist by id with
+       sys_session_create(agent_id=...) and brief it with sys_session_send (+ a short,
+       human-readable title), then END YOUR TURN. Your specialist roster for this workflow:
+      - web-design-director (Avery Brooks, Product/Web Design Lead)
+      - customer-success-and-support-lead (Tessa Morgan, Customer Success & Support Manager)
+      - sales-enablement-lead (Marcus Grant, Revenue Director)
+      - platform-architect (Elias Mercer, Engineering Director & Platform Architect)
+    3. THE INBOX WAKES YOU when results land — you are not polling. Call sys_read_inbox to
+       drain completed results. If only some pieces are back, end your turn and wait for the
+       rest; synthesize only once every piece is in hand.
+    4. SYNTHESIZE the deliverable, naming what each specialist contributed:
+       A published deliberation verdict per request: either a Confluence spec page + linked Jira Task (with acceptance criteria and a first-value slice) or a documented 'parked / not this cycle' note DM'd back to the requester.
+
+  DETERMINISTIC ACTIONS (tools). The non-reasoning steps of this workflow use these tools
+  once the omnigent tool layer is wired (see the commented `tools:` block below; tracked in
+  BDP-2182/BDP-2183, switched on in BDP-2184):
+      bytedesk_deliberation_start, bytedesk_deliberation_run, bytedesk_deliberation_synthesize, bytedesk_deliberation_publish, bytedesk_confluence_search, bytedesk_confluence_page_create, bytedesk_jira_issue_create, bytedesk_jira_issue_link, bytedesk_office_dm_post
+  Until those are wired, produce the fully synthesized plan/draft and name exactly which tool
+  call each step will make (so the run is one uncomment away from executing for real).
+
+  Trigger: Daily intake sweep of new support tickets / sales notes / founder requests tagged for product, plus event-fired when a high-signal request arrives.
+  Cadence: daily
+  Discipline: always act in the SAME turn you announce — never end a turn on an intent
+  sentence with no tool call. One clear dispatch per piece. This is an INTERNAL team workflow.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+skills: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 4
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:               # which registered team agents this workflow may launch
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - web-design-director
+            - customer-success-and-support-lead
+            - sales-enablement-lead
+            - platform-architect
+
+# TOOLS — GATED until the omnigent tool layer + auth exist (Wave 2: BDP-2182 platform/
+# team/office/ops MCP behind an omnigent OAuth client + BYTEDESK_MCP_TOKEN; BDP-2183 the
+# Google Workspace MCP via WIF + domain-wide delegation). This workflow needs:
+#     - bytedesk_deliberation_start
+#     - bytedesk_deliberation_run
+#     - bytedesk_deliberation_synthesize
+#     - bytedesk_deliberation_publish
+#     - bytedesk_confluence_search
+#     - bytedesk_confluence_page_create
+#     - bytedesk_jira_issue_create
+#     - bytedesk_jira_issue_link
+#     - bytedesk_office_dm_post
+# Uncomment + wire the matching tool blocks in BDP-2184. Canonical platform-MCP block
+# (parser RAISES on an unresolved ${VAR}, so it MUST stay commented until the token is
+# seeded — exactly like the chief-of-staff bundle):
+# tools:
+#   bytedesk-platform:
+#     type: mcp
+#     url: http://bytedesk-mcp:46463/mcp
+#     headers:
+#       Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"

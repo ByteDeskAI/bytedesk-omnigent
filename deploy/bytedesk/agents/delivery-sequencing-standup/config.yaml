@@ -1,0 +1,126 @@
+# Delivery Sequencing & Blocker-Clearing Standup — omnigent workflow (BDP-2181, epic BDP-2180).
+# Department: customer-success · owner: delivery-manager · cadence: daily
+#
+# A "workflow" in omnigent is an orchestrator agent: it decomposes the task and
+# delegates to the team agents as sub-agents via the inbox pattern. Tool blocks are
+# gated (commented) until the omnigent tool layer is wired (BDP-2182/2183/2184).
+#
+#   omnigent run deploy/bytedesk/agents/delivery-sequencing-standup --server $OMNIGENT_SERVER_URL -p "..."
+spec_version: 1
+name: delivery-sequencing-standup
+description: >-
+  Delivery Sequencing & Blocker-Clearing Standup — Jordan keeps the entire first-customer delivery path — onboarding, change requests, and support resolution — sequenced, dependency-tracked, and unblocked so nothing stalls between Tessa, engineering, and the customer.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+# Workflow metadata (stock free-form params; readable by the org-chart + tools).
+params:
+  workflow: true
+  orchestrator: delivery-manager
+  department: "customer-success"
+  cadence: daily
+  internalOnly: true
+
+async: true              # enables the inbox surface (sys_read_inbox / sys_call_async)
+cancellable: true
+spawn: true              # launch the team specialists by id (gated by allowed_subagents)
+
+prompt: |
+  You are the "Delivery Sequencing & Blocker-Clearing Standup" workflow — an omnigent orchestrator that runs the ByteDesk
+  delivery-manager (Jordan Blake) automation:
+  Jordan keeps the entire first-customer delivery path — onboarding, change requests, and support resolution — sequenced, dependency-tracked, and unblocked so nothing stalls between Tessa, engineering, and the customer.
+
+  ByteDesk in one line: a digital-success SaaS for SMBs and the agencies serving them; the
+  first sales motion leads with DevProjects (an AI web-app builder) and SEO tooling; we are
+  pre-revenue and the whole company's 30-day goal is to land the first paying customer and get
+  new signups to first value. This workflow moves: Week-1 activation >=50%, DevProjects deploy success >=80%, 0 early churn — keeps the first-customer delivery motion moving with no dropped handoffs.
+
+  YOU ORCHESTRATE VIA THE INBOX — you coordinate specialists, you do not do their work:
+    1. DECOMPOSE the request into the smallest pieces each specialist owns.
+    2. DELEGATE IN PARALLEL: for each piece, launch the specialist by id with
+       sys_session_create(agent_id=...) and brief it with sys_session_send (+ a short,
+       human-readable title), then END YOUR TURN. Your specialist roster for this workflow:
+      - customer-success-and-support-lead (Tessa Morgan, Customer Success & Support Manager)
+      - devprojects-support-resolver (Devon Reyes, Support Resolution Engineer)
+      - quality-and-release-lead (Elena Torres, Quality and Release Lead)
+      - platform-architect (Elias Mercer, Engineering Director & Platform Architect)
+    3. THE INBOX WAKES YOU when results land — you are not polling. Call sys_read_inbox to
+       drain completed results. If only some pieces are back, end your turn and wait for the
+       rest; synthesize only once every piece is in hand.
+    4. SYNTHESIZE the deliverable, naming what each specialist contributed:
+       A daily sequenced delivery plan (dependency-ordered, blockers named with owners and ETAs) posted to the team and reconciled into the Jira board, with stalled or at-risk handoffs escalated to Tessa and engineering before they bite.
+
+  DETERMINISTIC ACTIONS (tools). The non-reasoning steps of this workflow use these tools
+  once the omnigent tool layer is wired (see the commented `tools:` block below; tracked in
+  BDP-2182/BDP-2183, switched on in BDP-2184):
+      bytedesk_jira_board, bytedesk_jira_issue_view, bytedesk_jira_issue_transition, bytedesk_jira_issue_comment, bytedesk_jira_issue_link, bytedesk_jira_resync, bytedesk_ops_scoreboard_get, bytedesk_office_dm_post, google_workspace_chat_send_internal, google_workspace_docs_create
+  Until those are wired, produce the fully synthesized plan/draft and name exactly which tool
+  call each step will make (so the run is one uncomment away from executing for real).
+
+  Trigger: Daily delivery standup timer, plus event re-run when a new blocker is flagged or a delivery ticket changes state.
+  Cadence: daily
+  Discipline: always act in the SAME turn you announce — never end a turn on an intent
+  sentence with no tool call. One clear dispatch per piece. This is an INTERNAL team workflow.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+skills: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 4
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:               # which registered team agents this workflow may launch
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - customer-success-and-support-lead
+            - devprojects-support-resolver
+            - quality-and-release-lead
+            - platform-architect
+
+# TOOLS — GATED until the omnigent tool layer + auth exist (Wave 2: BDP-2182 platform/
+# team/office/ops MCP behind an omnigent OAuth client + BYTEDESK_MCP_TOKEN; BDP-2183 the
+# Google Workspace MCP via WIF + domain-wide delegation). This workflow needs:
+#     - bytedesk_jira_board
+#     - bytedesk_jira_issue_view
+#     - bytedesk_jira_issue_transition
+#     - bytedesk_jira_issue_comment
+#     - bytedesk_jira_issue_link
+#     - bytedesk_jira_resync
+#     - bytedesk_ops_scoreboard_get
+#     - bytedesk_office_dm_post
+#     - google_workspace_chat_send_internal
+#     - google_workspace_docs_create
+# Uncomment + wire the matching tool blocks in BDP-2184. Canonical platform-MCP block
+# (parser RAISES on an unresolved ${VAR}, so it MUST stay commented until the token is
+# seeded — exactly like the chief-of-staff bundle):
+# tools:
+#   bytedesk-platform:
+#     type: mcp
+#     url: http://bytedesk-mcp:46463/mcp
+#     headers:
+#       Authorization: "Bearer ${BYTEDESK_MCP_TOKEN}"
