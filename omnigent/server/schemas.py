@@ -197,6 +197,13 @@ class AgentObject(BaseModel):
     policies: list[PolicySummary] = Field(default_factory=list)
     skills: list[SkillSummary] = Field(default_factory=list)
     terminals: list[str] = Field(default_factory=list)
+    # Org metadata derived from the bundle's ``params`` (FU3, ADR-0134) for the
+    # params-derived org chart. ``managers`` are kept as raw
+    # ``{id, displayName, title}`` objects (the platform side flattens to
+    # manager-id slug strings); ``department`` / ``title`` are plain strings.
+    managers: list[dict[str, Any]] = Field(default_factory=list)
+    department: str | None = None
+    title: str | None = None
 
 
 # ── Session Policies ───────────────────────────────────────────
