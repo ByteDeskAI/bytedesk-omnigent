@@ -1015,3 +1015,35 @@ class SqlIdempotencyKey(Base):
     __table_args__ = (
         Index("ix_idempotency_keys_dead_lettered", "dead_lettered"),
     )
+
+
+class SqlWebhookBinding(Base):
+    """Maps an inbound external event to a durable signal (BDP-2249, ADR-0142).
+
+    The signed-webhook ingress (``POST /v1/ingress/{source}``) verifies the HMAC,
+    resolves the ``(source, match_key)`` binding, and delivers ``signal_id`` to the
+    durable signal bus (BDP-2248) — waking the parked session (e.g. TeamCity
+    ``build.finished`` → ``release:{version}``). An unmatched event 404s
+    (BDP-1419), never 2xx. ``match_key`` ``"*"`` is a per-source catch-all.
+    """
+
+    __tablename__ = "webhook_bindings"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    match_key: Mapped[str] = mapped_column(
+        String(256), nullable=False, server_default="*"
+    )
+    signal_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=true()
+    )
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "source", "match_key", name="uq_webhook_bindings_source_match"
+        ),
+        Index("ix_webhook_bindings_source_enabled", "source", "enabled"),
+    )
