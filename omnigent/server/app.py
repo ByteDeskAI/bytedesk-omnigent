@@ -1527,6 +1527,16 @@ def create_app(
         prefix="/v1",
         tags=["terminals"],
     )
+    # BDP-2249 (ADR-0142): signed inbound-webhook ingress — verify HMAC, resolve a
+    # (source, event) binding, and deliver to the durable signal bus (404 on
+    # no-match, never 2xx; BDP-1419).
+    from omnigent.server.routes.ingress import create_ingress_router
+
+    app.include_router(
+        create_ingress_router(),
+        prefix="/v1",
+        tags=["ingress"],
+    )
     if comment_store is not None:
         app.include_router(
             create_comments_router(
