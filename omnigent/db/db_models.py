@@ -945,3 +945,43 @@ class SqlAgentMessage(Base):
         ),
         Index("ix_agent_messages_dead_lettered", "dead_lettered"),
     )
+
+
+class SqlCronTrigger(Base):
+    """A durable scheduled trigger that fires an agent on a cadence (BDP-2250,
+    ADR-0142).
+
+    The native cron scheduler (the server ``_lifespan`` loop) finds due triggers
+    (``enabled`` AND ``next_fire_at <= now``), **claims** each via a guarded
+    UPDATE on ``(id, next_fire_at)`` — exactly-once per fire instant (ADR-0009) —
+    and dispatches it by opening/resuming the agent's session and posting
+    ``payload`` as a message. Replaces the no-op ``cadence:`` bundle param and the
+    stubbed ``sys_timer_set`` (``timer.py`` ``NotImplementedError``). ``agent_id``
+    is a plain column (no hard FK) so the scheduler is decoupled + standalone-
+    testable, mirroring the signal bus.
+    """
+
+    __tablename__ = "cron_triggers"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    key: Mapped[str] = mapped_column(String(256), nullable=False)
+    schedule_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    schedule_expr: Mapped[str] = mapped_column(String(128), nullable=False)
+    next_fire_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_fired_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=true()
+    )
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("agent_id", "key", name="uq_cron_triggers_agent_key"),
+        Index("ix_cron_triggers_enabled_next_fire", "enabled", "next_fire_at"),
+        CheckConstraint(
+            "schedule_kind in ('interval', 'cron', 'once')",
+            name="ck_cron_triggers_schedule_kind",
+        ),
+    )

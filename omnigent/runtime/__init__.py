@@ -14,6 +14,7 @@ from omnigent.stores.memory_store.pgvector import pgvector_installed as _pgvecto
 
 if TYPE_CHECKING:
     from omnigent.bus import SqlAlchemySignalBus
+    from omnigent.scheduler import SqlAlchemyCronScheduler
     from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runner.routing import RunnerRouter
     from omnigent.runtime.agent_cache import AgentCache
@@ -147,6 +148,29 @@ def get_signal_bus() -> SqlAlchemySignalBus:
         bus = SqlAlchemySignalBus(location)
         _signal_bus_cache[location] = bus
     return bus
+
+
+# Lazily-built, per-URI cache of the native cron scheduler (BDP-2250, ADR-0142).
+# Shares the conversation store's database, mirroring the accessors above.
+_cron_scheduler_cache: dict[str, SqlAlchemyCronScheduler] = {}
+
+
+def get_cron_scheduler() -> SqlAlchemyCronScheduler:
+    """Return the native cron scheduler (BDP-2250, ADR-0142).
+
+    Built lazily from the canonical conversation store's database URI and cached
+    per URI. Drives the ``_lifespan`` cron loop — the org heartbeat.
+
+    :returns: The :class:`SqlAlchemyCronScheduler` for the active database.
+    """
+    from omnigent.scheduler import SqlAlchemyCronScheduler
+
+    location = get_conversation_store().storage_location
+    scheduler = _cron_scheduler_cache.get(location)
+    if scheduler is None:
+        scheduler = SqlAlchemyCronScheduler(location)
+        _cron_scheduler_cache[location] = scheduler
+    return scheduler
 
 
 def _select_memory_embedder(engine: Any):
