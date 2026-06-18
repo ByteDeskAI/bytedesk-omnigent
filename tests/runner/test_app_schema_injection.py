@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from omnigent.runner.app import _inject_mcp_schemas
+from omnigent.runner.app import _inject_mcp_schemas, _spec_builtin_tool_schemas
 
 
 def _schema(name: str) -> dict[str, Any]:
@@ -111,3 +111,62 @@ def test_inject_skips_mcp_already_present() -> None:
     names = [t["name"] for t in body["tools"]]
     assert names == ["sys_os_read", "confluence_get_service_info", "confluence_search_pages"]
     assert names.count("confluence_get_service_info") == 1
+
+
+# ---------------------------------------------------------------------------
+# _spec_builtin_tool_schemas — the streaming path's builtin assembly (BDP-2204)
+# ---------------------------------------------------------------------------
+
+
+def _builtin_names(schemas: list[dict[str, Any]]) -> set[str]:
+    """Builtin schemas are nested OpenAI shape — name is under ``function``."""
+    out: set[str] = set()
+    for s in schemas:
+        fn = s.get("function")
+        if isinstance(fn, dict) and isinstance(fn.get("name"), str):
+            out.add(fn["name"])
+    return out
+
+
+def test_builtin_schemas_include_spawn_orchestration_tools() -> None:
+    """A spawn-enabled spec yields the sys_* orchestration builtins.
+
+    These are exactly the tools Maya's prompt drives (sys_agent_list /
+    sys_session_create / sys_session_send / sys_read_inbox). The streaming
+    turn path must inject them or the model gets "No such tool available:
+    mcp__omnigent__sys_agent_list" (BDP-2204). Mirrors test_manager's
+    spawn-gate assertion at the app-helper boundary.
+    """
+    from omnigent.spec.types import AgentSpec
+
+    names = _builtin_names(
+        _spec_builtin_tool_schemas(AgentSpec(spec_version=1, spawn=True), None)
+    )
+    assert "sys_agent_list" in names
+    assert "sys_session_create" in names
+    assert "sys_session_send" in names
+    assert "sys_read_inbox" in names
+
+
+def test_builtin_schemas_empty_for_none_spec() -> None:
+    """No spec → no builtins (degrades to MCP-only, never raises)."""
+    assert _spec_builtin_tool_schemas(None, None) == []
+
+
+def test_builtin_schemas_inject_then_normalize_round_trip() -> None:
+    """Injected nested builtins survive the inject + flatten to a callable name.
+
+    Locks in the end-to-end shape contract: nested builtin schemas append
+    into ``body["tools"]`` and ``_normalize_tool_schemas`` exposes a
+    top-level ``name`` (→ ``mcp__omnigent__sys_agent_list``), so the empty-name
+    failure mode cannot silently return.
+    """
+    from omnigent.runtime.harnesses._executor_adapter import _normalize_tool_schemas
+    from omnigent.spec.types import AgentSpec
+
+    body: dict[str, Any] = {"tools": []}
+    _inject_mcp_schemas(
+        body, _spec_builtin_tool_schemas(AgentSpec(spec_version=1, spawn=True), None)
+    )
+    flat_names = {s.get("name") for s in _normalize_tool_schemas(body["tools"])}
+    assert "sys_agent_list" in flat_names
