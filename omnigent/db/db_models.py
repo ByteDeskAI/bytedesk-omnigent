@@ -1214,3 +1214,66 @@ class SqlBusinessOutcome(Base):
         Index("ix_business_outcomes_agent_metric", "agent_id", "metric"),
         Index("ix_business_outcomes_kind", "kind"),
     )
+
+
+class SqlDeliberation(Base):
+    """A durable proposal→debate→decision (BDP-2273 C6, ADR-0142).
+
+    The org's decision organ: a company decides by *proposal + debate*, not one
+    manager's prompt. A deliberation opens on a ``topic`` with a ``proposal``,
+    accumulates positions (``deliberation_positions``) across rounds, and closes
+    with a recorded ``decision`` — so "what did we decide about X?" is a durable
+    query, not lost in a chat scroll. Decide is a guarded ``open → decided``
+    transition (single writer, ADR-0009).
+    """
+
+    __tablename__ = "deliberations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    topic: Mapped[str] = mapped_column(String(256), nullable=False)
+    proposal: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="open"
+    )
+    decision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    opened_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    decided_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_deliberations_topic_status", "topic", "status"),
+        CheckConstraint(
+            "status in ('open', 'decided', 'closed')",
+            name="ck_deliberations_status",
+        ),
+    )
+
+
+class SqlDeliberationPosition(Base):
+    """A position taken in a deliberation round (BDP-2273 C6, ADR-0142).
+
+    One row per (agent, round) contribution — a ``stance`` (for / against / amend)
+    plus the argument ``body``. Positions accumulate per ``(deliberation_id,
+    round)`` so the debate is reconstructable.
+    """
+
+    __tablename__ = "deliberation_positions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    deliberation_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    stance: Mapped[str] = mapped_column(String(16), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    round: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_deliberation_positions_delib_round", "deliberation_id", "round"),
+        CheckConstraint(
+            "stance in ('for', 'against', 'amend')",
+            name="ck_deliberation_positions_stance",
+        ),
+    )
