@@ -1185,3 +1185,32 @@ class SqlPeerMessage(Base):
             "kind in ('dm', 'broadcast', 'escalation')", name="ck_peer_messages_kind"
         ),
     )
+
+
+class SqlBusinessOutcome(Base):
+    """A durable attributed business outcome (BDP-2268 B7, ADR-0142).
+
+    The org's outcome ledger: an append-only record of what an agent actually
+    achieved — a won deal, a resolved ticket, a shipped feature — each carrying
+    the ``metric`` it rolls into and a ``value`` (deal size, count). Recording an
+    outcome upserts the agent's cumulative ``scoreboard_entries`` value for that
+    metric, so find-specialist ranking + the accountability loop reflect what
+    worked (the org learns who is good at what). Append-only; the scoreboard is
+    the derived rollup.
+    """
+
+    __tablename__ = "business_outcomes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    metric: Mapped[str] = mapped_column(String(64), nullable=False)
+    value: Mapped[float] = mapped_column(Float, nullable=False, server_default="1")
+    ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_business_outcomes_agent_metric", "agent_id", "metric"),
+        Index("ix_business_outcomes_kind", "kind"),
+    )

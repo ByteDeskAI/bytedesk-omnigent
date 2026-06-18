@@ -49,5 +49,6 @@ BUILTIN_POLICY_MODULES = [
     "omnigent.policies.builtins.forever_gate",
     "omnigent.policies.builtins.two_key",
     "omnigent.policies.builtins.dry_run",
+    "omnigent.policies.builtins.delegation",
     "omnigent.inner.nessie.policies",
 ]
