@@ -1005,6 +1005,18 @@ def create_app(
             cron_scheduler_loop(dispatch=_cron_dispatch)
         )
 
+        # BDP-2272 C4 (ADR-0142): native accountability loop — rebalance stalled
+        # owned goals + escalate blocked goals to the manager, guarded by a
+        # distinct advisory lock. The manager target comes from
+        # OMNIGENT_ACCOUNTABILITY_MANAGER; unset → rebalance-only (no escalation).
+        from omnigent.accountability import accountability_loop
+
+        accountability_task = asyncio.create_task(
+            accountability_loop(
+                manager_agent_id=os.getenv("OMNIGENT_ACCOUNTABILITY_MANAGER") or None
+            )
+        )
+
         # BDP-2252 (ADR-0142): reclaim tool-steps orphaned by a restart — a
         # ``running`` step past its ``deadline_at`` goes back to ``pending``
         # (attempts remain) or ``failed``. One-shot at boot under a distinct PG
@@ -1039,6 +1051,9 @@ def create_app(
             cron_scheduler_task.cancel()
             with suppress(asyncio.CancelledError):
                 await cron_scheduler_task
+            accountability_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await accountability_task
             # Stop in-flight background managed-sandbox launches so a
             # slow provision doesn't outlive the ASGI shutdown (the
             # sandbox itself, if already provisioned, is reaped by the
