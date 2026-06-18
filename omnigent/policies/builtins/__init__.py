@@ -50,5 +50,6 @@ BUILTIN_POLICY_MODULES = [
     "omnigent.policies.builtins.two_key",
     "omnigent.policies.builtins.dry_run",
     "omnigent.policies.builtins.delegation",
+    "omnigent.policies.builtins.outreach_compliance",
     "omnigent.inner.nessie.policies",
 ]

@@ -1277,3 +1277,29 @@ class SqlDeliberationPosition(Base):
             name="ck_deliberation_positions_stance",
         ),
     )
+
+
+class SqlSuppression(Base):
+    """A do-not-contact suppression entry (BDP-2278 F3, ADR-0142).
+
+    The org's outreach-compliance floor: an opt-out / GDPR-erasure / hard-bounce /
+    complaint that means an address must **never** be contacted again on a channel.
+    Keyed ``(channel, address)`` so the check is an O(1) PK lookup the outreach
+    path consults before sending. Append-once (idempotent suppress); honoring it is
+    the CAN-SPAM/GDPR obligation a sending agent cannot talk its way past.
+    """
+
+    __tablename__ = "suppressions"
+
+    channel: Mapped[str] = mapped_column(String(16), primary_key=True)
+    address: Mapped[str] = mapped_column(String(320), primary_key=True)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "reason in ('unsubscribe', 'gdpr_erasure', 'bounce', 'complaint', 'manual')",
+            name="ck_suppressions_reason",
+        ),
+    )
