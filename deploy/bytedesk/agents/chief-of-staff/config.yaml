@@ -148,3 +148,16 @@ tools:
       client_id: omnigent-mcp
       client_secret: ${OMNIGENT_MCP_CLIENT_SECRET}   # Infisical /omnigent-mcp (operator-hydrated)
       scopes: [mcp.read, mcp.write, mcp.admin]
+    # Maya is an ORCHESTRATOR (BDP-2205): the bytedesk-platform MCP exposes ~344
+    # tools, and combined with her ~44 sys_* builtins that overflows the
+    # claude-sdk tool surface — the CLI then silently drops the sys_* tools and
+    # she can't delegate ("No such tool available: mcp__omnigent__sys_agent_list").
+    # She delegates platform ACTIONS to specialists; she only needs to SEE state.
+    # Curate to a small read/inventory subset (bare tool names) so her total tool
+    # count stays small and the sys_* orchestration tools are always surfaced.
+    tool_allowlist:
+      - platform_get_inventory          # discover available platform capabilities to delegate
+      - sales_list_prospecting_searches # read sales prospecting state
+      - sales_get_prospecting_search
+      - tools_list_market_research      # read market-research outputs
+      - dev_get_dev_server_status       # read dev environment status

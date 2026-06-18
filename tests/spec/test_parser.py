@@ -1038,6 +1038,34 @@ def test_parse_inline_mcp_http_server(tmp_path: Path) -> None:
     assert srv.description == "My HTTP service"
     assert srv.command is None
     assert srv.args == []
+    # No allowlist declared → empty (expose all tools), backward-compatible.
+    assert srv.tool_allowlist == []
+
+
+def test_parse_inline_mcp_tool_allowlist(tmp_path: Path) -> None:
+    """
+    A ``tools.<name>`` entry with ``tool_allowlist`` parses into
+    :attr:`MCPServerConfig.tool_allowlist`; absent yields ``[]`` (BDP-2205).
+
+    If the parse path ignored the field, ``srv.tool_allowlist`` would be
+    ``[]`` and the curated-subset filter could never restrict tools.
+    """
+    config = {
+        "spec_version": 1,
+        "name": "inline-allowlist",
+        "tools": {
+            "bytedesk-platform": {
+                "type": "mcp",
+                "url": "http://localhost:9000/mcp",
+                "tool_allowlist": ["a", "b"],
+            }
+        },
+    }
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+    spec = parse(tmp_path)
+
+    assert len(spec.mcp_servers) == 1
+    assert spec.mcp_servers[0].tool_allowlist == ["a", "b"]
 
 
 def test_parse_inline_mcp_skips_standard_tools_keys(tmp_path: Path) -> None:

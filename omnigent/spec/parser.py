@@ -2488,9 +2488,30 @@ def _parse_inline_mcp_servers(
                 env=env,
                 databricks_profile=databricks_profile,
                 oauth=oauth,
+                tool_allowlist=_parse_tool_allowlist(val),
             )
         )
     return servers
+
+
+def _parse_tool_allowlist(val: dict[str, Any]) -> list[str]:  # type: ignore[explicit-any]
+    """
+    Read an optional per-server tool allowlist from an inline MCP entry.
+
+    Accepts ``tool_allowlist`` (canonical) or the ``tools``/``allow``
+    aliases — ``tools`` matches the attribute the runner-side
+    :class:`~omnigent.runner.mcp_manager.RunnerMcpManager` already reads.
+    A missing or empty value yields ``[]`` (expose all tools).
+
+    :param val: The inline ``tools.<name>`` mapping, e.g.
+        ``{"type": "mcp", "url": "...", "tool_allowlist": ["a", "b"]}``.
+    :returns: A list of bare tool names (stringified), or ``[]``.
+    """
+    for k in ("tool_allowlist", "tools", "allow"):
+        raw = val.get(k)
+        if raw:
+            return [str(t) for t in raw] if isinstance(raw, list) else [str(raw)]
+    return []
 
 
 def _discover_mcp_servers(
