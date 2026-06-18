@@ -881,6 +881,46 @@ class TestBuildMcpTools(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Tests: Omnigent tool-naming note (BDP-2204)
+# ---------------------------------------------------------------------------
+
+
+class TestOmnigentToolNamingNote(unittest.TestCase):
+    def test_documents_sys_builtins_with_prefix(self):
+        from omnigent.inner.claude_sdk_executor import _omnigent_tool_naming_note
+
+        note = _omnigent_tool_naming_note(
+            ["sys_agent_list", "sys_session_create", "sys_read_inbox"]
+        )
+        # Bare name is mapped to the mcp__omnigent__ callable form.
+        self.assertIn("`mcp__omnigent__sys_agent_list`", note)
+        self.assertIn("bare `sys_agent_list`", note)
+        # The note steers the model away from the Skill tool — the cause of
+        # the "Unknown skill: sys_agent_list" failure.
+        self.assertIn("Skill", note)
+
+    def test_omits_non_sys_mcp_tools(self):
+        from omnigent.inner.claude_sdk_executor import _omnigent_tool_naming_note
+
+        # Descriptive MCP-server tools (e.g. bytedesk-platform) are not
+        # referenced by bare name in prompts and must not bloat the note.
+        note = _omnigent_tool_naming_note(
+            ["sys_agent_list", "data_catalog_query_database", "platform_get_inventory"]
+        )
+        self.assertIn("sys_agent_list", note)
+        self.assertNotIn("data_catalog_query_database", note)
+        self.assertNotIn("platform_get_inventory", note)
+
+    def test_empty_when_no_builtins(self):
+        from omnigent.inner.claude_sdk_executor import _omnigent_tool_naming_note
+
+        self.assertEqual(_omnigent_tool_naming_note([]), "")
+        self.assertEqual(
+            _omnigent_tool_naming_note(["platform_get_inventory", ""]), ""
+        )
+
+
+# ---------------------------------------------------------------------------
 # Tests: Databricks env resolution
 # ---------------------------------------------------------------------------
 

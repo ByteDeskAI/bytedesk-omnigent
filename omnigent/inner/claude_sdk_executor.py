@@ -680,6 +680,42 @@ def _build_mcp_tools(
     return mcp_tools
 
 
+_OMNIGENT_MCP_PREFIX = "mcp__omnigent__"
+
+
+def _omnigent_tool_naming_note(tool_names: list[str]) -> str:
+    """Build a system-prompt note bridging bare Omnigent built-in tool names
+    to the ``mcp__omnigent__`` namespace the claude-agent-sdk advertises.
+
+    ``create_sdk_mcp_server`` always exposes tools as ``mcp__<server>__<tool>``,
+    so an Omnigent built-in registered as ``sys_agent_list`` reaches the model
+    as ``mcp__omnigent__sys_agent_list``. Native agent prompts (and the
+    openai-agents harness, which registers bare names directly) refer to the
+    built-ins by their bare ``sys_*`` names. Without this bridge the model on
+    the claude-sdk harness treats a bare ``sys_agent_list`` as a *skill* and the
+    Claude Code CLI returns "Unknown skill: sys_agent_list" (BDP-2204).
+
+    Only the ``sys_*`` built-ins are documented — those are the tools prompts
+    reference by bare name. MCP-server tools (e.g. ``bytedesk-platform``) carry
+    descriptive names the model invokes directly and are intentionally omitted
+    to keep the note short. Returns "" when there are no built-ins to document.
+    """
+    builtins = sorted({n for n in tool_names if n and n.startswith("sys_")})
+    if not builtins:
+        return ""
+    listed = "\n".join(
+        f"- bare `{n}` → call `{_OMNIGENT_MCP_PREFIX}{n}`" for n in builtins
+    )
+    return (
+        "# Omnigent built-in tool names\n"
+        "Your Omnigent orchestration/OS built-in tools are exposed to you under "
+        f"the `{_OMNIGENT_MCP_PREFIX}` prefix. When any instruction names one of "
+        "these by its bare name, invoke the prefixed form below. These are "
+        "regular tools, NOT skills — never use the `Skill` tool to call them:\n"
+        f"{listed}"
+    )
+
+
 def _find_system_claude() -> str | None:
     """Find a system-installed ``claude`` CLI binary on PATH.
 
@@ -1826,6 +1862,21 @@ class ClaudeSDKExecutor(Executor):
                 version="1.0.0",
                 tools=mcp_tools,
             )
+
+        # Bridge bare ``sys_*`` references in the agent prompt to the
+        # ``mcp__omnigent__`` names the SDK actually advertises (BDP-2204).
+        # Without this the model treats a bare ``sys_agent_list`` as a skill
+        # and the CLI returns "Unknown skill: sys_agent_list".
+        if "omnigent" in mcp_servers:
+            naming_note = _omnigent_tool_naming_note(
+                [s.get("name", "") for s in tools]
+            )
+            if naming_note:
+                system_prompt = (
+                    f"{system_prompt}\n\n{naming_note}"
+                    if system_prompt
+                    else naming_note
+                )
 
         # Build allowed_tools list.  OS-environment operations route
         # through Omnigent ``sys_os_*`` MCP tools rather than the
