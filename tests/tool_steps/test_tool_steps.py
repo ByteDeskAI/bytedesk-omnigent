@@ -196,3 +196,33 @@ def test_resume_stale_ignores_running_step_within_deadline(tmp_path) -> None:
     )  # deadline_at=400
     assert store.resume_stale(now=200) == 0
     assert store.get(session_id="s1", step_key="k1").status == "running"
+
+
+def test_begin_terminalizes_orphaned_running_step_at_attempt_cap(tmp_path) -> None:
+    """A running step orphaned past its deadline that has ALREADY spent all its
+    attempts must NOT be re-claimed by begin() (which would execute it past
+    max_attempts) — begin terminalizes it to failed/EXHAUSTED, the same as
+    resume_stale (BDP-2283 #4)."""
+    store = _store(tmp_path)
+    store.begin(
+        session_id="s1",
+        step_key="k1",
+        tool_name="t",
+        max_attempts=1,
+        timeout_seconds=60,
+        now=100,
+    )  # attempts=1 == max_attempts, deadline_at=160
+
+    # Its worker crashed; a later begin() arrives past the deadline.
+    claim = store.begin(
+        session_id="s1",
+        step_key="k1",
+        tool_name="t",
+        max_attempts=1,
+        timeout_seconds=60,
+        now=300,
+    )
+
+    assert claim.outcome is StepOutcome.EXHAUSTED
+    assert claim.step.attempts == 1  # NOT re-incremented past the cap
+    assert store.get(session_id="s1", step_key="k1").status == "failed"

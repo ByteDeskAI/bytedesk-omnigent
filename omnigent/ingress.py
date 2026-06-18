@@ -40,6 +40,7 @@ class IngressStatus(str, Enum):
     NO_BINDING = "no_binding"  # no (source, event) binding (404, never 2xx)
     BAD_SIGNATURE = "bad_signature"  # HMAC mismatch (401)
     DEAD_LETTERED = "dead_lettered"  # bound but no pending wait (404)
+    EXPIRED = "expired"  # the wait expired before this late deliver (410, never 2xx)
 
 
 @dataclass(frozen=True)
@@ -191,6 +192,14 @@ def process_inbound(
         return IngressResult(
             IngressStatus.ALREADY_RESOLVED, 409, signal_id=binding.signal_id,
             detail="already resolved",
+        )
+    if result.status is DeliveryStatus.EXPIRED:
+        # The wait expired before this late deliver — the parked session was never
+        # woken (dead-lettered for recovery). 410 (never 2xx, BDP-1419) so the
+        # sender retries/alerts rather than treating it as benignly handled.
+        return IngressResult(
+            IngressStatus.EXPIRED, 410, signal_id=binding.signal_id,
+            detail="wait expired before delivery",
         )
     return IngressResult(
         IngressStatus.DEAD_LETTERED, 404, signal_id=binding.signal_id,

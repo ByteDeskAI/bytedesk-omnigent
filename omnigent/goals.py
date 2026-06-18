@@ -122,14 +122,47 @@ class SqlAlchemyGoalStore:
             return result.rowcount == 1
 
     def advance_goal(self, *, goal_id: str, status: str, now: int | None = None) -> None:
-        """Move a goal to a new status (``in_progress`` / ``blocked`` / ``done`` …)."""
+        """Move a goal to a new status (``in_progress`` / ``blocked`` / ``done`` …).
+
+        Re-arms accountability escalation on every (re-)transition to ``blocked``
+        by resetting ``escalated_at`` to NULL, so a goal that is unblocked and
+        later re-blocked escalates once again (BDP-2283).
+        """
         now = now_epoch() if now is None else now
+        values: dict = {"status": status, "updated_at": now}
+        if status == "blocked":
+            values["escalated_at"] = None
         with self._write_session() as session:
             session.execute(
-                update(SqlGoal)
-                .where(SqlGoal.id == goal_id)
-                .values(status=status, updated_at=now)
+                update(SqlGoal).where(SqlGoal.id == goal_id).values(**values)
             )
+
+    def escalate_blocked(self, *, now: int | None = None) -> list[Goal]:
+        """Claim not-yet-escalated ``blocked`` goals, marking them escalated (C4).
+
+        The accountability loop calls this each tick: it returns the blocked goals
+        whose ``escalated_at`` is still NULL (stamping it to ``now``) so the caller
+        sends exactly one escalation per blocked episode — a re-tick returns ``[]``
+        (no spam), and a goal re-entering ``blocked`` (``advance_goal`` reset its
+        ``escalated_at``) is returned again. Single guarded write (ADR-0009).
+        """
+        now = now_epoch() if now is None else now
+        with self._write_session() as session:
+            rows = (
+                session.execute(
+                    select(SqlGoal).where(
+                        SqlGoal.status == "blocked",
+                        SqlGoal.escalated_at.is_(None),
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            snapshot = [_to_goal(r) for r in rows]
+            for row in rows:
+                row.escalated_at = now
+            session.flush()
+            return snapshot
 
     def reopen_stalled(
         self, *, older_than_seconds: int, now: int | None = None
