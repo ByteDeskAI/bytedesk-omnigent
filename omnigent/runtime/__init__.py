@@ -14,11 +14,11 @@ from omnigent.stores.memory_store.pgvector import pgvector_installed as _pgvecto
 
 if TYPE_CHECKING:
     from omnigent.bus import SqlAlchemySignalBus
-    from omnigent.scheduler import SqlAlchemyCronScheduler
     from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runner.routing import RunnerRouter
     from omnigent.runtime.agent_cache import AgentCache
     from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
+    from omnigent.scheduler import SqlAlchemyCronScheduler
     from omnigent.stores import (
         AgentStore,
         ArtifactStore,
@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from omnigent.stores.memory_store import SqlAlchemyMemoryStore
     from omnigent.stores.policy_store import PolicyStore
     from omnigent.terminals import TerminalRegistry
+    from omnigent.tool_steps import SqlAlchemyToolStepStore
     from omnigent.tools import ToolManager
 
 
@@ -171,6 +172,31 @@ def get_cron_scheduler() -> SqlAlchemyCronScheduler:
         scheduler = SqlAlchemyCronScheduler(location)
         _cron_scheduler_cache[location] = scheduler
     return scheduler
+
+
+# Lazily-built, per-URI cache of the durable tool-step store (BDP-2252, ADR-0142).
+# Shares the conversation store's database, mirroring the accessors above.
+_tool_step_store_cache: dict[str, SqlAlchemyToolStepStore] = {}
+
+
+def get_tool_step_store() -> SqlAlchemyToolStepStore:
+    """Return the durable deterministic tool-step store (BDP-2252, ADR-0142).
+
+    Built lazily from the canonical conversation store's database URI and cached
+    per URI. Backs deterministic tool-step re-entry + retry/timeout-over-session;
+    its ``resume_stale`` sweep runs at server boot to reclaim steps orphaned by a
+    restart.
+
+    :returns: The :class:`SqlAlchemyToolStepStore` for the active database.
+    """
+    from omnigent.tool_steps import SqlAlchemyToolStepStore
+
+    location = get_conversation_store().storage_location
+    store = _tool_step_store_cache.get(location)
+    if store is None:
+        store = SqlAlchemyToolStepStore(location)
+        _tool_step_store_cache[location] = store
+    return store
 
 
 def _select_memory_embedder(engine: Any):

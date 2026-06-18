@@ -1017,6 +1017,59 @@ class SqlIdempotencyKey(Base):
     )
 
 
+class SqlToolStep(Base):
+    """A durable deterministic tool-step with retry/timeout-over-session +
+    resume-on-restart (BDP-2252, ADR-0142).
+
+    A tool-step is the unit of deterministic work inside an orchestration. Keyed
+    idempotently by ``(session_id, step_key)``: it is **claimed** once (status
+    ``running``, ``attempts`` incremented, ``deadline_at = now + timeout_seconds``),
+    executed, then recorded ``completed`` with its ``result`` — so a replay of the
+    same step returns the cached result (deterministic re-entry, **no double side
+    effect**) — or ``failed``. Retry-over-session: a failed attempt below
+    ``max_attempts`` returns to ``pending`` for the next claim; at the cap it is
+    ``failed`` (dead). Resume-on-restart: a ``running`` step whose ``deadline_at``
+    has passed (its worker crashed / the process restarted) is reclaimed by the
+    boot sweep — back to ``pending`` if attempts remain, else ``failed``. Mirrors
+    the signal bus / cron scheduler single-writer guarded-UPDATE shape;
+    ``session_id`` is a plain column (no hard FK) so the store is standalone-
+    testable.
+    """
+
+    __tablename__ = "tool_steps"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    step_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="pending"
+    )
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    max_attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1"
+    )
+    timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deadline_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "session_id", "step_key", name="uq_tool_steps_session_step"
+        ),
+        Index("ix_tool_steps_status_deadline", "status", "deadline_at"),
+        CheckConstraint(
+            "status in ('pending', 'running', 'completed', 'failed')",
+            name="ck_tool_steps_status",
+        ),
+    )
+
+
 class SqlWebhookBinding(Base):
     """Maps an inbound external event to a durable signal (BDP-2249, ADR-0142).
 
