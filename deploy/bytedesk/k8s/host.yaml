@@ -125,7 +125,14 @@ spec:
             # ANTHROPIC_*/GEMINI_API_KEY are forwarded by default). Add the
             # openai-agents wrap vars here if you use them instead of OPENAI_*.
             - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
-              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL"
+              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET"
+            # ByteDesk platform MCP (BDP-2169/2182/2199): every agent's inline
+            # bytedesk-platform MCP server references these ${VAR}s, expanded by
+            # the runner at turn setup. Both names MUST be in the passthrough list
+            # above so the spawned runner inherits them (else turn setup fails:
+            # "Unresolved environment variable '${BYTEDESK_IDENTITY_TOKEN_URL}'").
+            - name: BYTEDESK_IDENTITY_TOKEN_URL
+              value: http://identity.bytedesk.svc.cluster.local/connect/token
           # SHARED LLM/AI credentials — ONE Secret, every host replica gets it,
           # and the host forwards these to every runner/agent it spawns. Drop the
           # real key into this single Secret and all hosts run with it. optional
@@ -133,6 +140,12 @@ spec:
           envFrom:
             - secretRef:
                 name: omnigent-host-credentials
+                optional: true
+            # OMNIGENT_MCP_CLIENT_SECRET for the bytedesk-platform MCP oauth
+            # client_credentials grant (BDP-2182/2199). Forwarded to runners via
+            # the passthrough list above.
+            - secretRef:
+                name: omnigent-mcp-secrets
                 optional: true
           resources:
             requests:
