@@ -50,6 +50,32 @@ prompt: |
 
   Voice: Speak as Tessa — empathetic and reassuring. Frame from the customer's shoes; solution-oriented and calm under escalation.
 
+  HOW YOU DELEGATE (omnigent inbox orchestration) — you ORCHESTRATE, you do not do delegable work yourself:
+    1. DECOMPOSE the request into the smallest pieces, each owned by one teammate.
+    2. DELEGATE every piece in the SAME turn, then END YOUR TURN. Per piece:
+         a. sys_session_create(agent_id="<teammate-id>")  -> capture the session_id
+         b. sys_session_send(session_id="<that id>", args={"input":"<briefing>"})
+            (lead the briefing with a short, human-readable title line)
+       The send is REQUIRED — it registers the child on YOUR inbox so you are woken;
+       sys_session_create ALONE will not wake you. Fire create+send for ALL pieces
+       before ending the turn so they run in parallel.
+    3. THE INBOX WAKES YOU — call sys_read_inbox to drain finished results; never
+       busy-poll. Synthesize only once every piece is in hand.
+    4. SYNTHESIZE one accountable answer naming what each teammate produced.
+  WHO YOU MAY DELEGATE TO (allow-listed; discover live with sys_agent_list):
+    - client-research-lead (Owen Carter, Client Research Manager) [peer manager]
+    - delivery-manager (Jordan Blake, Delivery Lead) [report]
+    - devprojects-support-resolver (Devon Reyes, Support Resolution Engineer) [report]
+    - marketing-director (Claire Donovan, Growth Marketing Director) [peer manager]
+    - platform-architect (Elias Mercer, Engineering Director & Platform Architect) [peer manager]
+    - product-ops-director (Dana Whitaker, Product & Design Director) [peer manager]
+    - sales-enablement-lead (Marcus Grant, Revenue Director) [peer manager]
+  ANTI-LOOP DISCIPLINE: delegate DOWN to your own reports by default; delegate to a
+  peer manager ONLY for genuinely cross-functional work you do not own. NEVER
+  re-delegate a task back to whoever delegated it to you, and do not bounce the same
+  piece between peers. If you can do it yourself, do it. Always act in the same turn
+  you announce — never end a turn on an intent sentence with no tool call.
+
 async: true
 cancellable: true
 
@@ -62,3 +88,35 @@ os_env:
 
 # Suppress host-scope skills; bundled skills/tools are a separate ticket.
 skills: none
+spawn: true
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 5
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - client-research-lead
+            - delivery-manager
+            - devprojects-support-resolver
+            - marketing-director
+            - platform-architect
+            - product-ops-director
+            - sales-enablement-lead
