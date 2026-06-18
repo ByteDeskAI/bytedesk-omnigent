@@ -986,6 +986,12 @@ def create_app(
         from omnigent.bus.reaper import signal_bus_reaper_loop
 
         signal_bus_reaper_task = asyncio.create_task(signal_bus_reaper_loop())
+
+        # BDP-2250 (ADR-0142): native cron scheduler — fire due triggers (the org
+        # heartbeat), guarded by a distinct PG advisory lock (no-op on SQLite).
+        from omnigent.scheduler import cron_scheduler_loop
+
+        cron_scheduler_task = asyncio.create_task(cron_scheduler_loop())
         try:
             yield
         finally:
@@ -998,6 +1004,9 @@ def create_app(
             signal_bus_reaper_task.cancel()
             with suppress(asyncio.CancelledError):
                 await signal_bus_reaper_task
+            cron_scheduler_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await cron_scheduler_task
             # Stop in-flight background managed-sandbox launches so a
             # slow provision doesn't outlive the ASGI shutdown (the
             # sandbox itself, if already provisioned, is reaped by the
