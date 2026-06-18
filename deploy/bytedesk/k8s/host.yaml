@@ -150,10 +150,23 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 256Mi
+              # A host runs the host process + one harness subprocess PER active
+              # conversation, and (for caller_process/sandbox:none agents like
+              # Maya) each agent's own shell/python tool work runs IN-POD too. A
+              # long multi-agent delegation (orchestrator + spawned specialist
+              # scraping the web) is several hundred MB per subprocess. Reserve
+              # 1Gi so the scheduler keeps real headroom for that fan-out.
+              memory: 1Gi
             limits:
               cpu: "2"
-              memory: 2Gi
+              # Raised 2Gi -> 8Gi (BDP-2206): the 2Gi cap OOMKilled (exit 137)
+              # the pod mid-delegation, killing the host's WS tunnel and every
+              # in-flight runner/turn — so long delegations never completed and
+              # turns failed silently. 8Gi fits an orchestrator + spawned
+              # children + their in-pod tool subprocesses. Node has ample RAM
+              # and there is no namespace ResourceQuota, so 2 replicas x 8Gi is
+              # comfortably schedulable.
+              memory: 8Gi
           volumeMounts:
             - name: omni-home
               mountPath: /var/omni-home
