@@ -1047,3 +1047,88 @@ class SqlWebhookBinding(Base):
         ),
         Index("ix_webhook_bindings_source_enabled", "source", "enabled"),
     )
+
+
+class SqlGoal(Base):
+    """A durable backlog goal an agent can pull and own (BDP-2271 C3, ADR-0142).
+
+    The "why-act" substrate: a cron-woken triage agent reads + assigns ``open``
+    goals; agents advance them; the accountability loop reads them. ``claim_goal``
+    uses a guarded UPDATE on ``(id, status='open')`` so exactly one agent claims a
+    goal (ADR-0009), the same shape the signal bus + cron scheduler use.
+    """
+
+    __tablename__ = "goals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    owner_agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_goals_status_priority", "status", "priority"),
+        Index("ix_goals_owner_status", "owner_agent_id", "status"),
+        CheckConstraint(
+            "status in ('open', 'assigned', 'in_progress', 'blocked', 'done')",
+            name="ck_goals_status",
+        ),
+    )
+
+
+class SqlScoreboardEntry(Base):
+    """A durable per-agent ops metric (BDP-2271 C3, ADR-0142).
+
+    One row per ``(agent_id, metric, window)`` — the latest value is upserted.
+    Feeds workload rebalance, find-specialist ranking, and the accountability
+    loop (the org's scoreboard).
+    """
+
+    __tablename__ = "scoreboard_entries"
+
+    agent_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    metric: Mapped[str] = mapped_column(String(64), primary_key=True)
+    window: Mapped[str] = mapped_column(String(32), primary_key=True, server_default="all")
+    value: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_scoreboard_metric_window_value", "metric", "window", "value"),
+    )
+
+
+class SqlPeerMessage(Base):
+    """A durable lateral peer message (BDP-2270 C2, ADR-0142).
+
+    Lets an agent ask a peer, escalate sideways, or push up — not just answer
+    down an ``allowed_subagents`` tree (the social fabric). Stored per
+    ``(from_agent, to_agent | topic)``; ``seq`` gives FIFO. The ``sys_peer_message``
+    tool + the always-on wake are the integration follow-up.
+    """
+
+    __tablename__ = "peer_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    from_agent: Mapped[str] = mapped_column(String(64), nullable=False)
+    to_agent: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    topic: Mapped[str] = mapped_column(String(256), nullable=False)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, server_default="dm")
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    read_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_peer_messages_to_read_seq", "to_agent", "read_at", "seq"),
+        Index("ix_peer_messages_topic_seq", "topic", "seq"),
+        CheckConstraint(
+            "kind in ('dm', 'broadcast', 'escalation')", name="ck_peer_messages_kind"
+        ),
+    )
