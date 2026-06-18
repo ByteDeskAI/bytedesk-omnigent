@@ -3339,6 +3339,32 @@ def _inject_mcp_schemas(
     event_body["tools"] = list(existing) + new_schemas
 
 
+def _spec_builtin_tool_schemas(spec: Any, workdir: Any) -> list[dict[str, Any]]:
+    """Return a spec's builtin (``sys_*`` etc.) tool schemas for a turn.
+
+    Mirrors the builtin half of the fire-and-forget assembly in
+    ``_run_turn_bg`` (``ToolManager(spec).get_tool_schemas()``) so the
+    STREAMING turn path injects the same builtins. Without this the
+    streaming path injects ONLY MCP schemas, so orchestration builtins
+    such as ``sys_agent_list`` / ``sys_session_create`` never reach the
+    harness and the model gets ``No such tool available:
+    mcp__omnigent__sys_agent_list`` (BDP-2204). Returns ``[]`` (logged) on
+    a ``ToolManager`` build failure, matching the ``_run_turn_bg`` guard so
+    a broken local-tool dir degrades to MCP-only rather than failing the
+    turn. The schemas are nested OpenAI shape; ``_normalize_tool_schemas``
+    flattens them before the inner executor reads them.
+    """
+    if spec is None:
+        return []
+    try:
+        from omnigent.tools.manager import ToolManager
+
+        return ToolManager(spec, workdir=workdir).get_tool_schemas()
+    except (ImportError, ValueError, RuntimeError):
+        _logger.warning("streaming builtin schema build failed", exc_info=True)
+        return []
+
+
 def _schema_tool_name(schema: dict[str, Any]) -> str | None:
     """
     Extract a tool's function name from its OpenAI-format schema.
@@ -8993,6 +9019,22 @@ def create_runner_app(
                 return
 
             event_body = _wrap_as_message_event(body)
+            # Inject the spec's builtin tool schemas (sys_agent_list,
+            # sys_session_create, …). Unlike the fire-and-forget path
+            # (_run_turn_bg, which assembles builtins + MCP), the streaming
+            # path otherwise injects ONLY MCP schemas, so a streaming agent
+            # (e.g. Maya on the Office SSE bridge) never sees its
+            # orchestration builtins and the model gets "No such tool
+            # available: mcp__omnigent__sys_agent_list" (BDP-2204). Resolve
+            # the turn spec via the idempotent lazy resolver (already cached
+            # for the eager MCP path) so this also covers builtin-only /
+            # non-MCP streaming turns.
+            _builtin_spec, _builtin_spec_err = await _resolve_turn_spec_lazy()
+            if _builtin_spec_err is None:
+                _inject_mcp_schemas(
+                    event_body,
+                    _spec_builtin_tool_schemas(_builtin_spec, runner_workspace),
+                )
             _inject_mcp_schemas(event_body, _mcp_schemas)
             try:
                 async with client.stream(
