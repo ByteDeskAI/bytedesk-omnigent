@@ -989,9 +989,41 @@ def create_app(
 
         # BDP-2250 (ADR-0142): native cron scheduler — fire due triggers (the org
         # heartbeat), guarded by a distinct PG advisory lock (no-op on SQLite).
+        # BDP-2279 (ADR-0142): dispatch each fire through the registered
+        # sys_session_initiate seam (open a root session + post the payload); when
+        # no live initiator is registered the loop degrades to log-only.
         from omnigent.scheduler import cron_scheduler_loop
+        from omnigent.sessions import build_cron_dispatch, get_session_initiator
 
-        cron_scheduler_task = asyncio.create_task(cron_scheduler_loop())
+        _session_initiator = get_session_initiator()
+        _cron_dispatch = (
+            build_cron_dispatch(_session_initiator)
+            if _session_initiator is not None
+            else None
+        )
+        cron_scheduler_task = asyncio.create_task(
+            cron_scheduler_loop(dispatch=_cron_dispatch)
+        )
+
+        # BDP-2252 (ADR-0142): reclaim tool-steps orphaned by a restart — a
+        # ``running`` step past its ``deadline_at`` goes back to ``pending``
+        # (attempts remain) or ``failed``. One-shot at boot under a distinct PG
+        # advisory lock (no-op on SQLite). Resilient: a failure is logged only.
+        try:
+            from omnigent.runtime import get_tool_step_store
+            from omnigent.runtime.memory_maintenance import advisory_lock
+
+            _tool_step_store = get_tool_step_store()
+            with advisory_lock(_tool_step_store.engine, 0x746F6F6C73746570) as _acq:
+                if _acq:
+                    _reclaimed = await asyncio.to_thread(_tool_step_store.resume_stale)
+                    if _reclaimed:
+                        _logger.info(
+                            "tool-step resume: reclaimed %d orphaned step(s)",
+                            _reclaimed,
+                        )
+        except Exception as exc:  # noqa: BLE001
+            _logger.warning("tool-step resume sweep failed: %s", exc, exc_info=True)
         try:
             yield
         finally:
