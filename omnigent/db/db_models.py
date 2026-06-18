@@ -985,3 +985,33 @@ class SqlCronTrigger(Base):
             name="ck_cron_triggers_schedule_kind",
         ),
     )
+
+
+class SqlIdempotencyKey(Base):
+    """A durable processed-message marker for at-most-once handling (BDP-2251,
+    ADR-0142, aligned ADR-0009/0077).
+
+    A consumer ``claim``s a ``(scope, key)`` before doing work; the composite
+    primary key makes the claim atomic — the first claimer inserts (returns
+    "claimed, new"), a duplicate delivery hits the PK conflict (returns "already
+    handled"). Backs the event-trigger consumers' dedup (replaces the
+    per-consumer ``DbSupportTicketIdempotencyStore`` / ``WorkflowTriggerInboxEntry``)
+    and any redelivered external event. ``dead_lettered`` marks a claim whose work
+    ultimately failed past redelivery.
+    """
+
+    __tablename__ = "idempotency_keys"
+
+    scope: Mapped[str] = mapped_column(String(64), primary_key=True)
+    key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    claimed_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    result: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dead_lettered: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_idempotency_keys_dead_lettered", "dead_lettered"),
+    )
