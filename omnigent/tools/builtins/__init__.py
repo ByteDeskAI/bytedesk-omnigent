@@ -65,6 +65,11 @@ from omnigent.tools.builtins.peer_tools import PeerInboxTool, PeerSendTool
 from omnigent.tools.builtins.read_skill_file import (
     ReadSkillFileTool,
 )
+from omnigent.tools.builtins.signal_tools import (
+    SignalAwaitTool,
+    SignalCheckTool,
+    SignalDeliverTool,
+)
 from omnigent.tools.builtins.spawn import (
     SysSessionCloseTool,
     SysSessionCreateTool,
@@ -225,6 +230,10 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "deliberation_decide": lambda _config: DeliberationDecideTool(),
     "deliberation_find": lambda _config: DeliberationFindTool(),
     "outcome_record": lambda _config: OutcomeRecordTool(),
+    # Native signal-bus tools (BDP-2248 α1 integration, ADR-0142).
+    "signal_await": lambda _config: SignalAwaitTool(),
+    "signal_deliver": lambda _config: SignalDeliverTool(),
+    "signal_check": lambda _config: SignalCheckTool(),
     # Framework-owned: need runtime context. ``web_fetch`` is
     # constructed by ToolManager before reaching this registry.
     # ``list_comments`` and ``update_comment`` are auto-registered by
