@@ -134,11 +134,15 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              cpu: 250m
-              memory: 512Mi
+              cpu: 500m
+              memory: 2Gi
             limits:
-              cpu: "1"
-              memory: 1Gi
+              # BDP-2206 — the control-plane server holds session/conversation
+              # state, the spawn-tree, the SSE relay fan-out, and the SoT for the
+              # whole agent fleet; under concurrent multi-agent delegations its
+              # 1Gi/1cpu cap was far too small. Make it hefty: 4 CPU / 12Gi.
+              cpu: "4"
+              memory: 12Gi
           volumeMounts:
             - name: artifacts
               mountPath: /data/artifacts
