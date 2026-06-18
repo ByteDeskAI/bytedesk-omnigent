@@ -101,3 +101,31 @@ def test_star_binding_is_per_source_catch_all(tmp_path) -> None:
         payload=None, now=now + 1,
     )
     assert res.status is IngressStatus.DELIVERED  # fell back to the "*" catch-all
+
+
+def test_process_inbound_expired_wait_returns_410_not_409(tmp_path) -> None:
+    """A webhook arriving after its wait expired maps to 410 EXPIRED (never a 2xx,
+    and distinct from the benign-replay 409) so the sender retries/alerts instead
+    of treating an un-woken parked session as already handled (BDP-2283 #1)."""
+    db = f"sqlite:///{tmp_path / 'ing3.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "teamcity-secret"
+    bus.register_wait(
+        signal_id="release:9.9.9", session_id="sess-rel", key="subscribe:teamcity",
+        kind="subscribe", target="teamcity", expires_at=now + 60, now=now,
+    )
+    store.register_binding(
+        source="teamcity", match_key="build.finished", signal_id="release:9.9.9", now=now
+    )
+    assert bus.sweep_expired(now=now + 61) == 1
+
+    body = json.dumps({"build": "green"}).encode()
+    res = process_inbound(
+        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
+        secret=secret, store=store, bus=bus, match_key="build.finished",
+        payload={"build": "green"}, now=now + 62,
+    )
+    assert res.status is IngressStatus.EXPIRED
+    assert res.http_status == 410

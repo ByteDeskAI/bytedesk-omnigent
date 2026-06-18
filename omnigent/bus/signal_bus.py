@@ -39,6 +39,7 @@ class DeliveryStatus(str, Enum):
     DELIVERED = "delivered"  # signal was pending -> resolved + wake queued
     ALREADY_RESOLVED = "already_resolved"  # 2nd deliver of same signal_id (replay)
     DEAD_LETTERED = "dead_lettered"  # no pending wait ever registered (unmatched)
+    EXPIRED = "expired"  # the wait expired before this (late) deliver -> dead-lettered
 
 
 @dataclass(frozen=True)
@@ -214,7 +215,28 @@ class SqlAlchemySignalBus:
                 return DeliveryResult(
                     DeliveryStatus.DELIVERED, signal_id, session_id, key, payload
                 )
-            # The row was already resolved (concurrent / replayed deliver).
+            # The guarded UPDATE matched 0 rows — the wait is no longer pending.
+            # Branch on its ACTUAL status (loaded above; unchanged by the no-op
+            # UPDATE) instead of assuming a benign replay:
+            #   - expired: the wait timed out before this late deliver, so the
+            #     parked session was never woken. Dead-letter the payload so the
+            #     signal is recoverable + report EXPIRED (NOT ALREADY_RESOLVED,
+            #     which would tell the sender "handled, don't retry" while the
+            #     signal is silently lost).
+            #   - resolved: a true idempotent replay of an already-delivered signal.
+            if wait.status == "expired":
+                self._append_message(
+                    session,
+                    session_id=None,
+                    signal_id=signal_id,
+                    kind="expired",
+                    payload=payload,
+                    dead_lettered=True,
+                    now=now,
+                )
+                return DeliveryResult(
+                    DeliveryStatus.EXPIRED, signal_id, session_id, key, payload
+                )
             return DeliveryResult(
                 DeliveryStatus.ALREADY_RESOLVED, signal_id, session_id, key, payload
             )

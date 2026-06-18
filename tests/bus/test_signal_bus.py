@@ -85,3 +85,33 @@ def test_registered_wait_and_wake_survive_a_process_restart(tmp_path) -> None:
     assert inbox[0]["payload"]["ok"] is True
     # The delivered_at latch persists, so a re-drain after reconnect is empty.
     assert fresh.drain_inbox(session_id="sess-9") == []
+
+
+def test_deliver_to_an_expired_wait_returns_expired_not_already_resolved(tmp_path) -> None:
+    """A wait that expires before a late deliver must NOT be reported
+    ALREADY_RESOLVED (which tells the sender "handled, don't retry" while the
+    parked session is never woken — a silently lost signal). It returns EXPIRED,
+    the payload is dead-lettered for recovery, and the session stays un-woken
+    (BDP-2283 #1)."""
+    bus = _bus(tmp_path)
+    now = int(time.time())
+    bus.register_wait(
+        signal_id="run-x:node-1",
+        session_id="sess-x",
+        key="subscribe:teamcity",
+        kind="subscribe",
+        target="teamcity",
+        expires_at=now + 60,
+        now=now,
+    )
+    # The reaper sweeps it expired once past its deadline.
+    assert bus.sweep_expired(now=now + 61) == 1
+
+    # A late deliver (e.g. a slow TeamCity build.finished callback) arrives.
+    result = bus.deliver(signal_id="run-x:node-1", payload={"build": "green"}, now=now + 62)
+    assert result.status is DeliveryStatus.EXPIRED
+    # The parked session is NOT falsely woken.
+    assert bus.drain_inbox(session_id="sess-x") == []
+    # Idempotent: a replayed late deliver is still EXPIRED, not DELIVERED.
+    again = bus.deliver(signal_id="run-x:node-1", payload={"build": "green"}, now=now + 63)
+    assert again.status is DeliveryStatus.EXPIRED

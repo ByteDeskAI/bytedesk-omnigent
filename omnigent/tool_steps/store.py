@@ -185,6 +185,17 @@ class SqlAlchemyToolStepStore:
             if existing.status == "running" and not running_past_deadline:
                 return StepClaim(StepOutcome.RUNNING, _to_step(existing))
 
+            # An orphaned ``running`` step past its deadline that has ALREADY spent
+            # all its attempts must not be re-claimed — reclaiming would execute it
+            # past ``max_attempts``. Terminalize it instead, mirroring fail() /
+            # resume_stale() (which is the only other path that reclaims it).
+            if existing.attempts >= existing.max_attempts:
+                existing.status = "failed"
+                existing.error = existing.error or "reclaim: attempts exhausted"
+                existing.completed_at = now
+                session.flush()
+                return StepClaim(StepOutcome.EXHAUSTED, _to_step(existing))
+
             # pending retry, or a running step orphaned past its deadline → reclaim.
             existing.status = "running"
             existing.attempts = existing.attempts + 1

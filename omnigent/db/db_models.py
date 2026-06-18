@@ -1122,6 +1122,11 @@ class SqlGoal(Base):
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    # BDP-2283 (C4 escalation dedup): set when the accountability loop escalates a
+    # blocked goal, so it escalates ONCE per blocked episode (not every tick).
+    # Reset to NULL on every (re-)transition to 'blocked' so a re-blocked goal
+    # escalates again.
+    escalated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (

@@ -62,7 +62,9 @@ def run_accountability_tick(
 
     escalated = 0
     if manager_agent_id is not None:
-        for goal in goals.list_goals(status="blocked"):
+        # escalate_blocked claims each blocked goal ONCE (escalated_at dedup), so a
+        # re-tick returns nothing — no escalation spam (BDP-2283).
+        for goal in goals.escalate_blocked(now=now):
             peers.send(
                 from_agent="accountability",
                 to_agent=manager_agent_id,
