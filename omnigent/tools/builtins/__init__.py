@@ -34,6 +34,18 @@ from omnigent.tools.builtins.async_inbox import (
     SysCancelAsyncTool,
     SysReadInboxTool,
 )
+from omnigent.tools.builtins.deliberation_tools import (
+    DeliberationDecideTool,
+    DeliberationFindTool,
+    DeliberationPositionTool,
+    DeliberationStartTool,
+)
+from omnigent.tools.builtins.goal_tools import (
+    GoalAdvanceTool,
+    GoalClaimTool,
+    GoalCreateTool,
+    GoalListTool,
+)
 from omnigent.tools.builtins.list_comments import ListCommentsTool
 from omnigent.tools.builtins.list_models import SysListModelsTool
 from omnigent.tools.builtins.load_skill import (
@@ -48,6 +60,8 @@ from omnigent.tools.builtins.memory import (
     MemoryCompartmentsListTool,
     MemoryQueryTool,
 )
+from omnigent.tools.builtins.outcome_tools import OutcomeRecordTool
+from omnigent.tools.builtins.peer_tools import PeerInboxTool, PeerSendTool
 from omnigent.tools.builtins.read_skill_file import (
     ReadSkillFileTool,
 )
@@ -198,6 +212,19 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "memory_append": lambda config: MemoryAppendTool(),
     "memory_query": lambda config: MemoryQueryTool(),
     "memory_compartments_list": lambda config: MemoryCompartmentsListTool(),
+    # Native org tools over the durable social/why-act/decision stores
+    # (BDP-2262 C2/C3/C6/B7, ADR-0142). agent identity is server-stamped.
+    "peer_send": lambda _config: PeerSendTool(),
+    "peer_inbox": lambda _config: PeerInboxTool(),
+    "goal_create": lambda _config: GoalCreateTool(),
+    "goal_list": lambda _config: GoalListTool(),
+    "goal_claim": lambda _config: GoalClaimTool(),
+    "goal_advance": lambda _config: GoalAdvanceTool(),
+    "deliberation_start": lambda _config: DeliberationStartTool(),
+    "deliberation_position": lambda _config: DeliberationPositionTool(),
+    "deliberation_decide": lambda _config: DeliberationDecideTool(),
+    "deliberation_find": lambda _config: DeliberationFindTool(),
+    "outcome_record": lambda _config: OutcomeRecordTool(),
     # Framework-owned: need runtime context. ``web_fetch`` is
     # constructed by ToolManager before reaching this registry.
     # ``list_comments`` and ``update_comment`` are auto-registered by
