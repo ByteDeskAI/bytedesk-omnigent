@@ -112,7 +112,7 @@ guardrails:
       function:
         path: omnigent.inner.nessie.policies.allowed_subagents
         arguments:
-          allowed_agents: [platform-developer]
+          allowed_agents: [platform-developer, client-research-lead]
 
 tools:
   # platform-developer is now a SHARED REGISTERED TEMPLATE (BDP-2148): Maya
