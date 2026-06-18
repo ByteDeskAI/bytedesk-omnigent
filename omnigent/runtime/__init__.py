@@ -13,6 +13,7 @@ from omnigent.runtime.caps import RuntimeCaps
 from omnigent.stores.memory_store.pgvector import pgvector_installed as _pgvector_installed
 
 if TYPE_CHECKING:
+    from omnigent.bus import SqlAlchemySignalBus
     from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runner.routing import RunnerRouter
     from omnigent.runtime.agent_cache import AgentCache
@@ -120,6 +121,32 @@ def get_memory_store() -> SqlAlchemyMemoryStore:
         store = SqlAlchemyMemoryStore(location, embedder=embedder)
         _memory_store_cache[location] = store
     return store
+
+
+# Lazily-built, per-URI cache of the durable signal/await bus (BDP-2248,
+# ADR-0142). Shares the conversation store's database, mirroring the memory
+# store accessor above; built on first use and cached per URI.
+_signal_bus_cache: dict[str, SqlAlchemySignalBus] = {}
+
+
+def get_signal_bus() -> SqlAlchemySignalBus:
+    """Return the durable signal/await bus (BDP-2248, ADR-0142).
+
+    Built lazily from the canonical conversation store's database URI and cached
+    per URI. Backs the ``await_signal`` re-home + the platform
+    ``WorkflowSignalClient`` route layer (omnigent is the sole orchestration
+    engine, ADR-0141).
+
+    :returns: The :class:`SqlAlchemySignalBus` for the active database.
+    """
+    from omnigent.bus import SqlAlchemySignalBus
+
+    location = get_conversation_store().storage_location
+    bus = _signal_bus_cache.get(location)
+    if bus is None:
+        bus = SqlAlchemySignalBus(location)
+        _signal_bus_cache[location] = bus
+    return bus
 
 
 def _select_memory_embedder(engine: Any):
