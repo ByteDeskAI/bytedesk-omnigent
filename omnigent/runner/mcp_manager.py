@@ -71,6 +71,70 @@ class McpSchemasResult:
     failures: dict[str, str]  # server_name → error message
 
 
+def filter_schemas_by_allowlist(
+    schemas: list[dict[str, Any]],
+    spec: AgentSpec,
+) -> list[dict[str, Any]]:
+    """
+    Drop MCP tool schemas not on their owning server's ``tool_allowlist``.
+
+    Tool names in *schemas* are namespaced ``<server>__<tool>`` (applied
+    by the Omnigent server MCP proxy / runner pool). For each server in
+    ``spec.mcp_servers`` whose :attr:`MCPServerConfig.tool_allowlist` is
+    non-empty, only that server's tools whose **bare** name is on the
+    allowlist survive.
+
+    Behavior:
+
+    - If NO declared server has a non-empty ``tool_allowlist``, *schemas*
+      is returned unchanged (zero behavior change for existing agents).
+    - A schema is attributed to a server by stripping a ``<server>__``
+      prefix that matches a declared server name; if names are bare AND
+      there is exactly one MCP server, it is attributed to that server.
+    - A schema kept iff its server has no allowlist OR its bare tool name
+      is on that server's allowlist.
+    - Schemas that cannot be attributed to a declared server pass through
+      unchanged (fail-open) so unrelated tools are never dropped.
+
+    :param schemas: Flat OpenAI function-tool schemas (each with a
+        ``"name"`` key).
+    :param spec: The agent spec carrying ``mcp_servers``.
+    :returns: The filtered (or original) schema list, order preserved.
+    """
+    servers = list(spec.mcp_servers or [])
+    allowlists: dict[str, set[str]] = {
+        s.name: set(s.tool_allowlist) for s in servers if s.tool_allowlist
+    }
+    if not allowlists:
+        return schemas
+
+    server_names = [s.name for s in servers]
+    only_server = server_names[0] if len(server_names) == 1 else None
+
+    kept: list[dict[str, Any]] = []
+    for schema in schemas:
+        name = str(schema.get("name", ""))
+        owner: str | None = None
+        bare = name
+        for sname in server_names:
+            prefix = f"{sname}__"
+            if name.startswith(prefix):
+                owner = sname
+                bare = name[len(prefix) :]
+                break
+        if owner is None and only_server is not None:
+            # Bare names with a single declared server → attribute to it.
+            owner = only_server
+        if owner is None:
+            # Unattributable → fail open.
+            kept.append(schema)
+            continue
+        allow = allowlists.get(owner)
+        if allow is None or bare in allow:
+            kept.append(schema)
+    return kept
+
+
 def compute_spec_hash(configs: list[MCPServerConfig], cwd: Path | None = None) -> str:
     """Stable content hash over ``spec.mcp_servers`` (+ stdio cwd)."""
     payload = json.dumps(
@@ -84,7 +148,7 @@ def compute_spec_hash(configs: list[MCPServerConfig], cwd: Path | None = None) -
                     "command": c.command,
                     "args": list(c.args or []),
                     "env": dict(c.env or {}),
-                    "tools": list(getattr(c, "tools", None) or []),
+                    "tools": list(c.tool_allowlist or []),
                 }
                 for c in configs
             ],
@@ -322,11 +386,7 @@ class RunnerMcpManager:
             if server.error is not None:
                 failures[server.config.name] = server.error
                 continue
-            allowed = (
-                set(getattr(server.config, "tools", None) or [])
-                if getattr(server.config, "tools", None)
-                else None
-            )
+            allowed = set(server.config.tool_allowlist) or None
             for td in server.tools:
                 schema = _mcp_tool_schema(server.config.name, td, allowed)
                 if schema is None:

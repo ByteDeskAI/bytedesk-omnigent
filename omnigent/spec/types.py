@@ -937,6 +937,12 @@ class MCPServerConfig:
         initialization and tool calls.
     :param retry: Per-tool retry policy. ``None`` inherits
         ``tools.retry``.
+    :param tool_allowlist: When non-empty, only these (bare) tool
+        names from this server are exposed to the model; empty
+        (default) exposes all of the server's tools (current
+        behavior). Lets an agent that declares a high-volume MCP
+        server expose a curated subset so the total tool count stays
+        small.
     """
 
     name: str
@@ -962,6 +968,9 @@ class MCPServerConfig:
     # tools.timeout / tools.retry.
     timeout: int | None = None
     retry: RetryPolicy | None = None
+    # When non-empty, only these bare tool names are exposed to the
+    # model (curated subset). Empty = all tools (backward-compatible).
+    tool_allowlist: list[str] = field(default_factory=list)
 
     def __repr__(self) -> str:
         """

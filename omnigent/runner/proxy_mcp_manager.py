@@ -32,7 +32,7 @@ from typing import Any
 import httpx
 
 from omnigent.runner import pending_approvals
-from omnigent.runner.mcp_manager import McpSchemasResult
+from omnigent.runner.mcp_manager import McpSchemasResult, filter_schemas_by_allowlist
 from omnigent.runner.tool_dispatch import MCP_PROXY_CALL_TIMEOUT_S
 from omnigent.spec.types import AgentSpec
 
@@ -172,6 +172,12 @@ class ProxyMcpManager:
             }
             schemas.append(schema)
             tool_names.add(name)
+
+        # Apply per-server tool_allowlist (no-op when no server declares one)
+        # so the model-facing set matches the dispatchable set and a curated
+        # subset keeps the total tool count small.
+        schemas = filter_schemas_by_allowlist(schemas, spec)
+        tool_names = {str(s.get("name", "")) for s in schemas}
 
         return McpSchemasResult(schemas=schemas, tool_names=tool_names, failures={})
 
