@@ -980,6 +980,12 @@ def create_app(
         from omnigent.runtime.memory_maintenance import memory_maintenance_loop
 
         memory_maintenance_task = asyncio.create_task(memory_maintenance_loop())
+
+        # BDP-2248 (ADR-0142): periodic signal-bus reaper — expire stale pending
+        # waits, guarded by a distinct PG advisory lock (no-op on SQLite).
+        from omnigent.bus.reaper import signal_bus_reaper_loop
+
+        signal_bus_reaper_task = asyncio.create_task(signal_bus_reaper_loop())
         try:
             yield
         finally:
@@ -989,6 +995,9 @@ def create_app(
             memory_maintenance_task.cancel()
             with suppress(asyncio.CancelledError):
                 await memory_maintenance_task
+            signal_bus_reaper_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await signal_bus_reaper_task
             # Stop in-flight background managed-sandbox launches so a
             # slow provision doesn't outlive the ASGI shutdown (the
             # sandbox itself, if already provisioned, is reaped by the

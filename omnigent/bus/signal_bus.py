@@ -260,6 +260,25 @@ class SqlAlchemySignalBus:
                     row.delivered_at = now
             return out
 
+    def sweep_expired(self, *, now: int | None = None) -> int:
+        """Reaper duty: mark ``pending`` waits past ``expires_at`` as ``expired``.
+
+        Returns the number swept. Sibling of ``SqlAlchemyMemoryStore.sweep``;
+        run on a timer under a PG advisory lock by ``signal_bus_reaper_loop``.
+        """
+        now = now_epoch() if now is None else now
+        with self._write_session() as session:
+            result = session.execute(
+                update(SqlPendingWait)
+                .where(
+                    SqlPendingWait.status == "pending",
+                    SqlPendingWait.expires_at.is_not(None),
+                    SqlPendingWait.expires_at < now,
+                )
+                .values(status="expired")
+            )
+            return result.rowcount or 0
+
     # ── internals ────────────────────────────────────────────────────
     def _append_message(
         self,
