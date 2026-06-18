@@ -870,3 +870,78 @@ class SqlMemory(Base):
         ),
         Index("ix_memories_source_conversation_id", "source_conversation_id"),
     )
+
+
+class SqlPendingWait(Base):
+    """A durable awaited signal: a parked session waiting on a keyed signal
+    (BDP-2248, ADR-0142).
+
+    ``signal_id`` (the raw ``{runId}:{nodeId}`` colon form, kept unescaped to
+    match the platform ``WorkflowSignalClient`` contract) is the **primary key
+    and the idempotency key**: a second ``deliver`` of the same id resolves to
+    ``AlreadyResolved`` via the guarded conditional UPDATE
+    (``... WHERE status='pending'`` → rowcount 0 the second time), per the
+    ADR-0009 Idempotent Receiver. ``session_id`` is a plain column (no hard FK)
+    so the bus is decoupled + unit-testable standalone; orphaned waits are
+    reaper-swept.
+    """
+
+    __tablename__ = "pending_waits"
+
+    signal_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    key: Mapped[str] = mapped_column(String(256), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    target: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="pending"
+    )
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolved_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    expires_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_pending_waits_kind_target", "kind", "target"),
+        Index("ix_pending_waits_session_status", "session_id", "status"),
+        Index("ix_pending_waits_status_expires", "status", "expires_at"),
+        CheckConstraint(
+            "status in ('pending', 'resolved', 'expired')",
+            name="ck_pending_waits_status",
+        ),
+    )
+
+
+class SqlAgentMessage(Base):
+    """A durable inter-session message / wake payload (BDP-2248, ADR-0142).
+
+    Replaces the ephemeral in-process inbox so a wake survives a runner/process
+    restart. An unmatched ``deliver`` is stored here with ``dead_lettered=True``
+    (Dead Letter Channel, ADR-0009). ``session_id`` is nullable so a dead-letter
+    row is not stranded when no session matched; ``seq`` gives FIFO ordering.
+    """
+
+    __tablename__ = "agent_messages"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    signal_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    dead_lettered: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default=false()
+    )
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    delivered_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_agent_messages_session_delivered_seq",
+            "session_id",
+            "delivered_at",
+            "seq",
+        ),
+        Index("ix_agent_messages_dead_lettered", "dead_lettered"),
+    )
