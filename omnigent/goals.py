@@ -37,6 +37,7 @@ class Goal:
     source: str | None
     payload: dict | None
     created_at: int
+    updated_at: int
 
 
 def _to_goal(row: SqlGoal) -> Goal:
@@ -49,6 +50,7 @@ def _to_goal(row: SqlGoal) -> Goal:
         source=row.source,
         payload=json.loads(row.payload) if row.payload is not None else None,
         created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -128,6 +130,38 @@ class SqlAlchemyGoalStore:
                 .where(SqlGoal.id == goal_id)
                 .values(status=status, updated_at=now)
             )
+
+    def reopen_stalled(
+        self, *, older_than_seconds: int, now: int | None = None
+    ) -> list[Goal]:
+        """Rebalance: reopen owned goals idle past ``older_than_seconds`` (BDP-2272 C4).
+
+        An ``assigned`` / ``in_progress`` goal whose ``updated_at`` is older than the
+        threshold is stalled — its owner is sitting on it. Reopen it (``status='open'``,
+        ``owner_agent_id=None``) so another agent can claim it. Returns the goals **as
+        they were before reopening** (carrying the prior ``owner_agent_id``) so the
+        caller can notify the dropped owner. Single guarded write (ADR-0009).
+        """
+        now = now_epoch() if now is None else now
+        cutoff = now - older_than_seconds
+        with self._write_session() as session:
+            rows = (
+                session.execute(
+                    select(SqlGoal).where(
+                        SqlGoal.status.in_(("assigned", "in_progress")),
+                        SqlGoal.updated_at <= cutoff,
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            reopened = [_to_goal(r) for r in rows]  # snapshot prior owner
+            for r in rows:
+                r.status = "open"
+                r.owner_agent_id = None
+                r.updated_at = now
+            session.flush()
+            return reopened
 
     # ── scoreboard ───────────────────────────────────────────────────
     def record_score(

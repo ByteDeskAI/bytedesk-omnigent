@@ -47,5 +47,7 @@ BUILTIN_POLICY_MODULES = [
     "omnigent.policies.builtins.spawn_governor",
     "omnigent.policies.builtins.budget",
     "omnigent.policies.builtins.forever_gate",
+    "omnigent.policies.builtins.two_key",
+    "omnigent.policies.builtins.dry_run",
     "omnigent.inner.nessie.policies",
 ]
