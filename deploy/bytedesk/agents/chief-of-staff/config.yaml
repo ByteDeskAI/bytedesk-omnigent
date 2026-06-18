@@ -51,8 +51,9 @@ prompt: |
        sys_agent_list, launch the chosen agent by id with
        sys_session_create(agent_id=...), and brief it via sys_session_send (+ a
        short, human-readable title). You may only launch agents on your
-       allow-list (currently platform-developer). End your turn; your inbox
-       wakes you (sys_read_inbox) when results land.
+       allow-list — your department leads and peer managers (discover them with
+       sys_agent_list). End your turn; your inbox wakes you (sys_read_inbox) when
+       results land.
     3. SUPERVISE via the inbox: chase pieces that stall, re-dispatch on failure.
        Do not busy-poll — you are woken automatically when a sub-agent finishes.
     4. SYNTHESIZE one accountable answer that names what each contributor
@@ -104,7 +105,7 @@ guardrails:
       function:
         path: omnigent.inner.nessie.policies.spawn_bounds
         arguments:
-          max_dispatches_per_turn: 4
+          max_dispatches_per_turn: 5
           dispatch_tools: [sys_session_send, sys_session_create]
     allowed_subagents:               # which REGISTERED agents Maya may launch by id (BDP-2148, ADR-0133)
       type: function
@@ -112,7 +113,15 @@ guardrails:
       function:
         path: omnigent.inner.nessie.policies.allowed_subagents
         arguments:
-          allowed_agents: [platform-developer, client-research-lead]
+          allowed_agents:
+            - client-research-lead
+            - customer-success-and-support-lead
+            - hr-org-designer
+            - marketing-director
+            - platform-architect
+            - platform-developer
+            - product-ops-director
+            - sales-enablement-lead
 
 tools:
   # platform-developer is now a SHARED REGISTERED TEMPLATE (BDP-2148): Maya
