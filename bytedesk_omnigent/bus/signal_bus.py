@@ -25,7 +25,7 @@ from enum import Enum
 
 from sqlalchemy import func, select, update
 
-from omnigent.db.db_models import SqlAgentMessage, SqlPendingWait
+from bytedesk_omnigent.db_models import SqlAgentMessage, SqlPendingWait
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
