@@ -293,6 +293,43 @@ class SqlGoal(Base):
     )
 
 
+class SqlTask(Base):
+    """A durable task: a goal with assignment + execution binding (BDP-2333, ADR-0142).
+
+    Extends the goal shape (durable backlog row, guarded-UPDATE claim) with an explicit
+    ``assignee_agent_id`` (who executes it) distinct from ``owner_agent_id`` (who is
+    accountable for it) and a ``required_capability`` that gates which agent may be
+    assigned. ``claim_task`` uses a guarded UPDATE on ``(id, status='open')`` so exactly
+    one agent claims a task (ADR-0009), the same shape SqlGoal + the signal bus use.
+    Agent ids + capability are plain columns (soft FKs); ``payload`` is JSON-in-Text.
+    """
+
+    __tablename__ = "tasks"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    owner_agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    assignee_agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    required_capability: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
+    priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
+    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_tasks_status_priority", "status", "priority"),
+        Index("ix_tasks_owner_status", "owner_agent_id", "status"),
+        Index("ix_tasks_assignee_status", "assignee_agent_id", "status"),
+        CheckConstraint(
+            "status in ('open', 'assigned', 'in_progress', 'blocked', 'done')",
+            name="ck_tasks_status",
+        ),
+    )
+
+
 class SqlScoreboardEntry(Base):
     """A durable per-agent ops metric (BDP-2271 C3, ADR-0142).
 

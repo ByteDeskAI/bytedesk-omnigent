@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+
 from sqlalchemy import and_, asc, desc, or_, select
 
 from omnigent.db.converters import sql_agent_to_entity
@@ -225,6 +228,45 @@ class SqlAlchemyAgentStore(AgentStore):
         with self._session() as session:
             row = session.get(SqlAgent, agent_id)
             return row.sot_tier if row else None
+
+    def set_capabilities(
+        self, agent_id: str, capabilities: Sequence[str] | None
+    ) -> bool:
+        """Persist the agent's declared capability slugs (BDP-2334, ADR-0142).
+
+        Serialized as JSON-in-Text (dual-DB SQLite + Postgres, never JSONB),
+        mirroring ``hosts.configured_harnesses``. ``None``/empty clears it.
+
+        :param agent_id: The registered agent id.
+        :param capabilities: The capability slugs, or ``None`` to clear them.
+        :returns: ``True`` if the agent exists and was updated, else ``False``.
+        """
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            if not row:
+                return False
+            row.capabilities = json.dumps(list(capabilities)) if capabilities else None
+            row.updated_at = now_epoch()
+            return True
+
+    def get_capabilities(self, agent_id: str) -> tuple[str, ...]:
+        """Return the agent's persisted capability slugs (empty if none/unset).
+
+        Tolerant: NULL, malformed JSON, or a non-list payload all map to an
+        empty tuple — a corrupt value must degrade to "no capabilities", never
+        break resolution. Non-string entries are dropped for the same reason.
+        """
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            if row is None or row.capabilities is None:
+                return ()
+            try:
+                parsed = json.loads(row.capabilities)
+            except json.JSONDecodeError:
+                return ()
+            if not isinstance(parsed, list):
+                return ()
+            return tuple(c for c in parsed if isinstance(c, str))
 
     def delete(self, agent_id: str) -> bool:
         """

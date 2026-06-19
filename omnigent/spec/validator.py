@@ -93,6 +93,7 @@ def validate(spec: AgentSpec) -> ValidationResult:
     _validate_sub_agents(spec, result)
     _validate_compaction(spec, result)
     _validate_os_env(spec, result)
+    _validate_capabilities(spec, result)
     return result
 
 
@@ -543,6 +544,39 @@ def _validate_os_env(spec: AgentSpec, result: ValidationResult) -> None:
             "inert decoration on the policy and the agent would have "
             "unrestricted network access despite the YAML declaring otherwise.",
         )
+
+
+def _validate_capabilities(spec: AgentSpec, result: ValidationResult) -> None:
+    """
+    Validate the agent's ``capabilities`` surface (BDP-2334).
+
+    ``capabilities`` is an immutable sequence of capability slugs. The
+    parser already enforces these on the YAML-loaded path, but an
+    ``AgentSpec`` may also be built programmatically (tests, the
+    omnigent-compat shim, future API callers) — so the same rules are
+    checked here, the last common gate before the runtime.
+
+    Rules:
+
+    - Every entry is a non-empty, non-blank string.
+    - Slugs are unique (a duplicate is almost always a copy-paste
+      mistake and would double-grant the same capability).
+
+    :param spec: The agent spec to check.
+    :param result: Accumulator for any validation errors found.
+    """
+    seen: set[str] = set()
+    for i, slug in enumerate(spec.capabilities):
+        prefix = f"capabilities[{i}]"
+        if not isinstance(slug, str) or not slug.strip():
+            result.add(
+                prefix,
+                f"must be a non-empty, non-blank capability slug string, got {slug!r}",
+            )
+            continue
+        if slug in seen:
+            result.add(prefix, f"duplicate capability slug: {slug!r}")
+        seen.add(slug)
 
 
 def _validate_agent_names(

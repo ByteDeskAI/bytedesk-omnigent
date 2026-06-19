@@ -69,6 +69,11 @@ class SqlAgent(Base):
     # lives here, written via AgentStore.set_sot_tier — never inferred from
     # store presence).
     sot_tier: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # First-class capability surface (BDP-2334). JSON-serialized list of
+    # capability slugs (Text, never JSONB — dual-DB SQLite + Postgres). NULL
+    # = no capabilities declared / not yet materialized. Queryable so the
+    # resolver / admin surfaces can filter agents by declared capability.
+    capabilities: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     __table_args__ = (
         Index("ix_agents_created_at", "created_at"),
