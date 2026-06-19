@@ -161,6 +161,8 @@ def test_builtin_names_size_matches_registry() -> None:
                 "deliberation_position",
                 "deliberation_decide",
                 "deliberation_find",
+                # BDP-2276 E2: self-learning routing over the outcome scoreboard.
+                "find_specialist",
             }
         )
         == BUILTIN_NAMES

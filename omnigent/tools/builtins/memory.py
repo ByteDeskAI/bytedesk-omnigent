@@ -19,6 +19,10 @@ from __future__ import annotations
 import json
 from typing import Any
 
+from omnigent.memory_protocol import (
+    ORG_CONTEXT_COMPARTMENT,
+    ensure_org_compartments,
+)
 from omnigent.tools.base import Tool, ToolContext
 
 _SCOPES = ("agent", "team", "topic")
@@ -83,7 +87,11 @@ class MemoryAppendTool(Tool):
                             "enum": list(_SCOPES),
                             "description": (
                                 "agent = your own private memory (default); "
-                                "team = shared team memory; topic = a shared named topic."
+                                f"team = shared team memory (use name "
+                                f"'{ORG_CONTEXT_COMPARTMENT}' for the standing org "
+                                "blackboard); topic = a shared named topic (use name "
+                                "'initiative:<id>' to log an initiative's "
+                                "status/blockers/decisions and recall it before deciding)."
                             ),
                             "default": "agent",
                         },
@@ -262,4 +270,8 @@ class MemoryCompartmentsListTool(Tool):
         comps += store.list_compartments(scope="team")
         comps += store.list_compartments(scope="topic")
         out = [{"scope": c["scope"], "name": c["name"]} for c in comps]
+        # Always surface the standing org blackboard (BDP-2276 D6/E1) — the
+        # store only lists compartments that hold a row, so an unwritten
+        # org-context would otherwise be invisible and undiscoverable.
+        out = ensure_org_compartments(out)
         return json.dumps({"compartments": out})

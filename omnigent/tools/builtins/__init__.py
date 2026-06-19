@@ -65,6 +65,7 @@ from omnigent.tools.builtins.peer_tools import PeerInboxTool, PeerSendTool
 from omnigent.tools.builtins.read_skill_file import (
     ReadSkillFileTool,
 )
+from omnigent.tools.builtins.routing_tools import FindSpecialistTool
 from omnigent.tools.builtins.signal_tools import (
     SignalAwaitTool,
     SignalCheckTool,
@@ -230,6 +231,8 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "deliberation_decide": lambda _config: DeliberationDecideTool(),
     "deliberation_find": lambda _config: DeliberationFindTool(),
     "outcome_record": lambda _config: OutcomeRecordTool(),
+    # Self-learning routing over the outcome scoreboard (BDP-2276 E2, ADR-0142).
+    "find_specialist": lambda _config: FindSpecialistTool(),
     # Native signal-bus tools (BDP-2248 α1 integration, ADR-0142).
     "signal_await": lambda _config: SignalAwaitTool(),
     "signal_deliver": lambda _config: SignalDeliverTool(),

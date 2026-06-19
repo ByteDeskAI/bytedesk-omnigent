@@ -7850,6 +7850,53 @@ async def _relay_persist_error_once(
         return "failed"
 
 
+async def _rescue_compaction_to_memory(
+    conversation_store: ConversationStore,
+    session_id: str,
+    persisted_items: list[Any],
+) -> None:
+    """Rescue a just-persisted compaction summary into the agent's episodic memory.
+
+    D6 (BDP-2276, ADR-0132/0142): when a compaction summary is persisted, copy it
+    into durable long-term memory so distilled session knowledge survives the
+    lossy compaction boundary — the substrate for "agents remember yesterday".
+
+    Best-effort and cheap on the hot path: returns immediately unless a
+    compaction item was actually just persisted, and only then resolves the
+    conversation's bound agent (the memory owner) and writes the summary. A
+    capture failure never blocks or surfaces — the durable conversation item
+    stays the source of truth; the memory is a derived, recallable copy.
+
+    :param conversation_store: The store the item was persisted through (used to
+        resolve the conversation's owning agent).
+    :param session_id: The conversation whose item was just persisted.
+    :param persisted_items: The store-assigned items returned by ``append``.
+    """
+    if not any(getattr(it, "type", None) == "compaction" for it in persisted_items):
+        return
+    try:
+        conv = await asyncio.to_thread(
+            conversation_store.get_conversation, session_id
+        )
+        agent_id = conv.agent_id if conv is not None else None
+
+        from omnigent.runtime import get_memory_store
+        from omnigent.runtime.memory_capture import capture_compaction_summaries
+
+        await asyncio.to_thread(
+            capture_compaction_summaries,
+            get_memory_store(),
+            session_id,
+            agent_id,
+            persisted_items,
+        )
+    except Exception:
+        _logger.exception(
+            "episodic compaction capture failed for session=%s",
+            session_id,
+        )
+
+
 async def _relay_persist(
     conversation_store: ConversationStore | None,
     session_id: str,
@@ -7865,7 +7912,7 @@ async def _relay_persist(
     if conversation_store is None:
         return
     try:
-        await asyncio.to_thread(
+        persisted = await asyncio.to_thread(
             conversation_store.append,
             session_id,
             [item],
@@ -7875,6 +7922,8 @@ async def _relay_persist(
             "Relay persist failed for session=%s",
             session_id,
         )
+        return
+    await _rescue_compaction_to_memory(conversation_store, session_id, persisted)
 
 
 async def _flush_relay_text(
@@ -15978,10 +16027,14 @@ def create_sessions_router(
                 response_id=f"compact_{_uuid.uuid4().hex}",
                 data=parse_item_data("compaction", body.data),
             )
-            await asyncio.to_thread(
+            persisted_items = await asyncio.to_thread(
                 conversation_store.append,
                 session_id,
                 [item],
+            )
+            # D6 (BDP-2276): rescue the summary into the agent's episodic memory.
+            await _rescue_compaction_to_memory(
+                conversation_store, session_id, persisted_items
             )
             return {"queued": True}
         if body.type == _EXTERNAL_ASSISTANT_MESSAGE_TYPE:
