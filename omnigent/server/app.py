@@ -1584,6 +1584,17 @@ def create_app(
         prefix="/v1",
         tags=["ingress"],
     )
+
+    # BDP-2278 F5 (ADR-0142): read-only governance API — the goals backlog +
+    # open deliberations rollup + outcome leaderboard the Founder Governance
+    # cockpit / control-plane Work tab reads to see org state at a glance.
+    from omnigent.server.routes.governance import create_governance_router
+
+    app.include_router(
+        create_governance_router(),
+        prefix="/v1",
+        tags=["governance"],
+    )
     if comment_store is not None:
         app.include_router(
             create_comments_router(
