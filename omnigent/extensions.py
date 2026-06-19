@@ -85,18 +85,65 @@ def discover_extensions() -> list[OmnigentExtension]:
 
 
 def install_extensions(
-    app: FastAPI, *, extensions: list[OmnigentExtension] | None = None
+    app: FastAPI,
+    *,
+    extensions: list[OmnigentExtension] | None = None,
+    auth_provider: object | None = None,
 ) -> list[str]:
     """Mount each extension's routers under ``/v1``; return the installed names.
 
     :param extensions: defaults to :func:`discover_extensions` (entry-point
         discovery); tests inject fakes directly.
+    :param auth_provider: passed to ``ext.routers(auth_provider=...)`` for
+        extensions whose routes need it; extensions whose ``routers()`` takes no
+        argument are called without it (back-compat).
     """
     exts = discover_extensions() if extensions is None else extensions
     installed: list[str] = []
     for ext in exts:
-        for router in ext.routers():
+        try:
+            routers = ext.routers(auth_provider=auth_provider)
+        except TypeError:
+            routers = ext.routers()
+        for router in routers:
             app.include_router(router, prefix="/v1")
         installed.append(ext.name)
         logger.info("installed omnigent extension %r", ext.name)
     return installed
+
+
+def extension_tool_factories() -> dict:
+    """Builtin tool factories contributed by extensions (``tool_factories()``).
+
+    Merged into the core ``_BUILTIN_REGISTRY`` so first-party tools register
+    without a ByteDesk-specific edit in ``omnigent/tools/builtins/__init__``.
+    """
+    factories: dict = {}
+    for ext in discover_extensions():
+        getter = getattr(ext, "tool_factories", None)
+        if getter is not None:
+            factories.update(getter())
+    return factories
+
+
+def extension_policy_modules() -> list[str]:
+    """Policy-builtin module paths contributed by extensions (``policy_modules()``)."""
+    modules: list[str] = []
+    for ext in discover_extensions():
+        getter = getattr(ext, "policy_modules", None)
+        if getter is not None:
+            modules.extend(getter())
+    return modules
+
+
+def extension_background_factories() -> list:
+    """Background-task factories contributed by extensions (``background_tasks()``).
+
+    The server lifespan starts each as a task and cancels it on shutdown.
+    """
+    factories: list = []
+    for ext in discover_extensions():
+        getter = getattr(ext, "background_tasks", None)
+        if getter is not None:
+            factories.extend(getter())
+    return factories
