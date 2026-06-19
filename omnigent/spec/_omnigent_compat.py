@@ -84,6 +84,9 @@ OMNIGENT_HARNESSES = frozenset(
         # ByteDesk: native xAI Grok Build CLI bridge (ACP over `grok agent
         # stdio`), registered in runtime/harnesses._HARNESS_MODULES.
         "grok-native",
+        # ByteDesk: Hermes Agent bridge (ACP over `hermes acp`) — Kade Vector's
+        # brain; registered in runtime/harnesses._HARNESS_MODULES.
+        "hermes",
         "openai-agents",
         "open-responses",
         "pi",
