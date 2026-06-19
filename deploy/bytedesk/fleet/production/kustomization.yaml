@@ -61,3 +61,10 @@ patches:
             containers:
               - name: host
                 imagePullPolicy: Always
+                # InfisicalBackend (BDP-2303): prod reads the `production` env of
+                # the bytedesk-agent-configuration project (base = development).
+                # Strategic-merge by env name; CLIENT_ID/SECRET still come from
+                # the Infisical/SOPS-reconciled omnigent-host-credentials Secret.
+                env:
+                  - name: OMNIGENT_INFISICAL_ENV
+                    value: production
