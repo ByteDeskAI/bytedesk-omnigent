@@ -6,8 +6,8 @@ durable signal bus (``omnigent/bus/``): a SQLAlchemy store over a new table, a
 ``_lifespan`` loop guarded by a distinct advisory lock, and a runtime accessor.
 """
 
-from omnigent.scheduler.loop import cron_scheduler_loop
-from omnigent.scheduler.scheduler import (
+from bytedesk_omnigent.scheduler.loop import cron_scheduler_loop
+from bytedesk_omnigent.scheduler.scheduler import (
     CronTrigger,
     SqlAlchemyCronScheduler,
     compute_next_fire,

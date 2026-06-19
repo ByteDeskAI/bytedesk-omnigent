@@ -1,7 +1,7 @@
 """Signed inbound-webhook / event ingress route (BDP-2249, ADR-0142).
 
 ``POST /v1/ingress/{source}`` — verify the HMAC, resolve the binding, deliver to
-the durable signal bus. Thin glue over ``omnigent.ingress.process_inbound``
+the durable signal bus. Thin glue over ``bytedesk_omnigent.ingress.process_inbound``
 (which holds the tested logic). 404 on no-match / unconfigured source, never 2xx.
 """
 
@@ -20,12 +20,12 @@ def create_ingress_router() -> APIRouter:
     @router.post("/ingress/{source}")
     async def receive(source: str, request: Request) -> JSONResponse:
         """Receive a signed external event and deliver it to the signal bus."""
-        from omnigent.ingress import (
+        from bytedesk_omnigent.ingress import (
             default_secret_resolver,
             get_binding_store,
             process_inbound,
         )
-        from omnigent.runtime import get_signal_bus
+        from bytedesk_omnigent.runtime import get_signal_bus
 
         secret = default_secret_resolver(source)
         if secret is None:

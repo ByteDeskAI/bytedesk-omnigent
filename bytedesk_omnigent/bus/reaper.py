@@ -28,7 +28,7 @@ _DEFAULT_INTERVAL_SECONDS = 60
 def run_signal_bus_sweep_tick(bus, *, now: int | None = None) -> int:
     """Expire stale pending waits. Returns the number swept.
 
-    :param bus: The :class:`~omnigent.bus.SqlAlchemySignalBus`.
+    :param bus: The :class:`~bytedesk_omnigent.bus.SqlAlchemySignalBus`.
     :param now: Current epoch seconds; defaults inside the call.
     """
     return bus.sweep_expired(now=now)
@@ -44,7 +44,7 @@ async def signal_bus_reaper_loop(
     Resilient — a failed tick is logged and the loop continues; cancellation
     propagates for clean shutdown.
     """
-    from omnigent.runtime import get_signal_bus
+    from bytedesk_omnigent.runtime import get_signal_bus
 
     while True:
         await asyncio.sleep(interval_seconds)

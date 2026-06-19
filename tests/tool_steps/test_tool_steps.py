@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnigent.tool_steps import (
+from bytedesk_omnigent.tool_steps import (
     SqlAlchemyToolStepStore,
     StepOutcome,
     ToolStepBusy,

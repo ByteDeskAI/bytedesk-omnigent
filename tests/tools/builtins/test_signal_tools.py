@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from omnigent.bus import SqlAlchemySignalBus
+from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from omnigent.tools.base import ToolContext
 from omnigent.tools.builtins.signal_tools import (
     SignalAwaitTool,
@@ -17,7 +17,7 @@ from omnigent.tools.builtins.signal_tools import (
 @pytest.fixture
 def bus(tmp_path, monkeypatch):
     b = SqlAlchemySignalBus(f"sqlite:///{tmp_path / 'bus.db'}")
-    monkeypatch.setattr("omnigent.runtime.get_signal_bus", lambda: b)
+    monkeypatch.setattr("bytedesk_omnigent.runtime.get_signal_bus", lambda: b)
     return b
 
 

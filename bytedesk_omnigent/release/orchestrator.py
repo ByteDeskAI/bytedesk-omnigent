@@ -31,7 +31,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from omnigent.bus.signal_bus import PendingWait
+from bytedesk_omnigent.bus.signal_bus import PendingWait
 
 #: The ingress ``source`` TeamCity callbacks arrive under.
 TEAMCITY_SOURCE = "teamcity"

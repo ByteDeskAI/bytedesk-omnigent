@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import time
 
-from omnigent.bus import SqlAlchemySignalBus
-from omnigent.bus.reaper import _SIGNAL_BUS_LOCK_KEY, run_signal_bus_sweep_tick
+from bytedesk_omnigent.bus import SqlAlchemySignalBus
+from bytedesk_omnigent.bus.reaper import _SIGNAL_BUS_LOCK_KEY, run_signal_bus_sweep_tick
 from omnigent.runtime.memory_maintenance import advisory_lock
 
 

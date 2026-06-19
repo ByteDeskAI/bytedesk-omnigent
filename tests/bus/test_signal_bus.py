@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from omnigent.bus import DeliveryStatus, SqlAlchemySignalBus
+from bytedesk_omnigent.bus import DeliveryStatus, SqlAlchemySignalBus
 
 
 def _bus(tmp_path) -> SqlAlchemySignalBus:
