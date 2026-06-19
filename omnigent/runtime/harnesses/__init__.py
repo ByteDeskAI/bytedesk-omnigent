@@ -83,6 +83,9 @@ _HARNESS_MODULES: dict[str, str] = {
     # has no third-party SDK dependency — it talks HTTP / SSE
     # directly to the Databricks gateway.
     "databricks_supervisor": "omnigent.inner.databricks_supervisor_harness",
+    # ByteDesk Hermes Agent bridge (ACP over ``hermes acp``) — Kade Vector's
+    # model-agnostic brain. See bytedesk_omnigent/harnesses/hermes_native_harness.py.
+    "hermes": "bytedesk_omnigent.harnesses.hermes_native_harness",
 }
 
 __all__ = ["_HARNESS_MODULES"]
