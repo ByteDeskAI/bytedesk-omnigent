@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import func, select
 
-from omnigent.db.db_models import SqlPeerMessage
+from bytedesk_omnigent.db_models import SqlPeerMessage
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,

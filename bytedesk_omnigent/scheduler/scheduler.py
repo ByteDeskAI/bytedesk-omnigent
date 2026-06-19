@@ -21,7 +21,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import select, update
 
-from omnigent.db.db_models import SqlCronTrigger
+from bytedesk_omnigent.db_models import SqlCronTrigger
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,

@@ -32,7 +32,7 @@ from enum import Enum
 
 from sqlalchemy import select, update
 
-from omnigent.db.db_models import SqlToolStep
+from bytedesk_omnigent.db_models import SqlToolStep
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,

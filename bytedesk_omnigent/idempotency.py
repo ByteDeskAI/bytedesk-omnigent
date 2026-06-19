@@ -17,7 +17,7 @@ import json
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 
-from omnigent.db.db_models import SqlIdempotencyKey
+from bytedesk_omnigent.db_models import SqlIdempotencyKey
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,

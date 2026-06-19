@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
-from omnigent.db.db_models import SqlSuppression
+from bytedesk_omnigent.db_models import SqlSuppression
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
