@@ -1673,6 +1673,14 @@ def create_app(
         tags=["policy_registry"],
     )
 
+    # BDP-2291 (ADR-0143): discover + mount first-party extensions via the generic
+    # omnigent.extensions entry-point seam — the single seam that keeps ByteDesk
+    # functionality out of upstream-tracked core. No hard dependency on any
+    # specific extension; one bad extension is logged and skipped, never fatal.
+    from omnigent.extensions import install_extensions
+
+    install_extensions(app)
+
     # ── Tunnel lifecycle callbacks (Step 8.5 crash recovery) ───
     async def _on_runner_disconnect(runner_id: str) -> None:
         """Mark sessions pinned to *this* runner as offline.
