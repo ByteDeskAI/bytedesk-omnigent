@@ -10,5 +10,17 @@ release, policies, tools) onto :class:`~bytedesk_omnigent.extension.BytedeskExte
 from __future__ import annotations
 
 from bytedesk_omnigent.extension import BytedeskExtension
+from bytedesk_omnigent.provider_metadata import (
+    ProviderKind,
+    ProviderMetadata,
+    ProviderMetadataMixin,
+    metadata_for,
+)
 
-__all__ = ["BytedeskExtension"]
+__all__ = [
+    "BytedeskExtension",
+    "ProviderKind",
+    "ProviderMetadata",
+    "ProviderMetadataMixin",
+    "metadata_for",
+]

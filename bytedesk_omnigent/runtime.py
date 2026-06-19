@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from bytedesk_omnigent.bus import SqlAlchemySignalBus
     from bytedesk_omnigent.scheduler import SqlAlchemyCronScheduler
     from bytedesk_omnigent.tool_steps import SqlAlchemyToolStepStore
+    from bytedesk_omnigent.session_state_store import SqlAlchemySessionStateStore
 
 
 _signal_bus_cache: dict[str, SqlAlchemySignalBus] = {}
@@ -75,4 +76,25 @@ def get_tool_step_store() -> SqlAlchemyToolStepStore:
     if store is None:
         store = SqlAlchemyToolStepStore(location)
         _tool_step_store_cache[location] = store
+    return store
+
+
+_session_state_store_cache: dict[str, SqlAlchemySessionStateStore] = {}
+
+
+def get_session_state_store() -> SqlAlchemySessionStateStore:
+    """Return the session-state facade store (Phase 6d, BDP-2342, ADR-0143).
+
+    Built lazily from the canonical conversation store's database URI and cached
+    per URI. A read/write facade over the existing
+    ``conversations.session_state`` / ``conversations.session_usage`` columns;
+    the conversation store remains the row authority.
+    """
+    from bytedesk_omnigent.session_state_store import SqlAlchemySessionStateStore
+
+    location = get_conversation_store().storage_location
+    store = _session_state_store_cache.get(location)
+    if store is None:
+        store = SqlAlchemySessionStateStore(location)
+        _session_state_store_cache[location] = store
     return store
