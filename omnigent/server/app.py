@@ -1591,7 +1591,7 @@ def create_app(
     from omnigent.server.routes.governance import create_governance_router
 
     app.include_router(
-        create_governance_router(),
+        create_governance_router(auth_provider=auth_provider),
         prefix="/v1",
         tags=["governance"],
     )
