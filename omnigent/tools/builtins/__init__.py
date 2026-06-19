@@ -22,6 +22,26 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
+from bytedesk_omnigent.tools.deliberation_tools import (
+    DeliberationDecideTool,
+    DeliberationFindTool,
+    DeliberationPositionTool,
+    DeliberationStartTool,
+)
+from bytedesk_omnigent.tools.goal_tools import (
+    GoalAdvanceTool,
+    GoalClaimTool,
+    GoalCreateTool,
+    GoalListTool,
+)
+from bytedesk_omnigent.tools.outcome_tools import OutcomeRecordTool
+from bytedesk_omnigent.tools.peer_tools import PeerInboxTool, PeerSendTool
+from bytedesk_omnigent.tools.routing_tools import FindSpecialistTool
+from bytedesk_omnigent.tools.signal_tools import (
+    SignalAwaitTool,
+    SignalCheckTool,
+    SignalDeliverTool,
+)
 from omnigent.spec.types import SkillSpec
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins.agents import (
@@ -33,18 +53,6 @@ from omnigent.tools.builtins.async_inbox import (
     SysCallAsyncTool,
     SysCancelAsyncTool,
     SysReadInboxTool,
-)
-from omnigent.tools.builtins.deliberation_tools import (
-    DeliberationDecideTool,
-    DeliberationFindTool,
-    DeliberationPositionTool,
-    DeliberationStartTool,
-)
-from omnigent.tools.builtins.goal_tools import (
-    GoalAdvanceTool,
-    GoalClaimTool,
-    GoalCreateTool,
-    GoalListTool,
 )
 from omnigent.tools.builtins.list_comments import ListCommentsTool
 from omnigent.tools.builtins.list_models import SysListModelsTool
@@ -60,16 +68,8 @@ from omnigent.tools.builtins.memory import (
     MemoryCompartmentsListTool,
     MemoryQueryTool,
 )
-from omnigent.tools.builtins.outcome_tools import OutcomeRecordTool
-from omnigent.tools.builtins.peer_tools import PeerInboxTool, PeerSendTool
 from omnigent.tools.builtins.read_skill_file import (
     ReadSkillFileTool,
-)
-from omnigent.tools.builtins.routing_tools import FindSpecialistTool
-from omnigent.tools.builtins.signal_tools import (
-    SignalAwaitTool,
-    SignalCheckTool,
-    SignalDeliverTool,
 )
 from omnigent.tools.builtins.spawn import (
     SysSessionCloseTool,

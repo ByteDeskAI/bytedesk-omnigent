@@ -53,7 +53,7 @@ def forever_denied(patterns: list[str]) -> PolicyCallable:
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.forever_gate.forever_denied",
+        "handler": "bytedesk_omnigent.policies.forever_gate.forever_denied",
         "kind": "factory",
         "name": "Forever-Denied Tool Registry",
         "description": "Denies any tool call matching a forbidden regex pattern — the "

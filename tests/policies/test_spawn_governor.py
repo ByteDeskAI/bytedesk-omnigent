@@ -1,7 +1,7 @@
 """Tests for the spawn-breadth governor policy (BDP-2272, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.policies.builtins.spawn_governor import (
+from bytedesk_omnigent.policies.spawn_governor import (
     POLICY_REGISTRY,
     spawn_breadth_governor,
 )

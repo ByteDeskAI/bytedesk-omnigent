@@ -70,7 +70,7 @@ def cost_hard_stop(max_cost_usd: float) -> PolicyCallable:
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.budget.cost_hard_stop",
+        "handler": "bytedesk_omnigent.policies.budget.cost_hard_stop",
         "kind": "factory",
         "name": "Hard-Stop Budget Circuit Breaker",
         "description": "Unconditionally denies once cumulative session spend reaches a "

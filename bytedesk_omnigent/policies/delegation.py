@@ -79,7 +79,7 @@ def delegation_authority(allowed_targets: list[str]) -> PolicyCallable:
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.delegation.delegation_authority",
+        "handler": "bytedesk_omnigent.policies.delegation.delegation_authority",
         "kind": "factory",
         "name": "Delegation-Graph Authority",
         "description": "Denies a sys_session_create whose named target is not one of "

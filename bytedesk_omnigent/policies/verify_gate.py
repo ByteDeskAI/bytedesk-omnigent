@@ -140,7 +140,7 @@ def verify_as_gate(
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.verify_gate.verify_as_gate",
+        "handler": "bytedesk_omnigent.policies.verify_gate.verify_as_gate",
         "kind": "factory",
         "name": "Verify Destructive Outcomes (verify-as-gate)",
         "description": (

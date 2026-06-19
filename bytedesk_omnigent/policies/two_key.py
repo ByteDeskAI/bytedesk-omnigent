@@ -64,7 +64,7 @@ def two_key_required(patterns: list[str], min_approvers: int = 2) -> PolicyCalla
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.two_key.two_key_required",
+        "handler": "bytedesk_omnigent.policies.two_key.two_key_required",
         "kind": "factory",
         "name": "Two-Key Approval Gate",
         "description": "Requires N distinct human approvers (default 2) before a "

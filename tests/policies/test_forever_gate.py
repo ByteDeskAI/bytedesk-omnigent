@@ -1,7 +1,7 @@
 """Tests for the forever-gated tool registry policy (BDP-2271 F7, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.policies.builtins.forever_gate import POLICY_REGISTRY, forever_denied
+from bytedesk_omnigent.policies.forever_gate import POLICY_REGISTRY, forever_denied
 
 
 def _call(name: str) -> dict:

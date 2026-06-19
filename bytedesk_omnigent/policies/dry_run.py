@@ -62,7 +62,7 @@ def dry_run_preview(patterns: list[str], max_preview_chars: int = 800) -> Policy
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.dry_run.dry_run_preview",
+        "handler": "bytedesk_omnigent.policies.dry_run.dry_run_preview",
         "kind": "factory",
         "name": "Dry-Run Preview Gate",
         "description": "ASKs with a concrete preview (tool name + arguments) of a "
