@@ -488,7 +488,7 @@ describe("Composer slash-command highlight overlay", () => {
   });
   afterEach(() => cleanup());
 
-  /** The only tinted (pink) run in the overlay — should be just the token. */
+  /** The only tinted brand run in the overlay — should be just the token. */
   function tintedText(): string | null {
     return (
       screen.getByTestId("composer-highlight-overlay").querySelector(".text-brand-accent")

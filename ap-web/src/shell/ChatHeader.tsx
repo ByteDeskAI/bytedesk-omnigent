@@ -308,9 +308,8 @@ export function ChatHeader({
             type="button"
             aria-label="Share session"
             onClick={onShare}
-            // share-button-glassy (index.css) paints the pink gradient,
-            // shadow, and white text in both light and dark mode.
-            className="share-button-glassy hidden h-8 rounded-full px-6 text-13 font-normal text-white md:inline-flex"
+            // share-button-glassy (index.css) paints the Platform primary surface.
+            className="share-button-glassy hidden h-8 rounded-full px-6 text-13 font-normal md:inline-flex"
           >
             <ShareIcon className="size-4" />
             Share

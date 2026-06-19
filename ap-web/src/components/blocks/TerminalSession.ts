@@ -325,8 +325,7 @@ export class TerminalSession {
       // Match the system mono stack at the configured base size. The
       // xterm.js defaults (15px, no theme) feel out of place inside the
       // app chrome.
-      fontFamily:
-        "'Geist Mono Variable', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
+      fontFamily: "ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace",
       fontSize: 13,
       scrollback: 20000,
       cursorBlink: true,
