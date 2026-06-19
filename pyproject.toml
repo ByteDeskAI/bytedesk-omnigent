@@ -211,6 +211,12 @@ memory = [
 omnigent = "omnigent.cli:main"
 omni = "omnigent.cli:main"
 
+# ADR-0143 (BDP-2291): first-party extensions discovered by omnigent.extensions.
+# The generic seam (omnigent/extensions.py) mounts each registered extension's
+# routers — keeping ByteDesk functionality out of upstream-tracked core.
+[project.entry-points."omnigent.extensions"]
+bytedesk = "bytedesk_omnigent.extension:BytedeskExtension"
+
 # uv path-deps for the sibling SDK packages (renamed in Stage 3).
 [tool.uv.sources]
 omnigent-client = { path = "sdks/python-client", editable = true }
@@ -222,8 +228,9 @@ include-package-data = true
 [tool.setuptools.packages.find]
 where = ["."]
 # Discovers the `omnigent` package (including `omnigent.inner.*` and
-# all omnigent subpackages absorbed during unification).
-include = ["omnigent*"]
+# all omnigent subpackages absorbed during unification) plus the first-party
+# `bytedesk_omnigent` extension package (ADR-0143).
+include = ["omnigent*", "bytedesk_omnigent*"]
 
 [tool.setuptools.package-data]
 "omnigent.db" = ["alembic.ini"]
