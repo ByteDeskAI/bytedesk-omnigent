@@ -23,7 +23,7 @@ from enum import Enum
 
 from sqlalchemy import select
 
-from omnigent.bus.signal_bus import DeliveryStatus
+from bytedesk_omnigent.bus.signal_bus import DeliveryStatus
 from omnigent.db.db_models import SqlWebhookBinding
 from omnigent.db.utils import (
     get_or_create_engine,

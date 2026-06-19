@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from omnigent.scheduler import (
+from bytedesk_omnigent.scheduler import (
     SqlAlchemyCronScheduler,
     compute_next_fire,
     run_cron_scheduler_tick,

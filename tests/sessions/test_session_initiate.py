@@ -2,8 +2,8 @@
 adapter (BDP-2279 α3b, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.scheduler.scheduler import CronTrigger
-from omnigent.sessions import (
+from bytedesk_omnigent.scheduler.scheduler import CronTrigger
+from bytedesk_omnigent.sessions import (
     build_cron_dispatch,
     get_session_initiator,
     set_session_initiator,

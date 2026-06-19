@@ -11,7 +11,7 @@ sweep is layered on in the server ``_lifespan``.
 
 from __future__ import annotations
 
-from omnigent.tool_steps.store import (
+from bytedesk_omnigent.tool_steps.store import (
     SqlAlchemyToolStepStore,
     StepClaim,
     StepOutcome,

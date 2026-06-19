@@ -2,7 +2,7 @@
 (BDP-2251, ADR-0142, aligned ADR-0009/0077)."""
 from __future__ import annotations
 
-from omnigent.idempotency import SqlAlchemyIdempotencyStore
+from bytedesk_omnigent.idempotency import SqlAlchemyIdempotencyStore
 
 
 def _store(tmp_path) -> SqlAlchemyIdempotencyStore:

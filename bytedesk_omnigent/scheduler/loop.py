@@ -17,8 +17,8 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from bytedesk_omnigent.scheduler.scheduler import CronTrigger, run_cron_scheduler_tick
 from omnigent.runtime.memory_maintenance import advisory_lock
-from omnigent.scheduler.scheduler import CronTrigger, run_cron_scheduler_tick
 
 _logger = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def cron_scheduler_loop(
     Resilient — a failed tick is logged and the loop continues; cancellation
     propagates for clean shutdown. The blocking DB work runs in a worker thread.
     """
-    from omnigent.runtime import get_cron_scheduler
+    from bytedesk_omnigent.runtime import get_cron_scheduler
 
     if dispatch is None:
         dispatch = _log_only_dispatch

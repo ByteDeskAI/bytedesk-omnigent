@@ -7,8 +7,8 @@ import hmac
 import json
 import time
 
-from omnigent.bus import SqlAlchemySignalBus
-from omnigent.ingress import (
+from bytedesk_omnigent.bus import SqlAlchemySignalBus
+from bytedesk_omnigent.ingress import (
     IngressBindingStore,
     IngressStatus,
     process_inbound,

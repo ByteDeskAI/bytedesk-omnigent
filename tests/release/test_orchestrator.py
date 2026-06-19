@@ -14,9 +14,9 @@ import time
 
 import pytest
 
-from omnigent.bus import SqlAlchemySignalBus
-from omnigent.ingress import IngressBindingStore, IngressStatus, process_inbound
-from omnigent.release import (
+from bytedesk_omnigent.bus import SqlAlchemySignalBus
+from bytedesk_omnigent.ingress import IngressBindingStore, IngressStatus, process_inbound
+from bytedesk_omnigent.release import (
     HumanGatedReleaseExecutor,
     ReleaseOrchestrator,
     ReleaseTriggerResult,

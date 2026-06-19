@@ -6,7 +6,7 @@ upstream file; the runtime accessor (``get_signal_bus``) and the lifespan reaper
 wiring are the only additive seams elsewhere.
 """
 
-from omnigent.bus.signal_bus import (
+from bytedesk_omnigent.bus.signal_bus import (
     DeliveryResult,
     DeliveryStatus,
     PendingWait,

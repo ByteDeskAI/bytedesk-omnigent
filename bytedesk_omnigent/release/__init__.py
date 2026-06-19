@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnigent.release.orchestrator import (
+from bytedesk_omnigent.release.orchestrator import (
     HumanGatedReleaseExecutor,
     ReleaseExecutor,
     ReleaseOrchestrator,

@@ -80,7 +80,7 @@ class SignalAwaitTool(Tool):
         if not ctx.conversation_id:
             return json.dumps({"error": "signal_await requires a session"})
 
-        from omnigent.runtime import get_signal_bus
+        from bytedesk_omnigent.runtime import get_signal_bus
 
         # Namespace the id to this session so an agent can't squat a server- or
         # workflow-reserved id (BDP-2288). signal_check drains by session, so the
@@ -144,7 +144,7 @@ class SignalDeliverTool(Tool):
         if not ctx.conversation_id:
             return json.dumps({"error": "signal_deliver requires a session"})
 
-        from omnigent.runtime import get_signal_bus
+        from bytedesk_omnigent.runtime import get_signal_bus
 
         result = get_signal_bus().deliver(
             signal_id=_agent_signal_id(ctx.conversation_id, signal_id),
@@ -182,7 +182,7 @@ class SignalCheckTool(Tool):
         if not ctx.conversation_id:
             return json.dumps({"error": "signal_check requires a session"})
 
-        from omnigent.runtime import get_signal_bus
+        from bytedesk_omnigent.runtime import get_signal_bus
 
         msgs = get_signal_bus().drain_inbox(session_id=ctx.conversation_id)
         signals = [

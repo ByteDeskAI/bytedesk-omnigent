@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Protocol, runtime_checkable
 
-from omnigent.scheduler.scheduler import CronTrigger
+from bytedesk_omnigent.scheduler.scheduler import CronTrigger
 
 _logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def build_cron_dispatch(
     """Adapt a :class:`SessionInitiator` into a cron-scheduler ``dispatch``.
 
     Returns a ``(CronTrigger) -> None`` callable (the shape
-    :func:`~omnigent.scheduler.scheduler.run_cron_scheduler_tick` expects) that
+    :func:`~bytedesk_omnigent.scheduler.scheduler.run_cron_scheduler_tick` expects) that
     initiates a root session for the trigger's agent, seeded with the trigger's
     prompt. Pure + injectable so the mapping is unit-provable without a live
     runtime.
