@@ -1,10 +1,10 @@
 """Tests for the governance read model (BDP-2278 F5 backbone, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.deliberation import SqlAlchemyDeliberationStore
-from omnigent.goals import SqlAlchemyGoalStore
-from omnigent.governance import governance_summary, outcome_leaderboard
-from omnigent.outcomes import SqlAlchemyOutcomeLedger
+from bytedesk_omnigent.deliberation import SqlAlchemyDeliberationStore
+from bytedesk_omnigent.goals import SqlAlchemyGoalStore
+from bytedesk_omnigent.governance import governance_summary, outcome_leaderboard
+from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
 
 
 def _stores(tmp_path):

@@ -34,7 +34,7 @@ def create_goals_router(auth_provider: AuthProvider | None = None) -> APIRouter:
     ) -> JSONResponse:
         """List the ops backlog (by priority then age), optionally filtered."""
         require_user(request, auth_provider)
-        from omnigent.goals import get_goal_store
+        from bytedesk_omnigent.goals import get_goal_store
 
         goals = get_goal_store().list_goals(status=status, owner_agent_id=owner)
         return JSONResponse({"goals": [asdict(g) for g in goals]})

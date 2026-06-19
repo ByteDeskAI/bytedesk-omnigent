@@ -7,10 +7,10 @@ import json
 
 import pytest
 
-from omnigent.deliberation import SqlAlchemyDeliberationStore
-from omnigent.goals import SqlAlchemyGoalStore
-from omnigent.outcomes import SqlAlchemyOutcomeLedger
-from omnigent.peer import SqlAlchemyPeerMessageStore
+from bytedesk_omnigent.deliberation import SqlAlchemyDeliberationStore
+from bytedesk_omnigent.goals import SqlAlchemyGoalStore
+from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
+from bytedesk_omnigent.peer import SqlAlchemyPeerMessageStore
 from omnigent.tools.base import ToolContext
 from omnigent.tools.builtins.deliberation_tools import (
     DeliberationDecideTool,
@@ -35,10 +35,10 @@ def stores(tmp_path, monkeypatch):
     goals = SqlAlchemyGoalStore(db)
     delib = SqlAlchemyDeliberationStore(db)
     ledger = SqlAlchemyOutcomeLedger(db)
-    monkeypatch.setattr("omnigent.peer.get_peer_message_store", lambda: peer)
-    monkeypatch.setattr("omnigent.goals.get_goal_store", lambda: goals)
-    monkeypatch.setattr("omnigent.deliberation.get_deliberation_store", lambda: delib)
-    monkeypatch.setattr("omnigent.outcomes.get_outcome_ledger", lambda: ledger)
+    monkeypatch.setattr("bytedesk_omnigent.peer.get_peer_message_store", lambda: peer)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
+    monkeypatch.setattr("bytedesk_omnigent.deliberation.get_deliberation_store", lambda: delib)
+    monkeypatch.setattr("bytedesk_omnigent.outcomes.get_outcome_ledger", lambda: ledger)
     return {"peer": peer, "goals": goals, "delib": delib, "ledger": ledger}
 
 

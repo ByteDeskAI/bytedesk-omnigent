@@ -1,7 +1,7 @@
 """Tests for the deliberation store: proposal→debate→decision (BDP-2273 C6, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.deliberation import SqlAlchemyDeliberationStore
+from bytedesk_omnigent.deliberation import SqlAlchemyDeliberationStore
 
 
 def _store(tmp_path) -> SqlAlchemyDeliberationStore:

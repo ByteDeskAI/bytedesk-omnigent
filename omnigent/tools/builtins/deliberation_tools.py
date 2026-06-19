@@ -54,7 +54,7 @@ class DeliberationStartTool(Tool):
         proposal = args.get("proposal")
         if not topic or not proposal:
             return json.dumps({"error": "missing required 'topic' or 'proposal'"})
-        from omnigent.deliberation import get_deliberation_store
+        from bytedesk_omnigent.deliberation import get_deliberation_store
 
         delib = get_deliberation_store().start(
             topic=topic, proposal=proposal, opened_by=ctx.agent_id
@@ -111,7 +111,7 @@ class DeliberationPositionTool(Tool):
             return json.dumps({"error": f"invalid stance {stance!r}; expected {list(_STANCES)}"})
         if not ctx.agent_id:
             return json.dumps({"error": "deliberation_position requires an agent identity"})
-        from omnigent.deliberation import get_deliberation_store
+        from bytedesk_omnigent.deliberation import get_deliberation_store
 
         pos = get_deliberation_store().add_position(
             deliberation_id=delib_id,
@@ -162,7 +162,7 @@ class DeliberationDecideTool(Tool):
             return json.dumps({"error": "missing required 'deliberation_id' or 'decision'"})
         if not ctx.agent_id:
             return json.dumps({"error": "deliberation_decide requires an agent identity"})
-        from omnigent.deliberation import get_deliberation_store
+        from bytedesk_omnigent.deliberation import get_deliberation_store
 
         decided = get_deliberation_store().decide(
             deliberation_id=delib_id, decision=decision, decided_by=ctx.agent_id
@@ -203,7 +203,7 @@ class DeliberationFindTool(Tool):
         topic = args.get("topic")
         if not topic:
             return json.dumps({"error": "missing required 'topic'"})
-        from omnigent.deliberation import get_deliberation_store
+        from bytedesk_omnigent.deliberation import get_deliberation_store
 
         found = get_deliberation_store().find_decision(topic=topic)
         if found is None:

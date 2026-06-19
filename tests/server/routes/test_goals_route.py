@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from bytedesk_omnigent.goals import Goal
 from omnigent.errors import OmnigentError
-from omnigent.goals import Goal
 from omnigent.server.routes.goals import create_goals_router
 
 
@@ -62,7 +62,7 @@ def test_list_returns_backlog_in_single_user_mode(monkeypatch) -> None:
         updated_at=1000,
     )
     store = _FakeStore([goal])
-    monkeypatch.setattr("omnigent.goals.get_goal_store", lambda: store)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: store)
     client = TestClient(_app(None))  # single-user mode → open
     resp = client.get("/v1/goals?status=open")
     assert resp.status_code == 200

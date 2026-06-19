@@ -76,7 +76,7 @@ class FindSpecialistTool(Tool):
         except (TypeError, ValueError):
             limit = _DEFAULT_LIMIT
 
-        from omnigent.goals import get_goal_store
+        from bytedesk_omnigent.goals import get_goal_store
 
         board = get_goal_store().scoreboard(metric=metric, limit=limit)
         candidates = [{"agent_id": agent_id, "score": value} for agent_id, value in board]

@@ -56,7 +56,7 @@ def outreach_compliance(
     if is_suppressed is None:
 
         def _check_suppressed(*, channel: str, address: str) -> bool:
-            from omnigent.compliance import get_suppression_store
+            from bytedesk_omnigent.compliance import get_suppression_store
 
             return get_suppression_store().is_suppressed(
                 channel=channel, address=address

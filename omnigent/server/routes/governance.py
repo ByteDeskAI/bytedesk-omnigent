@@ -2,7 +2,7 @@
 
 ``GET /v1/governance/summary`` — the goals backlog + open deliberations rollup.
 ``GET /v1/governance/leaderboard?metric=`` — the outcome leaderboard for a metric.
-Thin glue over the pure ``omnigent.governance`` read model + the durable stores.
+Thin glue over the pure ``bytedesk_omnigent.governance`` read model + the durable stores.
 
 This is founder/control-plane org data (goal backlog, open deliberations, per-agent
 leaderboard), so — like every sibling read route — it is authenticated: in
@@ -32,9 +32,9 @@ def create_governance_router(auth_provider: AuthProvider | None = None) -> APIRo
     async def summary(request: Request) -> JSONResponse:
         """One-glance org state: goals by status + open deliberations."""
         require_user(request, auth_provider)
-        from omnigent.deliberation import get_deliberation_store
-        from omnigent.goals import get_goal_store
-        from omnigent.governance import governance_summary
+        from bytedesk_omnigent.deliberation import get_deliberation_store
+        from bytedesk_omnigent.goals import get_goal_store
+        from bytedesk_omnigent.governance import governance_summary
 
         data = governance_summary(
             goal_store=get_goal_store(),
@@ -50,8 +50,8 @@ def create_governance_router(auth_provider: AuthProvider | None = None) -> APIRo
     ) -> JSONResponse:
         """The outcome leaderboard for a metric (find-specialist signal)."""
         require_user(request, auth_provider)
-        from omnigent.governance import outcome_leaderboard
-        from omnigent.outcomes import get_outcome_ledger
+        from bytedesk_omnigent.governance import outcome_leaderboard
+        from bytedesk_omnigent.outcomes import get_outcome_ledger
 
         data = outcome_leaderboard(
             outcome_ledger=get_outcome_ledger(), metric=metric, limit=limit

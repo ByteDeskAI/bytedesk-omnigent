@@ -70,7 +70,7 @@ class OutcomeRecordTool(Tool):
             return json.dumps({"error": "missing required 'kind' or 'metric'"})
         if not ctx.agent_id:
             return json.dumps({"error": "outcome_record requires an agent identity"})
-        from omnigent.outcomes import get_outcome_ledger
+        from bytedesk_omnigent.outcomes import get_outcome_ledger
 
         outcome = get_outcome_ledger().record_outcome(
             agent_id=ctx.agent_id,

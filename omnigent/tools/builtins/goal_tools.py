@@ -56,7 +56,7 @@ class GoalCreateTool(Tool):
         title = args.get("title")
         if not title:
             return json.dumps({"error": "missing required 'title'"})
-        from omnigent.goals import get_goal_store
+        from bytedesk_omnigent.goals import get_goal_store
 
         goal = get_goal_store().create_goal(
             title=title, priority=int(args.get("priority", 3)), source=ctx.agent_id
@@ -102,7 +102,7 @@ class GoalListTool(Tool):
 
     def invoke(self, arguments: str, ctx: ToolContext) -> str:
         args: dict[str, Any] = json.loads(arguments) if arguments else {}
-        from omnigent.goals import get_goal_store
+        from bytedesk_omnigent.goals import get_goal_store
 
         owner = ctx.agent_id if args.get("mine") else None
         goals = get_goal_store().list_goals(status=args.get("status"), owner_agent_id=owner)
@@ -150,7 +150,7 @@ class GoalClaimTool(Tool):
             return json.dumps({"error": "missing required 'goal_id'"})
         if not ctx.agent_id:
             return json.dumps({"error": "goal_claim requires an agent identity"})
-        from omnigent.goals import get_goal_store
+        from bytedesk_omnigent.goals import get_goal_store
 
         claimed = get_goal_store().claim_goal(goal_id=goal_id, owner_agent_id=ctx.agent_id)
         return json.dumps({"claimed": claimed})
@@ -204,7 +204,7 @@ class GoalAdvanceTool(Tool):
         # scope the write so a foreign / non-existent goal is not reported as moved.
         if not ctx.agent_id:
             return json.dumps({"error": "goal_advance requires an agent identity"})
-        from omnigent.goals import get_goal_store
+        from bytedesk_omnigent.goals import get_goal_store
 
         advanced = get_goal_store().advance_goal_owned(
             goal_id=goal_id, status=status, owner_agent_id=ctx.agent_id

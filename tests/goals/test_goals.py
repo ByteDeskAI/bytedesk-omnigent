@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from omnigent.goals import SqlAlchemyGoalStore
+from bytedesk_omnigent.goals import SqlAlchemyGoalStore
 
 
 def _store(tmp_path) -> SqlAlchemyGoalStore:

@@ -2,8 +2,8 @@
 (BDP-2268 B7, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.goals import SqlAlchemyGoalStore
-from omnigent.outcomes import SqlAlchemyOutcomeLedger
+from bytedesk_omnigent.goals import SqlAlchemyGoalStore
+from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
 
 
 def _stores(tmp_path) -> tuple[SqlAlchemyOutcomeLedger, SqlAlchemyGoalStore]:
