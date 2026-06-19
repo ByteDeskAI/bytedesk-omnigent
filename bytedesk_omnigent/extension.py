@@ -125,7 +125,17 @@ class BytedeskExtension:
             self._cron_scheduler,
             self._accountability,
             self._tool_step_resume,
+            self._realtime_bridge,
         ]
+
+    async def _realtime_bridge(self) -> None:
+        """Install the office:agents roster bridge (BDP-2301). One-shot: wraps the
+        agent store + returns. Runs in lifespan, i.e. AFTER the construction-time
+        builtin-agent re-seed, so the ~74 seed creates are not emitted (no
+        roster.changed storm on cold start) — only post-boot mutations fan out."""
+        from bytedesk_omnigent.realtime import install_realtime_bridge
+
+        install_realtime_bridge()
 
     async def _signal_bus_reaper(self) -> None:
         from bytedesk_omnigent.bus.reaper import signal_bus_reaper_loop
