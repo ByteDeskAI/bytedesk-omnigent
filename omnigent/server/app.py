@@ -1042,7 +1042,62 @@ def create_app(
             # inside shutdown_all().
             await _mcp_pool.shutdown_all()
 
-    app = FastAPI(title="Omnigent Server", lifespan=_lifespan)
+    # BDP-2327 (core-refactor spine, Phase 3): behind
+    # OMNIGENT_USE_LIFESPAN_PHASES (default OFF), run the same startup/
+    # shutdown steps through the LifespanOrchestrator's depends_on DAG
+    # (omnigent.server.lifespan_phases) instead of the monolithic _lifespan
+    # above. The phases mirror _lifespan 1:1 and the orchestrator's reverse-
+    # topological teardown reproduces the original ``finally`` order; with
+    # the flag off the orchestrator is never built and _lifespan stays the
+    # live path, so the app behaves identically to today.
+    from omnigent.server.auth import env_var_is_truthy as _env_var_is_truthy
+
+    if _env_var_is_truthy("OMNIGENT_USE_LIFESPAN_PHASES"):
+        from omnigent.server.lifespan_phases import (
+            LifespanContext,
+            LifespanOrchestrator,
+            build_default_lifespan_phases,
+        )
+
+        @asynccontextmanager
+        async def _lifespan_via_phases(
+            app_inst: FastAPI,
+        ) -> AsyncIterator[None]:
+            """Flag-gated alternate lifespan: run the phase DAG.
+
+            Captures the same wiring the monolithic ``_lifespan`` closes
+            over into a :class:`LifespanContext`, then drives the default
+            phases through the orchestrator (topological startup, reverse-
+            topological shutdown). Behaviorally equivalent to ``_lifespan``.
+
+            :param app_inst: The FastAPI app, for ``app_inst.state.*`` writes.
+            """
+            ctx = LifespanContext(
+                app=app_inst,
+                agent_store=agent_store,
+                artifact_store=artifact_store,
+                agent_cache=agent_cache,
+                conversation_store=conversation_store,
+                runner_router=runner_router,
+                tunnel_registry=tunnel_registry,
+                mcp_pool=_mcp_pool,
+                server_metrics=server_metrics,
+                server_metrics_otel=server_metrics_otel,
+                bootstrap_result=_bootstrap_result,
+                policy_modules=policy_modules,
+            )
+            orchestrator = LifespanOrchestrator(build_default_lifespan_phases())
+            await orchestrator.startup(ctx)
+            try:
+                yield
+            finally:
+                await orchestrator.shutdown(ctx)
+
+        _active_lifespan: Any = _lifespan_via_phases
+    else:
+        _active_lifespan = _lifespan
+
+    app = FastAPI(title="Omnigent Server", lifespan=_active_lifespan)
     from omnigent.runtime import telemetry
 
     telemetry.instrument_fastapi_app(app)
@@ -1064,6 +1119,29 @@ def create_app(
     app.state.managed_launches = ManagedLaunchTracker()
     app.state.server_metrics = server_metrics
     app.state.server_metrics_otel = server_metrics_otel
+    # BDP-2327 (core-refactor spine, Phase 1): behind
+    # OMNIGENT_USE_SERVICE_REGISTRY (default OFF), DUAL-WRITE the wired
+    # services into a typed ServiceRegistry alongside the app.state writes
+    # above. Nothing reads the registry yet; with the flag off it is never
+    # built and the app is byte-identical to today. Later phases migrate
+    # readers off app.state onto registry.get().
+    from omnigent.server.auth import env_var_is_truthy
+
+    if env_var_is_truthy("OMNIGENT_USE_SERVICE_REGISTRY"):
+        from omnigent.server.service_registry import ServiceRegistry
+
+        _service_registry = ServiceRegistry()
+        _service_registry.register(tunnel_registry)
+        _service_registry.register(runner_router)
+        _service_registry.register(host_registry)
+        _service_registry.register(server_metrics)
+        _service_registry.register(server_metrics_otel)
+        _service_registry.register(app.state.managed_launches)
+        if host_store is not None:
+            _service_registry.register(host_store, as_type=HostStore)
+        if sandbox_config is not None:
+            _service_registry.register(sandbox_config)
+        app.state.service_registry = _service_registry
     app.add_middleware(_WebSocketMetricsMiddleware, metrics=server_metrics)
     # CSWSH guard: reject cross-origin WebSocket handshakes before any
     # route accepts them. Added after the metrics middleware so it is the
