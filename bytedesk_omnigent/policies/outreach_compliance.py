@@ -134,7 +134,7 @@ def outreach_compliance(
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.outreach_compliance.outreach_compliance",
+        "handler": "bytedesk_omnigent.policies.outreach_compliance.outreach_compliance",
         "kind": "factory",
         "name": "Outreach Compliance Gate",
         "description": "Denies a matched outreach tool call with no unsubscribe/opt-out "

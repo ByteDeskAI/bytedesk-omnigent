@@ -11,8 +11,8 @@ import json
 
 from bytedesk_omnigent.goals import SqlAlchemyGoalStore
 from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
+from bytedesk_omnigent.tools.routing_tools import FindSpecialistTool
 from omnigent.tools.base import ToolContext
-from omnigent.tools.builtins.routing_tools import FindSpecialistTool
 
 
 def _ctx() -> ToolContext:

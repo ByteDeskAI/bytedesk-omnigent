@@ -1,7 +1,7 @@
 """Tests for the hard-stop budget circuit breaker (BDP-2271, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.policies.builtins.budget import POLICY_REGISTRY, cost_hard_stop
+from bytedesk_omnigent.policies.budget import POLICY_REGISTRY, cost_hard_stop
 
 
 def _event(spent: float, phase: str = "request", model: str = "opus") -> dict:

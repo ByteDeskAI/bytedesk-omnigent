@@ -11,21 +11,21 @@ from bytedesk_omnigent.deliberation import SqlAlchemyDeliberationStore
 from bytedesk_omnigent.goals import SqlAlchemyGoalStore
 from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
 from bytedesk_omnigent.peer import SqlAlchemyPeerMessageStore
-from omnigent.tools.base import ToolContext
-from omnigent.tools.builtins.deliberation_tools import (
+from bytedesk_omnigent.tools.deliberation_tools import (
     DeliberationDecideTool,
     DeliberationFindTool,
     DeliberationPositionTool,
     DeliberationStartTool,
 )
-from omnigent.tools.builtins.goal_tools import (
+from bytedesk_omnigent.tools.goal_tools import (
     GoalAdvanceTool,
     GoalClaimTool,
     GoalCreateTool,
     GoalListTool,
 )
-from omnigent.tools.builtins.outcome_tools import OutcomeRecordTool
-from omnigent.tools.builtins.peer_tools import PeerInboxTool, PeerSendTool
+from bytedesk_omnigent.tools.outcome_tools import OutcomeRecordTool
+from bytedesk_omnigent.tools.peer_tools import PeerInboxTool, PeerSendTool
+from omnigent.tools.base import ToolContext
 
 
 @pytest.fixture

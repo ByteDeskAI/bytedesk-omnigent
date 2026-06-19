@@ -1,7 +1,7 @@
 """Tests for the dry-run preview gate (BDP-2277 F6, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.policies.builtins.dry_run import dry_run_preview
+from bytedesk_omnigent.policies.dry_run import dry_run_preview
 
 
 def _tool_call(name: str, arguments: dict | None = None) -> dict:

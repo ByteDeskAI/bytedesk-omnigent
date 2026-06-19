@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from bytedesk_omnigent.compliance import SqlAlchemySuppressionStore
-from omnigent.policies.builtins.outreach_compliance import outreach_compliance
+from bytedesk_omnigent.policies.outreach_compliance import outreach_compliance
 
 
 def _store(tmp_path) -> SqlAlchemySuppressionStore:

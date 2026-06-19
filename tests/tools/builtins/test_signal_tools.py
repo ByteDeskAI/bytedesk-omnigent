@@ -6,12 +6,12 @@ import json
 import pytest
 
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
-from omnigent.tools.base import ToolContext
-from omnigent.tools.builtins.signal_tools import (
+from bytedesk_omnigent.tools.signal_tools import (
     SignalAwaitTool,
     SignalCheckTool,
     SignalDeliverTool,
 )
+from omnigent.tools.base import ToolContext
 
 
 @pytest.fixture

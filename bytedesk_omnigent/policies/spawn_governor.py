@@ -67,7 +67,7 @@ def spawn_breadth_governor(max_spawns: int = 16) -> PolicyCallable:
 
 POLICY_REGISTRY: list[dict[str, Any]] = [
     {
-        "handler": "omnigent.policies.builtins.spawn_governor.spawn_breadth_governor",
+        "handler": "bytedesk_omnigent.policies.spawn_governor.spawn_breadth_governor",
         "kind": "factory",
         "name": "Spawn-Breadth Governor",
         "description": "Denies after N child-session spawns (sys_session_create) in a "

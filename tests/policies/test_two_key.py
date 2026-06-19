@@ -1,7 +1,7 @@
 """Tests for the two-key approval gate (BDP-2277 F2, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.policies.builtins.two_key import _APPROVERS_KEY, two_key_required
+from bytedesk_omnigent.policies.two_key import _APPROVERS_KEY, two_key_required
 
 
 def _tool_call(name: str, state: dict | None = None) -> dict:

@@ -1,7 +1,7 @@
 """Tests for the delegation-graph authority gate (BDP-2269 C1, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.policies.builtins.delegation import delegation_authority
+from bytedesk_omnigent.policies.delegation import delegation_authority
 
 
 def _spawn(target_key: str | None = None, target_value: str | None = None) -> dict:

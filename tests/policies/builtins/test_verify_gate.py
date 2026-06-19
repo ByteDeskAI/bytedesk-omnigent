@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 
-from omnigent.policies.builtins.verify_gate import POLICY_REGISTRY, verify_as_gate
+from bytedesk_omnigent.policies.verify_gate import POLICY_REGISTRY, verify_as_gate
 
 from .helpers import tool_result_event
 
@@ -84,6 +84,6 @@ async def test_custom_verified_field() -> None:
 def test_registry_entry_is_well_formed() -> None:
     assert len(POLICY_REGISTRY) == 1
     entry = POLICY_REGISTRY[0]
-    assert entry["handler"] == "omnigent.policies.builtins.verify_gate.verify_as_gate"
+    assert entry["handler"] == "bytedesk_omnigent.policies.verify_gate.verify_as_gate"
     assert entry["kind"] == "factory"
     assert "gated_tools" in entry["params_schema"]["required"]
