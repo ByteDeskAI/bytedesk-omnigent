@@ -6,6 +6,14 @@ event (a TeamCity build callback, a webhook, a peer) can resume the work later;
 ``signal_deliver`` resolves a wait by id (idempotent on replay; unmatched ids
 dead-letter); ``signal_check`` drains this session's delivered payloads. The
 session is stamped **server-side** from ``ToolContext.conversation_id``.
+
+Agent-facing signal ids are **namespaced by the caller's session**
+(``sig:{conversation_id}:{signal_id}``, BDP-2288): an agent operates only inside
+its own signal namespace, so it can never register/await a server- or
+workflow-reserved id (e.g. ``release:1.2.3``) to squat another session's wake, nor
+deliver against another session's parked wait to forge an external signal. The
+HMAC-verified server ingress (``omnigent/ingress.py``) is the only path that
+resolves un-namespaced server ids — agents have no reach into it.
 """
 
 from __future__ import annotations
@@ -14,6 +22,11 @@ import json
 from typing import Any
 
 from omnigent.tools.base import Tool, ToolContext
+
+
+def _agent_signal_id(conversation_id: str, signal_id: str) -> str:
+    """Namespace an agent-chosen ``signal_id`` to the caller's session (BDP-2288)."""
+    return f"sig:{conversation_id}:{signal_id}"
 
 
 class SignalAwaitTool(Tool):
@@ -42,7 +55,7 @@ class SignalAwaitTool(Tool):
                     "properties": {
                         "signal_id": {
                             "type": "string",
-                            "description": "Correlation id the deliverer uses, e.g. 'release:1.2.3'.",
+                            "description": "Correlation id for this wait (your label).",
                         },
                         "key": {
                             "type": "string",
@@ -69,8 +82,11 @@ class SignalAwaitTool(Tool):
 
         from omnigent.runtime import get_signal_bus
 
+        # Namespace the id to this session so an agent can't squat a server- or
+        # workflow-reserved id (BDP-2288). signal_check drains by session, so the
+        # agent still sees its own delivered payloads.
         get_signal_bus().register_wait(
-            signal_id=signal_id,
+            signal_id=_agent_signal_id(ctx.conversation_id, signal_id),
             session_id=ctx.conversation_id,
             key=key,
             target=args.get("target"),
@@ -117,15 +133,23 @@ class SignalDeliverTool(Tool):
         }
 
     def invoke(self, arguments: str, ctx: ToolContext) -> str:
-        del ctx
         args: dict[str, Any] = json.loads(arguments)
         signal_id = args.get("signal_id")
         if not signal_id:
             return json.dumps({"error": "missing required 'signal_id'"})
+        # BDP-2288 — require identity and namespace the id to THIS session, so an
+        # agent can only ever resolve a wait it parked itself. It cannot forge an
+        # external signal (e.g. release:1.2.3) to wake another session's parked
+        # work — that namespaced id has no matching wait and dead-letters.
+        if not ctx.conversation_id:
+            return json.dumps({"error": "signal_deliver requires a session"})
 
         from omnigent.runtime import get_signal_bus
 
-        result = get_signal_bus().deliver(signal_id=signal_id, payload=args.get("payload"))
+        result = get_signal_bus().deliver(
+            signal_id=_agent_signal_id(ctx.conversation_id, signal_id),
+            payload=args.get("payload"),
+        )
         return json.dumps({"signal_id": signal_id, "status": result.status.value})
 
 
