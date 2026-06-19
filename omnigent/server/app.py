@@ -1607,7 +1607,7 @@ def create_app(
     # BDP-2249 (ADR-0142): signed inbound-webhook ingress — verify HMAC, resolve a
     # (source, event) binding, and deliver to the durable signal bus (404 on
     # no-match, never 2xx; BDP-1419).
-    from omnigent.server.routes.ingress import create_ingress_router
+    from bytedesk_omnigent.routes.ingress import create_ingress_router
 
     app.include_router(
         create_ingress_router(),
@@ -1618,7 +1618,7 @@ def create_app(
     # BDP-2278 F5 (ADR-0142): read-only governance API — the goals backlog +
     # open deliberations rollup + outcome leaderboard the Founder Governance
     # cockpit / control-plane Work tab reads to see org state at a glance.
-    from omnigent.server.routes.governance import create_governance_router
+    from bytedesk_omnigent.routes.governance import create_governance_router
 
     app.include_router(
         create_governance_router(auth_provider=auth_provider),
@@ -1629,7 +1629,7 @@ def create_app(
     # BDP-2290 (ADR-0142): read-only goals backlog — the ops backlog (BDP-2271 C3)
     # the Founder Governance cockpit (BDP-976) reads, proxied by ByteDesk.Office
     # /api/office/goals. Re-wires the cockpit's read path after C3 moved the store.
-    from omnigent.server.routes.goals import create_goals_router
+    from bytedesk_omnigent.routes.goals import create_goals_router
 
     app.include_router(
         create_goals_router(auth_provider=auth_provider),

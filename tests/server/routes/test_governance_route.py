@@ -10,8 +10,8 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from bytedesk_omnigent.routes.governance import create_governance_router
 from omnigent.errors import OmnigentError
-from omnigent.server.routes.governance import create_governance_router
 
 
 class _NoIdentityAuth:
