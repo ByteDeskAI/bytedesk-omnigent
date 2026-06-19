@@ -121,12 +121,26 @@ class BytedeskExtension:
         server lifespan starts each as a task and cancels it on shutdown; the
         resume sweep is a one-shot that completes and returns (cancel is a no-op)."""
         return [
+            self._configure_logging,
             self._signal_bus_reaper,
             self._cron_scheduler,
             self._accountability,
             self._tool_step_resume,
             self._realtime_bridge,
         ]
+
+    async def _configure_logging(self) -> None:
+        """Surface the ``bytedesk_omnigent`` namespace's INFO logs. Core sets the
+        ``omnigent`` namespace level in the lifespan AFTER uvicorn's dictConfig
+        (omnigent/server/app.py), because a pre-dictConfig call is reset; the
+        extension's loggers otherwise inherit root and stay silent (e.g. the
+        BDP-2301 bridge-installed line never showed). background_tasks run in the
+        same post-dictConfig lifespan window, so mirror core here — honouring the
+        same OMNIGENT_LOG_LEVEL. One-shot: set the level and return."""
+        level_name = os.environ.get("OMNIGENT_LOG_LEVEL", "INFO").upper()
+        logging.getLogger("bytedesk_omnigent").setLevel(
+            getattr(logging, level_name, logging.INFO)
+        )
 
     async def _realtime_bridge(self) -> None:
         """Install the office:agents roster bridge (BDP-2301). One-shot: wraps the
