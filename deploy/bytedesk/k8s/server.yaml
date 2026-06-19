@@ -59,6 +59,11 @@ spec:
           envFrom:
             - secretRef:
                 name: omnigent-secrets # DATABASE_URL (+ cookie secret if auth on)
+            # BDP-2301 — BYTEDESK_TENANT_ID for the realtime agent bridge,
+            # hydrated from Infisical bytedesk-agent-configuration /realtime by
+            # the omnigent-bridge-config InfisicalSecret CR.
+            - secretRef:
+                name: omnigent-bridge-config-secrets
           env:
             - name: HOST
               value: "0.0.0.0"

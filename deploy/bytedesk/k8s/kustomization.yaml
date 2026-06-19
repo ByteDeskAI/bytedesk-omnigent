@@ -43,6 +43,11 @@ resources:
   # omnigent-infisical-secrets so the secret store's Infisical backend can read
   # the bytedesk-agent-configuration project. Persists via Fleet in both clusters.
   - omnigent-infisical-secret.yaml
+  # Infisical-operator-managed bridge config (BDP-2301). A CR pointing at
+  # bytedesk-agent-configuration /realtime — the operator hydrates
+  # omnigent-bridge-config-secrets (BYTEDESK_TENANT_ID) which server.yaml injects
+  # as env for the realtime agent bridge (bytedesk_omnigent/realtime).
+  - omnigent-bridge-config-secret.yaml
   # secret.example.yaml is intentionally NOT listed — copy it to secret.yaml,
   # fill values, and `kubectl apply -f secret.yaml` (gitignored) for local.
   # In prod the secrets are Infisical/SOPS-reconciled (see README + fleet overlay).
