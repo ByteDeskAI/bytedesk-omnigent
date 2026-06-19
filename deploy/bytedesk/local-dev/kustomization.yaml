@@ -99,6 +99,17 @@ patches:
                   # per conversation anyway, so the .pyc cache buys ~nothing here.
                   - name: PYTHONDONTWRITEBYTECODE
                     value: "1"
+                  # BDP-2294 (ADR-0143): the image's PEP-660 editable finder +
+                  # entry_points.txt are baked PRE-mount, so the new top-level
+                  # bytedesk_omnigent package isn't importable and its
+                  # omnigent.extensions entry-point isn't registered in the source
+                  # mount. PYTHONPATH=/build makes the package importable;
+                  # OMNIGENT_EXTENSIONS registers it with the extension seam
+                  # explicitly — no metadata regen / image rebuild needed.
+                  - name: PYTHONPATH
+                    value: /build
+                  - name: OMNIGENT_EXTENSIONS
+                    value: bytedesk_omnigent.extension:BytedeskExtension
                 volumeMounts:
                   - name: omnigent-src
                     mountPath: /build
@@ -129,6 +140,10 @@ patches:
                   # re-imports per conversation, so the cache buys ~nothing).
                   - name: PYTHONDONTWRITEBYTECODE
                     value: "1"
+                  # BDP-2294: harness subprocesses import bytedesk_omnigent modules
+                  # from the source mount — make the new top-level package importable.
+                  - name: PYTHONPATH
+                    value: /build
                 volumeMounts:
                   - name: omnigent-src
                     mountPath: /build

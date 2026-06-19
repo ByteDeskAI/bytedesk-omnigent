@@ -9,7 +9,13 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.extension import BytedeskExtension
-from omnigent.extensions import OmnigentExtension, install_extensions
+from omnigent.extensions import (
+    ENV_VAR,
+    OmnigentExtension,
+    _load_env_extensions,
+    discover_extensions,
+    install_extensions,
+)
 
 
 class _FakeExt:
@@ -48,3 +54,30 @@ def test_bytedesk_extension_satisfies_protocol_and_serves_health() -> None:
     resp = TestClient(app).get("/v1/_ext/health")
     assert resp.status_code == 200
     assert resp.json() == {"extension": "bytedesk", "loaded": True}
+
+
+def test_load_env_extensions_loads_factory(monkeypatch) -> None:
+    monkeypatch.setenv(ENV_VAR, "bytedesk_omnigent.extension:BytedeskExtension")
+    exts = _load_env_extensions()
+    assert [e.name for e in exts] == ["bytedesk"]
+
+
+def test_load_env_extensions_skips_bad_entry(monkeypatch) -> None:
+    monkeypatch.setenv(
+        ENV_VAR,
+        "nope.module:Missing, bytedesk_omnigent.extension:BytedeskExtension",
+    )
+    assert [e.name for e in _load_env_extensions()] == ["bytedesk"]
+
+
+def test_load_env_extensions_empty_is_noop(monkeypatch) -> None:
+    monkeypatch.delenv(ENV_VAR, raising=False)
+    assert _load_env_extensions() == []
+
+
+def test_discover_dedups_env_against_entrypoint(monkeypatch) -> None:
+    # The `bytedesk` entry-point is registered in the synced venv; pointing the env
+    # var at the SAME extension must not double-register it.
+    monkeypatch.setenv(ENV_VAR, "bytedesk_omnigent.extension:BytedeskExtension")
+    names = [e.name for e in discover_extensions()]
+    assert names.count("bytedesk") == 1
