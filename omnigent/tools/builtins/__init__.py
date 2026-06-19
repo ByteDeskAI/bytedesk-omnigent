@@ -22,26 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from bytedesk_omnigent.tools.deliberation_tools import (
-    DeliberationDecideTool,
-    DeliberationFindTool,
-    DeliberationPositionTool,
-    DeliberationStartTool,
-)
-from bytedesk_omnigent.tools.goal_tools import (
-    GoalAdvanceTool,
-    GoalClaimTool,
-    GoalCreateTool,
-    GoalListTool,
-)
-from bytedesk_omnigent.tools.outcome_tools import OutcomeRecordTool
-from bytedesk_omnigent.tools.peer_tools import PeerInboxTool, PeerSendTool
-from bytedesk_omnigent.tools.routing_tools import FindSpecialistTool
-from bytedesk_omnigent.tools.signal_tools import (
-    SignalAwaitTool,
-    SignalCheckTool,
-    SignalDeliverTool,
-)
+from omnigent.extensions import extension_tool_factories
 from omnigent.spec.types import SkillSpec
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins.agents import (
@@ -218,25 +199,10 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "memory_append": lambda config: MemoryAppendTool(),
     "memory_query": lambda config: MemoryQueryTool(),
     "memory_compartments_list": lambda config: MemoryCompartmentsListTool(),
-    # Native org tools over the durable social/why-act/decision stores
-    # (BDP-2262 C2/C3/C6/B7, ADR-0142). agent identity is server-stamped.
-    "peer_send": lambda _config: PeerSendTool(),
-    "peer_inbox": lambda _config: PeerInboxTool(),
-    "goal_create": lambda _config: GoalCreateTool(),
-    "goal_list": lambda _config: GoalListTool(),
-    "goal_claim": lambda _config: GoalClaimTool(),
-    "goal_advance": lambda _config: GoalAdvanceTool(),
-    "deliberation_start": lambda _config: DeliberationStartTool(),
-    "deliberation_position": lambda _config: DeliberationPositionTool(),
-    "deliberation_decide": lambda _config: DeliberationDecideTool(),
-    "deliberation_find": lambda _config: DeliberationFindTool(),
-    "outcome_record": lambda _config: OutcomeRecordTool(),
-    # Self-learning routing over the outcome scoreboard (BDP-2276 E2, ADR-0142).
-    "find_specialist": lambda _config: FindSpecialistTool(),
-    # Native signal-bus tools (BDP-2248 α1 integration, ADR-0142).
-    "signal_await": lambda _config: SignalAwaitTool(),
-    "signal_deliver": lambda _config: SignalDeliverTool(),
-    "signal_check": lambda _config: SignalCheckTool(),
+    # First-party tools (ByteDesk goals/peer/deliberation/outcome/signal/routing)
+    # are contributed via the omnigent.extensions seam (ADR-0143 / BDP-2300) and
+    # merged here — no ByteDesk import in core.
+    **extension_tool_factories(),
     # Framework-owned: need runtime context. ``web_fetch`` is
     # constructed by ToolManager before reaching this registry.
     # ``list_comments`` and ``update_comment`` are auto-registered by

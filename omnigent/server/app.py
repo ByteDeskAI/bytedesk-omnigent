@@ -997,61 +997,17 @@ def create_app(
 
         memory_maintenance_task = asyncio.create_task(memory_maintenance_loop())
 
-        # BDP-2248 (ADR-0142): periodic signal-bus reaper — expire stale pending
-        # waits, guarded by a distinct PG advisory lock (no-op on SQLite).
-        from bytedesk_omnigent.bus.reaper import signal_bus_reaper_loop
+        # BDP-2300 (ADR-0143): start first-party extension background loops — the
+        # signal-bus reaper, cron heartbeat, accountability loop, and the one-shot
+        # tool-step resume sweep — via the generic omnigent.extensions seam. They
+        # are cancelled on shutdown in the finally below. Generic: no ByteDesk
+        # reference in core.
+        from omnigent.extensions import extension_background_factories
 
-        signal_bus_reaper_task = asyncio.create_task(signal_bus_reaper_loop())
-
-        # BDP-2250 (ADR-0142): native cron scheduler — fire due triggers (the org
-        # heartbeat), guarded by a distinct PG advisory lock (no-op on SQLite).
-        # BDP-2279 (ADR-0142): dispatch each fire through the registered
-        # sys_session_initiate seam (open a root session + post the payload); when
-        # no live initiator is registered the loop degrades to log-only.
-        from bytedesk_omnigent.scheduler import cron_scheduler_loop
-        from bytedesk_omnigent.sessions import build_cron_dispatch, get_session_initiator
-
-        _session_initiator = get_session_initiator()
-        _cron_dispatch = (
-            build_cron_dispatch(_session_initiator)
-            if _session_initiator is not None
-            else None
-        )
-        cron_scheduler_task = asyncio.create_task(
-            cron_scheduler_loop(dispatch=_cron_dispatch)
-        )
-
-        # BDP-2272 C4 (ADR-0142): native accountability loop — rebalance stalled
-        # owned goals + escalate blocked goals to the manager, guarded by a
-        # distinct advisory lock. The manager target comes from
-        # OMNIGENT_ACCOUNTABILITY_MANAGER; unset → rebalance-only (no escalation).
-        from bytedesk_omnigent.accountability import accountability_loop
-
-        accountability_task = asyncio.create_task(
-            accountability_loop(
-                manager_agent_id=os.getenv("OMNIGENT_ACCOUNTABILITY_MANAGER") or None
-            )
-        )
-
-        # BDP-2252 (ADR-0142): reclaim tool-steps orphaned by a restart — a
-        # ``running`` step past its ``deadline_at`` goes back to ``pending``
-        # (attempts remain) or ``failed``. One-shot at boot under a distinct PG
-        # advisory lock (no-op on SQLite). Resilient: a failure is logged only.
-        try:
-            from bytedesk_omnigent.runtime import get_tool_step_store
-            from omnigent.runtime.memory_maintenance import advisory_lock
-
-            _tool_step_store = get_tool_step_store()
-            with advisory_lock(_tool_step_store.engine, 0x746F6F6C73746570) as _acq:
-                if _acq:
-                    _reclaimed = await asyncio.to_thread(_tool_step_store.resume_stale)
-                    if _reclaimed:
-                        _logger.info(
-                            "tool-step resume: reclaimed %d orphaned step(s)",
-                            _reclaimed,
-                        )
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("tool-step resume sweep failed: %s", exc, exc_info=True)
+        _ext_bg_tasks = [
+            asyncio.create_task(factory())
+            for factory in extension_background_factories()
+        ]
         try:
             yield
         finally:
@@ -1061,15 +1017,10 @@ def create_app(
             memory_maintenance_task.cancel()
             with suppress(asyncio.CancelledError):
                 await memory_maintenance_task
-            signal_bus_reaper_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await signal_bus_reaper_task
-            cron_scheduler_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await cron_scheduler_task
-            accountability_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await accountability_task
+            for _bg in _ext_bg_tasks:
+                _bg.cancel()
+                with suppress(asyncio.CancelledError):
+                    await _bg
             # Stop in-flight background managed-sandbox launches so a
             # slow provision doesn't outlive the ASGI shutdown (the
             # sandbox itself, if already provisioned, is reaped by the
@@ -1604,38 +1555,6 @@ def create_app(
         prefix="/v1",
         tags=["terminals"],
     )
-    # BDP-2249 (ADR-0142): signed inbound-webhook ingress — verify HMAC, resolve a
-    # (source, event) binding, and deliver to the durable signal bus (404 on
-    # no-match, never 2xx; BDP-1419).
-    from bytedesk_omnigent.routes.ingress import create_ingress_router
-
-    app.include_router(
-        create_ingress_router(),
-        prefix="/v1",
-        tags=["ingress"],
-    )
-
-    # BDP-2278 F5 (ADR-0142): read-only governance API — the goals backlog +
-    # open deliberations rollup + outcome leaderboard the Founder Governance
-    # cockpit / control-plane Work tab reads to see org state at a glance.
-    from bytedesk_omnigent.routes.governance import create_governance_router
-
-    app.include_router(
-        create_governance_router(auth_provider=auth_provider),
-        prefix="/v1",
-        tags=["governance"],
-    )
-
-    # BDP-2290 (ADR-0142): read-only goals backlog — the ops backlog (BDP-2271 C3)
-    # the Founder Governance cockpit (BDP-976) reads, proxied by ByteDesk.Office
-    # /api/office/goals. Re-wires the cockpit's read path after C3 moved the store.
-    from bytedesk_omnigent.routes.goals import create_goals_router
-
-    app.include_router(
-        create_goals_router(auth_provider=auth_provider),
-        prefix="/v1",
-        tags=["goals"],
-    )
     if comment_store is not None:
         app.include_router(
             create_comments_router(
@@ -1673,13 +1592,14 @@ def create_app(
         tags=["policy_registry"],
     )
 
-    # BDP-2291 (ADR-0143): discover + mount first-party extensions via the generic
-    # omnigent.extensions entry-point seam — the single seam that keeps ByteDesk
-    # functionality out of upstream-tracked core. No hard dependency on any
-    # specific extension; one bad extension is logged and skipped, never fatal.
+    # BDP-2291/2300 (ADR-0143): discover + mount first-party extensions via the
+    # generic omnigent.extensions seam — the single seam that keeps ByteDesk
+    # functionality (routes, tools, policies, background loops) out of
+    # upstream-tracked core. auth_provider is threaded to extension routes that
+    # need it. One bad extension is logged and skipped, never fatal.
     from omnigent.extensions import install_extensions
 
-    install_extensions(app)
+    install_extensions(app, auth_provider=auth_provider)
 
     # ── Tunnel lifecycle callbacks (Step 8.5 crash recovery) ───
     async def _on_runner_disconnect(runner_id: str) -> None:
