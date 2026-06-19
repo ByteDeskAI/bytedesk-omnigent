@@ -142,6 +142,7 @@ from omnigent.server._elicitation_registry import (
     _ParkedHarnessElicitation,
     _PreResolvedHarnessElicitation,
 )
+from omnigent.server.agent_write import apply_bundle_update
 from omnigent.server.auth import (
     LEVEL_EDIT,
     LEVEL_MANAGE,
@@ -17272,32 +17273,20 @@ def create_sessions_router(
                 code=ErrorCode.INVALID_INPUT,
             )
 
-        new_loc = bundle_location(agent.id, bundle_bytes)
-
-        # Idempotency: same bundle content = no-op
-        if new_loc == agent.bundle_location:
-            return _to_agent_object(agent, agent_cache)
-
-        if artifact_store is None:
-            raise OmnigentError(
-                "Artifact store not configured",
-                code=ErrorCode.INTERNAL_ERROR,
-            )
-        artifact_store.put(new_loc, bundle_bytes)
-        updated = await asyncio.to_thread(agent_store.update, agent.id, new_loc)
-        if updated is None:
-            raise OmnigentError(
-                f"Agent not found: {agent.id!r}",
-                code=ErrorCode.NOT_FOUND,
-            )
-
-        if agent_cache is not None:
-            # Only operator-authored template agents
-            # (session_id is None) may expand ${VAR} against the server
-            # env; tenant session-scoped bundles must not.
-            agent_cache.replace(
-                agent.id, new_loc, bundle_bytes, expand_env=agent.session_id is None
-            )
+        # Store the bundle, repoint the row, and warm-swap the cache via
+        # the shared helper (content-addressed + idempotent). Only
+        # operator-authored template agents (session_id is None) may
+        # expand ${VAR} against the server env; tenant session-scoped
+        # bundles must not. Blocking IO → run off the event loop.
+        updated = await asyncio.to_thread(
+            apply_bundle_update,
+            agent,
+            bundle_bytes,
+            artifact_store=artifact_store,
+            agent_store=agent_store,
+            agent_cache=agent_cache,
+            expand_env=agent.session_id is None,
+        )
 
         return _to_agent_object(updated, agent_cache)
 

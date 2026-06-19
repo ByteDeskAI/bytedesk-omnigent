@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gzip
 import io
 import tarfile
 from pathlib import Path, PurePosixPath
@@ -21,6 +22,52 @@ class ExtractionError(Exception):
     special file types (FIFOs, character/block devices), decompression
     bombs, and entry count bombs.
     """
+
+
+def build_bundle_bytes(source_dir: Path) -> bytes:
+    """
+    Build a deterministic ``.tar.gz`` of an agent-image directory.
+
+    The bytes are a true content address: two directories with
+    identical content produce byte-identical output regardless of
+    build order, filesystem entry order, or file timestamps. This is
+    what lets a read-modify-rewrite of an agent image short-circuit as
+    a no-op when nothing actually changed (``sha256(bytes)`` is stable).
+
+    Normalization vs. a bare ``tar.add(dir, arcname=".")`` (as used in
+    ``omnigent.cli``): entries are added in sorted path order and each
+    member's ``mtime``/``uid``/``gid``/``uname``/``gname``/``mode`` is
+    pinned, and the gzip ``mtime`` is 0.
+
+    :param source_dir: Root of the agent image (contains
+        ``config.yaml`` at the top level).
+    :returns: The gzipped tarball bytes, with image contents at the
+        tar root (so ``extract_safe`` reproduces the same shape
+        ``spec.load`` expects).
+    """
+    root = Path(source_dir)
+
+    def _normalize(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.mtime = 0
+        info.uid = 0
+        info.gid = 0
+        info.uname = ""
+        info.gname = ""
+        info.mode = 0o755 if info.isdir() else 0o644
+        return info
+
+    members = sorted(root.rglob("*"))
+    buf = io.BytesIO()
+    with (
+        gzip.GzipFile(fileobj=buf, mode="wb", mtime=0) as gz,
+        tarfile.open(fileobj=gz, mode="w") as tar,
+    ):
+        for path in members:
+            arcname = path.relative_to(root).as_posix()
+            # recursive=False — we drive ordering ourselves via the
+            # sorted member list so the byte output is deterministic.
+            tar.add(str(path), arcname=arcname, recursive=False, filter=_normalize)
+    return buf.getvalue()
 
 
 def extract_safe(
