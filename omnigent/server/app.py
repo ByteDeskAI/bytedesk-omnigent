@@ -1625,6 +1625,17 @@ def create_app(
         prefix="/v1",
         tags=["governance"],
     )
+
+    # BDP-2290 (ADR-0142): read-only goals backlog — the ops backlog (BDP-2271 C3)
+    # the Founder Governance cockpit (BDP-976) reads, proxied by ByteDesk.Office
+    # /api/office/goals. Re-wires the cockpit's read path after C3 moved the store.
+    from omnigent.server.routes.goals import create_goals_router
+
+    app.include_router(
+        create_goals_router(auth_provider=auth_provider),
+        prefix="/v1",
+        tags=["goals"],
+    )
     if comment_store is not None:
         app.include_router(
             create_comments_router(
