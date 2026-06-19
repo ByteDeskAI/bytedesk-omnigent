@@ -30,7 +30,7 @@ def _get_client() -> redis_pkg.Redis:
         import redis  # lazy import — only when the bridge actually publishes
 
         _client = redis.Redis.from_url(
-            config.REDIS_URL,
+            config.redis_url(),
             socket_timeout=2,
             socket_connect_timeout=2,
         )
