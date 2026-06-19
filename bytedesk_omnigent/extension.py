@@ -108,6 +108,13 @@ class BytedeskExtension:
             "signal_check": lambda _c: SignalCheckTool(),
         }
 
+    # ── secret backends (consulted by omnigent.onboarding.secrets) ───
+    def secret_backends(self) -> list:
+        """Infisical as the default secret store (BDP-2303); inert without creds."""
+        from bytedesk_omnigent.secrets.infisical import InfisicalBackend
+
+        return [InfisicalBackend()]
+
     # ── background lifespan tasks (started + cancelled by the server) ─
     def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
         """The org background loops + the boot-time tool-step resume sweep. The
