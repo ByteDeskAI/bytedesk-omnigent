@@ -11,8 +11,8 @@ from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.goals import Goal
+from bytedesk_omnigent.routes.goals import create_goals_router
 from omnigent.errors import OmnigentError
-from omnigent.server.routes.goals import create_goals_router
 
 
 class _NoIdentityAuth:
