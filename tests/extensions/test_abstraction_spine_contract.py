@@ -48,6 +48,10 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         "managed_launches",
         "server_metrics",
         "server_metrics_otel",
+        # Phase 1 / ServiceRegistry: the dual-write sidecar key (flag-gated,
+        # OMNIGENT_USE_SERVICE_REGISTRY default OFF — never set at runtime when off,
+        # but the AST scan sees the source-level assignment).
+        "service_registry",
     }
 )
 # ── Phase 3 anchor: the one app.state key set inside _lifespan (app.py:915). ──

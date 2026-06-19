@@ -46,6 +46,7 @@ from omnigent.model_override import (
     normalize_model_for_provider,
     validate_model_override,
 )
+from omnigent.runner.tool_execution_context import ToolExecutionContext
 from omnigent.runtime import pending_elicitations
 from omnigent.session_lifecycle import (
     CLOSED_LABEL_KEY,
@@ -93,6 +94,12 @@ _logger = logging.getLogger(__name__)
 
 _INBOX_OUTPUT_MAX_CHARS = 12000
 _OS_ENV_SHELL_DEFAULT_TIMEOUT_S = 120.0
+
+# Spine Phase 4 (BDP-2327): when truthy, ``execute_tool`` bundles its
+# per-dispatch dependencies into a ``ToolExecutionContext`` and dispatches
+# through the context-consuming path. Default OFF — with the flag unset the
+# existing per-kwarg signature is the live path and behavior is unchanged.
+_USE_TOOL_EXECUTION_CONTEXT_ENV = "OMNIGENT_USE_TOOL_EXECUTION_CONTEXT"
 _RUNNER_EXECUTION_TIMEOUT_S = 7200.0
 _SUBAGENT_POLICY_STATUSES = frozenset({"completed", "failed"})
 _SUBAGENT_INBOX_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -3353,6 +3360,92 @@ async def _fetch_peek_meta(
     return _PeekMeta(agent=parsed.agent, title=parsed.title, pending_elicitations=pending)
 
 
+def _build_tool_execution_context(
+    *,
+    tool_name: str,
+    arguments: str,
+    server_client: httpx.AsyncClient | None,
+    terminal_registry: Any | None,
+    resource_registry: Any | None,
+    agent_spec: Any | None,
+    conversation_id: str | None,
+    task_id: str | None,
+    agent_id: str | None,
+    agent_name: str | None,
+    runner_workspace: Path | None,
+    mcp_manager: Any | None,
+    session_inbox: asyncio.Queue[dict[str, Any]] | None,
+    session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None,
+    harness_client: httpx.AsyncClient | None,
+    publish_event: Callable[[str, dict[str, Any]], None] | None,
+    filesystem_registry: FilesystemRegistry | None,
+) -> ToolExecutionContext:
+    """Bundle ``execute_tool``'s per-dispatch args into a context.
+
+    The mutable coordination objects (``session_inbox``,
+    ``session_async_tasks``) are passed straight through, so the context
+    holds the SAME queue/map the caller still holds — never a copy. This
+    is the only place the spine Phase 4 carrier is constructed.
+
+    :returns: A :class:`ToolExecutionContext` mirroring the args.
+    """
+    return ToolExecutionContext(
+        tool_name=tool_name,
+        arguments=arguments,
+        server_client=server_client,
+        terminal_registry=terminal_registry,
+        resource_registry=resource_registry,
+        agent_spec=agent_spec,
+        conversation_id=conversation_id,
+        task_id=task_id,
+        agent_id=agent_id,
+        agent_name=agent_name,
+        runner_workspace=runner_workspace,
+        mcp_manager=mcp_manager,
+        session_inbox=session_inbox,
+        session_async_tasks=session_async_tasks,
+        harness_client=harness_client,
+        publish_event=publish_event,
+        filesystem_registry=filesystem_registry,
+    )
+
+
+async def _execute_tool_from_context(ctx: ToolExecutionContext) -> str:
+    """Dispatch a tool from a bundled :class:`ToolExecutionContext`.
+
+    The context-consuming alternate path (spine Phase 4, gated by
+    ``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT``). Unpacks the context's
+    by-reference fields back into the existing per-kwarg dispatch chain so
+    there is one dispatch implementation, not two. ``session_inbox`` /
+    ``session_async_tasks`` are forwarded by reference, so a background
+    task that mutates ``ctx.session_inbox`` is visible to the caller that
+    shares the same queue.
+
+    :param ctx: The bundled per-dispatch dependencies.
+    :returns: Tool output string.
+    """
+    return await execute_tool(
+        tool_name=ctx.tool_name,
+        arguments=ctx.arguments,
+        server_client=ctx.server_client,
+        terminal_registry=ctx.terminal_registry,
+        resource_registry=ctx.resource_registry,
+        agent_spec=ctx.agent_spec,
+        conversation_id=ctx.conversation_id,
+        task_id=ctx.task_id,
+        agent_id=ctx.agent_id,
+        agent_name=ctx.agent_name,
+        runner_workspace=ctx.runner_workspace,
+        mcp_manager=ctx.mcp_manager,
+        session_inbox=ctx.session_inbox,
+        session_async_tasks=ctx.session_async_tasks,
+        harness_client=ctx.harness_client,
+        publish_event=ctx.publish_event,
+        filesystem_registry=ctx.filesystem_registry,
+        _from_context=True,
+    )
+
+
 async def execute_tool(
     *,
     tool_name: str,
@@ -3372,6 +3465,7 @@ async def execute_tool(
     harness_client: httpx.AsyncClient | None = None,
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
     filesystem_registry: FilesystemRegistry | None = None,
+    _from_context: bool = False,
 ) -> str:
     """
     Execute a tool and return the output string.
@@ -3380,6 +3474,14 @@ async def execute_tool(
     Used by ``dispatch_tool_locally`` (which adds the harness
     POST) and by ``_spawn_async_tool`` background tasks (which
     push to the inbox queue instead).
+
+    When ``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT`` is truthy (spine Phase 4,
+    default OFF), the args are bundled into a :class:`ToolExecutionContext`
+    and dispatched through :func:`_execute_tool_from_context`; the
+    mutable ``session_inbox`` / ``session_async_tasks`` are carried by
+    reference, so the dispatch is identical to the default per-kwarg path.
+    ``_from_context`` is the internal re-entry marker that prevents the
+    context path from recursing — callers never set it.
 
     :param tool_name: Tool to execute, e.g. ``"sys_os_shell"``.
     :param arguments: JSON-encoded arguments string.
@@ -3397,6 +3499,76 @@ async def execute_tool(
         not tracked — shell side-effects cannot be attributed to a session.
     :returns: Tool output string.
     """
+    # Spine Phase 5 (BDP-2327): default OFF. When
+    # ``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` is on and this is not the
+    # context path's re-entry, route dispatch through the
+    # DispatcherRegistry (Strategy + Registry) instead of the elif chain
+    # below. The registry walks the SAME precedence (MCP first) and calls
+    # the SAME per-tool helpers, carrying the identical by-reference
+    # queue/map inside a ToolExecutionContext — so the routing decision and
+    # result are unchanged; only the seam differs. Lazy import keeps the
+    # registry module out of the default import path.
+    if not _from_context:
+        from omnigent.runner.tool_dispatcher_registry import (
+            dispatch_via_registry,
+            use_tool_dispatcher_registry,
+        )
+
+        if use_tool_dispatcher_registry():
+            return await dispatch_via_registry(
+                _build_tool_execution_context(
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    server_client=server_client,
+                    terminal_registry=terminal_registry,
+                    resource_registry=resource_registry,
+                    agent_spec=agent_spec,
+                    conversation_id=conversation_id,
+                    task_id=task_id,
+                    agent_id=agent_id,
+                    agent_name=agent_name,
+                    runner_workspace=runner_workspace,
+                    mcp_manager=mcp_manager,
+                    session_inbox=session_inbox,
+                    session_async_tasks=session_async_tasks,
+                    harness_client=harness_client,
+                    publish_event=publish_event,
+                    filesystem_registry=filesystem_registry,
+                )
+            )
+
+    # Spine Phase 4 (BDP-2327): default OFF. When the flag is on and this is
+    # not the context path's re-entry, bundle the args into a
+    # ToolExecutionContext and dispatch through it. The carrier forwards the
+    # same by-reference queue/map, so the result is identical to the path
+    # below — this only exercises the new seam. Lazy import of the env helper
+    # mirrors this module's existing ``omnigent.server.*`` import discipline
+    # (server.schemas is imported lazily too) to keep import order clean.
+    from omnigent.server.auth import env_var_is_truthy
+
+    if not _from_context and env_var_is_truthy(_USE_TOOL_EXECUTION_CONTEXT_ENV):
+        return await _execute_tool_from_context(
+            _build_tool_execution_context(
+                tool_name=tool_name,
+                arguments=arguments,
+                server_client=server_client,
+                terminal_registry=terminal_registry,
+                resource_registry=resource_registry,
+                agent_spec=agent_spec,
+                conversation_id=conversation_id,
+                task_id=task_id,
+                agent_id=agent_id,
+                agent_name=agent_name,
+                runner_workspace=runner_workspace,
+                mcp_manager=mcp_manager,
+                session_inbox=session_inbox,
+                session_async_tasks=session_async_tasks,
+                harness_client=harness_client,
+                publish_event=publish_event,
+                filesystem_registry=filesystem_registry,
+            )
+        )
+
     try:
         args = json.loads(arguments)
     except json.JSONDecodeError:

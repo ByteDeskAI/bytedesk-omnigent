@@ -2931,13 +2931,37 @@ def server(
 
     from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
 
-    agent_store = SqlAlchemyAgentStore(db_uri)
-    file_store = SqlAlchemyFileStore(db_uri)
-    conversation_store = SqlAlchemyConversationStore(db_uri)
-    comment_store = SqlAlchemyCommentStore(db_uri)
-    policy_store = SqlAlchemyPolicyStore(db_uri)
-    permission_store = SqlAlchemyPermissionStore(db_uri)
-    artifact_store = _create_artifact_store(art_loc)
+    # BDP-2327 (core-refactor spine, Phase 1): behind
+    # OMNIGENT_USE_STORE_BOOTSTRAPPER (default OFF), build the stores via
+    # the StoreBootstrapper factory — the same Sql* stores + the same
+    # Local-vs-Databricks artifact-store branch this block builds inline.
+    # With the flag off the inline path below stays the default, so wiring
+    # is unchanged. The bootstrapper also builds host_store, so the later
+    # `host_store = HostStore(db_uri)` is skipped when this path runs.
+    from omnigent.server.auth import env_var_is_truthy
+
+    _use_store_bootstrapper = env_var_is_truthy("OMNIGENT_USE_STORE_BOOTSTRAPPER")
+    _bootstrapped_host_store = None
+    if _use_store_bootstrapper:
+        from omnigent.stores.factory import StoreBootstrapper
+
+        _stores = StoreBootstrapper.create(db_uri, art_loc)
+        agent_store = _stores.agent_store
+        file_store = _stores.file_store
+        conversation_store = _stores.conversation_store
+        comment_store = _stores.comment_store
+        policy_store = _stores.policy_store
+        permission_store = _stores.permission_store
+        artifact_store = _stores.artifact_store
+        _bootstrapped_host_store = _stores.host_store
+    else:
+        agent_store = SqlAlchemyAgentStore(db_uri)
+        file_store = SqlAlchemyFileStore(db_uri)
+        conversation_store = SqlAlchemyConversationStore(db_uri)
+        comment_store = SqlAlchemyCommentStore(db_uri)
+        policy_store = SqlAlchemyPolicyStore(db_uri)
+        permission_store = SqlAlchemyPermissionStore(db_uri)
+        artifact_store = _create_artifact_store(art_loc)
 
     # Initialize the runtime with store references so workflow code
     # can access them via getter functions (get_agent_cache(), etc.).
@@ -3000,7 +3024,13 @@ def server(
 
     from omnigent.stores.host_store import HostStore
 
-    host_store = HostStore(db_uri)
+    # Reuse the StoreBootstrapper-built host_store when that path ran
+    # (BDP-2327); otherwise construct inline as before.
+    host_store = (
+        _bootstrapped_host_store
+        if _bootstrapped_host_store is not None
+        else HostStore(db_uri)
+    )
 
     # Managed sandbox hosts (host_type="managed" sessions): parse the
     # config's `sandbox:` section up front so an operator typo stops
