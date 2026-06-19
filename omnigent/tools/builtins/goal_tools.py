@@ -193,7 +193,6 @@ class GoalAdvanceTool(Tool):
         }
 
     def invoke(self, arguments: str, ctx: ToolContext) -> str:
-        del ctx
         args: dict[str, Any] = json.loads(arguments)
         goal_id = args.get("goal_id")
         status = args.get("status")
@@ -201,7 +200,18 @@ class GoalAdvanceTool(Tool):
             return json.dumps({"error": "missing required 'goal_id' or 'status'"})
         if status not in _STATUSES:
             return json.dumps({"error": f"invalid status {status!r}; expected {list(_STATUSES)}"})
+        # BDP-2285 — an agent may only advance a goal it OWNS; require identity and
+        # scope the write so a foreign / non-existent goal is not reported as moved.
+        if not ctx.agent_id:
+            return json.dumps({"error": "goal_advance requires an agent identity"})
         from omnigent.goals import get_goal_store
 
-        get_goal_store().advance_goal(goal_id=goal_id, status=status)
-        return json.dumps({"goal_id": goal_id, "status": status})
+        advanced = get_goal_store().advance_goal_owned(
+            goal_id=goal_id, status=status, owner_agent_id=ctx.agent_id
+        )
+        if not advanced:
+            return json.dumps(
+                {"advanced": False, "goal_id": goal_id,
+                 "error": "goal not found or not owned by you"}
+            )
+        return json.dumps({"advanced": True, "goal_id": goal_id, "status": status})

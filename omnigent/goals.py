@@ -137,6 +137,34 @@ class SqlAlchemyGoalStore:
                 update(SqlGoal).where(SqlGoal.id == goal_id).values(**values)
             )
 
+    def advance_goal_owned(
+        self, *, goal_id: str, status: str, owner_agent_id: str, now: int | None = None
+    ) -> bool:
+        """Move a goal the caller OWNS to a new status (BDP-2285 authz).
+
+        Guarded UPDATE on ``(id, owner_agent_id)`` — an agent can only advance its
+        OWN goal, and a missing / foreign goal matches 0 rows. Returns ``True``
+        only when this owner's goal was advanced (``rowcount == 1``), so the
+        agent-tool never reports fabricated success for a goal it doesn't own or
+        that doesn't exist. ``open`` clears the owner (it returns to the backlog).
+        """
+        now = now_epoch() if now is None else now
+        values: dict = {"status": status, "updated_at": now}
+        if status == "blocked":
+            values["escalated_at"] = None
+        if status == "open":
+            values["owner_agent_id"] = None
+        with self._write_session() as session:
+            result = session.execute(
+                update(SqlGoal)
+                .where(
+                    SqlGoal.id == goal_id,
+                    SqlGoal.owner_agent_id == owner_agent_id,
+                )
+                .values(**values)
+            )
+            return result.rowcount == 1
+
     def escalate_blocked(self, *, now: int | None = None) -> list[Goal]:
         """Claim not-yet-escalated ``blocked`` goals, marking them escalated (C4).
 

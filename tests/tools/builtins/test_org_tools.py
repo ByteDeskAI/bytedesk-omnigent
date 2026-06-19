@@ -78,8 +78,33 @@ def test_goal_create_list_claim_advance(stores) -> None:
     # A second claim by another agent loses the guarded race.
     assert _call(GoalClaimTool(), {"goal_id": gid}, agent_id="ag_c")["claimed"] is False
 
-    advanced = _call(GoalAdvanceTool(), {"goal_id": gid, "status": "in_progress"})
+    # The OWNER advances it (BDP-2285 — advance is owner-scoped).
+    advanced = _call(
+        GoalAdvanceTool(), {"goal_id": gid, "status": "in_progress"}, agent_id="ag_b"
+    )
+    assert advanced["advanced"] is True
     assert advanced["status"] == "in_progress"
+
+
+def test_goal_advance_denies_non_owner_and_missing_goal(stores) -> None:
+    """An agent may only advance a goal it OWNS; a foreign or non-existent goal is
+    not reported as moved (no fabricated success) — BDP-2285 #3."""
+    gid = _call(GoalCreateTool(), {"title": "owned work"})["goal_id"]
+    assert _call(GoalClaimTool(), {"goal_id": gid}, agent_id="ag_owner")["claimed"] is True
+
+    # A different agent tries to advance it → denied; it stays assigned to the owner.
+    foreign = _call(
+        GoalAdvanceTool(), {"goal_id": gid, "status": "done"}, agent_id="ag_intruder"
+    )
+    assert foreign["advanced"] is False
+    still = stores["goals"].list_goals(status="assigned")
+    assert len(still) == 1 and still[0].id == gid and still[0].owner_agent_id == "ag_owner"
+
+    # A non-existent goal → also not moved.
+    missing = _call(
+        GoalAdvanceTool(), {"goal_id": "goal_nope", "status": "done"}, agent_id="ag_owner"
+    )
+    assert missing["advanced"] is False
 
 
 def test_deliberation_start_position_decide_find(stores) -> None:
