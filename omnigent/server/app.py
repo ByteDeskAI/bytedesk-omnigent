@@ -43,6 +43,7 @@ from omnigent.server.performance_metrics import (
     publish_server_metrics_periodically,
     set_request_duration_for_access_log,
 )
+from omnigent.server.routes.agents_write import create_agents_write_router
 from omnigent.server.routes.builtin_agents import create_builtin_agents_router
 from omnigent.server.routes.comments import create_comments_router
 from omnigent.server.routes.default_policies import create_default_policies_router
@@ -303,6 +304,21 @@ def _ensure_builtin_agent(
     bundle_hash = hashlib.sha256(bundle_bytes).hexdigest()
     existing = agent_store.get_by_name(name)
     if existing is not None:
+        # Migrated agents are omnigent-SoT: their config was edited at
+        # runtime (PUT /v1/agents/{id}/image set sot_tier="migrated").
+        # The packaged-wheel bundle is stale for them, so re-seeding would
+        # CLOBBER the live edit on every restart. Treat the DB row as
+        # authoritative — refresh the cache from it (evict so a lagging
+        # replica reloads the edited bundle) and never overwrite.
+        if agent_store.get_sot_tier(existing.id) == "migrated":
+            agent_cache.evict(existing.id)
+            _logger.info(
+                "Built-in %s agent %s is migrated (omnigent SoT); "
+                "skipping wheel re-seed to preserve the runtime edit",
+                name,
+                existing.id,
+            )
+            return
         new_loc = f"{existing.id}/{bundle_hash}"
         if existing.bundle_location == new_loc:
             # Row current; evict so a lagging replica's stale cache reloads the bundle.
@@ -1560,6 +1576,20 @@ def create_app(
         create_builtin_agents_router(
             agent_store,
             agent_cache,
+            auth_provider=auth_provider,
+        ),
+        prefix="/v1",
+        tags=["agents"],
+    )
+    # Template-agent image read/write (GET/PUT /v1/agents/{id}/image).
+    # Lets the org chart reconfigure a template agent's full spec live —
+    # rebuild + warm-swap with no server restart. Template agents only;
+    # session-scoped agents go through PUT /v1/sessions/{id}/agent.
+    app.include_router(
+        create_agents_write_router(
+            agent_store,
+            agent_cache,
+            artifact_store,
             auth_provider=auth_provider,
         ),
         prefix="/v1",

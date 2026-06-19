@@ -134,6 +134,39 @@ class AgentStore(ABC):
         """
         ...
 
+    def set_sot_tier(self, agent_id: str, tier: str | None) -> bool:  # noqa: ARG002
+        """
+        Set the per-agent migration tier marker (ADR-0133/0136).
+
+        ``None`` / ``"openclaw-resident"`` = OpenClaw is SoT (default);
+        ``"migrated"`` = omnigent is SoT for this agent's config (e.g.
+        after an org-chart edit through ``PUT /v1/agents/{id}/image``),
+        which immunizes the agent against the startup wheel re-seed.
+
+        The flip-able marker lives on the row, not in the immutable
+        bundle params. Backends that don't persist it stay a no-op (it
+        simply reads back as ``None``); the SQLAlchemy store overrides
+        with the real implementation.
+
+        :param agent_id: The registered agent id.
+        :param tier: The tier marker, or ``None`` to clear it.
+        :returns: ``True`` if the agent exists and was updated, else
+            ``False``.
+        """
+        return False
+
+    def get_sot_tier(self, agent_id: str) -> str | None:  # noqa: ARG002
+        """
+        Return the agent's migration tier marker, or ``None``.
+
+        Default ``None`` for stores that don't track it; the SQLAlchemy
+        store overrides.
+
+        :param agent_id: The registered agent id.
+        :returns: The tier string (e.g. ``"migrated"``), or ``None``.
+        """
+        return None
+
     @abstractmethod
     def delete(self, agent_id: str) -> bool:
         """
