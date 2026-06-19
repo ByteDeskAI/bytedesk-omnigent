@@ -143,6 +143,24 @@ def test_builtin_names_size_matches_registry() -> None:
                 # intercepted in the runner's tool dispatch. Reserved
                 # so user specs can't shadow it.
                 "sys_list_models",
+                # BDP-2262 native org/coordination tools (ADR-0142):
+                # the durable signal bus, goal backlog, peer bus,
+                # outcome ledger, and deliberation organ exposed as
+                # agent-callable tools.
+                "signal_await",
+                "signal_deliver",
+                "signal_check",
+                "goal_create",
+                "goal_list",
+                "goal_claim",
+                "goal_advance",
+                "peer_send",
+                "peer_inbox",
+                "outcome_record",
+                "deliberation_start",
+                "deliberation_position",
+                "deliberation_decide",
+                "deliberation_find",
             }
         )
         == BUILTIN_NAMES
