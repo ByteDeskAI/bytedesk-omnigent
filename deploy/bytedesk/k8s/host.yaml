@@ -124,8 +124,14 @@ spec:
             # built-in HARNESS_CREDENTIAL_ENV_VARS (OPENAI_API_KEY/OPENAI_BASE_URL/
             # ANTHROPIC_*/GEMINI_API_KEY are forwarded by default). Add the
             # openai-agents wrap vars here if you use them instead of OPENAI_*.
+            # INFISICAL_*/OMNIGENT_INFISICAL_* added so the InfisicalBackend
+            # (BDP-2303) can resolve keychain:<name> agent creds from Infisical in
+            # the spawned runner. The two universal-auth secrets come from the
+            # omnigent-host-credentials envFrom below; the rest are non-secret
+            # config set inline here. All MUST be in this list or the runner can't
+            # authenticate to Infisical and falls back to its local keyring.
             - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
-              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET"
+              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV"
             # ByteDesk platform MCP (BDP-2169/2182/2199): every agent's inline
             # bytedesk-platform MCP server references these ${VAR}s, expanded by
             # the runner at turn setup. Both names MUST be in the passthrough list
@@ -133,6 +139,16 @@ spec:
             # "Unresolved environment variable '${BYTEDESK_IDENTITY_TOKEN_URL}'").
             - name: BYTEDESK_IDENTITY_TOKEN_URL
               value: http://identity.bytedesk.svc.cluster.local/connect/token
+            # InfisicalBackend (BDP-2303) non-secret config. The CLIENT_ID/SECRET
+            # arrive via the omnigent-host-credentials Secret (envFrom below). Base
+            # = local MicroK8s → envSlug development; the prod fleet overlay patches
+            # OMNIGENT_INFISICAL_ENV → production.
+            - name: INFISICAL_HOST_URL
+              value: https://infisical.prod.bytedesk.ai
+            - name: OMNIGENT_INFISICAL_PROJECT_SLUG
+              value: bytedesk-agent-configuration
+            - name: OMNIGENT_INFISICAL_ENV
+              value: development
           # SHARED LLM/AI credentials — ONE Secret, every host replica gets it,
           # and the host forwards these to every runner/agent it spawns. Drop the
           # real key into this single Secret and all hosts run with it. optional
