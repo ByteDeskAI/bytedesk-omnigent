@@ -56,3 +56,38 @@ def test_duplicate_deliver_is_idempotent(bus) -> None:
     assert _call(SignalDeliverTool(), {"signal_id": "s1"})["status"] == "delivered"
     # A replayed deliver of the same id resolves idempotently.
     assert _call(SignalDeliverTool(), {"signal_id": "s1"})["status"] == "already_resolved"
+
+
+def test_agent_cannot_forge_another_sessions_signal(bus) -> None:
+    """An agent (namespaced to its own session) cannot deliver against another
+    session's parked wait — the forge dead-letters and the victim stays un-woken
+    (BDP-2288 #1: signal_deliver no longer del-ctx + delivers any raw id)."""
+    # Victim session awaits 'release:1.2.3'.
+    _call(
+        SignalAwaitTool(),
+        {"signal_id": "release:1.2.3", "key": "release"},
+        conversation_id="conv_victim",
+    )
+    # Attacker session tries to forge that external signal.
+    forged = _call(
+        SignalDeliverTool(),
+        {"signal_id": "release:1.2.3", "payload": {"build": "green"}},
+        conversation_id="conv_attacker",
+    )
+    assert forged["status"] == "dead_lettered"  # namespaced away → no such wait
+    # The victim is NOT woken.
+    assert _call(SignalCheckTool(), {}, conversation_id="conv_victim")["signals"] == []
+
+
+def test_agent_signal_id_is_session_scoped(bus) -> None:
+    """Two sessions awaiting the SAME signal_id don't collide — each is namespaced
+    to its own session, so neither can squat or starve the other (BDP-2288 #2)."""
+    _call(SignalAwaitTool(), {"signal_id": "dup", "key": "k"}, conversation_id="conv_1")
+    out = _call(SignalAwaitTool(), {"signal_id": "dup", "key": "k"}, conversation_id="conv_2")
+    assert out["status"] == "pending"  # not a silent collision — conv_2 has its own wait
+
+    # conv_2 resolves ITS own 'dup'; conv_1's is untouched.
+    out2 = _call(SignalDeliverTool(), {"signal_id": "dup"}, conversation_id="conv_2")
+    assert out2["status"] == "delivered"
+    assert len(_call(SignalCheckTool(), {}, conversation_id="conv_2")["signals"]) == 1
+    assert _call(SignalCheckTool(), {}, conversation_id="conv_1")["signals"] == []

@@ -29,10 +29,11 @@ def _is_spawn(name: str) -> bool:
 def delegation_authority(allowed_targets: list[str]) -> PolicyCallable:
     """Factory: DENY a spawn whose named target is not an allowed delegation target.
 
-    :param allowed_targets: Agent names/ids this agent may delegate to (its direct
+    :param allowed_targets: Agent ids this agent may delegate to (its direct
         reports, derived from ``params.managers``).
     :returns: A policy callable that DENYs a ``sys_session_create`` whose
-        ``agent_name``/``agent_id`` argument is outside ``allowed_targets``.
+        ``agent_id`` is outside ``allowed_targets``, and any ``config_path`` spawn
+        (which would bypass the org chart).
     """
     allowed = {t for t in allowed_targets if t}
 
@@ -43,8 +44,23 @@ def delegation_authority(allowed_targets: list[str]) -> PolicyCallable:
         if not _is_spawn(data.get("name", "")):
             return _ALLOW
         args = data.get("arguments") or {}
-        target = args.get("agent_name") or args.get("agent_id")
-        # Un-named (local-bundle) spawn — out of scope for the delegation graph.
+        # A config_path spawn defines + launches a brand-new agent from a local
+        # bundle — that bypasses the org chart entirely (you could stand up any
+        # agent), so it is DENIED here: an agent must delegate to a NAMED report,
+        # not invent one (BDP-2288 #3 — this previously fell through to ALLOW).
+        if args.get("config_path"):
+            return {
+                "result": "DENY",
+                "reason": (
+                    "delegation-graph: launching a new agent from a local config "
+                    "bypasses the org chart — delegate to a named report (ADR-0142)"
+                ),
+            }
+        # sys_session_create carries the spawn target as ``agent_id`` — there is no
+        # ``agent_name`` arg, so keying on it (the prior code) meant the gate never
+        # actually fired (BDP-2288 #4).
+        target = args.get("agent_id")
+        # Un-named (no agent_id, no config_path) spawn — out of scope here.
         if not target:
             return _ALLOW
         if target in allowed:
