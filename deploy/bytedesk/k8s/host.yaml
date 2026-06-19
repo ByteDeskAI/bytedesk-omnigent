@@ -127,8 +127,9 @@ spec:
             # INFISICAL_*/OMNIGENT_INFISICAL_* added so the InfisicalBackend
             # (BDP-2303) can resolve keychain:<name> agent creds from Infisical in
             # the spawned runner. The two universal-auth secrets come from the
-            # omnigent-host-credentials envFrom below; the rest are non-secret
-            # config set inline here. All MUST be in this list or the runner can't
+            # operator-hydrated omnigent-infisical-secrets Secret (envFrom below,
+            # see omnigent-infisical-secret.yaml); the rest are non-secret config
+            # set inline here. All MUST be in this list or the runner can't
             # authenticate to Infisical and falls back to its local keyring.
             - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
               value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV"
@@ -140,9 +141,9 @@ spec:
             - name: BYTEDESK_IDENTITY_TOKEN_URL
               value: http://identity.bytedesk.svc.cluster.local/connect/token
             # InfisicalBackend (BDP-2303) non-secret config. The CLIENT_ID/SECRET
-            # arrive via the omnigent-host-credentials Secret (envFrom below). Base
-            # = local MicroK8s → envSlug development; the prod fleet overlay patches
-            # OMNIGENT_INFISICAL_ENV → production.
+            # arrive via the operator-hydrated omnigent-infisical-secrets Secret
+            # (envFrom below). Base = local MicroK8s → envSlug development; the prod
+            # fleet overlay patches OMNIGENT_INFISICAL_ENV → production.
             - name: INFISICAL_HOST_URL
               value: https://infisical.prod.bytedesk.ai
             - name: OMNIGENT_INFISICAL_PROJECT_SLUG
@@ -162,6 +163,14 @@ spec:
             # the passthrough list above.
             - secretRef:
                 name: omnigent-mcp-secrets
+                optional: true
+            # InfisicalBackend (BDP-2303) bootstrap creds — universal-auth machine
+            # identity that READS the bytedesk-agent-configuration project. Operator-
+            # hydrated from Infisical bytedesk-ai /omnigent-infisical (see
+            # omnigent-infisical-secret.yaml). optional so the host boots before the
+            # operator hydrates; the backend then falls back to its local keyring.
+            - secretRef:
+                name: omnigent-infisical-secrets
                 optional: true
           resources:
             requests:
