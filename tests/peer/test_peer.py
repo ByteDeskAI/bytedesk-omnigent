@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from omnigent.peer import SqlAlchemyPeerMessageStore
+from bytedesk_omnigent.peer import SqlAlchemyPeerMessageStore
 
 
 def _store(tmp_path) -> SqlAlchemyPeerMessageStore:

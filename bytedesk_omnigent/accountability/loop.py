@@ -95,8 +95,8 @@ async def accountability_loop(
     tick is logged and the loop continues; cancellation propagates for clean
     shutdown. The blocking DB work runs in a worker thread.
     """
-    from omnigent.goals import get_goal_store
-    from omnigent.peer import get_peer_message_store
+    from bytedesk_omnigent.goals import get_goal_store
+    from bytedesk_omnigent.peer import get_peer_message_store
 
     while True:
         await asyncio.sleep(interval_seconds)

@@ -75,7 +75,7 @@ class PeerSendTool(Tool):
         if kind not in _KINDS:
             return json.dumps({"error": f"invalid kind {kind!r}; expected {list(_KINDS)}"})
 
-        from omnigent.peer import get_peer_message_store
+        from bytedesk_omnigent.peer import get_peer_message_store
 
         msg = get_peer_message_store().send(
             from_agent=ctx.agent_id,
@@ -131,7 +131,7 @@ class PeerInboxTool(Tool):
         if not ctx.agent_id:
             return json.dumps({"error": "peer_inbox requires an agent identity"})
 
-        from omnigent.peer import get_peer_message_store
+        from bytedesk_omnigent.peer import get_peer_message_store
 
         msgs = get_peer_message_store().inbox(
             to_agent=ctx.agent_id,

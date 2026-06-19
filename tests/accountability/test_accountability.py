@@ -1,9 +1,9 @@
 """Tests for the accountability tick: rebalance + escalate (BDP-2272 C4, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.accountability import run_accountability_tick
-from omnigent.goals import SqlAlchemyGoalStore
-from omnigent.peer import SqlAlchemyPeerMessageStore
+from bytedesk_omnigent.accountability import run_accountability_tick
+from bytedesk_omnigent.goals import SqlAlchemyGoalStore
+from bytedesk_omnigent.peer import SqlAlchemyPeerMessageStore
 
 
 def _stores(tmp_path) -> tuple[SqlAlchemyGoalStore, SqlAlchemyPeerMessageStore]:

@@ -2,7 +2,7 @@
 (BDP-2278 F3, ADR-0142)."""
 from __future__ import annotations
 
-from omnigent.compliance import SqlAlchemySuppressionStore
+from bytedesk_omnigent.compliance import SqlAlchemySuppressionStore
 from omnigent.policies.builtins.outreach_compliance import outreach_compliance
 
 
@@ -71,7 +71,7 @@ def test_self_resolves_suppression_store_when_no_checker_injected(
     (BDP-2285 #1 — it was dead code, so a suppressed recipient was ALLOWed)."""
     store = _store(tmp_path)
     store.suppress(channel="email", address="a@x.com", reason="gdpr_erasure")
-    monkeypatch.setattr("omnigent.compliance.get_suppression_store", lambda: store)
+    monkeypatch.setattr("bytedesk_omnigent.compliance.get_suppression_store", lambda: store)
     evaluate = outreach_compliance(["email\\.send"])  # NO is_suppressed injected
     args = {"to": "a@x.com", "unsubscribe": "https://x/u"}
     assert evaluate(_send("email.send", args))["result"] == "DENY"

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import json
 
-from omnigent.goals import SqlAlchemyGoalStore
-from omnigent.outcomes import SqlAlchemyOutcomeLedger
+from bytedesk_omnigent.goals import SqlAlchemyGoalStore
+from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
 from omnigent.tools.base import ToolContext
 from omnigent.tools.builtins.routing_tools import FindSpecialistTool
 
@@ -28,7 +28,7 @@ def test_find_specialist_ranks_by_recorded_outcomes(tmp_path, monkeypatch) -> No
     ledger.record_outcome(agent_id="ag_a", kind="deal_won", metric="revenue", value=100, now=1)
     ledger.record_outcome(agent_id="ag_b", kind="deal_won", metric="revenue", value=900, now=2)
 
-    monkeypatch.setattr("omnigent.goals.get_goal_store", lambda: goals)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
 
     out = json.loads(FindSpecialistTool().invoke(json.dumps({"metric": "revenue"}), _ctx()))
     assert [c["agent_id"] for c in out["candidates"]] == ["ag_b", "ag_a"]
@@ -39,7 +39,7 @@ def test_find_specialist_learns_after_new_outcome(tmp_path, monkeypatch) -> None
     db = f"sqlite:///{tmp_path / 'org.db'}"
     ledger = SqlAlchemyOutcomeLedger(db)
     goals = SqlAlchemyGoalStore(db)
-    monkeypatch.setattr("omnigent.goals.get_goal_store", lambda: goals)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
 
     ledger.record_outcome(agent_id="ag_a", kind="deal_won", metric="revenue", value=100, now=1)
     ledger.record_outcome(agent_id="ag_b", kind="deal_won", metric="revenue", value=50, now=2)
@@ -54,7 +54,7 @@ def test_find_specialist_learns_after_new_outcome(tmp_path, monkeypatch) -> None
 
 def test_find_specialist_unknown_metric_returns_empty(tmp_path, monkeypatch) -> None:
     goals = SqlAlchemyGoalStore(f"sqlite:///{tmp_path / 'org.db'}")
-    monkeypatch.setattr("omnigent.goals.get_goal_store", lambda: goals)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
     out = json.loads(FindSpecialistTool().invoke(json.dumps({"metric": "nope"}), _ctx()))
     assert out["candidates"] == []
     assert "No recorded outcomes" in out["message"]
@@ -69,7 +69,7 @@ def test_find_specialist_clamps_limit(tmp_path, monkeypatch) -> None:
     db = f"sqlite:///{tmp_path / 'org.db'}"
     ledger = SqlAlchemyOutcomeLedger(db)
     goals = SqlAlchemyGoalStore(db)
-    monkeypatch.setattr("omnigent.goals.get_goal_store", lambda: goals)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
     for i in range(3):
         ledger.record_outcome(
             agent_id=f"ag_{i}", kind="deal_won", metric="revenue", value=i + 1, now=i

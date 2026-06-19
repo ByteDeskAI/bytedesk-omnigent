@@ -1025,7 +1025,7 @@ def create_app(
         # owned goals + escalate blocked goals to the manager, guarded by a
         # distinct advisory lock. The manager target comes from
         # OMNIGENT_ACCOUNTABILITY_MANAGER; unset → rebalance-only (no escalation).
-        from omnigent.accountability import accountability_loop
+        from bytedesk_omnigent.accountability import accountability_loop
 
         accountability_task = asyncio.create_task(
             accountability_loop(

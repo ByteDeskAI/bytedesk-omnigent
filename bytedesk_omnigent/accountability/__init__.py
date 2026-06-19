@@ -18,7 +18,7 @@ scheduler (BDP-2250) and signal-bus reaper (BDP-2248). The spawn-breadth governo
 
 from __future__ import annotations
 
-from omnigent.accountability.loop import (
+from bytedesk_omnigent.accountability.loop import (
     AccountabilityReport,
     accountability_loop,
     run_accountability_tick,
