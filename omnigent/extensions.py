@@ -136,6 +136,21 @@ def extension_policy_modules() -> list[str]:
     return modules
 
 
+def extension_secret_backends() -> list:
+    """Secret backends contributed by extensions (``secret_backends()``).
+
+    Consulted by :mod:`omnigent.onboarding.secrets` to let an out-of-core package
+    (e.g. ``bytedesk_omnigent``'s Infisical backend) take precedence over the
+    local keyring/file store while staying upstream-generic here.
+    """
+    backends: list = []
+    for ext in discover_extensions():
+        getter = getattr(ext, "secret_backends", None)
+        if getter is not None:
+            backends.extend(getter())
+    return backends
+
+
 def extension_background_factories() -> list:
     """Background-task factories contributed by extensions (``background_tasks()``).
 
