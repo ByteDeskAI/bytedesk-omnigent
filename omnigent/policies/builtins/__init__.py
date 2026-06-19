@@ -42,6 +42,7 @@ BUILTIN_POLICY_MODULES = [
     "omnigent.policies.builtins.working_dir",
     "omnigent.policies.builtins.risk_score",
     "omnigent.policies.builtins.routing",
+    "omnigent.policies.builtins.verify_gate",
     "omnigent.policies.builtins.cel",
     "omnigent.policies.builtins.prompt",
     "omnigent.policies.builtins.spawn_governor",
