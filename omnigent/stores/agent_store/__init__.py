@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 
 from omnigent.entities import Agent, PagedList
 
@@ -166,6 +167,37 @@ class AgentStore(ABC):
         :returns: The tier string (e.g. ``"migrated"``), or ``None``.
         """
         return None
+
+    def set_capabilities(
+        self, agent_id: str, capabilities: Sequence[str] | None
+    ) -> bool:  # noqa: ARG002
+        """
+        Persist the agent's declared capability slugs (BDP-2334, ADR-0142).
+
+        Materializes the capability surface parsed from the agent spec onto
+        the row so the assignment resolver / admin surfaces can read it back
+        and filter agents by declared capability. Stored as JSON-in-Text.
+
+        Backends that don't persist it stay a no-op (it simply reads back as
+        ``None``); the SQLAlchemy store overrides with the real implementation.
+
+        :param agent_id: The registered agent id.
+        :param capabilities: The capability slugs, or ``None`` to clear them.
+        :returns: ``True`` if the agent exists and was updated, else ``False``.
+        """
+        return False
+
+    def get_capabilities(self, agent_id: str) -> tuple[str, ...]:  # noqa: ARG002
+        """
+        Return the agent's persisted capability slugs (empty if none/unset).
+
+        Default empty for stores that don't track it; the SQLAlchemy store
+        overrides.
+
+        :param agent_id: The registered agent id.
+        :returns: The declared capability slugs as a tuple (possibly empty).
+        """
+        return ()
 
     @abstractmethod
     def delete(self, agent_id: str) -> bool:

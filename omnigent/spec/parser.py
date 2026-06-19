@@ -260,6 +260,10 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
     # the specified sub-agent types. Defaults to False — session
     # reads stay always-on, but every write grant is explicit.
     spawn = bool(raw.get("spawn", False))
+    # Top-level ``capabilities:`` list — first-class capability surface
+    # (BDP-2334). Parsed into an immutable tuple of non-empty slugs;
+    # absent => empty tuple. Consumed by the capability resolver.
+    capabilities = _parse_capabilities(raw.get("capabilities"))
 
     # Honor ``prompt:`` as the legacy alias for ``instructions:`` (per
     # ``_OMNIGENT_SYSTEM_PROMPT_KEYS``); ``instructions:`` wins if both set.
@@ -296,6 +300,7 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
         terminals=terminals,
         timers=timers,
         spawn=spawn,
+        capabilities=capabilities,
     )
 
 
@@ -2101,6 +2106,52 @@ def _parse_skills_filter(raw: object) -> str | list[str]:
         f"names; got {type(raw).__name__}",
         code=ErrorCode.INVALID_INPUT,
     )
+
+
+def _parse_capabilities(raw: object) -> tuple[str, ...]:
+    """
+    Parse the top-level YAML ``capabilities:`` field into an immutable
+    tuple of capability slugs (BDP-2334).
+
+    Supported shapes:
+
+    - field omitted / ``null`` / ``[]`` -> empty tuple (the agent
+      declares no capabilities). Default.
+    - ``[<slug>, ...]`` -> tuple of the slugs in declaration order.
+
+    Each slug must be a non-empty, non-blank string. The result is a
+    tuple so the declared surface is immutable downstream.
+
+    :param raw: The raw YAML value (already parsed). One of ``None``
+        or a list of strings.
+    :returns: A (possibly empty) ``tuple[str, ...]`` of slugs.
+    :raises OmnigentError: When the value isn't a list, or any entry
+        is a non-string or empty/blank string.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise OmnigentError(
+            f"top-level capabilities: must be a list of capability slug "
+            f"strings; got {type(raw).__name__}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    slugs: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise OmnigentError(
+                f"top-level capabilities: list items must be strings; "
+                f"got {type(item).__name__} {item!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        if not item.strip():
+            raise OmnigentError(
+                "top-level capabilities: list items must be non-empty, "
+                f"non-blank strings; got {item!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        slugs.append(item)
+    return tuple(slugs)
 
 
 def discover_host_skills(

@@ -46,12 +46,14 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
+        from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
             _health_router(),
             create_governance_router(auth_provider=auth_provider),
             create_ingress_router(),
             create_goals_router(auth_provider=auth_provider),
+            create_tasks_router(auth_provider=auth_provider),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
@@ -83,7 +85,10 @@ class BytedeskExtension:
         )
         from bytedesk_omnigent.tools.outcome_tools import OutcomeRecordTool
         from bytedesk_omnigent.tools.peer_tools import PeerInboxTool, PeerSendTool
-        from bytedesk_omnigent.tools.routing_tools import FindSpecialistTool
+        from bytedesk_omnigent.tools.routing_tools import (
+            FindSpecialistTool,
+            ResolveAssigneeTool,
+        )
         from bytedesk_omnigent.tools.signal_tools import (
             SignalAwaitTool,
             SignalCheckTool,
@@ -103,6 +108,7 @@ class BytedeskExtension:
             "deliberation_find": lambda _c: DeliberationFindTool(),
             "outcome_record": lambda _c: OutcomeRecordTool(),
             "find_specialist": lambda _c: FindSpecialistTool(),
+            "resolve_assignee": lambda _c: ResolveAssigneeTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),

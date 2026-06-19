@@ -299,6 +299,11 @@ def create_agents_write_router(
         # Mark omnigent as config SoT so the boot re-seed leaves it
         # alone (idempotent; safe on a content no-op too).
         await asyncio.to_thread(agent_store.set_sot_tier, agent.id, _MIGRATED_TIER)
+        # Materialize the declared capability surface (BDP-2334) so the
+        # assignment resolver can read persisted capabilities back.
+        await asyncio.to_thread(
+            agent_store.set_capabilities, agent.id, spec.capabilities
+        )
 
         return _to_agent_object(updated, agent_cache)
 

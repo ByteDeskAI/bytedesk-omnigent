@@ -1543,3 +1543,10 @@ class AgentSpec:  # type: ignore[explicit-any]  # params: dict[str, Any] field (
     terminals: dict[str, TerminalEnvSpec] | None = None
     timers: bool = False
     spawn: bool = False
+    # First-class capability surface (BDP-2334). An immutable sequence of
+    # capability slugs the agent declares, consumed by the capability
+    # resolver (sibling stream). Maps from the top-level YAML
+    # ``capabilities:`` list; defaults to the empty tuple when the block is
+    # absent. A tuple (not a list) so the declared surface is immutable —
+    # downstream consumers read it, never mutate it.
+    capabilities: tuple[str, ...] = ()
