@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 #: PG advisory-lock key for the boot-time tool-step resume sweep (BDP-2252).
 _TOOL_STEP_RESUME_LOCK = 0x746F6F6C73746570
 
+#: PG advisory-lock key for the boot-time workflow-orchestrator task seed (BDP-2337).
+_WORKFLOW_TASK_SEED_LOCK = 0x776B666C77746B73
+
 
 def _health_router() -> APIRouter:
     router = APIRouter()
@@ -132,6 +135,7 @@ class BytedeskExtension:
             self._cron_scheduler,
             self._accountability,
             self._tool_step_resume,
+            self._seed_workflow_tasks,
             self._realtime_bridge,
         ]
 
@@ -179,6 +183,27 @@ class BytedeskExtension:
         await accountability_loop(
             manager_agent_id=os.getenv("OMNIGENT_ACCOUNTABILITY_MANAGER") or None
         )
+
+    async def _seed_workflow_tasks(self) -> None:
+        """Seed the workflow orchestrators as first-class Tasks (BDP-2337). ADDITIVE:
+        the workflow agents stay in the roster verbatim; this only adds derived Task
+        rows from the same ``OMNIGENT_BUILTIN_AGENT_DIRS`` bundles. One-shot,
+        PG-advisory-locked so only one pod seeds; idempotent so a re-run is a no-op."""
+        from bytedesk_omnigent.tasks import get_task_store
+        from bytedesk_omnigent.tasks.seed import seed_workflow_tasks
+        from omnigent.runtime.memory_maintenance import advisory_lock
+
+        try:
+            store = get_task_store()
+            with advisory_lock(store.engine, _WORKFLOW_TASK_SEED_LOCK) as acquired:
+                if acquired:
+                    count = await asyncio.to_thread(seed_workflow_tasks, store=store)
+                    logger.info(
+                        "workflow-task seed: %d workflow orchestrator task(s) present",
+                        count,
+                    )
+        except Exception as exc:  # noqa: BLE001 — boot seed is best-effort
+            logger.warning("workflow-task seed failed: %s", exc, exc_info=True)
 
     async def _tool_step_resume(self) -> None:
         from bytedesk_omnigent.runtime import get_tool_step_store
