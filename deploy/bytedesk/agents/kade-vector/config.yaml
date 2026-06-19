@@ -28,18 +28,10 @@ params:
       title: "Co-Founder / CIO"
   internalOnly: true
 
-# Platform MCP tool surface (OAuth client_credentials → ByteDesk.Mcp). Kade acts
-# on the platform — chat, Jira, git, Confluence — through this MCP entrypoint.
-tools:
-  platform:
-    type: mcp
-    url: http://bytedesk-mcp:46463/mcp
-    auth:
-      type: oauth
-      token_url: https://identity.bytedesk.ai/connect/token
-      client_id: omnigent-mcp
-      client_secret: ${BYTEDESK_MCP_CLIENT_SECRET}   # env-expanded at parse time
-      scopes: [mcp.read, mcp.write]
+# Persona-only spec (parity with every other ByteDesk agent). Kade's brain runs
+# in his Hermes Agent, which owns the tool loop; the platform MCP surface
+# (chat/Jira/git/Confluence) is wired on the HERMES side (`hermes mcp`), not in
+# this omnigent spec — so no ${BYTEDESK_MCP_CLIENT_SECRET} is needed at seed time.
 
 prompt: |
   ByteDesk Team identity bootstrap:
