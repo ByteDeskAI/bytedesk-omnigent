@@ -208,11 +208,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         // Mobile (default): fixed full-screen overlay, slide via
         // translate-x. Stays edge-to-edge — the floating-card
         // treatment below is desktop-only.
-        // bg-card-solid (opaque): the overlay sits on top of the chat, and
-        // WebKit drops the glass rule's backdrop-filter once a Radix popper
-        // opens (and never repaints it), letting the chat bleed through the
-        // 60%-alpha glass --card. Desktop keeps the translucent bg-card —
-        // there the sidebar pushes content aside, so nothing sits behind it.
+        // bg-card-solid (opaque): the overlay sits on top of the chat, so
+        // it must fully cover content below. Desktop keeps the bg-card token
+        // surface because the sidebar pushes content aside.
         "max-md:bg-card-solid",
         "fixed inset-0 z-50",
         open ? "translate-x-0" : "-translate-x-full",
@@ -233,7 +231,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       data-collapsed={!open || undefined}
       // Match the keyboard-focus story: when closed, the sidebar's
       // children shouldn't receive tabs.
-      inert={!open}
+      inert={open ? undefined : true}
     >
       {/* Right-edge resize handle (desktop only), mirroring the right rail's
           left-edge handle. Hidden on mobile, where the sidebar is a

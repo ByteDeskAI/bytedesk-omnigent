@@ -782,7 +782,7 @@ describe("SubagentsPanel", () => {
     renderPanel({ rootSessionId: "conv_root" });
 
     const mainRow = screen.getByTestId("subagent-main-row");
-    // The pulsing pink dot reads as "active" on its own, so the word is dropped.
+    // The pulsing status dot reads as "active" on its own, so the word is dropped.
     expect(mainRow.querySelector('[data-testid="running-dot"]')).not.toBeNull();
     expect(mainRow).not.toHaveTextContent(/Working/i);
     // The label survives as the accessible name on the status indicator.
@@ -831,9 +831,8 @@ describe("SubagentsPanel", () => {
 
     const { container } = renderPanel();
 
-    // Working reuses the sidebar RunningDot in the brand-pink tone —
-    // identical to the sidebar's running indicator; a wrong tone drops
-    // bg-brand-accent.
+    // Working reuses the sidebar RunningDot in the Platform brand accent;
+    // a wrong tone drops bg-brand-accent.
     expect(
       childRow(container, "c_work").querySelector('[data-testid="running-dot"].bg-brand-accent'),
     ).not.toBeNull();
@@ -905,7 +904,7 @@ describe("SubagentsPanel", () => {
     expect(childRow(container, "c_launch")).toHaveTextContent(/Launching/);
     expect(childRow(container, "c_launch").querySelector('[data-testid="running-dot"]')).toBeNull();
     // Quiet states render no word — the label lives in the tooltip. Working is
-    // quiet too: the pulsing pink dot already reads as "active".
+    // quiet too: the pulsing status dot already reads as "active".
     expect(childRow(container, "c_work")).not.toHaveTextContent(/Working/);
     expect(childRow(container, "c_done")).not.toHaveTextContent(/Done/);
     expect(childRow(container, "c_idle")).not.toHaveTextContent(/Idle/);

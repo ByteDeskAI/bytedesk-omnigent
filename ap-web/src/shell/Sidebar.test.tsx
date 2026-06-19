@@ -309,21 +309,17 @@ describe("Sidebar mobile overlay background", () => {
 
     const aside = screen.getByRole("complementary", { name: "Conversations" });
     // On mobile the sidebar is a fixed full-screen overlay ON TOP of the
-    // chat. Its desktop look uses the translucent glass --card (60% alpha
-    // in dark mode) + backdrop blur, but WebKit/Safari drops the blur as
-    // soon as a Radix popper (the row kebab menu) opens — and never
-    // repaints it — so the chat bled through the overlay. The fix pins an
-    // opaque background below the md breakpoint. If this assertion fails,
-    // the override was removed and the Safari mobile bleed-through is back.
+    // chat. The mobile overlay needs an opaque background below the md
+    // breakpoint so chat content never bleeds through behind a drawer.
     expect(aside.className).toContain("max-md:bg-card-solid");
-    // Desktop keeps the glass treatment: base bg-card must stay alongside
-    // the mobile override (removing it would kill the desktop frosted look).
+    // Desktop keeps the base bg-card tokenized surface alongside the mobile
+    // override.
     expect(aside.className).toMatch(/(^| )bg-card( |$)/);
   });
 });
 
 describe("Sidebar collapsed marker", () => {
-  // The dark-mode glass rule in index.css keys its border/blur on
+  // The dark-mode surface rule in index.css keys its border on
   // :not([data-collapsed]) — NOT on aria-hidden, which Radix also toggles
   // on the open sidebar while a modal menu is up (that coupling made every
   // row reflow 2px wider when the session kebab menu opened). The panel
@@ -335,7 +331,7 @@ describe("Sidebar collapsed marker", () => {
     // the role+name query can't reach them, so select by class instead.
     const { container } = renderSidebar(false);
     const aside = container.querySelector("aside.conversations-sidebar")!;
-    // Closed: marked collapsed so the glass rule skips the w-0 strip.
+    // Closed: marked collapsed so the surface rule skips the w-0 strip.
     expect(aside).toHaveAttribute("data-collapsed");
     cleanup();
 

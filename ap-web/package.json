@@ -13,13 +13,14 @@
     "lint:fix": "oxlint --fix .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "sync:platform-css": "node scripts/sync-platform-design-css.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
     "@databricks/sdk-experimental": "^0.17.0",
-    "@fontsource-variable/geist-mono": "^5.2.7",
+    "@fontsource/ibm-plex-sans": "^5.2.8",
     "@lobehub/fluent-emoji": "^4.1.0",
     "@lobehub/icons": "^5.6.0",
     "@lobehub/ui": "^5.10.2",

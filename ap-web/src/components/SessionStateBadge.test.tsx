@@ -33,11 +33,11 @@ describe("SessionStateBadge — per-state rendering", () => {
     );
   });
 
-  it("renders running with a pulsing brand-pink dot", () => {
+  it("renders running with a pulsing brand-accent dot", () => {
     const { container } = renderBadge({ kind: "running" });
     const badge = screen.getByTestId("session-state-badge");
     expect(badge).toHaveAttribute("data-state", "running");
-    // The running indicator is a single pulsing brand-pink dot; a missing dot
+    // The running indicator is a single pulsing brand-accent dot; a missing dot
     // (or the old success-tone dot grid) means it regressed.
     const dot = container.querySelector('[data-testid="running-dot"]');
     expect(dot).not.toBeNull();
@@ -46,12 +46,12 @@ describe("SessionStateBadge — per-state rendering", () => {
     expect(container.querySelector(".bg-success")).toBeNull();
   });
 
-  it("renders unseen messages as a solid (non-pulsing) brand-pink dot", () => {
+  it("renders unseen messages as a solid brand-accent dot", () => {
     const { container } = renderBadge({ kind: "unseen" });
     const badge = screen.getByTestId("session-state-badge");
     expect(badge).toHaveAttribute("aria-label", "New messages");
     expect(badge).toHaveAttribute("data-state", "unseen");
-    // Unread reuses the brand-pink token but stays static; the pulsing
+    // Unread reuses the brand-accent token but stays static; the pulsing
     // variant (running-pulse-dot) is reserved for the running state.
     const dot = container.querySelector(".bg-brand-accent");
     expect(dot).not.toBeNull();

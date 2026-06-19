@@ -1,8 +1,13 @@
 @import "tailwindcss";
-@plugin "@tailwindcss/typography";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/geist-mono";
+@import "@fontsource/ibm-plex-sans/300.css";
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans/700.css";
+@import "./styles/bytedesk-mission-control.css";
+@plugin "@tailwindcss/typography";
 
 /* Streamdown ships utility classes pre-compiled in its dist; this @source
  * pragma tells Tailwind v4 to scan those files so the classes survive the
@@ -14,13 +19,8 @@
 
 @theme inline {
   --font-heading: var(--font-sans);
-  /* Native system UI font stack — defers to whatever the OS ships
-     * (San Francisco on Apple, Segoe UI on Windows, Roboto on Android),
-     * matching Tailwind's default sans so the app reads as native chrome. */
-  --font-sans:
-    ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol",
-    "Noto Color Emoji";
-  --font-mono: "Geist Mono Variable", "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: var(--font-plex-sans);
+  --font-mono: var(--font-plex-sans);
   /* 13px/20px text step between text-xs (12px) and text-sm (14px) —
      * generates the `text-13` utility. Used for compact UI chrome like
      * the composer footer selectors and slash-command menu rows. */
@@ -55,7 +55,7 @@
   --color-success: var(--success);
   --color-warning: var(--warning);
   --color-info: var(--info);
-  /* Brand pink — reserved for brand moments, not status. */
+  /* Platform brand accent — reserved for brand moments, not status. */
   --color-brand-accent: var(--brand-accent);
   /* Named status hues — success/warning/info are repointed to the
      * green/yellow/blue of this set below, so the two stay in lockstep. */
@@ -93,198 +93,71 @@
   --radius-4xl: calc(var(--radius) * 2.6);
 }
 
-/* Apple system-blue accent (hue 256, matches iOS / macOS systemBlue —
- * ~#007AFF light, ~#0A84FF dark). Reserved for focus rings, charts,
- * unread state, and the active sidebar highlight; surfaces and primary
- * buttons stay neutral grey (hue 240). See designs/UI/WEB_UI.md (still
- * describes the older cobalt direction). */
 :root {
-  /* Brand palette (light). Hex values are the brand spec, kept verbatim
-     * for fidelity. --background is white: the lavender brand canvas is
-     * expressed by the .app-shell gradient (see index.css .app-shell), so
-     * the base background stays white. This keeps bg-background tiles/
-     * inputs/code-blocks/tables (incl. Streamdown's hardcoded bg-background)
-     * from rendering as lavender patches on the white cards they sit on.
-     * The auth pages (outside the gradient shell) use this as their
-     * full-page canvas. */
-  --background: #fff;
-  --foreground: #11171c;
-  --card: #fff;
-  /* Light --card is already opaque; the solid form only diverges in dark. */
-  --card-solid: #fff;
-  --card-foreground: #11171c;
-  /* Tray surface (composer footer tray): white, applied translucently
-     * via opacity modifiers so the page gradient shows through. */
-  --tray: #fff;
-  /* Popover/dropdown/tooltip/dialog surfaces — light, matching --card.
-     * (These all consume bg-popover / text-popover-foreground.) */
-  --popover: #fff;
-  --popover-foreground: #11171c;
-  --primary: #11171c;
-  --primary-foreground: #fff;
-  /* Light grey fill so secondary badges/headers read as surfaces (a
-     * fully-transparent value left them as bare floating text). */
-  --secondary: #eceef1;
-  --secondary-foreground: #11171c;
-  --muted: #0000000f;
-  --muted-foreground: #6f6f6f;
-  /* Dedicated chip background for inline code — a hair darker than the
-     * white card so the chip reads as a tile. Kept separate from --muted
-     * (now a translucent black wash reused for hover/quote surfaces). */
-  --code-bg: #0000000f;
-  --accent: #d7edfe;
-  --accent-foreground: #04355d;
-  --destructive: #c8324c;
-  --destructive-foreground: #fff;
-  /* success/warning/info repointed onto the named status hues below so
-     * the ~45 existing badges/indicators adopt the brand status palette. */
-  --success: #2ea65c;
-  --warning: #d4972a;
-  --info: #3b8ff5;
-  --border: #e8ecf0;
-  /* Stronger divider/outline + a dedicated neutral button border. */
-  --border-strong: #a3b1bf;
-  --button-border: #d6d6d6;
-  --button-icon-hover-color: #11171c;
-  --input: #e8ecf0;
-  /* Focus ring matches --primary. */
-  --ring: #11171c;
-  /* Brand pink — reserved for brand moments, not status. */
-  --brand-accent: #df3c85;
-  /* Named status hues. success/warning/info above mirror green/yellow/blue. */
-  --status-blue: #3b8ff5;
-  --status-green: #2ea65c;
-  --status-yellow: #d4972a;
-  --status-red: #f04858;
-  --status-gray: #8e99a4;
-  --chart-1: #3b8ff5;
-  --chart-2: #2272b4;
-  --chart-3: #2ea65c;
-  --chart-4: #d4972a;
-  --chart-5: #8e99a4;
-  --radius: 0.5rem;
-  /* Sidebar + workspace cards are white (--card); they float on the
-     * near-white .app-shell gradient canvas. --sidebar matches that
-     * gradient's lightest tone so bg-sidebar surfaces (the app-shell's
-     * fallback fill under the gradient, translucent chrome like the
-     * message copy button) blend into the canvas rather than painting
-     * a lavender band. */
-  --sidebar: #fdfafa;
-  --sidebar-foreground: #11171c;
-  --sidebar-primary: #2272b4;
-  --sidebar-primary-foreground: #fff;
-  --sidebar-accent: #d7edfe;
-  --sidebar-accent-foreground: #04355d;
-  --sidebar-border: #e8ecf0;
-  --sidebar-ring: #2272b4;
+  /* Omnigent compatibility adapter: existing shadcn-style primitives keep
+     their variable names, but every value resolves to Mission Control tokens. */
+  --background: var(--color-bg-base);
+  --foreground: var(--color-text-primary);
+  --card: var(--color-bg-surface);
+  --card-solid: var(--color-bg-surface);
+  --card-foreground: var(--color-text-primary);
+  --tray: var(--color-bg-inset);
+  --popover: var(--color-bg-elevated);
+  --popover-foreground: var(--color-text-primary);
+  --primary: var(--color-accent-blue);
+  --primary-foreground: var(--color-text-primary);
+  --secondary: var(--color-bg-subtle);
+  --secondary-foreground: var(--color-text-secondary);
+  --muted: var(--color-bg-inset);
+  --muted-foreground: var(--color-text-tertiary);
+  --code-bg: var(--color-bg-subtle);
+  --accent: var(--color-bg-nav-active);
+  --accent-foreground: var(--color-text-primary);
+  --destructive: var(--color-accent-red);
+  --destructive-foreground: var(--color-text-primary);
+  --success: var(--color-accent-green);
+  --warning: var(--color-accent-amber);
+  --info: var(--color-accent-blue);
+  --border: var(--color-border-default);
+  --border-strong: var(--color-border-stronger);
+  --button-border: var(--color-border-dimmer);
+  --button-icon-hover-color: var(--color-text-primary);
+  --input: var(--color-border-default);
+  --ring: var(--color-accent-blue);
+  --brand-accent: var(--color-accent-orange);
+  --status-blue: var(--color-accent-blue);
+  --status-green: var(--color-accent-green);
+  --status-yellow: var(--color-accent-amber);
+  --status-red: var(--color-accent-red);
+  --status-gray: var(--color-text-disabled);
+  --chart-1: var(--color-accent-blue);
+  --chart-2: var(--color-accent-cyan);
+  --chart-3: var(--color-accent-green);
+  --chart-4: var(--color-accent-amber);
+  --chart-5: var(--color-text-tertiary);
+  --radius: var(--radius-lg);
+  --sidebar: var(--color-bg-subtle);
+  --sidebar-foreground: var(--color-text-primary);
+  --sidebar-primary: var(--color-accent-blue);
+  --sidebar-primary-foreground: var(--color-text-primary);
+  --sidebar-accent: var(--color-bg-nav-active);
+  --sidebar-accent-foreground: var(--color-text-primary);
+  --sidebar-border: var(--color-border-default);
+  --sidebar-ring: var(--color-accent-blue);
+  --tooltip-bg: var(--color-bg-elevated);
 }
 
 .dark {
-  /* Dark mode tokens — semi-transparent for glassmorphism backdrop-filter */
-  --background: #0d1218;
-  --foreground: oklch(0.965 0.003 240);
-  --card: rgba(40, 34, 58, 0.6);
-  /* Opaque stand-in for the glass --card. The composer card uses this
-     * instead of --card: its trays tuck their square corners behind the
-     * card (negative-margin overlap), and a translucent card lets the
-     * tucked strip ghost through its edges. Not --card's raw RGB
-     * (#28223a) — full-alpha that read lighter than the neighboring
-     * glass surfaces; this approximates the glass card's perceived
-     * color: 60% of #28223a composited over the dark canvas gradient. */
-  --card-solid: #201c30;
-  --card-foreground: oklch(0.965 0.003 240);
-  /* Dark counterpart of the tray surface — semi-transparent for glass effect */
-  --tray: rgba(40, 34, 58, 0.6);
-  --popover: rgba(26, 33, 41, 0.8);
-  --popover-foreground: oklch(0.965 0.003 240);
-  --primary: #e8ecf0;
-  --primary-foreground: #11171c;
-  --secondary: #1f272d;
-  --secondary-foreground: #e8ecf0;
-  /* Active/selected states, hover backgrounds, subtle containers. */
-  /* Opaque base (#28223a is var(--card)'s solid form — the dark-mode --card
-       itself is translucent). bg-muted backs ~160 solid utility surfaces (code
-       blocks, badges, hover rows) that must not let the canvas gradient bleed
-       through; the frosted look is reserved for the .dark .bg-card rule. */
-  --muted: color-mix(in srgb, var(--muted-foreground) 15%, #28223a);
-  --muted-foreground: #92a4b3;
-  --code-bg: oklch(0.38 0.005 240);
-  --accent: #04355d;
-  --accent-foreground: #4299e0;
-  --destructive: #e65b77;
-  --destructive-foreground: #fff;
-  /* success/warning/info repointed onto the status hues below, mirroring
-     * light mode so dark mode doesn't carry a second green/yellow/blue. */
-  --success: #2ea65c;
-  --warning: #d4972a;
-  --info: #3b8ff5;
-  /* Brand pink + named status hues (same values as light — the brand
-     * status palette is hue-stable across themes). Defined explicitly here
-     * rather than inheriting from :root so dark mode is self-contained. */
-  --brand-accent: #df3c85;
-  --status-blue: #3b8ff5;
-  --status-green: #2ea65c;
-  --status-yellow: #d4972a;
-  --status-red: #f04858;
-  --status-gray: #8e99a4;
-  --border: oklch(0.28 0.005 240);
-  --input: oklch(0.28 0.005 240);
-  /* Focus ring matches --primary. */
-  --ring: #e8ecf0;
-  --chart-1: oklch(0.64 0.22 254);
-  --chart-2: oklch(0.65 0.14 200);
-  --chart-3: oklch(0.68 0.15 145);
-  --chart-4: oklch(0.75 0.16 70);
-  --chart-5: oklch(0.65 0.008 240);
-  /* bg-sidebar surfaces blend into the dark .app-shell gradient — a 45°
-     * diagonal sweeping green (rgb 17,24,28) → purple (rgb 19,13,33);
-     * --sidebar sits in the green-dominant region and stays translucent
-     * so it tracks the canvas underneath (a flat color can't match a
-     * diagonal everywhere). Mirrors the light-mode treatment. */
-  --sidebar: rgba(17, 23, 28, 0.75);
-  --sidebar-foreground: oklch(0.965 0.003 240);
-  --sidebar-primary: oklch(0.64 0.22 254);
-  --sidebar-primary-foreground: oklch(0.12 0.004 240);
-  --sidebar-accent: oklch(0.245 0.005 240);
-  --sidebar-accent-foreground: oklch(0.965 0.003 240);
-  --sidebar-border: oklch(0.28 0.005 240);
-  --sidebar-ring: oklch(0.92 0.003 240 / 0.4);
-  --tooltip-bg: #2a2440;
+  color-scheme: dark;
 }
 
-/* App-shell canvas gradient. Copied verbatim from the brand mock
- * (agentic-ux-2026, "modern-1" layout): a near-white 45° gradient with the
- * faintest warm/pink drift, painted over the lavender --background. The
- * lavender base is effectively never seen (the opaque gradient covers it),
- * exactly as on the mock — it remains the fallback. The white sidebar /
- * workspace cards float on this near-white canvas, delineated by their
- * border + shadow rather than background contrast. --sidebar is set to the
- * gradient's near-white so bg-sidebar chrome stays invisible against this
- * canvas. */
-.app-shell {
-  background: linear-gradient(
-    45deg,
-    rgb(253, 250, 250),
-    rgb(253, 249, 251) 8%,
-    rgb(253, 249, 251) 17%,
-    rgb(253, 249, 252) 25%,
-    rgb(254, 248, 253) 33%,
-    rgb(254, 248, 252) 42%,
-    rgb(254, 251, 252) 50%,
-    rgb(254, 251, 251) 58%,
-    rgb(254, 251, 251) 67%,
-    rgb(254, 251, 251) 75%,
-    rgb(254, 251, 251) 83%,
-    rgb(254, 251, 251) 92%,
-    rgb(254, 253, 253)
-  );
-}
+/* Mission Control canvas: dark base with a restrained blue operational glow. */
+.app-shell,
 .dark .app-shell {
   background:
-    radial-gradient(ellipse at 20% 50%, rgba(100, 40, 180, 0.15) 0%, transparent 50%),
-    radial-gradient(ellipse at 80% 20%, rgba(80, 30, 140, 0.1) 0%, transparent 45%),
-    radial-gradient(ellipse at 60% 80%, rgba(140, 30, 100, 0.08) 0%, transparent 40%),
-    linear-gradient(145deg, #1e1035 0%, #11171c 50%, #161020 100%);
+    radial-gradient(ellipse at 50% 0%, rgba(0, 121, 242, 0.06), transparent 70%),
+    radial-gradient(ellipse at 0% 100%, rgba(0, 121, 242, 0.03), transparent 60%),
+    var(--color-bg-base);
 }
 
 /* Chat scroll fade: the ChatHeader overlay paints no background (a flat
@@ -305,10 +178,9 @@
   -webkit-mask-image: linear-gradient(to bottom, transparent 48px, black 80px);
 }
 
-/* Elevated surfaces — frosted glass effect with backdrop blur.
+/* Elevated surfaces — flat Mission Control surfaces.
  * Targets top-level cards only, including responsive card surfaces like
- * the workspace panel's md:bg-card (so its chrome matches the sidebar's
- * glass border in dark mode). A bg-card nested inside another bg-card
+ * the workspace panel's md:bg-card. A bg-card nested inside another bg-card
  * (e.g. FilesPanel inside the workspace panel, toolbars inside the
  * composer) is an interior fill, and re-decorating it with its own
  * border/shadow visually carves the parent card into pieces.
@@ -324,24 +196,13 @@
   :is(.bg-card, [class*="md:bg-card"]):not(
     :is(.bg-card, [class*="md:bg-card"]) :is(.bg-card, [class*="md:bg-card"])
   ):not([data-collapsed]) {
-  /* -webkit- must come BEFORE the unprefixed property: LightningCSS (vite
-   * build) collapses the pair and keeps only the last declaration. */
-  -webkit-backdrop-filter: blur(32px) saturate(180%) !important;
-  backdrop-filter: blur(32px) saturate(180%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.09);
-  border-top-color: rgba(255, 255, 255, 0.14);
-  background-image: linear-gradient(
-    135deg,
-    rgba(255, 255, 255, 0.04) 0%,
-    rgba(255, 255, 255, 0) 60%
-  );
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.22),
-    0 1px 3px rgba(0, 0, 0, 0.16);
+  border: 1px solid var(--color-border-default);
+  background-image: none;
+  box-shadow: var(--shadow-sm);
 }
 
 /* Side panels (FileViewer, TerminalsPanel, FilesPanelDrawer) manage their own
- * left border; suppress the full border that the glass rule applies. */
+ * left border; suppress the full border that the surface rule applies. */
 .dark aside[data-testid="file-viewer"],
 .dark div[data-testid="terminals-panel"],
 .dark aside[data-testid="files-panel-drawer"] {
@@ -350,14 +211,12 @@
   border-bottom: none !important;
 }
 
-/* Popovers/menus — same glass treatment */
+/* Popovers/menus — raised, bordered Mission Control panels. */
 .dark [data-slot="popover-content"],
 .dark [role="menu"],
 .dark [data-radix-popper-content-wrapper] > * {
-  /* -webkit- before unprefixed — see comment on the bg-card rule above. */
-  -webkit-backdrop-filter: blur(24px) saturate(150%) !important;
-  backdrop-filter: blur(24px) saturate(150%) !important;
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--color-border-stronger);
+  box-shadow: var(--shadow-md);
 }
 
 /* Electron desktop shell on macOS (AppShell sets data-electron-mac when the
@@ -401,35 +260,27 @@
 [data-electron-mac] :is(a, button, input, textarea, [role="button"]) {
   -webkit-app-region: no-drag;
 }
-/* Share button — glassy pink effect (both modes). The vertical
- * gradient alone does the embossed work (lighter top = light catch,
- * darker bottom = shadow, simulating a convex surface lit from above);
- * no border or inset shine. Light mode: gentler gradient, no shadow —
- * the full emboss + dark depth shadow reads too heavy on the light
- * canvas. Dark mode: stronger emboss plus the grounding shadow. */
+/* Share button keeps the existing class name but now uses Platform primary. */
 .share-button-glassy {
-  background: linear-gradient(to bottom, #fa3d99 0%, #f22286 40%, #d51d74 100%);
-  border: none;
-  box-shadow: none;
-  color: #ffffff;
+  background: var(--color-accent-blue);
+  border: 1px solid color-mix(in srgb, var(--color-accent-blue) 70%, var(--color-text-primary));
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-primary);
 }
 
 .share-button-glassy:hover {
-  /* Darken the gradient slightly on hover */
-  background: linear-gradient(to bottom, #ec3790 0%, #e51b7d 40%, #c41a6b 100%);
+  filter: brightness(1.1);
 }
 
 .dark .share-button-glassy {
-  background: linear-gradient(150deg, #ff4da6 0%, #f22286 40%, #b8185f 100%);
-  border: none;
-  box-shadow:
-    0 4px 16px rgba(0, 0, 0, 0.5),
-    0 1px 3px rgba(0, 0, 0, 0.4);
-  color: #ffffff;
+  background: var(--color-accent-blue);
+  border: 1px solid color-mix(in srgb, var(--color-accent-blue) 70%, var(--color-text-primary));
+  box-shadow: var(--shadow-sm);
+  color: var(--color-text-primary);
 }
 
 .dark .share-button-glassy:hover {
-  background: linear-gradient(150deg, #f0408f 0%, #e51b7d 40%, #a51455 100%);
+  filter: brightness(1.1);
 }
 
 @layer base {
@@ -456,15 +307,14 @@
   html {
     @apply font-sans;
   }
-  /* Text selection — brand pink highlight. Light: gentle wash + dark pink
-   * text. Dark: solid brand pink background + white text. */
+  /* Text selection follows the Platform interactive accent. */
   ::selection {
-    background: color-mix(in srgb, #f22286 20%, transparent);
-    color: #f22286;
+    background: color-mix(in srgb, var(--color-accent-blue) 28%, transparent);
+    color: var(--color-text-primary);
   }
   .dark ::selection {
-    background: #f22286;
-    color: #ffffff;
+    background: color-mix(in srgb, var(--color-accent-blue) 40%, transparent);
+    color: var(--color-text-primary);
   }
 }
 
@@ -485,10 +335,9 @@
   }
 }
 
-/* Geist Mono renders wider than Geist Sans at the same point size, making
- * streamdown's default text-sm inline code and code blocks look larger than
- * the surrounding prose. Scale both down to ~87.5 % of the parent font size
- * so they match the relative sizing used in the Lexical markdown editor.
+/* Code-like runs inherit the Platform font stack in UI chrome. Scale
+ * streamdown's default text-sm inline code and code blocks down to ~87.5%
+ * of the parent font size so they match the surrounding prose.
  *
  * The bg override pulls inline-code chips off the page-default `bg-muted`
  * (which is only ~4% darker than the background) onto the dedicated
@@ -549,7 +398,7 @@
   }
 }
 
-/* "Running / working" status indicator — a single brand-pink dot that fades
+/* "Running / working" status indicator — a single status dot that fades
  * between faint and full opacity. Subtle yet noticeable, and cheaper than a
  * spinner. Shared by the sidebar SessionStateBadge and the SubagentsPanel. */
 @keyframes running-pulse {

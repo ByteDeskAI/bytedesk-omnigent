@@ -3,7 +3,7 @@
 // collapsible rhythm. Two kinds:
 //
 //   skill   — plugin/Skill invocations (``/dev-productivity:simplify``,
-//             ``/oncall``). Wand icon in brand pink, prefix "Skill".
+//             ``/oncall``). Wand icon in Platform brand accent, prefix "Skill".
 //   command — surfaced CLI built-ins (``/effort``, ``/clear``,
 //             ``/compact``, ``/model``, ``/ultrareview``). Command
 //             icon (⌘ glyph) in slate, prefix "Command". These change
@@ -29,8 +29,8 @@ const KIND_STYLES: Record<SlashCommandKind, KindStyle> = {
     // WandSparkles, not Sparkles — plain Sparkles is the thinking/reasoning
     // marker (ai-elements/reasoning), and skills must not look like thoughts.
     Icon: WandSparklesIcon,
-    // Brand pink — matches the composer slash-command tint and the nessie
-    // workflow chips so every skill surface shares one palette.
+    // Platform brand accent — matches the composer slash-command tint so
+    // every skill surface shares one palette.
     iconClass: "text-brand-accent",
   },
   command: {

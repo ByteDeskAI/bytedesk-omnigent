@@ -61,7 +61,6 @@ import type { Conversation } from "@/hooks/useConversations";
 import { OttoEyes } from "@/components/OttoEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
-import { IntelligentModelControl, type CostControlMode } from "@/components/CostRoutingControl";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { AgentRowTooltip } from "@/components/AgentHoverCard";
 
@@ -810,10 +809,6 @@ export function NewChatLandingScreen() {
   // null = the agent spec's declared harness (no override sent); cleared on
   // every agent switch so a pick never leaks across agents.
   const [pickedHarness, setPickedHarness] = useState<string | null>(null);
-  // Per-session cost-control switch ("Cost Optimized" pill). Unset
-  // (null) defers to the agent spec's default and is omitted from
-  // the create body.
-  const [costControlMode, setCostControlMode] = useState<CostControlMode>(null);
   // Controls the working-directory popover so picking a directory closes it.
   const [workspacePopoverOpen, setWorkspacePopoverOpen] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -1187,11 +1182,9 @@ export function NewChatLandingScreen() {
               : agentSupportsApprovalMode && approvalMode !== CODEX_NATIVE_DEFAULT_APPROVAL_MODE
                 ? (CODEX_NATIVE_APPROVAL_MODES.find((m) => m.value === approvalMode)?.args ?? [])
                 : undefined,
-          // Cost-control switch from the "Cost Optimized" pill; polly-only
-          // (cost control is a polly feature) and omitted when unset so the
-          // session defers to the spec default.
-          cost_control_mode_override:
-            agent?.name === "polly" ? (costControlMode ?? undefined) : undefined,
+          // Cost-control UI is currently hidden, so omit the override and let
+          // the session defer to the agent spec default.
+          cost_control_mode_override: undefined,
           // Brain-harness pick from the agent flyout. Omitted when the user
           // kept the spec default (pickedHarness is null) so the session
           // tracks the agent's declared harness.
@@ -1262,7 +1255,7 @@ export function NewChatLandingScreen() {
       <div className="flex w-full max-w-[840px] flex-col items-center gap-8 px-10 pt-8 pb-16">
         <div className="flex flex-col items-center gap-3.5 sm:flex-row">
           <OttoEyes className="h-18 w-auto shrink-0" />
-          <h1 className="text-center text-3xl font-medium tracking-[-0.03em] text-foreground sm:text-left">
+          <h1 className="text-center text-3xl font-medium text-foreground sm:text-left">
             What should we do?
           </h1>
         </div>
@@ -1366,21 +1359,21 @@ export function NewChatLandingScreen() {
               rows={1}
               autoFocus
               data-testid="new-chat-landing-input"
-              // Compose-pill text spec: SF Pro Text system stack at
+              // Compose-pill text follows the shared Platform font stack at
               // 14px/20px. (Note: sub-16px inputs make mobile Safari
               // auto-zoom on focus — accepted tradeoff per the design.)
               // Heights are border-box (16px top + 4px bottom padding lives
               // inside them): min 60px = one 20px line + a spare line of
               // breathing room; max 200px = the spec's 180px of content.
               // useAutoGrowTextarea drives the height between the two.
-              className="max-h-[200px] min-h-[60px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-4 pb-1 font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
+              className="max-h-[200px] min-h-[60px] w-full resize-none overflow-y-auto bg-transparent px-4 pt-4 pb-1 font-sans text-sm leading-5 text-foreground outline-none placeholder:text-muted-foreground"
             />
             {/* Gated on an empty draft so it reads as the placeholder.
                 pointer-events-none lets clicks fall through to focus the
                 textarea; the pills themselves opt back in. */}
             {pillSkills.length > 0 && message.length === 0 && (
               <div className="pointer-events-none absolute inset-x-4 top-4 flex flex-wrap items-center gap-2">
-                <span className="font-['SF_Pro_Text',-apple-system,BlinkMacSystemFont,system-ui,sans-serif] text-sm leading-5 text-muted-foreground">
+                <span className="font-sans text-sm leading-5 text-muted-foreground">
                   Describe a task, or try a skill
                 </span>
                 <SkillPills skills={pillSkills} onPick={applySkillPill} />
@@ -1453,13 +1446,6 @@ export function NewChatLandingScreen() {
                 />
               </div>
               <div className="flex items-center gap-0.5">
-                {/* Polly-only surface — cost control is a polly feature, so
-                    the toggle is hidden unless the selected agent is polly. */}
-                {/* Temporarily hidden (#3021): re-enable by removing the false gate. */}
-                {false && selectedAgent?.name === "polly" && (
-                  // Mode-only variant: no verdict can exist before the session does.
-                  <IntelligentModelControl value={costControlMode} onChange={setCostControlMode} />
-                )}
                 {agentList.length > 0 ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

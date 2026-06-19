@@ -80,9 +80,9 @@ function MenuRowButton({
   onSelect: (cmd: string) => void;
 }) {
   const isBuiltin = row.name in BUILTIN_SLASH_COMMANDS;
-  // Wand in pink for skills (per design feedback — distinct from the
-  // info-blue slash-command tint, and from plain Sparkles which marks
-  // thinking/reasoning blocks), the ⌘ glyph in slate for built-ins.
+  // Wand in the Platform brand accent for skills, distinct from the
+  // info-blue slash-command tint and from plain Sparkles, which marks
+  // thinking/reasoning blocks. The command glyph stays slate for built-ins.
   const Icon = isBuiltin ? CommandIcon : WandSparklesIcon;
   return (
     <button
@@ -100,7 +100,7 @@ function MenuRowButton({
       <Icon
         className={cn(
           "size-3.5 shrink-0",
-          isBuiltin ? "text-slate-500 dark:text-slate-400" : "text-pink-500 dark:text-pink-400",
+          isBuiltin ? "text-slate-500 dark:text-slate-400" : "text-brand-accent",
         )}
       />
       <span className="truncate">{row.name}</span>
