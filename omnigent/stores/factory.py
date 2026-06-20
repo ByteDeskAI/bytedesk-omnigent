@@ -19,32 +19,76 @@ artifact-store branch — so flipping the flag is byte-identical wiring.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from omnigent.pluggable import PluggableRegistry
 
 
-def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any]  # ArtifactStore protocol (optional deps)
-    """Create an artifact store based on the location URI scheme.
+def _artifact_scheme(location: str) -> str:
+    """Map an artifact *location* to its registry key (URI scheme).
 
-    Mirrors ``omnigent.cli._create_artifact_store``: ``dbfs:/Volumes/...``
-    URIs use :class:`DatabricksVolumesArtifactStore` (requires
-    ``databricks-sdk``); all other locations use
-    :class:`LocalArtifactStore`. Imports are deferred so the Databricks
-    backend's optional dependency is only required when actually used.
-
-    :param location: Artifact storage location, e.g. ``"./artifacts"`` or
-        ``"dbfs:/Volumes/cat/schema/vol"``.
-    :returns: An :class:`~omnigent.stores.ArtifactStore` instance.
+    ``dbfs:/Volumes/...`` URIs select the Databricks backend; everything else
+    (local paths and unknown schemes) selects the ``"local"`` default — the same
+    two-way split the historical if/else made.
     """
     if location.startswith("dbfs:/Volumes/"):
+        return "dbfs"
+    return "local"
+
+
+def _build_artifact_store_registry(
+    location: str,
+) -> "PluggableRegistry[Any]":  # type: ignore[explicit-any]  # ArtifactStore protocol (optional deps)
+    """Build the artifact-store seam registry, keyed by URI scheme.
+
+    The two built-in backends are registered with deferred imports so the
+    Databricks backend's optional ``databricks-sdk`` dependency is only loaded
+    when the ``dbfs`` scheme is actually selected — matching the old if/else.
+    Extensions can contribute schemes via an ``artifact_store_providers`` hook.
+
+    :param location: The artifact location, closed over by each factory so a
+        selected backend is constructed for exactly this location.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    def _local() -> Any:  # type: ignore[explicit-any]
+        from omnigent.stores.artifact_store.local import LocalArtifactStore
+
+        return LocalArtifactStore(location)
+
+    def _databricks() -> Any:  # type: ignore[explicit-any]
         from omnigent.stores.artifact_store.databricks_volumes import (
             DatabricksVolumesArtifactStore,
         )
 
         return DatabricksVolumesArtifactStore(location)
 
-    from omnigent.stores.artifact_store.local import LocalArtifactStore
+    registry: PluggableRegistry[Any] = PluggableRegistry(
+        "artifact_store", default=("local", _local)
+    )
+    registry.register("dbfs", _databricks)
+    registry.discover_extensions(hook="artifact_store_providers")
+    return registry
 
-    return LocalArtifactStore(location)
+
+def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any]  # ArtifactStore protocol (optional deps)
+    """Create an artifact store based on the location URI scheme.
+
+    Selection is now a :class:`~omnigent.pluggable.PluggableRegistry` keyed by
+    URI scheme (default = local), the reference seam for the pluggable framework
+    (BDP-2345). Behavior is identical to the historical if/else and to
+    ``omnigent.cli._create_artifact_store``: ``dbfs:/Volumes/...`` URIs use
+    :class:`DatabricksVolumesArtifactStore` (requires ``databricks-sdk``); all
+    other locations use :class:`LocalArtifactStore`. Imports are deferred so the
+    Databricks backend's optional dependency is only required when actually used.
+
+    :param location: Artifact storage location, e.g. ``"./artifacts"`` or
+        ``"dbfs:/Volumes/cat/schema/vol"``.
+    :returns: An :class:`~omnigent.stores.ArtifactStore` instance.
+    """
+    registry = _build_artifact_store_registry(location)
+    return registry.get(_artifact_scheme(location))
 
 
 @dataclass(frozen=True)
