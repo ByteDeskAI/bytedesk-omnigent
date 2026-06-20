@@ -29,12 +29,41 @@ and :class:`PolicyResult` from here (or from the
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from omnigent.spec.types import Phase, PolicyAction, StateUpdate
 
 if TYPE_CHECKING:
     from omnigent.entities import ConversationItem
+
+
+class ToolCallContent(TypedDict):
+    """``EvaluationContext.content`` shape on the ``TOOL_CALL`` phase.
+
+    :param name: The tool name being called, e.g. ``"sys_session_send"``.
+    :param arguments: Parsed tool-call arguments object.
+    """
+
+    name: str
+    arguments: dict[str, Any]
+
+
+class ToolResultContent(TypedDict):
+    """``EvaluationContext.content`` shape on the ``TOOL_RESULT`` phase.
+
+    :param result: The tool's output payload (shape is tool-specific).
+    """
+
+    result: Any
+
+
+# Documented per-phase union for ``EvaluationContext.content`` (see the
+# field docstring): ``str`` on ``REQUEST`` / ``RESPONSE``; the typed
+# tool dicts on ``TOOL_CALL`` / ``TOOL_RESULT``; an opaque
+# ``dict[str, Any]`` prompt/response body on ``LLM_REQUEST`` /
+# ``LLM_RESPONSE``. Policies branch on their declared ``on:`` phase to
+# pick the expected member; the engine never introspects the field.
+PhaseContent = str | ToolCallContent | ToolResultContent | dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -53,13 +82,14 @@ class EvaluationContext:
 
     :param phase: The enforcement point.
     :param content: Phase-specific payload — shape depends on
-        ``phase``:
+        ``phase`` (the documented union is :data:`PhaseContent`):
 
         - ``REQUEST`` / ``RESPONSE``: ``str`` (raw user /
           assistant text).
-        - ``TOOL_CALL``: ``dict[str, Any]`` shaped
+        - ``TOOL_CALL``: :class:`ToolCallContent` shaped
           ``{"name": <name>, "arguments": <parsed-args-dict>}``.
-        - ``TOOL_RESULT``: ``dict`` shaped ``{"result": <tool-output>}``.
+        - ``TOOL_RESULT``: :class:`ToolResultContent` shaped
+          ``{"result": <tool-output>}``.
         - ``LLM_REQUEST``: ``dict`` with the full LLM prompt
           (system instructions, messages, tool schemas).
         - ``LLM_RESPONSE``: ``dict`` with the raw model output
@@ -67,7 +97,9 @@ class EvaluationContext:
 
         Policies know which shape to expect from their declared
         ``on:`` phases — the engine never introspects this field
-        itself.
+        itself. Kept annotated ``Any`` at the dataclass (not
+        ``PhaseContent``) so the many call sites that build each
+        per-phase shape stay assignable without narrowing churn.
     :param tool_name: Resolved tool name. Populated on
         ``TOOL_CALL`` and ``TOOL_RESULT``; ``None`` on
         ``REQUEST``, ``RESPONSE``, ``LLM_REQUEST``, and

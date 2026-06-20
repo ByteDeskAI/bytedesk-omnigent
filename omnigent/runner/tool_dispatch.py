@@ -29,7 +29,7 @@ import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Protocol, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:
     from omnigent.runner.mcp_manager import McpManager
@@ -129,6 +129,143 @@ class AgentSpecLike(Protocol):
     sub_agents: Sequence[Any]
     executor: Any
     os_env: Any
+
+
+class ActionRequiredItem(TypedDict, total=False):
+    """The ``item`` body of an ``action_required`` SSE event.
+
+    The runner inspects this dict on every relayed
+    ``response.output_item.done`` event to decide whether a tool call must
+    be dispatched locally. ``total=False`` because the runner reads each
+    key defensively (``.get(...)``) and a non-tool item omits the
+    tool-call fields.
+
+    :param type: Item discriminator; ``"function_call"`` for a tool call.
+    :param status: Lifecycle status; ``"action_required"`` when the
+        runner must dispatch the call.
+    :param name: The tool name, e.g. ``"sys_os_shell"``.
+    :param call_id: Correlation id echoed back on the result.
+    :param arguments: Tool arguments as a JSON string.
+    """
+
+    type: str
+    status: str
+    name: str
+    call_id: str
+    arguments: str
+
+
+class ActionRequiredEvent(TypedDict, total=False):
+    """An SSE event carrying a possible ``action_required`` tool call.
+
+    The exact dict shape :func:`is_action_required` / :func:`get_tool_name`
+    / :func:`get_call_id` / :func:`get_arguments` already read. ``item`` is
+    absent on non-output events, so the keys stay optional.
+
+    :param type: Event type; ``"response.output_item.done"`` carries an item.
+    :param item: The output item (see :class:`ActionRequiredItem`).
+    """
+
+    type: str
+    item: ActionRequiredItem
+
+
+class SubagentSendArgs(TypedDict, total=False):
+    """Parsed LLM arguments at the ``sys_session_send`` dispatch boundary.
+
+    Names the keys :func:`_execute_subagent_tool` reads from the parsed
+    tool-call args. PRESERVES the loud-vs-soft asymmetry the dispatcher
+    enforces at runtime — this TypedDict only documents the surface, it
+    does not validate it:
+
+    - a malformed ``args.model`` fails **loud** (raises ``ValueError`` in
+      :func:`_subagent_model_from_args`, surfaced as an ``Error:`` reply);
+    - a malformed message / addressing mode fails **soft** (a ``None``
+      message yields an ``Error:`` string return without raising).
+
+    ``total=False`` because exactly one addressing mode is supplied
+    (``session_id`` XOR ``agent`` + ``title``) and ``args`` may be a bare
+    string or the object form.
+
+    :param agent: Named sub-agent to spawn/continue, e.g. ``"researcher"``.
+    :param title: Sub-agent instance label (named mode), e.g. ``"auth"``.
+    :param session_id: Existing child session id (by-session-id mode).
+    :param args: Either the raw message string, or the object form
+        ``{"input": <msg>, "purpose"?: <str>, "model"?: <str>}``.
+    """
+
+    agent: str
+    title: str
+    session_id: str
+    args: str | SubagentSendArgsObject
+
+
+class SubagentSendArgsObject(TypedDict, total=False):
+    """The object form of ``SubagentSendArgs.args``.
+
+    :param input: The user message text for the sub-agent.
+    :param purpose: Optional classification hint (e.g. polly's guardrail).
+    :param model: Optional per-dispatch model override id.
+    """
+
+    input: str
+    purpose: str
+    model: str
+
+
+class SubagentInboxPayload(TypedDict):
+    """Terminal sub-agent completion pushed into the parent session inbox.
+
+    The exact dict :func:`_deliver_subagent_completion` (``omnigent.runner.app``)
+    enqueues onto the parent's ``sys_read_inbox`` queue. Named here so the
+    inbox producer and the drain side share one contract.
+
+    :param type: Always ``"sub_agent"``.
+    :param work_id: Runner-local work entry id.
+    :param task_id: Child session id (legacy alias).
+    :param handle_id: Child session id (legacy alias).
+    :param conversation_id: Child session id.
+    :param tool_name: Dispatching sub-agent name.
+    :param agent: Dispatching sub-agent name.
+    :param title: Sub-agent instance title.
+    :param status: Terminal status string (``"completed"`` / ``"failed"`` /
+        ``"cancelled"``).
+    :param output: Sub-agent output text (a placeholder when empty).
+    """
+
+    type: str
+    work_id: str
+    task_id: str
+    handle_id: str
+    conversation_id: str
+    tool_name: str
+    agent: str
+    title: str | None
+    status: str
+    output: str
+
+
+class SessionSnapshotPayload(TypedDict, total=False):
+    """The ``GET /v1/sessions/{id}`` JSON body the runner projects.
+
+    Names the subset of the server :class:`~omnigent.server.schemas.SessionResponse`
+    body that the runner's single-flight ``_session_snapshot`` loader reads
+    (``omnigent.runner.app``). ``total=False`` + nullable members mirror the
+    runner's defensive ``body.get(...)`` reads: a not-yet-bound session omits
+    / nulls ``agent_id``, and ``sub_agent_name`` is present only on sub-agent
+    sessions.
+
+    :param created_at: Server creation time (UNIX seconds).
+    :param workspace: Server-stored workspace path, or ``None``.
+    :param agent_id: Bound agent id, or ``None`` before binding.
+    :param sub_agent_name: Dispatched sub-agent name on sub-agent sessions,
+        else ``None``.
+    """
+
+    created_at: float
+    workspace: str | None
+    agent_id: str | None
+    sub_agent_name: str | None
 
 
 _INBOX_OUTPUT_MAX_CHARS = 12000
@@ -365,7 +502,7 @@ _ALL_LOCAL_TOOLS = (
 _PLACEHOLDER_CWDS = (None, "", ".", "./")
 
 
-def is_action_required(event: dict[str, Any]) -> bool:
+def is_action_required(event: ActionRequiredEvent) -> bool:
     """Check if an SSE event is an action_required tool call."""
     if event.get("type") != "response.output_item.done":
         return False
@@ -373,17 +510,17 @@ def is_action_required(event: dict[str, Any]) -> bool:
     return item.get("type") == "function_call" and item.get("status") == "action_required"
 
 
-def get_tool_name(event: dict[str, Any]) -> str:
+def get_tool_name(event: ActionRequiredEvent) -> str:
     """Extract the tool name from an action_required event."""
     return (event.get("item") or {}).get("name", "")
 
 
-def get_call_id(event: dict[str, Any]) -> str:
+def get_call_id(event: ActionRequiredEvent) -> str:
     """Extract the call_id from an action_required event."""
     return (event.get("item") or {}).get("call_id", "")
 
 
-def get_arguments(event: dict[str, Any]) -> str:
+def get_arguments(event: ActionRequiredEvent) -> str:
     """Extract the arguments JSON string from an action_required event."""
     return (event.get("item") or {}).get("arguments", "{}")
 
@@ -771,7 +908,7 @@ async def _find_existing_child_session(
     return None
 
 
-def _subagent_message_from_args(args: dict[str, Any]) -> str | None:
+def _subagent_message_from_args(args: SubagentSendArgs) -> str | None:
     """
     Extract the user message from ``sys_session_send`` arguments.
 
@@ -793,7 +930,7 @@ def _subagent_message_from_args(args: dict[str, Any]) -> str | None:
     return None
 
 
-def _subagent_model_from_args(args: dict[str, Any]) -> str | None:
+def _subagent_model_from_args(args: SubagentSendArgs) -> str | None:
     """
     Extract and validate the per-dispatch model from ``sys_session_send`` args.
 
@@ -927,7 +1064,7 @@ async def _execute_list_models_tool(*, agent_spec: AgentSpecLike | None) -> str:
 
 
 async def _execute_subagent_tool(
-    args: dict[str, Any],
+    args: SubagentSendArgs,
     *,
     server_client: httpx.AsyncClient | None = None,
     conversation_id: str | None = None,
@@ -3682,8 +3819,11 @@ async def execute_tool(
                 filesystem_registry=filesystem_registry,
             )
         elif tool_name in _SUBAGENT_TOOLS:
+            # The dispatcher carries args as the open ``dict[str, Any]`` from
+            # ``json.loads``; narrow to the boundary TypedDict here (the
+            # helpers still read every key defensively).
             output = await _execute_subagent_tool(
-                args,
+                cast("SubagentSendArgs", args),
                 server_client=server_client,
                 conversation_id=conversation_id,
                 agent_spec=agent_spec,
