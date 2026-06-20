@@ -41,12 +41,175 @@
         "title": "AddCommentRequest",
         "type": "object"
       },
+      "AgentImage": {
+        "description": "The editable surface of a template agent's image (GET response).",
+        "properties": {
+          "config": {
+            "additionalProperties": true,
+            "title": "Config",
+            "type": "object"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "mcp_servers": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Mcp Servers",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "python_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Python Tools",
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "sot_tier": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sot Tier"
+          },
+          "sub_agents": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sub Agents",
+            "type": "array"
+          },
+          "typescript_tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Typescript Tools",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "config",
+          "instructions",
+          "skills",
+          "mcp_servers",
+          "python_tools",
+          "typescript_tools",
+          "sub_agents",
+          "sot_tier"
+        ],
+        "title": "AgentImage",
+        "type": "object"
+      },
+      "AgentImageUpdate": {
+        "description": "Partial edit to a template agent's image (PUT body).\n\nOnly the supplied parts are overwritten; everything else (skills,\ntools, sub-agents) is preserved from the current bundle. ``config``,\nwhen present, replaces ``config.yaml`` wholesale \u2014 the editor holds\nthe full document, so there is no server-side merge to disagree\nabout.",
+        "properties": {
+          "config": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Config"
+          },
+          "files": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Files"
+          },
+          "instructions": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Instructions"
+          },
+          "remove": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Remove"
+          }
+        },
+        "title": "AgentImageUpdate",
+        "type": "object"
+      },
       "AgentObject": {
-        "description": "API representation of a registered agent.\n\n:param id: Unique agent identifier, e.g. ``\"ag_abc123\"``.\n:param object: Fixed resource type, always ``\"agent\"``.\n:param name: Human-readable agent name,\n    e.g. ``\"research-agent\"``.\n:param version: Monotonic version counter. Starts at 1,\n    incremented on each update.\n:param description: Optional free-text description of the\n    agent's purpose.\n:param created_at: Unix epoch timestamp of creation.\n:param updated_at: Unix epoch timestamp of the last update,\n    or ``None`` if never updated.\n:param harness: The agent's harness/kind, e.g. ``\"codex\"``,\n    ``\"codex-native\"``, or ``\"claude-native\"`` for\n    ``executor.type: omnigent`` agents, otherwise the executor\n    type (``\"claude_sdk\"``, ``\"agents_sdk\"``). ``None`` when the\n    bundle cannot be loaded. Lets the Web UI Add Agent picker\n    recognise an agent's kind (Codex vs Claude) without\n    hardcoding by name slug.\n:param mcp_servers: MCP servers the agent is connected to\n    (secret fields omitted). Empty list when the spec\n    declares no MCP servers or when the bundle cannot be\n    loaded.\n:param policies: Guardrails policies declared on the agent.\n    Each entry summarises the policy name, type, and\n    phases. Empty list when the spec declares no policies\n    or when the bundle cannot be loaded.\n:param skills: Skills bundled in the agent spec\n    (``skills/<name>/SKILL.md``). Lets the Web UI's\n    new-session composer offer a slash-command menu before a\n    session (and its runner) exists. Host-discovered skills\n    are runner-owned, so they are NOT listed here \u2014 the\n    session snapshot's ``skills`` field carries the merged\n    set once a runner is bound. Empty list when the spec\n    bundles no skills or when the bundle cannot be loaded.\n:param terminals: Terminal names declared in the spec's\n    ``terminals:`` block, in declaration order, e.g.\n    ``[\"shell\"]``. The Web UI gates its \"new terminal\"\n    affordance on this list (creation is only offered for\n    agents with terminal access) and offers these names as\n    the launchable choices. Empty list when the spec\n    declares no terminals or when the bundle cannot be\n    loaded.",
+        "description": "API representation of a registered agent.\n\n:param id: Unique agent identifier, e.g. ``\"ag_abc123\"``.\n:param object: Fixed resource type, always ``\"agent\"``.\n:param name: Human-readable agent name,\n    e.g. ``\"research-agent\"``.\n:param display_name: Optional human display name sourced from the\n    bundle's ``params.displayName`` (e.g. ``\"Maya Chen\"``). The Web\n    UI new-session picker prefers it over the slug ``name``. ``None``\n    when the bundle sets no ``params.displayName`` or can't be loaded.\n:param version: Monotonic version counter. Starts at 1,\n    incremented on each update.\n:param description: Optional free-text description of the\n    agent's purpose.\n:param created_at: Unix epoch timestamp of creation.\n:param updated_at: Unix epoch timestamp of the last update,\n    or ``None`` if never updated.\n:param harness: The agent's harness/kind, e.g. ``\"codex\"``,\n    ``\"codex-native\"``, or ``\"claude-native\"`` for\n    ``executor.type: omnigent`` agents, otherwise the executor\n    type (``\"claude_sdk\"``, ``\"agents_sdk\"``). ``None`` when the\n    bundle cannot be loaded. Lets the Web UI Add Agent picker\n    recognise an agent's kind (Codex vs Claude) without\n    hardcoding by name slug.\n:param mcp_servers: MCP servers the agent is connected to\n    (secret fields omitted). Empty list when the spec\n    declares no MCP servers or when the bundle cannot be\n    loaded.\n:param policies: Guardrails policies declared on the agent.\n    Each entry summarises the policy name, type, and\n    phases. Empty list when the spec declares no policies\n    or when the bundle cannot be loaded.\n:param skills: Skills bundled in the agent spec\n    (``skills/<name>/SKILL.md``). Lets the Web UI's\n    new-session composer offer a slash-command menu before a\n    session (and its runner) exists. Host-discovered skills\n    are runner-owned, so they are NOT listed here \u2014 the\n    session snapshot's ``skills`` field carries the merged\n    set once a runner is bound. Empty list when the spec\n    bundles no skills or when the bundle cannot be loaded.\n:param terminals: Terminal names declared in the spec's\n    ``terminals:`` block, in declaration order, e.g.\n    ``[\"shell\"]``. The Web UI gates its \"new terminal\"\n    affordance on this list (creation is only offered for\n    agents with terminal access) and offers these names as\n    the launchable choices. Empty list when the spec\n    declares no terminals or when the bundle cannot be\n    loaded.",
         "properties": {
           "created_at": {
             "title": "Created At",
             "type": "integer"
+          },
+          "department": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department"
           },
           "description": {
             "anyOf": [
@@ -58,6 +221,17 @@
               }
             ],
             "title": "Description"
+          },
+          "display_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display Name"
           },
           "harness": {
             "anyOf": [
@@ -73,6 +247,14 @@
           "id": {
             "title": "Id",
             "type": "string"
+          },
+          "managers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Managers",
+            "type": "array"
           },
           "mcp_servers": {
             "items": {
@@ -111,6 +293,17 @@
             "title": "Terminals",
             "type": "array"
           },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -126,6 +319,11 @@
             "default": 1,
             "title": "Version",
             "type": "integer"
+          },
+          "workflow": {
+            "default": false,
+            "title": "Workflow",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3685,6 +3883,53 @@
         "summary": "Health"
       }
     },
+    "/v1/_capabilities": {
+      "get": {
+        "description": "Pluggable-seam capability manifest (BDP-2374).\n\nReturns one entry per live pluggable seam \u2014 its registered\nprovider names, the active impl, the registered default, and the\n``OMNIGENT_USE_<SEAM>`` override env var \u2014 projected from\n:data:`omnigent.pluggable.manifest.SEAMS`. Read-only and cheap\n(no factories are invoked, only registry introspection).\n\nAuthentication: intentionally UNAUTHED, matching ``/v1/info`` \u2014\nit exposes only which backends are wired, no secret state \u2014 so a\nclient / operator can probe seam configuration before holding a\nsession.\n\n:returns: ``{\"seams\": [<describe() + override_env>, ...]}``.",
+        "operationId": "capabilities_v1__capabilities_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "title": "Response Capabilities V1  Capabilities Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capabilities"
+      }
+    },
+    "/v1/_ext/health": {
+      "get": {
+        "operationId": "ext_health_v1__ext_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Ext Health V1  Ext Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Ext Health"
+      }
+    },
     "/v1/agents": {
       "get": {
         "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:returns: A :class:`PaginatedList` of built-in agents.",
@@ -3772,6 +4017,228 @@
         "tags": [
           "agents"
         ]
+      }
+    },
+    "/v1/agents/{agent_id}/image": {
+      "get": {
+        "description": "Return the editable image of a template agent.\n\n:param request: Incoming request (for auth).\n:param agent_id: Template agent id, e.g. ``\"ag_abc123\"``.\n:returns: The :class:`AgentImage` editable surface.\n:raises OmnigentError: If the agent is missing or session-scoped.",
+        "operationId": "get_agent_image_v1_agents__agent_id__image_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentImage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Image",
+        "tags": [
+          "agents"
+        ]
+      },
+      "put": {
+        "description": "Rewrite a template agent's image; live without a restart.\n\nCopies the current image forward, overwrites the supplied parts\n(``config`` replaces ``config.yaml``; ``instructions`` writes\n``AGENTS.md``; ``files``/``remove`` edit arbitrary in-bundle\nfiles), rebuilds + content-addresses the bundle, stores it,\nwarm-swaps the cache, and marks the agent ``sot_tier=migrated``\nso the startup wheel re-seed won't clobber the edit.\n\n:param request: Incoming request (for auth).\n:param agent_id: Template agent id.\n:param body: The partial image edit.\n:returns: The updated :class:`AgentObject`.\n:raises OmnigentError: If the agent is missing/session-scoped,\n    the rebuilt bundle is invalid, or the spec name changed\n    (name is immutable).",
+        "operationId": "put_agent_image_v1_agents__agent_id__image_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentImageUpdate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentObject"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Agent Image",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/v1/goals": {
+      "get": {
+        "description": "List the ops backlog (by priority then age), optionally filtered.",
+        "operationId": "list_goals_v1_goals_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Goals"
+      }
+    },
+    "/v1/governance/leaderboard": {
+      "get": {
+        "description": "The outcome leaderboard for a metric (find-specialist signal).",
+        "operationId": "leaderboard_v1_governance_leaderboard_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "metric",
+            "required": true,
+            "schema": {
+              "title": "Metric",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 10,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Leaderboard"
+      }
+    },
+    "/v1/governance/summary": {
+      "get": {
+        "description": "One-glance org state: goals by status + open deliberations.",
+        "operationId": "summary_v1_governance_summary_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Summary"
       }
     },
     "/v1/hosts": {
@@ -4122,6 +4589,44 @@
           }
         },
         "summary": "Info"
+      }
+    },
+    "/v1/ingress/{source}": {
+      "post": {
+        "description": "Receive a signed external event and deliver it to the signal bus.",
+        "operationId": "receive_v1_ingress__source__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive"
       }
     },
     "/v1/me": {
@@ -7757,6 +8262,83 @@
         "tags": [
           "sessions"
         ]
+      }
+    },
+    "/v1/tasks": {
+      "get": {
+        "description": "List the tasks backlog (by priority then age), optionally filtered.",
+        "operationId": "list_tasks_v1_tasks_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "owner",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner"
+            }
+          },
+          {
+            "in": "query",
+            "name": "assignee",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Assignee"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Tasks"
       }
     }
   }
