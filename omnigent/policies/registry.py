@@ -293,21 +293,15 @@ def validate_factory_params(
 def _type_matches(value: Any, json_type: str) -> bool:
     """Check if a Python value matches a JSON Schema type.
 
+    Thin wrapper over the ``schema_validator`` pluggable seam (BDP-2361, P10):
+    delegates to the registered :class:`~omnigent.policies.schema_validator.SchemaValidator`,
+    whose default reproduces this exact behavior. The seam lets a fuller
+    JSON-Schema validator be slotted in later without touching this registry.
+
     :param value: The value to check.
     :param json_type: JSON Schema type string.
     :returns: ``True`` if the value matches.
     """
-    if json_type == "integer":
-        return isinstance(value, int) and not isinstance(value, bool)
-    if json_type == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
-    if json_type == "string":
-        return isinstance(value, str)
-    if json_type == "boolean":
-        return isinstance(value, bool)
-    if json_type == "array":
-        return isinstance(value, list)
-    if json_type == "object":
-        return isinstance(value, dict)
-    # Unknown type — don't reject.
-    return True
+    from omnigent.policies.schema_validator import default_schema_validator
+
+    return default_schema_validator().type_matches(value, json_type)
