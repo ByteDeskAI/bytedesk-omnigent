@@ -14,7 +14,6 @@ is the only production consumer; see designs/RUNNER_MCP.md.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import shlex
@@ -46,12 +45,13 @@ from mcp.types import (
     ContentBlock,
     ElicitRequestParams,
     ElicitResult,
-    TextContent,
 )
 from mcp.types import Tool as McpToolDef
 
 from omnigent.runner.identity import strip_runner_auth_secrets
 from omnigent.spec.types import MCPOAuthConfig, MCPServerConfig, RetryPolicy
+from omnigent.tools.mcp_auth import DEFAULT_MCP_AUTH_REGISTRY
+from omnigent.tools.result_formatter import DEFAULT_TOOL_RESULT_FORMATTER
 
 _T = TypeVar("_T")
 
@@ -967,24 +967,18 @@ class McpServerConnection:
         """
         Build the HTTP headers for the MCP connection.
 
-        Merges explicit ``headers`` from the config with a
-        Databricks OAuth token when ``databricks_profile`` is set.
-        The token is resolved fresh on each call so reconnects
-        pick up rotated credentials.
+        Delegates to the ordered :data:`DEFAULT_MCP_AUTH_REGISTRY`
+        (:mod:`omnigent.tools.mcp_auth`), which seeds the explicit
+        config ``headers`` and applies each registered auth scheme in
+        precedence order (explicit header > databricks-profile > oauth).
+        Tokens are resolved fresh on each call so reconnects pick up
+        rotated credentials. Register new schemes (SigV4, mTLS, API key)
+        against that registry without touching this call site.
 
         :returns: Merged headers dict, or ``None`` if no headers
-            are needed (empty config headers and no profile).
+            are needed (empty config headers and no scheme applied).
         """
-        merged = dict(self.config.headers) if self.config.headers else {}
-        if self.config.databricks_profile is not None:
-            token = _resolve_databricks_token(self.config.databricks_profile)
-            # Explicit Authorization header wins — don't overwrite.
-            merged.setdefault("Authorization", f"Bearer {token}")
-        if self.config.oauth is not None:
-            token = _resolve_oauth_token(self.config.oauth)
-            # Explicit Authorization header (or a databricks token) wins.
-            merged.setdefault("Authorization", f"Bearer {token}")
-        return merged or None
+        return DEFAULT_MCP_AUTH_REGISTRY.resolve_headers(self.config)
 
     async def _open_streamable_http_transport(
         self,
@@ -1398,16 +1392,13 @@ def _format_content_block(block: ContentBlock) -> str:
     """
     Convert a single MCP content block to a string.
 
-    Returns ``.text`` for ``TextContent`` (the most common case).
-    For non-text types (``ImageContent``, ``AudioContent``,
-    ``EmbeddedResource``, ``ResourceLink``), serializes the full
-    Pydantic model to JSON.
+    Delegates to the shared :data:`DEFAULT_TOOL_RESULT_FORMATTER` so
+    the MCP content-block path and the in-process raw-value path
+    (``local_callable._stringify``) render image/audio/resource blocks
+    in exactly one place — see :mod:`omnigent.tools.result_formatter`.
 
     :param block: A content block from ``CallToolResult.content``,
         e.g. ``TextContent(type="text", text="hello")``.
     :returns: A string representation of the block.
     """
-    if isinstance(block, TextContent):
-        return block.text
-    # All ContentBlock variants are Pydantic BaseModels.
-    return json.dumps(block.model_dump())
+    return DEFAULT_TOOL_RESULT_FORMATTER.format_content_block(block)
