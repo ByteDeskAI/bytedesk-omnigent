@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import uuid
 from collections.abc import Callable, Mapping
@@ -127,8 +128,12 @@ class WebhookSourceAdapter(Protocol):
         """Return whether *raw_body* is authentic for *secret* given *headers*."""
         ...
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
-        """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
+    def match_key(
+        self,
+        raw_body_or_headers: bytes | Mapping[str, str],
+        headers: Mapping[str, str] | None = None,
+    ) -> str:
+        """The binding match key (event name) carried by *headers* or *raw_body*."""
         ...
 
 
@@ -149,8 +154,55 @@ class GitHubWebhookAdapter:
             return False
         return verify_hmac_signature(raw_body, secret, provided)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
-        return _header(headers, "x-omnigent-event") or "*"
+    def match_key(
+        self,
+        raw_body_or_headers: bytes | Mapping[str, str],
+        headers: Mapping[str, str] | None = None,
+    ) -> str:
+        active_headers = (
+            raw_body_or_headers
+            if headers is None and not isinstance(raw_body_or_headers, bytes)
+            else headers
+        )
+        return _header(active_headers or {}, "x-omnigent-event") or "*"
+
+
+class HubSpotWebhookAdapter:
+    """HubSpot legacy webhook adapter.
+
+    HubSpot's legacy webhook signature is ``sha256(clientSecret + rawBody)`` in
+    ``X-HubSpot-Signature``. Unlike GitHub-style sources, HubSpot carries the
+    event route inside the JSON body (usually a list of event objects with
+    ``subscriptionType``), so this adapter extracts the first event type from the
+    raw payload and falls back to ``"*"`` for account-wide catch-all bindings.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-hubspot-signature")
+        if not provided:
+            return False
+        expected = hashlib.sha256(secret.encode("utf-8") + raw_body).hexdigest()
+        return hmac.compare_digest(expected, provided)
+
+    def match_key(
+        self,
+        raw_body_or_headers: bytes | Mapping[str, str],
+        headers: Mapping[str, str] | None = None,
+    ) -> str:
+        _ = headers
+        raw_body = raw_body_or_headers if isinstance(raw_body_or_headers, bytes) else b""
+        try:
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else None
+        except (UnicodeDecodeError, ValueError, TypeError):
+            return "*"
+        event = payload[0] if isinstance(payload, list) and payload else payload
+        if not isinstance(event, dict):
+            return "*"
+        for field in ("subscriptionType", "eventType", "event_type", "type"):
+            value = event.get(field)
+            if isinstance(value, str) and value.strip():
+                return value
+        return "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -175,8 +227,9 @@ def _build_webhook_adapter_registry():
     from omnigent.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
-        "webhook_source", default=("github", GitHubWebhookAdapter)
+        "webhook_source", default=("github", lambda: GitHubWebhookAdapter())
     )
+    registry.register("hubspot", lambda: HubSpotWebhookAdapter())
     return registry
 
 
@@ -307,7 +360,7 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = _adapter_match_key(adapter, raw_body, headers)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
@@ -333,6 +386,18 @@ def process_inbound(
         IngressStatus.DEAD_LETTERED, 404, signal_id=binding.signal_id,
         detail="no pending wait for signal",
     )
+
+
+def _adapter_match_key(
+    adapter: WebhookSourceAdapter,
+    raw_body: bytes,
+    headers: Mapping[str, str],
+) -> str:
+    """Call source adapters with body-aware routing while preserving old plugins."""
+    try:
+        return adapter.match_key(raw_body, headers)
+    except TypeError:
+        return adapter.match_key(headers)  # type: ignore[call-arg]
 
 
 # Lazily-built, per-URI cache of the binding store (mirrors the other accessors).
