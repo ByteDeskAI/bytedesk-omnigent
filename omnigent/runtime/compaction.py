@@ -17,9 +17,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any
-
-import tiktoken
+from typing import Any, Protocol, runtime_checkable
 
 from omnigent.entities import (
     CompactionData,
@@ -129,32 +127,124 @@ class _CompactionState:
     history_len_at_compaction: int | None = None
 
 
-def count_tokens(messages: list[dict[str, Any]], model: str) -> int:
+@runtime_checkable
+class TokenCounter(Protocol):
     """
-    Estimate the token count for a messages list using tiktoken.
+    Pluggable strategy for estimating the token count of a messages
+    list.
+
+    The default implementation (:class:`_TiktokenCounter`) uses
+    tiktoken's cl100k estimator. Alternative counters (e.g. native
+    Anthropic or Gemini token counters) can be registered via
+    :func:`register_token_counter` and selected by passing their
+    name to :func:`count_tokens`.
+    """
+
+    def count(self, messages: list[dict[str, Any]], model: str) -> int:
+        """
+        Estimate the token count for *messages* given *model*.
+
+        :param messages: The messages list to count tokens for.
+        :param model: The LLM model string, e.g. ``"openai/gpt-4o"``.
+        :returns: Approximate token count.
+        """
+        ...
+
+
+class _TiktokenCounter:
+    """
+    Default :class:`TokenCounter` using tiktoken's cl100k estimator.
+
+    Tiktoken is imported lazily inside :meth:`count` so importing
+    this module (and the runner identity hot path) never pulls in
+    tiktoken. The counting logic is byte-identical to the historical
+    inline implementation.
+    """
+
+    def count(self, messages: list[dict[str, Any]], model: str) -> int:
+        """
+        Estimate token count using tiktoken, falling back to
+        ``cl100k_base`` for unknown models.
+
+        :param messages: The messages list to count tokens for.
+        :param model: The LLM model string, e.g. ``"openai/gpt-4o"``.
+        :returns: Approximate token count for the serialised messages.
+        """
+        import tiktoken
+
+        # Strip provider prefix (e.g. "openai/gpt-4o" -> "gpt-4o")
+        # so tiktoken can look up the model encoding.
+        bare_model = model.split("/", 1)[-1] if "/" in model else model
+        try:
+            enc = tiktoken.encoding_for_model(bare_model)
+        except KeyError:
+            # Unknown model — fall back to the most common encoding.
+            enc = tiktoken.get_encoding("cl100k_base")
+        text = json.dumps(messages, ensure_ascii=False)
+        return len(enc.encode(text))
+
+
+# Token counter registry. The "tiktoken" entry is the default and
+# must remain byte-identical to the historical inline estimator.
+_DEFAULT_TOKEN_COUNTER = "tiktoken"
+_TOKEN_COUNTERS: dict[str, TokenCounter] = {
+    _DEFAULT_TOKEN_COUNTER: _TiktokenCounter(),
+}
+
+
+def register_token_counter(name: str, counter: TokenCounter) -> None:
+    """
+    Register a :class:`TokenCounter` strategy under *name*.
+
+    Allows native Anthropic/Gemini counters to be plugged in later
+    without touching the call sites. Re-registering an existing name
+    overwrites it.
+
+    :param name: Registry key, e.g. ``"anthropic"``.
+    :param counter: A :class:`TokenCounter` implementation.
+    """
+    _TOKEN_COUNTERS[name] = counter
+
+
+def get_token_counter(name: str = _DEFAULT_TOKEN_COUNTER) -> TokenCounter:
+    """
+    Look up a registered :class:`TokenCounter` by name.
+
+    :param name: Registry key. Defaults to the tiktoken counter.
+    :returns: The registered counter.
+    :raises KeyError: If no counter is registered under *name*.
+    """
+    return _TOKEN_COUNTERS[name]
+
+
+def count_tokens(
+    messages: list[dict[str, Any]],
+    model: str,
+    counter: str = _DEFAULT_TOKEN_COUNTER,
+) -> int:
+    """
+    Estimate the token count for a messages list.
 
     Used as a sanity check against provider-reported token counts
     (within ~30%) and for proactive threshold checks. Not used as
-    the authoritative count — tiktoken is ~85-95% accurate for
-    non-OpenAI models, and the 20% headroom from
-    ``trigger_threshold`` absorbs the difference.
+    the authoritative count — the default tiktoken counter is
+    ~85-95% accurate for non-OpenAI models, and the 20% headroom
+    from ``trigger_threshold`` absorbs the difference.
+
+    The actual counting is delegated to a pluggable
+    :class:`TokenCounter` strategy (default: tiktoken's cl100k
+    estimator). The default path is byte-identical to the historical
+    inline implementation.
 
     :param messages: The messages list to count tokens for.
     :param model: The LLM model string, e.g. ``"openai/gpt-4o"``.
-        Used to select the appropriate tiktoken encoding; falls
-        back to ``cl100k_base`` for unknown models.
+        Used to select the appropriate encoding; the default counter
+        falls back to ``cl100k_base`` for unknown models.
+    :param counter: Registry name of the :class:`TokenCounter` to
+        use. Defaults to the tiktoken counter.
     :returns: Approximate token count for the serialised messages.
     """
-    # Strip provider prefix (e.g. "openai/gpt-4o" -> "gpt-4o")
-    # so tiktoken can look up the model encoding.
-    bare_model = model.split("/", 1)[-1] if "/" in model else model
-    try:
-        enc = tiktoken.encoding_for_model(bare_model)
-    except KeyError:
-        # Unknown model — fall back to the most common encoding.
-        enc = tiktoken.get_encoding("cl100k_base")
-    text = json.dumps(messages, ensure_ascii=False)
-    return len(enc.encode(text))
+    return get_token_counter(counter).count(messages, model)
 
 
 def _find_recent_boundary(
@@ -598,103 +688,255 @@ async def compact(
     history_boundary = _find_recent_boundary(history, recent_window)
     msg_boundary = _history_idx_to_msg_idx(history, history_boundary)
 
-    # --- Layer 1 ---
-    _clear_tool_results(working, msg_boundary)
-    _clear_binary_content(working, msg_boundary)
-    _strip_output_annotations(working, msg_boundary)
-
-    l1_tokens = count_tokens(working, model)
-    if not force and l1_tokens <= budget:
-        return CompactionResult(messages=working, summary_metadata=None, total_tokens=l1_tokens)
-
-    # --- Layer 2 ---
-    _logger.debug(
-        "Compaction Layer 2 summarization starting for task %s: "
-        "%d tokens after Layer 1 clearing, budget %d%s",
-        task_id,
-        l1_tokens,
-        budget,
-        " (forced)" if force else "",
-    )
-    if conversation_id:
-        # Publish to session stream so REPL/web UI shows "Compacting…" indicator.
-        # Imported locally to avoid circular imports at module level.
-        from omnigent.runtime import session_stream as _session_stream
-
-        _session_stream.publish(
-            conversation_id,
-            {"type": "response.compaction.in_progress", "task_id": task_id},
-        )
-    summary_metadata = await _run_layer2(
-        working,
-        history,
-        history_boundary,
-        msg_boundary,
-        budget,
-        model,
-        task_id,
-        llm_client,
+    ctx = _CompactionContext(
+        working=working,
+        history=history,
+        history_boundary=history_boundary,
+        msg_boundary=msg_boundary,
+        budget=budget,
+        model=model,
+        task_id=task_id,
+        llm_client=llm_client,
         connection=connection,
-        fail_on_error=fail_on_summary_error,
         runner_client=runner_client,
+        force=force,
+        fail_on_summary_error=fail_on_summary_error,
         conversation_id=conversation_id,
     )
-    if summary_metadata is not None:
-        summary_messages = _summary_to_messages(summary_metadata)
-        recent_messages = working[msg_boundary:]
-        compacted = summary_messages + recent_messages
-        compacted_tokens = count_tokens(compacted, model)
-        if compacted_tokens <= budget:
-            _logger.debug(
-                "Compaction Layer 2 complete for task %s: %d tokens (budget %d)",
-                task_id,
-                compacted_tokens,
-                budget,
-            )
-            if conversation_id:
-                from omnigent.runtime import session_stream as _session_stream
 
-                _session_stream.publish(
-                    conversation_id,
-                    {
-                        "type": "response.compaction.completed",
-                        "task_id": task_id,
-                        "total_tokens": compacted_tokens,
-                    },
-                )
+    # Chain-of-Responsibility: each layer either returns a final
+    # CompactionResult (terminating the chain) or None to pass to
+    # the next layer. The default chain registers the three layers
+    # in least-lossy → most-lossy order.
+    for layer in _default_compaction_chain():
+        result = await layer.apply(ctx)
+        if result is not None:
+            return result
+    # The default chain's last layer (truncation) always returns a
+    # result, so this is unreachable for the default chain.
+    raise RuntimeError("compaction chain exhausted without a result")
+
+
+@dataclass
+class _CompactionContext:
+    """
+    Shared mutable state threaded through the compaction layer chain.
+
+    Each :class:`CompactionLayer` reads and may mutate this context.
+    ``working`` is the in-progress messages list (already deep-copied
+    and Layer-1-cleared by :func:`compact` is no longer the case — the
+    clearing now happens inside Layer 1). ``summary_metadata`` is set
+    by Layer 2 on success and carried into Layer 3 if it has to run.
+
+    :param working: The in-progress messages list.
+    :param history: The original conversation history items.
+    :param history_boundary: Index in *history* where the recent
+        window begins.
+    :param msg_boundary: Index in the messages list where the recent
+        window begins.
+    :param budget: Token budget for the compacted result.
+    :param model: LLM model string.
+    :param task_id: Task identifier for SSE event emission.
+    :param llm_client: LLM client for Layer 2. Ignored when
+        *runner_client* is set.
+    :param connection: Per-provider connection overrides.
+    :param runner_client: Optional runner ``httpx.AsyncClient``.
+    :param force: Force Layer 2 even when Layer 1 already fits.
+    :param fail_on_summary_error: Propagate Layer 2 failures.
+    :param conversation_id: Session id for SSE publishing.
+    :param l1_tokens: Token count after Layer 1, set by Layer 1.
+    :param summary_metadata: Layer 2 summary metadata, set by Layer 2.
+    """
+
+    working: list[dict[str, Any]]
+    history: list[ConversationItem]
+    history_boundary: int
+    msg_boundary: int
+    budget: int
+    model: str
+    task_id: str
+    llm_client: Any
+    connection: dict[str, str] | None
+    runner_client: Any | None
+    force: bool
+    fail_on_summary_error: bool
+    conversation_id: str | None
+    l1_tokens: int | None = None
+    summary_metadata: SummaryMetadata | None = None
+
+
+@runtime_checkable
+class CompactionLayer(Protocol):
+    """
+    A single link in the compaction Chain-of-Responsibility.
+
+    Each layer inspects/mutates the shared :class:`_CompactionContext`
+    and returns either a final :class:`CompactionResult` (which
+    terminates the chain) or ``None`` to pass control to the next
+    layer. The default chain is :func:`_default_compaction_chain`.
+    """
+
+    async def apply(self, ctx: _CompactionContext) -> CompactionResult | None:
+        """
+        Apply this layer to *ctx*.
+
+        :param ctx: The shared compaction context.
+        :returns: A final result to terminate the chain, or ``None``
+            to defer to the next layer.
+        """
+        ...
+
+
+class _SurgicalClearingLayer:
+    """
+    Layer 1: clear tool result bodies, binary content, and output
+    annotations outside the recent window (fast, no LLM call).
+
+    Returns a final result early when, after clearing, the messages
+    already fit within budget and compaction was not forced.
+    """
+
+    async def apply(self, ctx: _CompactionContext) -> CompactionResult | None:
+        _clear_tool_results(ctx.working, ctx.msg_boundary)
+        _clear_binary_content(ctx.working, ctx.msg_boundary)
+        _strip_output_annotations(ctx.working, ctx.msg_boundary)
+
+        ctx.l1_tokens = count_tokens(ctx.working, ctx.model)
+        if not ctx.force and ctx.l1_tokens <= ctx.budget:
             return CompactionResult(
-                messages=compacted,
-                summary_metadata=summary_metadata,
-                total_tokens=compacted_tokens,
+                messages=ctx.working,
+                summary_metadata=None,
+                total_tokens=ctx.l1_tokens,
             )
-        # Summary + recent still exceeds budget — fall through to Layer 3.
-        working = compacted
+        return None
 
-    # --- Layer 3 ---
-    _logger.warning(
-        "Layer 3 truncation triggered for task %s — context still exceeds budget after layers 1+2",
-        task_id,
-    )
-    truncated = _truncate_oldest(working, budget, model)
-    l3_tokens = count_tokens(truncated, model)
-    # Emit completed on the Layer 3 path so "Compacting…" spinners
-    # resolve even when Layer 2 failed or its output exceeded budget.
-    if conversation_id:
-        from omnigent.runtime import session_stream as _session_stream
 
-        _session_stream.publish(
-            conversation_id,
-            {
-                "type": "response.compaction.completed",
-                "task_id": task_id,
-                "total_tokens": l3_tokens,
-            },
+class _SummarizationLayer:
+    """
+    Layer 2: LLM summarization of messages outside the recent window.
+
+    Publishes the ``in_progress`` SSE event, runs summarization, and
+    on success returns a final result when the summary + recent
+    messages fit budget. Otherwise threads the summary metadata into
+    the context and defers to Layer 3.
+    """
+
+    async def apply(self, ctx: _CompactionContext) -> CompactionResult | None:
+        _logger.debug(
+            "Compaction Layer 2 summarization starting for task %s: "
+            "%d tokens after Layer 1 clearing, budget %d%s",
+            ctx.task_id,
+            ctx.l1_tokens,
+            ctx.budget,
+            " (forced)" if ctx.force else "",
         )
-    return CompactionResult(
-        messages=truncated,
-        summary_metadata=summary_metadata,
-        total_tokens=l3_tokens,
-    )
+        if ctx.conversation_id:
+            # Publish to session stream so REPL/web UI shows "Compacting…" indicator.
+            # Imported locally to avoid circular imports at module level.
+            from omnigent.runtime import session_stream as _session_stream
+
+            _session_stream.publish(
+                ctx.conversation_id,
+                {"type": "response.compaction.in_progress", "task_id": ctx.task_id},
+            )
+        summary_metadata = await _run_layer2(
+            ctx.working,
+            ctx.history,
+            ctx.history_boundary,
+            ctx.msg_boundary,
+            ctx.budget,
+            ctx.model,
+            ctx.task_id,
+            ctx.llm_client,
+            connection=ctx.connection,
+            fail_on_error=ctx.fail_on_summary_error,
+            runner_client=ctx.runner_client,
+            conversation_id=ctx.conversation_id,
+        )
+        ctx.summary_metadata = summary_metadata
+        if summary_metadata is not None:
+            summary_messages = _summary_to_messages(summary_metadata)
+            recent_messages = ctx.working[ctx.msg_boundary :]
+            compacted = summary_messages + recent_messages
+            compacted_tokens = count_tokens(compacted, ctx.model)
+            if compacted_tokens <= ctx.budget:
+                _logger.debug(
+                    "Compaction Layer 2 complete for task %s: %d tokens (budget %d)",
+                    ctx.task_id,
+                    compacted_tokens,
+                    ctx.budget,
+                )
+                if ctx.conversation_id:
+                    from omnigent.runtime import session_stream as _session_stream
+
+                    _session_stream.publish(
+                        ctx.conversation_id,
+                        {
+                            "type": "response.compaction.completed",
+                            "task_id": ctx.task_id,
+                            "total_tokens": compacted_tokens,
+                        },
+                    )
+                return CompactionResult(
+                    messages=compacted,
+                    summary_metadata=summary_metadata,
+                    total_tokens=compacted_tokens,
+                )
+            # Summary + recent still exceeds budget — fall through to Layer 3.
+            ctx.working = compacted
+        return None
+
+
+class _TruncationLayer:
+    """
+    Layer 3: drop oldest messages until budget is met (emergency
+    fallback). Always returns a final result.
+    """
+
+    async def apply(self, ctx: _CompactionContext) -> CompactionResult | None:
+        _logger.warning(
+            "Layer 3 truncation triggered for task %s — context still "
+            "exceeds budget after layers 1+2",
+            ctx.task_id,
+        )
+        truncated = _truncate_oldest(ctx.working, ctx.budget, ctx.model)
+        l3_tokens = count_tokens(truncated, ctx.model)
+        # Emit completed on the Layer 3 path so "Compacting…" spinners
+        # resolve even when Layer 2 failed or its output exceeded budget.
+        if ctx.conversation_id:
+            from omnigent.runtime import session_stream as _session_stream
+
+            _session_stream.publish(
+                ctx.conversation_id,
+                {
+                    "type": "response.compaction.completed",
+                    "task_id": ctx.task_id,
+                    "total_tokens": l3_tokens,
+                },
+            )
+        return CompactionResult(
+            messages=truncated,
+            summary_metadata=ctx.summary_metadata,
+            total_tokens=l3_tokens,
+        )
+
+
+def _default_compaction_chain() -> list[CompactionLayer]:
+    """
+    Build the default compaction layer chain.
+
+    The three layers are registered in the same least-lossy →
+    most-lossy order as the historical inline implementation:
+    surgical clearing → LLM summarization → truncation. The default
+    chain reproduces the previous behavior exactly.
+
+    :returns: The ordered list of :class:`CompactionLayer` instances.
+    """
+    return [
+        _SurgicalClearingLayer(),
+        _SummarizationLayer(),
+        _TruncationLayer(),
+    ]
 
 
 def _deep_copy_messages(

@@ -1440,3 +1440,154 @@ async def test_compaction_strips_annotations_before_summarization(
                     f"summarization input: {block}. Layer 1 should "
                     f"have stripped them."
                 )
+
+
+# ---------------------------------------------------------------------------
+# Pluggable token counter (BDP-2365 P14)
+# ---------------------------------------------------------------------------
+
+
+def test_default_token_counter_byte_identical_to_inline_tiktoken() -> None:
+    """
+    The default token counter reproduces the historical inline
+    tiktoken/cl100k estimate exactly for representative messages.
+    """
+    import json as _json
+
+    import tiktoken
+
+    from omnigent.runtime.compaction import count_tokens as _count
+
+    messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "Summarize the quarterly report, please."},
+        {"role": "assistant", "content": "Sure — here is a concise summary."},
+        {"type": "function_call_output", "output": "some tool output text"},
+    ]
+    for model in ("openai/gpt-4o", "anthropic/claude-3-5-sonnet", "totally-fake-xyz"):
+        bare = model.split("/", 1)[-1] if "/" in model else model
+        try:
+            enc = tiktoken.encoding_for_model(bare)
+        except KeyError:
+            enc = tiktoken.get_encoding("cl100k_base")
+        expected = len(enc.encode(_json.dumps(messages, ensure_ascii=False)))
+        assert _count(messages, model) == expected
+
+
+def test_token_counter_is_swappable_with_fake() -> None:
+    """
+    A fake TokenCounter can be registered and selected by name; the
+    default registry entry is untouched.
+    """
+    from omnigent.runtime import compaction as _c
+
+    class _FakeCounter:
+        def count(self, messages: list[dict[str, Any]], model: str) -> int:
+            return 4242
+
+    _c.register_token_counter("fake-counter", _FakeCounter())
+    try:
+        fake = _c.count_tokens([{"role": "user", "content": "x"}], "m", counter="fake-counter")
+        assert fake == 4242
+        # Default path unchanged.
+        assert _c.count_tokens([{"role": "user", "content": "x"}], "openai/gpt-4o") > 0
+    finally:
+        _c._TOKEN_COUNTERS.pop("fake-counter", None)
+
+
+# ---------------------------------------------------------------------------
+# Compaction-layer chain (BDP-2365 P15)
+# ---------------------------------------------------------------------------
+
+
+def test_default_compaction_chain_is_three_layers_in_order() -> None:
+    """The default chain registers the 3 layers in least→most lossy order."""
+    from omnigent.runtime.compaction import (
+        _default_compaction_chain,
+        _SummarizationLayer,
+        _SurgicalClearingLayer,
+        _TruncationLayer,
+    )
+
+    chain = _default_compaction_chain()
+    assert [type(layer) for layer in chain] == [
+        _SurgicalClearingLayer,
+        _SummarizationLayer,
+        _TruncationLayer,
+    ]
+
+
+async def test_compaction_chain_default_matches_old_inline_layer1_earlyreturn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    With the default chain, when Layer 1 clearing brings tokens within
+    budget the chain returns early with no summary — identical to the
+    old inline 3-layer behavior.
+    """
+    monkeypatch.setattr("omnigent.runtime.compaction.count_tokens", lambda msgs, model: 50)
+
+    messages = [
+        {"type": "function_call_output", "call_id": "c1", "output": "big tool output"},
+        {"role": "user", "content": "recent question"},
+    ]
+    history = [
+        _make_conv_item(
+            "m_assistant",
+            "message",
+            MessageData(
+                role="assistant",
+                content=[{"type": "output_text", "text": "hi"}],
+                agent="openai/gpt-4o",
+            ),
+        ),
+    ]
+    result = await compact(
+        messages,
+        history,
+        config=CompactionConfig(trigger_threshold=0.8, recent_window=1),
+        context_window=1000,
+        system_token_budget=0,
+        model="openai/gpt-4o",
+        task_id="t",
+        llm_client=_RaisesIfCalled(),
+    )
+    assert result.summary_metadata is None
+    assert result.total_tokens == 50
+
+
+async def test_compaction_chain_is_extensible_with_fake_layer() -> None:
+    """
+    A fake CompactionLayer satisfies the protocol and short-circuits a
+    custom chain — proving the chain is pluggable.
+    """
+    from omnigent.runtime.compaction import (
+        CompactionLayer,
+        CompactionResult,
+        _CompactionContext,
+    )
+
+    class _FakeLayer:
+        async def apply(self, ctx: _CompactionContext) -> CompactionResult | None:
+            return CompactionResult(messages=[], summary_metadata=None, total_tokens=7)
+
+    layer = _FakeLayer()
+    assert isinstance(layer, CompactionLayer)
+    ctx = _CompactionContext(
+        working=[],
+        history=[],
+        history_boundary=0,
+        msg_boundary=0,
+        budget=10,
+        model="m",
+        task_id="t",
+        llm_client=None,
+        connection=None,
+        runner_client=None,
+        force=False,
+        fail_on_summary_error=False,
+        conversation_id=None,
+    )
+    result = await layer.apply(ctx)
+    assert result is not None
+    assert result.total_tokens == 7
