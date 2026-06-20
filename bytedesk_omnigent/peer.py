@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 
 from bytedesk_omnigent.db_models import SqlPeerMessage
+from bytedesk_omnigent.lifecycle import PeerMessageKind
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -32,7 +33,7 @@ class PeerMessage:
     from_agent: str
     to_agent: str | None
     topic: str
-    kind: str
+    kind: PeerMessageKind
     body: str
     created_at: int
     read_at: int | None
@@ -45,7 +46,7 @@ def _to_peer(row: SqlPeerMessage) -> PeerMessage:
         from_agent=row.from_agent,
         to_agent=row.to_agent,
         topic=row.topic,
-        kind=row.kind,
+        kind=PeerMessageKind(row.kind),
         body=row.body,
         created_at=row.created_at,
         read_at=row.read_at,

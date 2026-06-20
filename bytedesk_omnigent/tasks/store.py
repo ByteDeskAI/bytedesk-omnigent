@@ -24,11 +24,17 @@ from typing import Any
 from sqlalchemy import select, update
 
 from bytedesk_omnigent.db_models import SqlTask
+from bytedesk_omnigent.lifecycle import (
+    WorkflowLifecycle,
+    WorkflowLifecycleStatus,
+)
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
     now_epoch,
 )
+
+_LIFECYCLE = WorkflowLifecycle()
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,7 @@ class Task:
     owner_agent_id: str | None
     assignee_agent_id: str | None
     required_capability: str | None
-    status: str
+    status: WorkflowLifecycleStatus
     priority: int
     source: str | None
     payload: dict[str, Any] | None
@@ -60,7 +66,7 @@ def sql_task_to_entity(row: SqlTask) -> Task:
         owner_agent_id=row.owner_agent_id,
         assignee_agent_id=row.assignee_agent_id,
         required_capability=row.required_capability,
-        status=row.status,
+        status=WorkflowLifecycleStatus(row.status),
         priority=row.priority,
         source=row.source,
         payload=json.loads(row.payload) if row.payload is not None else None,
@@ -233,13 +239,21 @@ class SqlAlchemyTaskStore(TaskStore):
             return result.rowcount == 1
 
     def advance_task(self, *, task_id: str, status: str, now: int | None = None) -> None:
-        """Move a task to a new status (``in_progress`` / ``blocked`` / ``done`` …)."""
+        """Move a task to a new status (``in_progress`` / ``blocked`` / ``done`` …).
+
+        Rejects a genuinely illegal transition (e.g. ``done -> in_progress``) via
+        the lifecycle state machine (BDP-2356).
+        """
         now = now_epoch() if now is None else now
+        target = WorkflowLifecycleStatus(status)
         with self._write_session() as session:
+            current = session.get(SqlTask, task_id)
+            if current is not None:
+                _LIFECYCLE.check(WorkflowLifecycleStatus(current.status), target)
             session.execute(
                 update(SqlTask)
                 .where(SqlTask.id == task_id)
-                .values(status=status, updated_at=now)
+                .values(status=target, updated_at=now)
             )
 
     def advance_task_owned(
@@ -257,11 +271,15 @@ class SqlAlchemyTaskStore(TaskStore):
         backlog (clears owner + assignee). Returns True iff this owner's task advanced.
         """
         now = now_epoch() if now is None else now
-        values: dict[str, Any] = {"status": status, "updated_at": now}
-        if status == "open":
+        target = WorkflowLifecycleStatus(status)
+        values: dict[str, Any] = {"status": target, "updated_at": now}
+        if target is WorkflowLifecycleStatus.OPEN:
             values["owner_agent_id"] = None
             values["assignee_agent_id"] = None
         with self._write_session() as session:
+            current = session.get(SqlTask, task_id)
+            if current is not None and current.owner_agent_id == owner_agent_id:
+                _LIFECYCLE.check(WorkflowLifecycleStatus(current.status), target)
             result = session.execute(
                 update(SqlTask)
                 .where(

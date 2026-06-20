@@ -12,10 +12,13 @@ from bytedesk_omnigent.bus.signal_bus import (
     PendingWait,
     SqlAlchemySignalBus,
 )
+from bytedesk_omnigent.lifecycle import WaitKind, WaitStatus
 
 __all__ = [
     "DeliveryResult",
     "DeliveryStatus",
     "PendingWait",
     "SqlAlchemySignalBus",
+    "WaitKind",
+    "WaitStatus",
 ]

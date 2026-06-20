@@ -33,6 +33,7 @@ from enum import Enum
 from sqlalchemy import select, update
 
 from bytedesk_omnigent.db_models import SqlToolStep
+from bytedesk_omnigent.lifecycle import StepStatus
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -57,7 +58,7 @@ class ToolStep:
     session_id: str
     step_key: str
     tool_name: str
-    status: str
+    status: StepStatus
     attempts: int
     max_attempts: int
     timeout_seconds: int | None
@@ -97,7 +98,7 @@ def _to_step(row: SqlToolStep) -> ToolStep:
         session_id=row.session_id,
         step_key=row.step_key,
         tool_name=row.tool_name,
-        status=row.status,
+        status=StepStatus(row.status),
         attempts=row.attempts,
         max_attempts=row.max_attempts,
         timeout_seconds=row.timeout_seconds,

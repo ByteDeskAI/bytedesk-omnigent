@@ -10,6 +10,7 @@ the read API; both mirror the goals substrate (BDP-2271 C3).
 
 from __future__ import annotations
 
+from bytedesk_omnigent.lifecycle import WorkflowLifecycleStatus
 from bytedesk_omnigent.tasks.store import (
     SqlAlchemyTaskStore,
     Task,
@@ -22,6 +23,7 @@ __all__ = [
     "SqlAlchemyTaskStore",
     "Task",
     "TaskStore",
+    "WorkflowLifecycleStatus",
     "get_task_store",
     "sql_task_to_entity",
 ]
