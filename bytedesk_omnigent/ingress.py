@@ -27,6 +27,10 @@ from sqlalchemy import select
 
 from bytedesk_omnigent.bus.signal_bus import DeliveryStatus
 from bytedesk_omnigent.db_models import SqlWebhookBinding
+from bytedesk_omnigent.integration_dead_letter import (
+    DeadLetterIncident,
+    compile_dead_letter_escalation,
+)
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -53,6 +57,7 @@ class IngressResult:
     http_status: int
     signal_id: str | None = None
     detail: str | None = None
+    escalation: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -306,12 +311,32 @@ def process_inbound(
     if adapter is None:
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
-        return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
+        return IngressResult(
+            IngressStatus.BAD_SIGNATURE,
+            401,
+            detail="signature mismatch",
+            escalation=_compile_escalation(
+                source=source,
+                match_key=adapter.match_key(headers),
+                status=IngressStatus.BAD_SIGNATURE,
+                signal_id=None,
+                now=now,
+            ),
+        )
     match_key = adapter.match_key(headers)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
-            IngressStatus.NO_BINDING, 404, detail=f"no binding for {source}/{match_key}"
+            IngressStatus.NO_BINDING,
+            404,
+            detail=f"no binding for {source}/{match_key}",
+            escalation=_compile_escalation(
+                source=source,
+                match_key=match_key,
+                status=IngressStatus.NO_BINDING,
+                signal_id=None,
+                now=now,
+            ),
         )
     result = bus.deliver(signal_id=binding.signal_id, payload=payload, now=now)
     if result.status is DeliveryStatus.DELIVERED:
@@ -328,10 +353,44 @@ def process_inbound(
         return IngressResult(
             IngressStatus.EXPIRED, 410, signal_id=binding.signal_id,
             detail="wait expired before delivery",
+            escalation=_compile_escalation(
+                source=source,
+                match_key=match_key,
+                status=IngressStatus.EXPIRED,
+                signal_id=binding.signal_id,
+                now=now,
+            ),
         )
     return IngressResult(
         IngressStatus.DEAD_LETTERED, 404, signal_id=binding.signal_id,
         detail="no pending wait for signal",
+        escalation=_compile_escalation(
+            source=source,
+            match_key=match_key,
+            status=IngressStatus.DEAD_LETTERED,
+            signal_id=binding.signal_id,
+            now=now,
+        ),
+    )
+
+
+def _compile_escalation(
+    *,
+    source: str,
+    match_key: str,
+    status: IngressStatus,
+    signal_id: str | None,
+    now: int | None,
+) -> dict:
+    """Build a sanitized recovery artifact for failed webhook delivery."""
+    return compile_dead_letter_escalation(
+        DeadLetterIncident(
+            source=source,
+            match_key=match_key,
+            status=status.value,
+            signal_id=signal_id,
+            received_at=now_epoch() if now is None else now,
+        )
     )
 
 
