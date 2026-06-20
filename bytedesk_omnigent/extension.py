@@ -49,6 +49,9 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
+        from bytedesk_omnigent.routes.integration_workflow_plans import (
+            create_integration_workflow_plans_router,
+        )
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
@@ -57,6 +60,7 @@ class BytedeskExtension:
             create_ingress_router(),
             create_goals_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
+            create_integration_workflow_plans_router(auth_provider=auth_provider),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
