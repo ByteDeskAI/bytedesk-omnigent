@@ -6,8 +6,8 @@ import asyncio
 import logging
 from dataclasses import dataclass
 
+from bytedesk_omnigent.maintenance import advisory_locked_loop
 from omnigent.db.utils import now_epoch
-from omnigent.runtime.memory_maintenance import advisory_lock
 
 _logger = logging.getLogger(__name__)
 
@@ -98,28 +98,31 @@ async def accountability_loop(
     from bytedesk_omnigent.goals import get_goal_store
     from bytedesk_omnigent.peer import get_peer_message_store
 
-    while True:
-        await asyncio.sleep(interval_seconds)
-        try:
-            goals = get_goal_store()
-            peers = get_peer_message_store()
-            with advisory_lock(goals.engine, lock_key) as acquired:
-                if not acquired:
-                    continue
-                report = await asyncio.to_thread(
-                    run_accountability_tick,
-                    goals,
-                    peers,
-                    manager_agent_id=manager_agent_id,
-                    stall_seconds=stall_seconds,
-                )
+    def _prepare():
+        goals = get_goal_store()
+        peers = get_peer_message_store()
+
+        async def _work() -> None:
+            report = await asyncio.to_thread(
+                run_accountability_tick,
+                goals,
+                peers,
+                manager_agent_id=manager_agent_id,
+                stall_seconds=stall_seconds,
+            )
             if report.rebalanced or report.escalated:
                 _logger.info(
                     "accountability: rebalanced=%d escalated=%d",
                     report.rebalanced,
                     report.escalated,
                 )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("accountability tick failed: %s", exc, exc_info=True)
+
+        return goals.engine, _work
+
+    await advisory_locked_loop(
+        interval_seconds=interval_seconds,
+        lock_key=lock_key,
+        prepare=_prepare,
+        logger=_logger,
+        name="accountability",
+    )

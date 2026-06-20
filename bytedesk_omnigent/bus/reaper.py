@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from omnigent.runtime.memory_maintenance import advisory_lock
+from bytedesk_omnigent.maintenance import advisory_locked_loop
 
 _logger = logging.getLogger(__name__)
 
@@ -42,21 +42,26 @@ async def signal_bus_reaper_loop(
     """Background loop: every ``interval_seconds`` expire stale waits under the lock.
 
     Resilient — a failed tick is logged and the loop continues; cancellation
-    propagates for clean shutdown.
+    propagates for clean shutdown. The advisory-lock scaffold is the shared
+    :func:`~bytedesk_omnigent.maintenance.advisory_locked_loop` Template Method
+    (BDP-2355).
     """
     from bytedesk_omnigent.runtime import get_signal_bus
 
-    while True:
-        await asyncio.sleep(interval_seconds)
-        try:
-            bus = get_signal_bus()
-            with advisory_lock(bus.engine, lock_key) as acquired:
-                if not acquired:
-                    continue
-                swept = await asyncio.to_thread(run_signal_bus_sweep_tick, bus)
+    def _prepare():
+        bus = get_signal_bus()
+
+        async def _work() -> None:
+            swept = await asyncio.to_thread(run_signal_bus_sweep_tick, bus)
             if swept:
                 _logger.info("signal bus reaper: expired=%d", swept)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("signal bus reaper tick failed: %s", exc, exc_info=True)
+
+        return bus.engine, _work
+
+    await advisory_locked_loop(
+        interval_seconds=interval_seconds,
+        lock_key=lock_key,
+        prepare=_prepare,
+        logger=_logger,
+        name="signal bus reaper",
+    )

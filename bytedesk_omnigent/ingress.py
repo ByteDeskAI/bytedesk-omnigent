@@ -18,9 +18,10 @@ import hashlib
 import hmac
 import os
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select
 
@@ -107,6 +108,102 @@ def resolve_secret(source: str) -> str | None:
     return _secret_resolver(source)
 
 
+# ── per-source webhook signature adapter (BDP-2354) ──────────────────────────
+# An Adapter (ADR-0008) per webhook source owns BOTH halves of the source's
+# wire contract: how it signs the body (verify) and where it carries the event
+# name (match_key). The old code hardwired HMAC-SHA256 + a fixed header list, so
+# a source that signs differently (or names its event in a different header) had
+# nowhere to live. A registry keyed by source resolves the adapter; GitHub is the
+# registered default for any source without a bespoke adapter. The adapter
+# composes with the existing SecretResolver — the route resolves the secret via
+# `resolve_secret` and passes it into `verify`, so the two seams stay orthogonal.
+
+
+@runtime_checkable
+class WebhookSourceAdapter(Protocol):
+    """A webhook source's signature + event-routing contract (ADR-0008)."""
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        """Return whether *raw_body* is authentic for *secret* given *headers*."""
+        ...
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
+        ...
+
+
+class GitHubWebhookAdapter:
+    """Default adapter: HMAC-SHA256 over the raw body (GitHub / TeamCity style).
+
+    Reads the signature from ``X-Omnigent-Signature`` (preferred) or GitHub's
+    ``X-Hub-Signature-256`` (bare hex or ``sha256=<hex>``); the event name from
+    ``X-Omnigent-Event`` (``"*"`` when absent). Headers are read
+    case-insensitively.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-omnigent-signature") or _header(
+            headers, "x-hub-signature-256"
+        )
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-omnigent-event") or "*"
+
+
+def _header(headers: Mapping[str, str], name: str) -> str:
+    """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
+    plain dict in tests is not) — returns ``""`` when absent."""
+    if name in headers:
+        return headers[name]
+    lower = name.lower()
+    for key, value in headers.items():
+        if key.lower() == lower:
+            return value
+    return ""
+
+
+def _build_webhook_adapter_registry():
+    """The per-source webhook-adapter registry (BDP-2354).
+
+    GitHub is the registered default — `resolve_webhook_adapter` returns it for
+    any source without a bespoke adapter. A deployment registers a source-specific
+    adapter (different signing scheme / event header) by name.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
+        "webhook_source", default=("github", GitHubWebhookAdapter)
+    )
+    return registry
+
+
+# Lazily-built singleton so a deployment can register adapters once at import.
+_webhook_adapter_registry = None
+
+
+def register_webhook_adapter(
+    source: str, factory: Callable[[], WebhookSourceAdapter]
+) -> None:
+    """Register a per-source webhook adapter *factory* (BDP-2354)."""
+    global _webhook_adapter_registry
+    if _webhook_adapter_registry is None:
+        _webhook_adapter_registry = _build_webhook_adapter_registry()
+    _webhook_adapter_registry.register(source, factory)
+
+
+def resolve_webhook_adapter(source: str) -> WebhookSourceAdapter:
+    """Resolve *source*'s webhook adapter, falling back to the GitHub default."""
+    global _webhook_adapter_registry
+    if _webhook_adapter_registry is None:
+        _webhook_adapter_registry = _build_webhook_adapter_registry()
+    if source in _webhook_adapter_registry.names():
+        return _webhook_adapter_registry.get(source)
+    return _webhook_adapter_registry.resolve_default()
+
+
 def _to_binding(row: SqlWebhookBinding) -> WebhookBinding:
     return WebhookBinding(
         id=row.id,
@@ -186,22 +283,31 @@ def process_inbound(
     *,
     source: str,
     raw_body: bytes,
-    provided_signature: str,
+    headers: Mapping[str, str],
     secret: str,
     store: IngressBindingStore,
     bus,
-    match_key: str = "*",
+    adapter: WebhookSourceAdapter | None = None,
     payload: dict | None = None,
     now: int | None = None,
 ) -> IngressResult:
     """Verify → resolve → deliver. The pure ingress logic (injectable store + bus).
 
+    The per-source :class:`WebhookSourceAdapter` (BDP-2354) owns BOTH signature
+    verification (``verify(raw_body, headers, secret)``) and event routing
+    (``match_key(headers)``); it defaults to the GitHub HMAC-SHA256 adapter. The
+    *secret* is resolved by the caller via the existing SecretResolver and passed
+    in, so the two seams compose.
+
     Returns an :class:`IngressResult` carrying the HTTP status the route returns:
     bad signature → 401; no binding → 404 (never 2xx, BDP-1419); delivered → 202;
     replayed → 409; bound-but-no-waiter → 404 (dead-lettered).
     """
-    if not verify_hmac_signature(raw_body, secret, provided_signature):
+    if adapter is None:
+        adapter = GitHubWebhookAdapter()
+    if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
+    match_key = adapter.match_key(headers)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(

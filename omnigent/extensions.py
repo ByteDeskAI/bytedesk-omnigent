@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from importlib.metadata import entry_points
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
@@ -39,12 +40,42 @@ ENV_VAR = "OMNIGENT_EXTENSIONS"
 
 @runtime_checkable
 class OmnigentExtension(Protocol):
-    """An out-of-core extension the server discovers and installs (ADR-0143)."""
+    """An out-of-core extension the server discovers and installs (ADR-0143).
+
+    ``name`` and ``routers`` are required. The four capability methods below
+    (``tool_factories`` / ``policy_modules`` / ``secret_backends`` /
+    ``background_tasks``) are **optional** — an extension contributes only the
+    surfaces it has. They are declared here for the type checker; the
+    aggregators use ``hasattr`` so an extension that omits one is simply
+    skipped (no ``getattr`` default probe).
+    """
 
     name: str
 
-    def routers(self) -> list[APIRouter]:
-        """FastAPI routers to mount under ``/v1`` (empty list if none)."""
+    def routers(self, auth_provider: object | None = ...) -> list[APIRouter]:
+        """FastAPI routers to mount under ``/v1`` (empty list if none).
+
+        ``auth_provider`` is passed by :func:`install_extensions` for routes
+        that need it; an extension whose ``routers`` takes no argument is still
+        accepted (back-compat, handled by the install-time ``TypeError`` retry).
+        """
+        ...
+
+    # ── optional capability methods ──────────────────────────────────
+    def tool_factories(self) -> dict[str, Callable[[object], object]]:
+        """Builtin tool factories (``{name: factory(config) -> Tool}``)."""
+        ...
+
+    def policy_modules(self) -> list[str]:
+        """Policy-builtin module import paths the policy registry scans."""
+        ...
+
+    def secret_backends(self) -> list[object]:
+        """Secret backends consulted by :mod:`omnigent.onboarding.secrets`."""
+        ...
+
+    def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
+        """Background-task factories the server lifespan starts and cancels."""
         ...
 
 
@@ -125,9 +156,8 @@ def extension_tool_factories() -> dict:
     """
     factories: dict = {}
     for ext in discover_extensions():
-        getter = getattr(ext, "tool_factories", None)
-        if getter is not None:
-            factories.update(getter())
+        if hasattr(ext, "tool_factories"):
+            factories.update(ext.tool_factories())
     return factories
 
 
@@ -135,9 +165,8 @@ def extension_policy_modules() -> list[str]:
     """Policy-builtin module paths contributed by extensions (``policy_modules()``)."""
     modules: list[str] = []
     for ext in discover_extensions():
-        getter = getattr(ext, "policy_modules", None)
-        if getter is not None:
-            modules.extend(getter())
+        if hasattr(ext, "policy_modules"):
+            modules.extend(ext.policy_modules())
     return modules
 
 
@@ -150,9 +179,8 @@ def extension_secret_backends() -> list:
     """
     backends: list = []
     for ext in discover_extensions():
-        getter = getattr(ext, "secret_backends", None)
-        if getter is not None:
-            backends.extend(getter())
+        if hasattr(ext, "secret_backends"):
+            backends.extend(ext.secret_backends())
     return backends
 
 
@@ -163,7 +191,6 @@ def extension_background_factories() -> list:
     """
     factories: list = []
     for ext in discover_extensions():
-        getter = getattr(ext, "background_tasks", None)
-        if getter is not None:
-            factories.extend(getter())
+        if hasattr(ext, "background_tasks"):
+            factories.extend(ext.background_tasks())
     return factories

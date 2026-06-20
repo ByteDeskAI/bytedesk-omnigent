@@ -326,6 +326,45 @@ def test_parse_e2b_template_rejects_non_string(monkeypatch: pytest.MonkeyPatch) 
         )
 
 
+# ── sandbox-provider Abstract Factory registry (BDP-2353) ────
+
+
+def test_sandbox_provider_registry_selects_each_provider() -> None:
+    """Every accepted provider resolves to a spec via the registry, and the two
+    derived frozensets match the registry's managed-launch declarations."""
+    from omnigent.server.managed_hosts import (
+        PROVIDERS_WITH_MANAGED_LAUNCH,
+        SUPPORTED_SANDBOX_PROVIDERS,
+        _build_sandbox_provider_registry,
+    )
+
+    registry = _build_sandbox_provider_registry()
+    for name in ("modal", "daytona", "cwsandbox", "islo", "e2b", "lakebox"):
+        spec = registry.get(name)  # each provider is selectable
+        assert callable(spec.build)
+
+    # SUPPORTED = every registered provider; MANAGED_LAUNCH = the launching subset.
+    assert frozenset(registry.names()) == SUPPORTED_SANDBOX_PROVIDERS
+    assert "lakebox" in SUPPORTED_SANDBOX_PROVIDERS
+    assert "lakebox" not in PROVIDERS_WITH_MANAGED_LAUNCH
+    assert frozenset(
+        {"modal", "daytona", "cwsandbox", "islo", "e2b"}
+    ) == PROVIDERS_WITH_MANAGED_LAUNCH
+
+
+def test_sandbox_provider_registry_unknown_raises() -> None:
+    """An unknown provider is not registered (registry.get raises) — and
+    parse_sandbox_config rejects it with the 'must be one of' ValueError."""
+    from omnigent.pluggable.errors import ProviderNotRegistered
+    from omnigent.server.managed_hosts import _build_sandbox_provider_registry
+
+    with pytest.raises(ProviderNotRegistered):
+        _build_sandbox_provider_registry().get("bogus")
+
+    with pytest.raises(ValueError, match="must be one of"):
+        parse_sandbox_config({"provider": "bogus", "server_url": "https://s"})
+
+
 @pytest.mark.parametrize(
     ("raw", "expected_fragment"),
     [

@@ -7,17 +7,30 @@ import hmac
 import json
 import time
 
+import pytest
+
+import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
+    GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    WebhookSourceAdapter,
     process_inbound,
+    register_webhook_adapter,
+    resolve_webhook_adapter,
     verify_hmac_signature,
 )
 
 
 def _sign(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _hdrs(signature: str, event: str) -> dict[str, str]:
+    """GitHub-style ingress headers (signature + event name) for the default
+    adapter (BDP-2354)."""
+    return {"x-omnigent-signature": signature, "x-omnigent-event": event}
 
 
 def test_verify_hmac_signature_bare_and_prefixed() -> None:
@@ -48,24 +61,26 @@ def test_process_inbound_delivers_to_signal_bus_then_replay_409(tmp_path) -> Non
 
     # Bad signature -> 401, never reaches the bus.
     bad = process_inbound(
-        source="teamcity", raw_body=body, provided_signature="nope", secret=secret,
-        store=store, bus=bus, match_key="build.finished", payload={"build": "green"},
+        source="teamcity", raw_body=body, headers=_hdrs("nope", "build.finished"),
+        secret=secret, store=store, bus=bus, payload={"build": "green"},
     )
     assert bad.status is IngressStatus.BAD_SIGNATURE
     assert bad.http_status == 401
 
     # Valid signature but no binding for the event -> 404 (never 2xx, BDP-1419).
     nob = process_inbound(
-        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="unknown.event", payload=None,
+        source="teamcity", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "unknown.event"),
+        secret=secret, store=store, bus=bus, payload=None,
     )
     assert nob.status is IngressStatus.NO_BINDING
     assert nob.http_status == 404
 
     # Valid + bound -> delivers to the bus, resolves the parked wait -> 202.
     ok = process_inbound(
-        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="build.finished",
+        source="teamcity", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "build.finished"),
+        secret=secret, store=store, bus=bus,
         payload={"build": "green"}, now=now + 1,
     )
     assert ok.status is IngressStatus.DELIVERED
@@ -75,8 +90,9 @@ def test_process_inbound_delivers_to_signal_bus_then_replay_409(tmp_path) -> Non
 
     # Replayed delivery (TeamCity retry) -> idempotent 409, no double-fire.
     again = process_inbound(
-        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="build.finished",
+        source="teamcity", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "build.finished"),
+        secret=secret, store=store, bus=bus,
         payload=None, now=now + 2,
     )
     assert again.status is IngressStatus.ALREADY_RESOLVED
@@ -96,8 +112,9 @@ def test_star_binding_is_per_source_catch_all(tmp_path) -> None:
     store.register_binding(source="github", match_key="*", signal_id="sig:any", now=now)
     body = b"{}"
     res = process_inbound(
-        source="github", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="some.event.we.didnt.bind",
+        source="github", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "some.event.we.didnt.bind"),
+        secret=secret, store=store, bus=bus,
         payload=None, now=now + 1,
     )
     assert res.status is IngressStatus.DELIVERED  # fell back to the "*" catch-all
@@ -123,9 +140,66 @@ def test_process_inbound_expired_wait_returns_410_not_409(tmp_path) -> None:
 
     body = json.dumps({"build": "green"}).encode()
     res = process_inbound(
-        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="build.finished",
+        source="teamcity", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "build.finished"),
+        secret=secret, store=store, bus=bus,
         payload={"build": "green"}, now=now + 62,
     )
     assert res.status is IngressStatus.EXPIRED
     assert res.http_status == 410
+
+
+# ── per-source webhook signature adapter (BDP-2354) ──────────────────────────
+
+
+@pytest.fixture()
+def _restore_adapter_registry():
+    """Restore the module-level adapter registry after a test registers one."""
+    saved = _ingress_mod._webhook_adapter_registry
+    yield
+    _ingress_mod._webhook_adapter_registry = saved
+
+
+def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
+    """The default GitHub adapter satisfies the Protocol, HMAC-verifies the raw
+    body (bare + ``sha256=`` forms), and reads the event header (BDP-2354)."""
+    adapter = GitHubWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+    body = b'{"build":"green"}'
+    secret = "s3cr3t"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-omnigent-signature": sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature-256": "sha256=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-omnigent-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False  # no signature header
+    assert adapter.match_key({"x-omnigent-event": "build.finished"}) == "build.finished"
+    assert adapter.match_key({}) == "*"  # absent → catch-all
+
+
+def test_resolve_webhook_adapter_defaults_to_github() -> None:
+    """A source with no bespoke adapter falls back to the GitHub default (BDP-2354)."""
+    assert isinstance(resolve_webhook_adapter("anything"), GitHubWebhookAdapter)
+
+
+def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
+    """A second source registers its own signature scheme + event header; the
+    registry resolves it instead of the GitHub default (BDP-2354)."""
+
+    class _StripeAdapter:
+        # A different scheme: a shared-token header (not HMAC) and a different
+        # event header — proving the adapter owns BOTH halves of the contract.
+        def verify(self, raw_body, headers, secret) -> bool:
+            return headers.get("stripe-token") == secret
+
+        def match_key(self, headers) -> str:
+            return headers.get("stripe-event", "*")
+
+    register_webhook_adapter("stripe", _StripeAdapter)
+    adapter = resolve_webhook_adapter("stripe")
+    assert isinstance(adapter, _StripeAdapter)
+    assert adapter.verify(b"{}", {"stripe-token": "whsec"}, "whsec") is True
+    assert adapter.verify(b"{}", {"stripe-token": "wrong"}, "whsec") is False
+    assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
+    # The default source is untouched.
+    assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
