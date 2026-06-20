@@ -53,6 +53,13 @@ class BaseAdapter(ABC, Generic[TConn]):
     ``class AnthropicAdapter(BaseAdapter[AnthropicConnection])``.
     """
 
+    #: Whether this adapter speaks the Responses API natively (and therefore
+    #: exposes ``responses_create``). The client dispatches the native
+    #: Responses path on this capability flag rather than an ``isinstance``
+    #: check, so a future native-Responses provider opts in by overriding it
+    #: without the client growing another ``isinstance`` branch.
+    supports_native_responses_api: bool = False
+
     @overload
     async def chat_completions(
         self,

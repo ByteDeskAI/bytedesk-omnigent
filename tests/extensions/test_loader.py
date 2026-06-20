@@ -14,6 +14,10 @@ from omnigent.extensions import (
     OmnigentExtension,
     _load_env_extensions,
     discover_extensions,
+    extension_background_factories,
+    extension_policy_modules,
+    extension_secret_backends,
+    extension_tool_factories,
     install_extensions,
 )
 
@@ -81,3 +85,37 @@ def test_discover_dedups_env_against_entrypoint(monkeypatch) -> None:
     monkeypatch.setenv(ENV_VAR, "bytedesk_omnigent.extension:BytedeskExtension")
     names = [e.name for e in discover_extensions()]
     assert names.count("bytedesk") == 1
+
+
+class _MinimalExt:
+    """An extension contributing ONLY routers — none of the four optional
+    capability methods. The aggregators must skip it cleanly (hasattr branch),
+    not raise (BDP-2352)."""
+
+    name = "minimal"
+
+    def routers(self, auth_provider=None):
+        return []
+
+
+def test_bytedesk_extension_satisfies_full_protocol() -> None:
+    """The real extension implements every OmnigentExtension method with the
+    typed shapes (routers + the four optional capability methods) (BDP-2352)."""
+    ext = BytedeskExtension()
+    assert isinstance(ext, OmnigentExtension)
+    assert isinstance(ext.tool_factories(), dict)
+    assert isinstance(ext.policy_modules(), list)
+    assert isinstance(ext.secret_backends(), list)
+    assert isinstance(ext.background_tasks(), list)
+
+
+def test_aggregators_skip_extension_missing_optional_methods(monkeypatch) -> None:
+    """An extension that omits an optional method is skipped by the matching
+    aggregator (hasattr branch), never probed with getattr defaults (BDP-2352)."""
+    monkeypatch.setattr(
+        "omnigent.extensions.discover_extensions", lambda: [_MinimalExt()]
+    )
+    assert extension_tool_factories() == {}
+    assert extension_policy_modules() == []
+    assert extension_secret_backends() == []
+    assert extension_background_factories() == []

@@ -18,7 +18,6 @@ from omnigent.llms._responses_to_chat import (
 )
 from omnigent.llms._usage_observer import notify as _notify_usage
 from omnigent.llms.adapters import get_adapter
-from omnigent.llms.adapters.openai import OpenAIAdapter
 from omnigent.llms.errors import (
     PermanentLLMError,
     RetryableLLMError,
@@ -182,10 +181,12 @@ class _ResponsesNamespace:
         routed = parse_model_string(model)
         adapter = get_adapter(routed.provider)
 
-        # OpenAI supports the Responses API natively — use it
-        # directly so reasoning token events flow through
-        # unmodified.
-        if isinstance(adapter, OpenAIAdapter):
+        # Adapters that speak the Responses API natively use it
+        # directly so reasoning token events flow through unmodified.
+        # Dispatched on a capability flag (not an ``isinstance`` check)
+        # so a new native-Responses provider opts in without another
+        # branch here.
+        if adapter.supports_native_responses_api:
             if reasoning and reasoning.get("effort"):
                 effort = validate_effort_or_llm_error(
                     reasoning.get("effort"), "OpenAI Responses", OPENAI_EFFORTS

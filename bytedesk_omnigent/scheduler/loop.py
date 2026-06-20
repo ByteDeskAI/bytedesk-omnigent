@@ -17,8 +17,8 @@ import asyncio
 import logging
 from collections.abc import Callable
 
+from bytedesk_omnigent.maintenance import advisory_locked_loop
 from bytedesk_omnigent.scheduler.scheduler import CronTrigger, run_cron_scheduler_tick
-from omnigent.runtime.memory_maintenance import advisory_lock
 
 _logger = logging.getLogger(__name__)
 
@@ -60,19 +60,22 @@ async def cron_scheduler_loop(
     if dispatch is None:
         dispatch = _log_only_dispatch
 
-    while True:
-        await asyncio.sleep(interval_seconds)
-        try:
-            scheduler = get_cron_scheduler()
-            with advisory_lock(scheduler.engine, lock_key) as acquired:
-                if not acquired:
-                    continue
-                fired = await asyncio.to_thread(
-                    run_cron_scheduler_tick, scheduler, dispatch
-                )
+    def _prepare():
+        scheduler = get_cron_scheduler()
+
+        async def _work() -> None:
+            fired = await asyncio.to_thread(
+                run_cron_scheduler_tick, scheduler, dispatch
+            )
             if fired:
                 _logger.info("cron scheduler: fired=%d", fired)
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            _logger.warning("cron scheduler tick failed: %s", exc, exc_info=True)
+
+        return scheduler.engine, _work
+
+    await advisory_locked_loop(
+        interval_seconds=interval_seconds,
+        lock_key=lock_key,
+        prepare=_prepare,
+        logger=_logger,
+        name="cron scheduler",
+    )

@@ -470,6 +470,9 @@ class OpenAIAdapter(OpenAICompatibleAdapter):
     :param api_key_env: Environment variable name for the API key.
     """
 
+    #: This adapter speaks the Responses API natively (see ``responses_create``).
+    supports_native_responses_api: bool = True
+
     async def responses_create(
         self,
         *,

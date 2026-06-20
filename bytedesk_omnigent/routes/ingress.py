@@ -24,6 +24,7 @@ def create_ingress_router() -> APIRouter:
             get_binding_store,
             process_inbound,
             resolve_secret,
+            resolve_webhook_adapter,
         )
         from bytedesk_omnigent.runtime import get_signal_bus
 
@@ -35,10 +36,9 @@ def create_ingress_router() -> APIRouter:
                 status_code=404,
             )
         raw = await request.body()
-        provided_sig = request.headers.get(
-            "x-omnigent-signature", request.headers.get("x-hub-signature-256", "")
-        )
-        match_key = request.headers.get("x-omnigent-event", "*")
+        # The per-source adapter owns signature scheme + event-header parsing
+        # (BDP-2354); the secret comes from the existing resolver (BDP-2349).
+        adapter = resolve_webhook_adapter(source)
         try:
             payload = json.loads(raw) if raw else None
         except ValueError:
@@ -46,11 +46,11 @@ def create_ingress_router() -> APIRouter:
         result = process_inbound(
             source=source,
             raw_body=raw,
-            provided_signature=provided_sig,
+            headers=request.headers,
             secret=secret,
             store=get_binding_store(),
             bus=get_signal_bus(),
-            match_key=match_key,
+            adapter=adapter,
             payload=payload if isinstance(payload, dict) else None,
         )
         return JSONResponse(

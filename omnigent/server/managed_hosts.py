@@ -111,6 +111,7 @@ from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
     from omnigent.onboarding.sandboxes import SandboxLauncher
+    from omnigent.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -120,12 +121,12 @@ _logger = logging.getLogger(__name__)
 # managed session today. (Deployments that construct
 # ManagedSandboxConfig directly are not constrained by either set —
 # their launcher factory IS the support.)
-SUPPORTED_SANDBOX_PROVIDERS: frozenset[str] = frozenset(
-    {"lakebox", "modal", "daytona", "cwsandbox", "islo", "e2b"}
-)
-PROVIDERS_WITH_MANAGED_LAUNCH: frozenset[str] = frozenset(
-    {"modal", "daytona", "cwsandbox", "islo", "e2b"}
-)
+#
+# Both sets are now DERIVED from the sandbox-provider registry (BDP-2353)
+# — see :func:`_build_sandbox_provider_registry` — so a new provider is
+# added in exactly one place (a registry row) instead of being threaded
+# through two frozensets plus the parse if/elif chain. They are computed
+# lazily at module import via :func:`_sandbox_provider_names`.
 
 # How long a managed launch waits for the sandboxed host to register
 # before declaring failure. The image is pre-baked (no pip install at
@@ -555,6 +556,146 @@ def _unsupported_launcher_factory(provider: str) -> Callable[[], SandboxLauncher
     return _reject
 
 
+@dataclass(frozen=True)
+class SandboxProviderSpec:
+    """One managed-sandbox provider (BDP-2353 — Abstract Factory seam).
+
+    :param build: Given the raw ``sandbox:`` dict, return
+        ``(launcher_factory, token_ttl_s)`` for this provider. May import
+        provider-specific deps lazily (cwsandbox/e2b derive their TTL from an
+        env-driven helper imported only on selection) and may raise
+        ``ValueError`` for a malformed provider section.
+    :param managed_launch: Whether the provider can actually serve a managed
+        session today (drives ``managed_launch_supported`` + the derived
+        :data:`PROVIDERS_WITH_MANAGED_LAUNCH`). Staged-only providers (e.g.
+        ``lakebox``) parse but reject launch, so this is ``False`` for them.
+    """
+
+    build: Callable[[dict[str, object]], tuple[Callable[[], SandboxLauncher], int]]
+    managed_launch: bool
+
+
+def _modal_provider() -> SandboxProviderSpec:
+    def build(raw: dict[str, object]):
+        return (
+            _modal_launcher_factory(_parse_modal_image(raw), _parse_modal_secrets(raw)),
+            MODAL_MANAGED_TOKEN_TTL_S,
+        )
+
+    return SandboxProviderSpec(build=build, managed_launch=True)
+
+
+def _daytona_provider() -> SandboxProviderSpec:
+    def build(raw: dict[str, object]):
+        return (
+            _daytona_launcher_factory(_parse_daytona_image(raw), _parse_daytona_env(raw)),
+            DAYTONA_MANAGED_TOKEN_TTL_S,
+        )
+
+    return SandboxProviderSpec(build=build, managed_launch=True)
+
+
+def _cwsandbox_provider() -> SandboxProviderSpec:
+    def build(raw: dict[str, object]):
+        # Derived from OMNIGENT_CWSANDBOX_MAX_LIFETIME_S so the token always
+        # outlives the (operator-overridable) sandbox lifetime. Imported lazily
+        # on selection (the same deferral the if/elif chain relied on).
+        from omnigent.onboarding.sandboxes.cwsandbox import managed_token_ttl_s
+
+        return (
+            _cwsandbox_launcher_factory(
+                _parse_cwsandbox_image(raw), _parse_cwsandbox_env(raw)
+            ),
+            managed_token_ttl_s(),
+        )
+
+    return SandboxProviderSpec(build=build, managed_launch=True)
+
+
+def _islo_provider() -> SandboxProviderSpec:
+    def build(raw: dict[str, object]):
+        return (
+            _islo_launcher_factory(
+                image=_parse_provider_image(raw, "islo"),
+                env=_parse_provider_env(raw, "islo"),
+                base_url=_parse_provider_string(raw, "islo", "base_url"),
+                gateway_profile=_parse_provider_string(raw, "islo", "gateway_profile"),
+                snapshot_name=_parse_provider_string(raw, "islo", "snapshot_name"),
+                workdir=_parse_provider_string(raw, "islo", "workdir"),
+                vcpus=_parse_provider_positive_int(raw, "islo", "vcpus"),
+                memory_mb=_parse_provider_positive_int(raw, "islo", "memory_mb"),
+                disk_gb=_parse_provider_positive_int(raw, "islo", "disk_gb"),
+            ),
+            ISLO_MANAGED_TOKEN_TTL_S,
+        )
+
+    return SandboxProviderSpec(build=build, managed_launch=True)
+
+
+def _e2b_provider() -> SandboxProviderSpec:
+    def build(raw: dict[str, object]):
+        # Derived from OMNIGENT_E2B_MAX_LIFETIME_S so the token always outlives
+        # the (operator-overridable) sandbox lifetime — mirrors cwsandbox.
+        # Imported lazily on selection.
+        from omnigent.onboarding.sandboxes.e2b import managed_token_ttl_s
+
+        return (
+            _e2b_launcher_factory(
+                _parse_e2b_template(raw), _parse_provider_env(raw, "e2b")
+            ),
+            managed_token_ttl_s(),
+        )
+
+    return SandboxProviderSpec(build=build, managed_launch=True)
+
+
+def _staged_provider(provider: str) -> SandboxProviderSpec:
+    """A provider whose config parses but whose launch is not yet implemented
+    (e.g. ``lakebox``): the factory rejects with a 400, the conservative modal
+    TTL keeps the field total (never consulted — rejection precedes any token).
+    """
+
+    def build(_raw: dict[str, object]):
+        return (_unsupported_launcher_factory(provider), MODAL_MANAGED_TOKEN_TTL_S)
+
+    return SandboxProviderSpec(build=build, managed_launch=False)
+
+
+def _build_sandbox_provider_registry() -> PluggableRegistry[SandboxProviderSpec]:
+    """The managed-sandbox provider registry (BDP-2353).
+
+    One registry row per provider replaces the ``parse_sandbox_config``
+    if/elif chain and the two hand-maintained frozensets. ``lakebox`` is
+    registered as a *staged* provider (parses, rejects launch) so it stays in
+    :data:`SUPPORTED_SANDBOX_PROVIDERS` without a code branch.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[SandboxProviderSpec] = PluggableRegistry("sandbox")
+    registry.register("modal", _modal_provider)
+    registry.register("daytona", _daytona_provider)
+    registry.register("cwsandbox", _cwsandbox_provider)
+    registry.register("islo", _islo_provider)
+    registry.register("e2b", _e2b_provider)
+    registry.register("lakebox", lambda: _staged_provider("lakebox"))
+    return registry
+
+
+def _sandbox_provider_specs() -> dict[str, SandboxProviderSpec]:
+    """Resolve every registered provider spec once (names → spec)."""
+    registry = _build_sandbox_provider_registry()
+    return {name: registry.get(name) for name in registry.names()}
+
+
+# Derived from the registry (BDP-2353): every accepted provider, and the subset
+# that can actually serve a managed session today.
+_SANDBOX_PROVIDER_SPECS: dict[str, SandboxProviderSpec] = _sandbox_provider_specs()
+SUPPORTED_SANDBOX_PROVIDERS: frozenset[str] = frozenset(_SANDBOX_PROVIDER_SPECS)
+PROVIDERS_WITH_MANAGED_LAUNCH: frozenset[str] = frozenset(
+    name for name, spec in _SANDBOX_PROVIDER_SPECS.items() if spec.managed_launch
+)
+
+
 def parse_sandbox_config(raw: object) -> ManagedSandboxConfig | None:
     """
     Parse and validate the server config's ``sandbox:`` section.
@@ -586,53 +727,11 @@ def parse_sandbox_config(raw: object) -> ManagedSandboxConfig | None:
             "server config 'sandbox.server_url' is required — the public URL "
             "of this server that sandboxed hosts connect back to"
         )
-    if provider == "modal":
-        launcher_factory = _modal_launcher_factory(
-            _parse_modal_image(raw), _parse_modal_secrets(raw)
-        )
-        token_ttl_s = MODAL_MANAGED_TOKEN_TTL_S
-    elif provider == "daytona":
-        launcher_factory = _daytona_launcher_factory(
-            _parse_daytona_image(raw), _parse_daytona_env(raw)
-        )
-        token_ttl_s = DAYTONA_MANAGED_TOKEN_TTL_S
-    elif provider == "cwsandbox":
-        from omnigent.onboarding.sandboxes.cwsandbox import managed_token_ttl_s
-
-        launcher_factory = _cwsandbox_launcher_factory(
-            _parse_cwsandbox_image(raw), _parse_cwsandbox_env(raw)
-        )
-        # Derived from OMNIGENT_CWSANDBOX_MAX_LIFETIME_S so the token always
-        # outlives the (operator-overridable) sandbox lifetime.
-        token_ttl_s = managed_token_ttl_s()
-    elif provider == "islo":
-        launcher_factory = _islo_launcher_factory(
-            image=_parse_provider_image(raw, "islo"),
-            env=_parse_provider_env(raw, "islo"),
-            base_url=_parse_provider_string(raw, "islo", "base_url"),
-            gateway_profile=_parse_provider_string(raw, "islo", "gateway_profile"),
-            snapshot_name=_parse_provider_string(raw, "islo", "snapshot_name"),
-            workdir=_parse_provider_string(raw, "islo", "workdir"),
-            vcpus=_parse_provider_positive_int(raw, "islo", "vcpus"),
-            memory_mb=_parse_provider_positive_int(raw, "islo", "memory_mb"),
-            disk_gb=_parse_provider_positive_int(raw, "islo", "disk_gb"),
-        )
-        token_ttl_s = ISLO_MANAGED_TOKEN_TTL_S
-    elif provider == "e2b":
-        from omnigent.onboarding.sandboxes.e2b import managed_token_ttl_s
-
-        launcher_factory = _e2b_launcher_factory(
-            _parse_e2b_template(raw), _parse_provider_env(raw, "e2b")
-        )
-        # Derived from OMNIGENT_E2B_MAX_LIFETIME_S so the token always
-        # outlives the (operator-overridable) sandbox lifetime — mirrors
-        # the cwsandbox path.
-        token_ttl_s = managed_token_ttl_s()
-    else:
-        launcher_factory = _unsupported_launcher_factory(provider)
-        # Never consulted (the factory rejects before any token is
-        # minted); the conservative modal TTL keeps the field total.
-        token_ttl_s = MODAL_MANAGED_TOKEN_TTL_S
+    # Abstract Factory (BDP-2353): the provider's registered spec builds its
+    # launcher factory + token TTL. The membership check above guarantees the
+    # spec exists, so .get never raises here.
+    spec = _SANDBOX_PROVIDER_SPECS[provider]
+    launcher_factory, token_ttl_s = spec.build(raw)
     return ManagedSandboxConfig(
         server_url=server_url.strip().rstrip("/"),
         launcher_factory=launcher_factory,

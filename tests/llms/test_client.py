@@ -91,6 +91,9 @@ class _MockAdapter:
         self.side_effect = side_effect
         self.call_count = 0
 
+    #: Routes through the chat_completions path, not responses_create.
+    supports_native_responses_api = False
+
     async def chat_completions(self, *args: Any, **kwargs: Any) -> Any:
         """
         Async mock of ``BaseAdapter.chat_completions()``.
@@ -225,6 +228,64 @@ async def test_create_without_retry_succeeds(
     assert tracker.calls == []
 
     # Adapter should be called exactly once.
+    assert mock_adapter.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_native_responses_flag_true_routes_to_responses_create(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An adapter with ``supports_native_responses_api=True`` is dispatched to
+    ``responses_create`` (the native Responses path), not ``chat_completions`` —
+    proving the capability flag replaced the old ``isinstance(OpenAIAdapter)``
+    check (BDP-2352).
+    """
+
+    class _NativeAdapter:
+        supports_native_responses_api = True
+
+        def __init__(self) -> None:
+            self.responses_calls = 0
+            self.chat_calls = 0
+
+        async def responses_create(self, **kwargs: Any) -> Response:
+            self.responses_calls += 1
+            return _make_response()
+
+        async def chat_completions(self, *a: Any, **k: Any) -> Any:
+            self.chat_calls += 1
+            return {}
+
+    adapter = _NativeAdapter()
+    routed = MagicMock(provider="test", model="test-model")
+    monkeypatch.setattr(
+        "omnigent.llms.client.parse_model_string", lambda model: routed
+    )
+    monkeypatch.setattr(
+        "omnigent.llms.client.get_adapter", lambda provider: adapter
+    )
+
+    result = await Client().responses.create(**_default_create_kwargs())
+
+    assert isinstance(result, Response)
+    assert adapter.responses_calls == 1
+    assert adapter.chat_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_native_responses_flag_false_routes_to_chat_completions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An adapter with ``supports_native_responses_api=False`` (the
+    ``BaseAdapter`` default) is dispatched to ``chat_completions`` — the
+    non-native translation path (BDP-2352)."""
+    mock_adapter = _MockAdapter(return_value={"id": "test"})
+    assert mock_adapter.supports_native_responses_api is False
+    _patch_client_deps(monkeypatch, mock_adapter)
+
+    result = await Client().responses.create(**_default_create_kwargs())
+
+    assert isinstance(result, Response)
     assert mock_adapter.call_count == 1
 
 
@@ -785,6 +846,8 @@ class _CapturingAdapter:
 
     :param captured_extra: List to append the extra dict into on each call.
     """
+
+    supports_native_responses_api = False
 
     def __init__(self, captured_extra: list[dict[str, Any]]) -> None:
         self._captured = captured_extra
