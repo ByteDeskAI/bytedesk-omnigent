@@ -11,6 +11,7 @@ from bytedesk_omnigent.scheduler.scheduler import (
     CronTrigger,
     SqlAlchemyCronScheduler,
     compute_next_fire,
+    register_schedule_kind,
     run_cron_scheduler_tick,
 )
 
@@ -19,5 +20,6 @@ __all__ = [
     "SqlAlchemyCronScheduler",
     "compute_next_fire",
     "cron_scheduler_loop",
+    "register_schedule_kind",
     "run_cron_scheduler_tick",
 ]

@@ -12,6 +12,7 @@ engine, mirroring the goals/peer store shape.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -36,6 +37,31 @@ class Suppression:
 
 def _normalize(address: str) -> str:
     return address.strip().lower()
+
+
+@runtime_checkable
+class SuppressionStore(Protocol):
+    """Do-not-contact suppression backend (BDP-2349 #46).
+
+    The seam over the concrete store so the outreach compliance path isn't
+    hardwired to :class:`SqlAlchemySuppressionStore` — a deployment can supply a
+    different backend (e.g. an external suppression service) that honors the same
+    ``(channel, address)`` contract. The default backend is SqlAlchemy.
+    """
+
+    def suppress(
+        self, *, channel: str, address: str, reason: str, now: int | None = None
+    ) -> bool:
+        """Idempotently add a ``(channel, address)`` suppression."""
+        ...
+
+    def is_suppressed(self, *, channel: str, address: str) -> bool:
+        """True if ``(channel, address)`` must not be contacted."""
+        ...
+
+    def list_suppressed(self, *, channel: str | None = None) -> list[Suppression]:
+        """List suppressions, optionally for one channel."""
+        ...
 
 
 def _to_suppression(row: SqlSuppression) -> Suppression:
@@ -106,11 +132,28 @@ class SqlAlchemySuppressionStore:
             return [_to_suppression(r) for r in session.execute(stmt).scalars().all()]
 
 
-_suppression_store_cache: dict[str, SqlAlchemySuppressionStore] = {}
+_suppression_store_cache: dict[str, SuppressionStore] = {}
+# Optional injected backend override (BDP-2349 #46). When set it wins over the
+# per-URI SqlAlchemy default — the seam that lets prod swap the backend without
+# touching the outreach compliance path. ``None`` = the SqlAlchemy default.
+_suppression_store_override: SuppressionStore | None = None
 
 
-def get_suppression_store() -> SqlAlchemySuppressionStore:
-    """Return the durable do-not-contact suppression store (BDP-2278 F3, ADR-0142)."""
+def set_suppression_store(store: SuppressionStore | None) -> None:
+    """Install the active suppression-store backend (``None`` restores the default)."""
+    global _suppression_store_override
+    _suppression_store_override = store
+
+
+def get_suppression_store() -> SuppressionStore:
+    """Return the do-not-contact suppression store (BDP-2278 F3, ADR-0142).
+
+    Returns an injected override when set, else the durable SqlAlchemy default
+    (lazily built per conversation-store URI). Typed against the
+    :class:`SuppressionStore` Protocol so callers depend on the seam.
+    """
+    if _suppression_store_override is not None:
+        return _suppression_store_override
     from omnigent.runtime import get_conversation_store
 
     location = get_conversation_store().storage_location

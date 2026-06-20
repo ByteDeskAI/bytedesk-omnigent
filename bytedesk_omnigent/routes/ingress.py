@@ -21,13 +21,13 @@ def create_ingress_router() -> APIRouter:
     async def receive(source: str, request: Request) -> JSONResponse:
         """Receive a signed external event and deliver it to the signal bus."""
         from bytedesk_omnigent.ingress import (
-            default_secret_resolver,
             get_binding_store,
             process_inbound,
+            resolve_secret,
         )
         from bytedesk_omnigent.runtime import get_signal_bus
 
-        secret = default_secret_resolver(source)
+        secret = resolve_secret(source)
         if secret is None:
             # Unconfigured source — not a valid ingress target. 404 (never 2xx).
             return JSONResponse(

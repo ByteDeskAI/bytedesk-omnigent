@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from sqlalchemy import select, update
@@ -43,25 +44,76 @@ class CronTrigger:
     payload: dict | None
 
 
+# ── Schedule-kind Strategy registry (BDP-2349 #13) ──────────────────────────
+# Each strategy maps ``(schedule_expr, after) -> next_fire | None`` for one
+# schedule_kind. Replaces the closed if/elif so a new cadence (cron/rrule) is a
+# `register_schedule_kind` call, not an edit to this function. `interval` and
+# `once` ship in-tree; `cron`/`rrule` are a clean seam (register a strategy that
+# pulls in croniter when that dependency lands) — deliberately NOT implemented
+# here.
+ScheduleKindStrategy = Callable[[str, int], "int | None"]
+
+
+def _interval_strategy(schedule_expr: str, after: int) -> int | None:
+    """``interval``: fire every ``int(schedule_expr)`` seconds."""
+    return after + int(schedule_expr)
+
+
+def _once_strategy(schedule_expr: str, after: int) -> int | None:
+    """``once``: a one-shot trigger has no next fire (disabled after it fires)."""
+    del schedule_expr, after
+    return None
+
+
+def _cron_seam_strategy(schedule_expr: str, after: int) -> int | None:
+    """``cron``: clean seam — cron-expression support requires ``croniter``.
+
+    Raises until a real strategy is registered (via
+    :func:`register_schedule_kind`), preserving the historical ``cron`` behavior
+    instead of silently failing.
+    """
+    del schedule_expr, after
+    raise NotImplementedError(
+        "cron-expression schedules require croniter (not yet a dependency); "
+        "use schedule_kind='interval' for now"
+    )
+
+
+_SCHEDULE_KIND_STRATEGIES: dict[str, ScheduleKindStrategy] = {
+    "interval": _interval_strategy,
+    "once": _once_strategy,
+    "cron": _cron_seam_strategy,
+}
+
+
+def register_schedule_kind(kind: str, strategy: ScheduleKindStrategy) -> None:
+    """Register a ``(schedule_expr, after) -> next_fire | None`` *strategy* for *kind*.
+
+    The seam for new cadences (e.g. ``cron``/``rrule`` once croniter is a
+    dependency) — register a strategy instead of editing :func:`compute_next_fire`.
+    """
+    _SCHEDULE_KIND_STRATEGIES[kind] = strategy
+
+
 def compute_next_fire(schedule_kind: str, schedule_expr: str, after: int) -> int | None:
     """Compute the next fire instant after ``after`` (epoch seconds).
+
+    Dispatches to the registered schedule-kind strategy:
 
     - ``interval``: ``after + int(schedule_expr)`` (seconds).
     - ``once``: ``None`` — a one-shot trigger has no next fire (it is disabled
       after it fires).
-    - ``cron``: deferred — cron-expression support requires ``croniter`` (not yet
-      a dependency); use ``interval`` until it is added.
+    - ``cron``/``rrule``: not registered in-tree — register a strategy via
+      :func:`register_schedule_kind` (requires ``croniter`` etc.); use
+      ``interval`` until then.
+
+    :raises ValueError: if no strategy is registered for *schedule_kind*.
     """
-    if schedule_kind == "interval":
-        return after + int(schedule_expr)
-    if schedule_kind == "once":
-        return None
-    if schedule_kind == "cron":
-        raise NotImplementedError(
-            "cron-expression schedules require croniter (not yet a dependency); "
-            "use schedule_kind='interval' for now"
-        )
-    raise ValueError(f"unknown schedule_kind {schedule_kind!r}")
+    try:
+        strategy = _SCHEDULE_KIND_STRATEGIES[schedule_kind]
+    except KeyError:
+        raise ValueError(f"unknown schedule_kind {schedule_kind!r}") from None
+    return strategy(schedule_expr, after)
 
 
 def _to_trigger(row: SqlCronTrigger) -> CronTrigger:
