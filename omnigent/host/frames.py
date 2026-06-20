@@ -22,7 +22,16 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, cast
+
+# Documented closed sets for host result-frame string fields, as Literal aliases
+# (zero runtime cost) so an invalid status/type is a type error at author time.
+LaunchRunnerStatus = Literal["launched", "failed"]
+StopRunnerStatus = Literal["stopped", "failed"]
+# stat / list_dir / create_worktree / remove_worktree results all use ok|failed.
+FsOpStatus = Literal["ok", "failed"]
+# Target type after symlink resolution (host.stat_result, host.list_dir entry).
+FsEntryType = Literal["directory", "file", "other"]
 
 # Structured error code carried in ``HostLaunchRunnerResultFrame.error_code``
 # when the host refuses a launch because the session's harness is not
@@ -129,7 +138,7 @@ class HostLaunchRunnerResultFrame:
     """
 
     request_id: str
-    status: str
+    status: LaunchRunnerStatus
     runner_id: str | None = None
     error: str | None = None
     error_code: str | None = None
@@ -161,7 +170,7 @@ class HostStopRunnerResultFrame:
     """
 
     request_id: str
-    status: str
+    status: StopRunnerStatus
     error: str | None = None
 
 
@@ -243,9 +252,9 @@ class HostStatResultFrame:
     """
 
     request_id: str
-    status: str
+    status: FsOpStatus
     exists: bool = False
-    type: str | None = None
+    type: FsEntryType | None = None
     canonical_path: str | None = None
     error: str | None = None
 
@@ -277,7 +286,7 @@ class HostListDirEntry:
 
     name: str
     path: str
-    type: str
+    type: FsEntryType
     bytes: int | None
     modified_at: int
 
@@ -336,7 +345,7 @@ class HostListDirResultFrame:
     """
 
     request_id: str
-    status: str
+    status: FsOpStatus
     entries: list[HostListDirEntry] = field(default_factory=list)
     has_more: bool = False
     error: str | None = None
@@ -380,7 +389,7 @@ class HostCreateWorktreeResultFrame:
     """
 
     request_id: str
-    status: str
+    status: FsOpStatus
     worktree_path: str | None = None
     branch: str | None = None
     error: str | None = None
@@ -422,7 +431,7 @@ class HostRemoveWorktreeResultFrame:
     """
 
     request_id: str
-    status: str
+    status: FsOpStatus
     error: str | None = None
 
 
@@ -732,7 +741,7 @@ def _decode_launch_runner_result(
     """
     return HostLaunchRunnerResultFrame(
         request_id=_required_str(msg, "request_id"),
-        status=_required_str(msg, "status"),
+        status=cast(LaunchRunnerStatus, _required_str(msg, "status")),
         runner_id=_optional_nullable_str(msg, "runner_id"),
         error=_optional_nullable_str(msg, "error"),
         error_code=_optional_nullable_str(msg, "error_code"),
@@ -761,7 +770,7 @@ def _decode_stop_runner_result(
     """
     return HostStopRunnerResultFrame(
         request_id=_required_str(msg, "request_id"),
-        status=_required_str(msg, "status"),
+        status=cast(StopRunnerStatus, _required_str(msg, "status")),
         error=_optional_nullable_str(msg, "error"),
     )
 
@@ -798,9 +807,9 @@ def _decode_stat_result(msg: dict[str, Any]) -> HostStatResultFrame:
     """
     return HostStatResultFrame(
         request_id=_required_str(msg, "request_id"),
-        status=_required_str(msg, "status"),
+        status=cast(FsOpStatus, _required_str(msg, "status")),
         exists=_required_bool(msg, "exists"),
-        type=_optional_nullable_str(msg, "type"),
+        type=cast("FsEntryType | None", _optional_nullable_str(msg, "type")),
         canonical_path=_optional_nullable_str(msg, "canonical_path"),
         error=_optional_nullable_str(msg, "error"),
     )
@@ -843,7 +852,7 @@ def _decode_list_dir_result(msg: dict[str, Any]) -> HostListDirResultFrame:
         raise ValueError("frame field must be a bool: 'has_more'")
     return HostListDirResultFrame(
         request_id=_required_str(msg, "request_id"),
-        status=_required_str(msg, "status"),
+        status=cast(FsOpStatus, _required_str(msg, "status")),
         entries=entries,
         has_more=has_more,
         error=_optional_nullable_str(msg, "error"),
@@ -867,7 +876,7 @@ def _decode_list_dir_entry(msg: dict[str, Any]) -> HostListDirEntry:
     return HostListDirEntry(
         name=_required_str(msg, "name"),
         path=_required_str(msg, "path"),
-        type=_required_str(msg, "type"),
+        type=cast(FsEntryType, _required_str(msg, "type")),
         bytes=bytes_val,
         modified_at=modified_at,
     )
@@ -897,7 +906,7 @@ def _decode_create_worktree_result(
     """
     return HostCreateWorktreeResultFrame(
         request_id=_required_str(msg, "request_id"),
-        status=_required_str(msg, "status"),
+        status=cast(FsOpStatus, _required_str(msg, "status")),
         worktree_path=_optional_nullable_str(msg, "worktree_path"),
         branch=_optional_nullable_str(msg, "branch"),
         error=_optional_nullable_str(msg, "error"),
@@ -931,7 +940,7 @@ def _decode_remove_worktree_result(
     """
     return HostRemoveWorktreeResultFrame(
         request_id=_required_str(msg, "request_id"),
-        status=_required_str(msg, "status"),
+        status=cast(FsOpStatus, _required_str(msg, "status")),
         error=_optional_nullable_str(msg, "error"),
     )
 

@@ -15,8 +15,7 @@ and other phases pass through.
 
 from __future__ import annotations
 
-from typing import Any
-
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -101,7 +100,7 @@ def spawn_breadth_governor(
     return evaluate  # type: ignore[return-value]
 
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.spawn_governor.spawn_breadth_governor",
         "kind": "factory",

@@ -24,6 +24,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -156,7 +157,7 @@ class WorkflowTaskSeed:
     assignee_agent_id: str
     required_capability: str
     priority: int
-    payload: dict
+    payload: dict[str, Any]
 
 
 def derive_capabilities(bundle: WorkflowBundle) -> list[str]:

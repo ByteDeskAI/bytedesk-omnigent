@@ -15,8 +15,8 @@ Patterns are regex, matched with ``re.search`` against the tool name on the
 from __future__ import annotations
 
 import re
-from typing import Any
 
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -51,7 +51,7 @@ def forever_denied(patterns: list[str]) -> PolicyCallable:
     return evaluate  # type: ignore[return-value]
 
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.forever_gate.forever_denied",
         "kind": "factory",

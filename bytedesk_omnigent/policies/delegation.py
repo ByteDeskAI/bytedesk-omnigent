@@ -13,8 +13,7 @@ governed by the spawn-breadth governor (C5) + the forever-gated registry (F7).
 
 from __future__ import annotations
 
-from typing import Any
-
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -77,7 +76,7 @@ def delegation_authority(allowed_targets: list[str]) -> PolicyCallable:
     return evaluate  # type: ignore[return-value]
 
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.delegation.delegation_authority",
         "kind": "factory",

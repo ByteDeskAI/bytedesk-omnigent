@@ -275,3 +275,24 @@ def test_frame_kind_enum_values_match_design() -> None:
     assert FrameKind.REQUEST_CANCEL.value == "request.cancel"
     assert FrameKind.PING.value == "ping"
     assert FrameKind.PONG.value == "pong"
+
+
+def test_frame_encoding_literal_closed_set() -> None:
+    """BDP-2358: ``encoding`` fields are the ``FrameEncoding`` Literal closed set."""
+    import typing
+
+    from omnigent.runner.transports.ws_tunnel.frames import FrameEncoding
+
+    assert set(typing.get_args(FrameEncoding)) == {"utf-8", "base64"}
+    # encode_body returns one of exactly those values.
+    assert encode_body(b"hi", "text/plain")[1] == "utf-8"
+    assert encode_body(b"\x00\x01", "application/octet-stream")[1] == "base64"
+
+
+def test_decode_rejects_unknown_body_encoding() -> None:
+    """A frame carrying an out-of-set ``encoding`` is rejected at decode time."""
+    raw = json.dumps(
+        {"kind": "response.body", "id": "r1", "body": "x", "encoding": "rot13"}
+    )
+    with pytest.raises(ValueError, match="body encoding"):
+        decode_frame(raw)

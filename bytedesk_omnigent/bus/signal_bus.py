@@ -22,6 +22,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 from sqlalchemy import func, select, update
 
@@ -50,7 +51,7 @@ class DeliveryResult:
     signal_id: str
     session_id: str | None  # the parked session woken (None for DEAD_LETTERED)
     key: str | None  # the (session, key) the wait was registered under
-    payload: dict | None  # echoed payload that was delivered
+    payload: dict[str, Any] | None  # echoed payload that was delivered
 
 
 @dataclass(frozen=True)
@@ -166,7 +167,7 @@ class SqlAlchemySignalBus:
         self,
         *,
         signal_id: str,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         now: int | None = None,
     ) -> DeliveryResult:
         """Deliver a signal by id; idempotent on replay; dead-letters unmatched.
@@ -309,7 +310,7 @@ class SqlAlchemySignalBus:
         session_id: str | None,
         signal_id: str | None,
         kind: str,
-        payload: dict | None,
+        payload: dict[str, Any] | None,
         dead_lettered: bool,
         now: int,
     ) -> None:

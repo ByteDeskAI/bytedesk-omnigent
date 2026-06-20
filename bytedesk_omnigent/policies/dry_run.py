@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any
 
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -60,7 +60,7 @@ def dry_run_preview(patterns: list[str], max_preview_chars: int = 800) -> Policy
     return evaluate  # type: ignore[return-value]
 
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.dry_run.dry_run_preview",
         "kind": "factory",

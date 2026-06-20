@@ -23,9 +23,15 @@ from __future__ import annotations
 import importlib
 import logging
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 _logger = logging.getLogger(__name__)
+
+# Closed set of handler kinds. ``"callable"`` is a direct policy callable;
+# ``"factory"`` is called with ``factory_params`` to build the callable. Typing
+# the registry entry's ``kind`` with this makes the two validate branches below
+# provably total — a third value is a type error at author time.
+PolicyHandlerKind = Literal["callable", "factory"]
 
 
 @dataclass(frozen=True)
@@ -52,7 +58,7 @@ class PolicyRegistryEntry:
     """
 
     handler: str
-    kind: str
+    kind: PolicyHandlerKind
     name: str
     description: str
     params_schema: dict[str, Any] | None = None

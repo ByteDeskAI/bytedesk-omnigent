@@ -23,7 +23,12 @@ import base64
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
+
+# Closed set of body encodings carried on the wire (RUNNER.md §3): ``"utf-8"``
+# for inline text bodies, ``"base64"`` for binary. A Literal alias documents
+# the set at author time at zero runtime cost.
+FrameEncoding = Literal["utf-8", "base64"]
 
 
 class FrameKind(str, Enum):
@@ -75,7 +80,7 @@ class RequestFrame:
     headers: list[list[str]] = field(default_factory=list)
     query_string: str = ""
     body: str | None = None
-    encoding: str = "utf-8"  # "utf-8" or "base64"
+    encoding: FrameEncoding = "utf-8"
     stream: bool = False
 
 
@@ -94,7 +99,7 @@ class ResponseBodyFrame:
 
     id: str
     body: str
-    encoding: str = "utf-8"
+    encoding: FrameEncoding = "utf-8"
 
 
 @dataclass
@@ -157,7 +162,7 @@ class WSFrame:
 
     ch_id: str
     data: str
-    encoding: str = "utf-8"  # "utf-8" or "base64"
+    encoding: FrameEncoding = "utf-8"
 
 
 @dataclass
@@ -383,7 +388,7 @@ def _decode_request(msg: dict[str, Any]) -> RequestFrame:
         query_string=_optional_str(msg, "query_string", ""),
         headers=_optional_headers(msg),
         body=_optional_body(msg),
-        encoding=_optional_str(msg, "encoding", "utf-8"),
+        encoding=_optional_encoding(msg, "encoding", "utf-8"),
         stream=_optional_bool(msg, "stream", False),
     )
 
@@ -410,7 +415,7 @@ def _decode_response_body(msg: dict[str, Any]) -> ResponseBodyFrame:
     return ResponseBodyFrame(
         id=_required_str(msg, "id"),
         body=_required_str(msg, "body"),
-        encoding=_optional_str(msg, "encoding", "utf-8"),
+        encoding=_optional_encoding(msg, "encoding", "utf-8"),
     )
 
 
@@ -448,7 +453,7 @@ def _decode_ws_frame(msg: dict[str, Any]) -> WSFrame:
     return WSFrame(
         ch_id=_required_str(msg, "ch_id"),
         data=_required_str(msg, "data"),
-        encoding=_optional_str(msg, "encoding", "utf-8"),
+        encoding=_optional_encoding(msg, "encoding", "utf-8"),
     )
 
 
@@ -492,6 +497,23 @@ def _optional_str(msg: dict[str, Any], key: str, default: str) -> str:
     if not isinstance(val, str):
         raise ValueError(f"frame field must be a string: {key!r}")
     return val
+
+
+def _optional_encoding(msg: dict[str, Any], key: str, default: FrameEncoding) -> FrameEncoding:
+    """Return an optional body-encoding field narrowed to :data:`FrameEncoding`.
+
+    :param msg: Decoded frame object.
+    :param key: Field name, e.g. ``"encoding"``.
+    :param default: Protocol default used when the field is absent.
+    :returns: ``"utf-8"`` or ``"base64"``.
+    :raises ValueError: If the field is present but not a known encoding.
+    """
+    val = msg.get(key, default)
+    if val == "utf-8":
+        return "utf-8"
+    if val == "base64":
+        return "base64"
+    raise ValueError(f"frame field must be a body encoding: {key!r}")
 
 
 def _optional_bool(msg: dict[str, Any], key: str, default: bool) -> bool:
@@ -595,7 +617,7 @@ def is_text_content_type(content_type: str) -> bool:
     return any(ct.startswith(prefix) for prefix in _TEXT_CONTENT_TYPES)
 
 
-def encode_body(body: bytes, content_type: str) -> tuple[str, str]:
+def encode_body(body: bytes, content_type: str) -> tuple[str, FrameEncoding]:
     """Return ``(encoded_body, encoding)`` for a body+content-type pair.
 
     Picks utf-8 inline for text-shaped content, base64 otherwise.
