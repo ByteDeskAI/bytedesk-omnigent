@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import uuid
 from collections.abc import Callable, Mapping
@@ -127,8 +128,13 @@ class WebhookSourceAdapter(Protocol):
         """Return whether *raw_body* is authentic for *secret* given *headers*."""
         ...
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
-        """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
+    def match_key(self, raw_body: bytes, headers: Mapping[str, str]) -> str:
+        """The binding match key (event name) derived from *raw_body* / *headers*.
+
+        Adapters that route exclusively by header can ignore *raw_body*. Payload-
+        first adapters use it to support SaaS webhooks that carry the event name
+        in JSON rather than a provider-specific header.
+        """
         ...
 
 
@@ -149,8 +155,51 @@ class GitHubWebhookAdapter:
             return False
         return verify_hmac_signature(raw_body, secret, provided)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(self, raw_body: bytes, headers: Mapping[str, str]) -> str:
+        _ = raw_body
         return _header(headers, "x-omnigent-event") or "*"
+
+
+class JsonPayloadWebhookAdapter:
+    """HMAC adapter for SaaS webhooks whose event name lives in JSON payloads.
+
+    Many work-management systems (Jira, Trello, Asana, and Notion-like relays)
+    do not expose a stable event header. They POST a signed JSON body with the
+    routing signal in fields such as ``event``, ``type``, ``webhookEvent``,
+    ``issue_event_type_name``, or nested ``action.type``. This adapter keeps the
+    default Omnigent/GitHub HMAC verification contract while deterministically
+    deriving the binding match key from those payload fields.
+    """
+
+    event_paths = (
+        "event",
+        "type",
+        "webhookEvent",
+        "webhook_event",
+        "event_type",
+        "issue_event_type_name",
+        "action.type",
+        "action",
+    )
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        return GitHubWebhookAdapter().verify(raw_body, headers, secret)
+
+    def match_key(self, raw_body: bytes, headers: Mapping[str, str]) -> str:
+        header_event = _header(headers, "x-omnigent-event")
+        if header_event:
+            return header_event
+        try:
+            payload = json.loads(raw_body.decode("utf-8")) if raw_body else None
+        except (UnicodeDecodeError, ValueError):
+            return "*"
+        if not isinstance(payload, dict):
+            return "*"
+        for path in self.event_paths:
+            value = _json_path(payload, path)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -165,6 +214,16 @@ def _header(headers: Mapping[str, str], name: str) -> str:
     return ""
 
 
+def _json_path(payload: Mapping[str, object], dotted_path: str) -> object | None:
+    """Read a dotted JSON path from a decoded object, returning ``None`` if absent."""
+    current: object = payload
+    for part in dotted_path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return current
+
+
 def _build_webhook_adapter_registry():
     """The per-source webhook-adapter registry (BDP-2354).
 
@@ -174,9 +233,13 @@ def _build_webhook_adapter_registry():
     """
     from omnigent.pluggable import PluggableRegistry
 
-    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
+    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry[
+        WebhookSourceAdapter
+    ](
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    for source in ("json", "jira", "trello", "asana", "notion"):
+        registry.register(source, JsonPayloadWebhookAdapter)
     return registry
 
 
@@ -307,7 +370,7 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = adapter.match_key(raw_body, headers)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
