@@ -11,13 +11,20 @@ import base64
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal, cast, overload
 
 import httpx
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.llms.adapters._content import parse_data_uri
-from omnigent.llms.adapters.base import BaseAdapter
+from omnigent.llms.adapters.base import BaseAdapter, ChatExtra
+from omnigent.llms.wire_types import (
+    AnthropicConnection,
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatTool,
+)
 from omnigent.reasoning_effort import ANTHROPIC_EFFORTS, validate_effort_or_llm_error
 
 _BASE_URL = "https://api.anthropic.com/v1"
@@ -27,7 +34,7 @@ _REQUEST_TIMEOUT = 120
 _STREAM_TIMEOUT = 300
 
 
-class AnthropicAdapter(BaseAdapter):
+class AnthropicAdapter(BaseAdapter[AnthropicConnection]):
     """
     Adapter for the Anthropic Messages API.
 
@@ -35,17 +42,43 @@ class AnthropicAdapter(BaseAdapter):
     at call time (from the ``connection:`` block in agent spec).
     """
 
+    @overload
     async def chat_completions(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
-        stream: bool,
-        extra: dict[str, Any],
+        tools: list[ChatTool] | None,
+        stream: Literal[False],
+        extra: ChatExtra,
         *,
-        connection_params: dict[str, str] | None = None,
+        connection_params: AnthropicConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> ChatCompletionResponse: ...
+
+    @overload
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: Literal[True],
+        extra: ChatExtra,
+        *,
+        connection_params: AnthropicConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: bool,
+        extra: ChatExtra,
+        *,
+        connection_params: AnthropicConnection | None = None,
         timeout: int | None = None,
-    ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]:
         """
         Send a request to the Anthropic Messages API.
 
@@ -92,10 +125,10 @@ class AnthropicAdapter(BaseAdapter):
 
 
 def _chat_to_anthropic(
-    messages: list[dict[str, Any]],
+    messages: list[ChatMessage],
     model: str,
-    tools: list[dict[str, Any]] | None,
-    extra: dict[str, Any],
+    tools: list[ChatTool] | None,
+    extra: ChatExtra,
 ) -> dict[str, Any]:
     """
     Convert Chat Completions messages to Anthropic Messages API payload.
@@ -108,8 +141,12 @@ def _chat_to_anthropic(
     """
     payload: dict[str, Any] = {"model": model}
 
-    # Extract system messages
-    system_parts = [m["content"] for m in messages if m["role"] == "system"]
+    # Extract system messages. System content is always a plain string on
+    # the wire; the cast narrows the typed ChatContent union with no runtime
+    # change.
+    system_parts = [
+        cast(str, m["content"]) for m in messages if m["role"] == "system"
+    ]
     if system_parts:
         payload["system"] = "\n".join(system_parts)
 
@@ -168,7 +205,7 @@ def _chat_to_anthropic(
     return payload
 
 
-def _convert_assistant_message(m: dict[str, Any]) -> dict[str, Any]:
+def _convert_assistant_message(m: ChatMessage) -> dict[str, Any]:
     """
     Convert a Chat Completions assistant message to Anthropic format.
 
@@ -192,7 +229,7 @@ def _convert_assistant_message(m: dict[str, Any]) -> dict[str, Any]:
     return {"role": "assistant", "content": m.get("content")}
 
 
-def _convert_tool_message(m: dict[str, Any]) -> dict[str, Any]:
+def _convert_tool_message(m: ChatMessage) -> dict[str, Any]:
     """
     Convert a Chat Completions tool message to Anthropic format.
 
@@ -211,7 +248,7 @@ def _convert_tool_message(m: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _convert_user_message(m: dict[str, Any]) -> dict[str, Any]:
+def _convert_user_message(m: ChatMessage) -> dict[str, Any]:
     """
     Convert a Chat Completions user message to Anthropic format.
 
@@ -224,7 +261,7 @@ def _convert_user_message(m: dict[str, Any]) -> dict[str, Any]:
     """
     content = m.get("content")
     if not isinstance(content, list):
-        return m
+        return cast("dict[str, Any]", m)
     return {
         "role": "user",
         "content": [_translate_part_to_anthropic(part) for part in content],
@@ -308,7 +345,7 @@ def _translate_part_to_anthropic(part: dict[str, Any]) -> dict[str, Any]:
     return part
 
 
-def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _convert_tools(tools: list[ChatTool]) -> list[dict[str, Any]]:
     """
     Convert OpenAI-format tool schemas to Anthropic format.
 
@@ -378,7 +415,7 @@ def _effort_to_budget(effort: str, max_tokens: int) -> int:
 # ── Response translation ──────────────────────────────────
 
 
-def _anthropic_to_chat(resp: dict[str, Any]) -> dict[str, Any]:
+def _anthropic_to_chat(resp: dict[str, Any]) -> ChatCompletionResponse:
     """
     Convert an Anthropic Messages API response to Chat Completions format.
 
@@ -413,7 +450,7 @@ def _anthropic_to_chat(resp: dict[str, Any]) -> dict[str, Any]:
 
     usage = resp.get("usage", {})
 
-    return {
+    chat: dict[str, Any] = {
         "id": resp["id"],
         "object": "chat.completion",
         "created": int(time.time()),
@@ -437,6 +474,7 @@ def _anthropic_to_chat(resp: dict[str, Any]) -> dict[str, Any]:
             ),
         },
     }
+    return cast("ChatCompletionResponse", chat)
 
 
 # ── Streaming ─────────────────────────────────────────────
@@ -444,7 +482,7 @@ def _anthropic_to_chat(resp: dict[str, Any]) -> dict[str, Any]:
 
 async def _stream_to_chat_chunks(
     lines: AsyncIterator[str],
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[ChatCompletionChunk]:
     """
     Parse Anthropic SSE stream into Chat Completions chunk dicts.
 
@@ -539,7 +577,7 @@ def _make_chunk(
     delta: dict[str, Any],
     finish_reason: str | None = None,
     usage: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> ChatCompletionChunk:
     """
     Build a Chat Completions streaming chunk dict.
 
@@ -564,7 +602,7 @@ def _make_chunk(
     }
     if usage:
         chunk["usage"] = usage
-    return chunk
+    return cast("ChatCompletionChunk", chunk)
 
 
 # ── HTTP helpers ──────────────────────────────────────────
@@ -598,7 +636,7 @@ async def _send_request(
     payload: dict[str, Any],
     base_url: str,
     timeout: int = _REQUEST_TIMEOUT,
-) -> dict[str, Any]:
+) -> ChatCompletionResponse:
     """
     Send a non-streaming request to Anthropic and return a Chat
     Completions format response.
@@ -626,7 +664,7 @@ async def _stream_request(
     payload: dict[str, Any],
     base_url: str,
     timeout: int = _STREAM_TIMEOUT,
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[ChatCompletionChunk]:
     """
     Send a streaming request to Anthropic and yield Chat
     Completions chunk dicts.

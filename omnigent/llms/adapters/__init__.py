@@ -10,11 +10,12 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.llms.adapters.base import BaseAdapter
 
 # Lazy-initialized adapter cache. Each provider gets at most one
-# adapter instance per process.
-_adapter_cache: dict[str, BaseAdapter] = {}
+# adapter instance per process. The concrete connection-params shape
+# varies per adapter, so the registry erases it to ``BaseAdapter[Any]``.
+_adapter_cache: dict[str, BaseAdapter[Any]] = {}
 
 
-def get_adapter(provider: str, **kwargs: Any) -> BaseAdapter:
+def get_adapter(provider: str, **kwargs: Any) -> BaseAdapter[Any]:
     """
     Return an adapter instance for the given provider.
 
@@ -36,7 +37,7 @@ def get_adapter(provider: str, **kwargs: Any) -> BaseAdapter:
     return adapter
 
 
-def _create_adapter(provider: str, **kwargs: Any) -> BaseAdapter:
+def _create_adapter(provider: str, **kwargs: Any) -> BaseAdapter[Any]:
     """
     Instantiate the correct adapter for the provider.
 

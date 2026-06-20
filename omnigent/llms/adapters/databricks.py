@@ -10,12 +10,27 @@ which honors ``DATABRICKS_CONFIG_PROFILE`` for profile selection.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Literal, cast, overload
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.llms.adapters.base import ChatExtra
 from omnigent.llms.adapters.openai import OpenAICompatibleAdapter
+from omnigent.llms.wire_types import (
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatTool,
+    DatabricksConnection,
+)
 from omnigent.runtime.credentials.databricks import resolve_databricks_workspace
+
+# The union-returning ``chat_completions`` implementation type, used to
+# call ``super().chat_completions`` with a runtime ``bool`` ``stream``
+# (the parent's ``@overload``s only resolve for ``Literal`` ``stream``).
+_ChatCompletionsImpl = Callable[
+    ..., Awaitable[ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]]
+]
 
 
 class DatabricksAdapter(OpenAICompatibleAdapter):
@@ -41,11 +56,11 @@ class DatabricksAdapter(OpenAICompatibleAdapter):
 
     def _build_payload(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
+        tools: list[ChatTool] | None,
         stream: bool,
-        extra: dict[str, Any],
+        extra: ChatExtra,
     ) -> dict[str, Any]:
         """
         Build the Chat Completions payload without ``stream_options``.
@@ -65,17 +80,43 @@ class DatabricksAdapter(OpenAICompatibleAdapter):
         payload.pop("stream_options", None)
         return payload
 
+    @overload
     async def chat_completions(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
-        stream: bool,
-        extra: dict[str, Any],
+        tools: list[ChatTool] | None,
+        stream: Literal[False],
+        extra: ChatExtra,
         *,
-        connection_params: dict[str, str] | None = None,
+        connection_params: DatabricksConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> ChatCompletionResponse: ...
+
+    @overload
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: Literal[True],
+        extra: ChatExtra,
+        *,
+        connection_params: DatabricksConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: bool,
+        extra: ChatExtra,
+        *,
+        connection_params: DatabricksConnection | None = None,
         timeout: int | None = None,
-    ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]:
         """
         Send a Chat Completions request to Databricks Model Serving.
 
@@ -100,12 +141,15 @@ class DatabricksAdapter(OpenAICompatibleAdapter):
                 creds = resolve_databricks_workspace(None)
             except OSError as exc:
                 raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
-            resolved = {
+            resolved: DatabricksConnection = {
                 "base_url": creds.host + "/serving-endpoints",
                 "api_key": creds.token,
             }
             connection_params = {**resolved, **(connection_params or {})}
-        return await super().chat_completions(
+        # ``stream`` is a runtime bool, so call the union-returning
+        # implementation rather than the Literal-split overloads.
+        impl = cast("_ChatCompletionsImpl", super().chat_completions)
+        return await impl(
             messages,
             model,
             tools,

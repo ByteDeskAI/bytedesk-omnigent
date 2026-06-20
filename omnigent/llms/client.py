@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from omnigent.llms._responses_to_chat import (
     chat_response_to_response,
@@ -29,6 +29,7 @@ from omnigent.llms.types import (
     ResponseCompletedEvent,
     ResponseStreamEvent,
 )
+from omnigent.llms.wire_types import ChatTool
 from omnigent.reasoning_effort import OPENAI_EFFORTS, validate_effort_or_llm_error
 from omnigent.runtime.llm_retry import classify_llm_error
 from omnigent.spec.types import RetryPolicy
@@ -207,6 +208,10 @@ class _ResponsesNamespace:
             input,
             instructions,
         )
+        # The public ``create`` surface accepts OpenAI-format tool dicts;
+        # they conform to ``ChatTool`` on the wire, so narrow at this
+        # adapter boundary.
+        chat_tools = cast("list[ChatTool] | None", tools)
 
         extra: dict[str, Any] = dict(kwargs)
         # Translate Responses API ``text`` (structured output) to the
@@ -232,7 +237,7 @@ class _ResponsesNamespace:
             chunks = await adapter.chat_completions(
                 messages,
                 routed.model,
-                tools,
+                chat_tools,
                 True,
                 extra,
                 connection_params=connection_params,
@@ -247,7 +252,7 @@ class _ResponsesNamespace:
         result = await adapter.chat_completions(
             messages,
             routed.model,
-            tools,
+            chat_tools,
             False,
             extra,
             connection_params=connection_params,

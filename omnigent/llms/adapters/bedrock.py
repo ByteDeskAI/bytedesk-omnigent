@@ -12,10 +12,18 @@ import asyncio
 import json
 import time
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal, cast, overload
 
 from omnigent.llms.adapters._content import parse_data_uri
-from omnigent.llms.adapters.base import BaseAdapter
+from omnigent.llms.adapters.base import BaseAdapter, ChatExtra
+from omnigent.llms.wire_types import (
+    BedrockConnection,
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatTool,
+    ChatToolCall,
+)
 
 # Default connect timeout: 30s to establish TCP connection.
 _BOTO_CONNECT_TIMEOUT = 30
@@ -102,7 +110,7 @@ def _boto_config(
     )
 
 
-class BedrockAdapter(BaseAdapter):
+class BedrockAdapter(BaseAdapter[BedrockConnection]):
     """
     Adapter for AWS Bedrock using the Converse API.
 
@@ -118,7 +126,7 @@ class BedrockAdapter(BaseAdapter):
     def _make_client(
         self,
         timeout: int,
-        connection_params: dict[str, str] | None = None,
+        connection_params: BedrockConnection | None = None,
     ) -> Any:
         """
         Create a boto3 ``bedrock-runtime`` client.
@@ -148,17 +156,43 @@ class BedrockAdapter(BaseAdapter):
             **boto_kwargs,
         )
 
+    @overload
     async def chat_completions(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
-        stream: bool,
-        extra: dict[str, Any],
+        tools: list[ChatTool] | None,
+        stream: Literal[False],
+        extra: ChatExtra,
         *,
-        connection_params: dict[str, str] | None = None,
+        connection_params: BedrockConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> ChatCompletionResponse: ...
+
+    @overload
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: Literal[True],
+        extra: ChatExtra,
+        *,
+        connection_params: BedrockConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: bool,
+        extra: ChatExtra,
+        *,
+        connection_params: BedrockConnection | None = None,
         timeout: int | None = None,
-    ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]:
         """
         Send a request via Bedrock Converse API.
 
@@ -191,10 +225,10 @@ class BedrockAdapter(BaseAdapter):
 
 
 def _build_converse_kwargs(
-    messages: list[dict[str, Any]],
+    messages: list[ChatMessage],
     model: str,
-    tools: list[dict[str, Any]] | None,
-    extra: dict[str, Any],
+    tools: list[ChatTool] | None,
+    extra: ChatExtra,
 ) -> dict[str, Any]:
     """
     Build kwargs for the Bedrock Converse API call.
@@ -235,7 +269,7 @@ def _build_converse_kwargs(
 
 
 def _messages_to_converse(
-    messages: list[dict[str, Any]],
+    messages: list[ChatMessage],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
     """
     Convert Chat Completions messages to Bedrock Converse format.
@@ -373,7 +407,7 @@ def _translate_part_to_converse(part: dict[str, Any]) -> dict[str, Any]:
 
 
 def _convert_tools(
-    tools: list[dict[str, Any]],
+    tools: list[ChatTool],
 ) -> list[dict[str, Any]]:
     """
     Convert OpenAI tool schemas to Bedrock toolSpec format.
@@ -402,7 +436,7 @@ def _convert_tools(
 def _converse_to_chat(
     response: dict[str, Any],
     model: str,
-) -> dict[str, Any]:
+) -> ChatCompletionResponse:
     """
     Convert Bedrock Converse response to Chat Completions format.
 
@@ -450,7 +484,7 @@ def _converse_to_chat(
                 "message": {
                     "role": "assistant",
                     "content": ("\n".join(text_parts) if text_parts else None),
-                    "tool_calls": tool_calls or None,
+                    "tool_calls": cast("list[ChatToolCall] | None", tool_calls or None),
                 },
                 "finish_reason": finish_reason,
             }
@@ -469,7 +503,7 @@ def _converse_to_chat(
 async def _send_converse(
     client: Any,
     kwargs: dict[str, Any],
-) -> dict[str, Any]:
+) -> ChatCompletionResponse:
     """
     Send a non-streaming Converse request.
 
@@ -488,7 +522,7 @@ async def _send_converse(
 async def _stream_converse(
     client: Any,
     kwargs: dict[str, Any],
-) -> AsyncIterator[dict[str, Any]]:
+) -> AsyncIterator[ChatCompletionChunk]:
     """
     Send a streaming Converse request and yield Chat Completions
     chunks.
@@ -528,7 +562,7 @@ async def _stream_converse(
 def _stream_text_chunk(
     model: str,
     text: str,
-) -> dict[str, Any]:
+) -> ChatCompletionChunk:
     """
     Build a streaming chunk dict for a text delta.
 
@@ -554,7 +588,7 @@ def _stream_text_chunk(
 def _stream_stop_chunk(
     model: str,
     finish_reason: str,
-) -> dict[str, Any]:
+) -> ChatCompletionChunk:
     """
     Build a streaming chunk dict for a stop event.
 
@@ -581,7 +615,7 @@ def _stream_stop_chunk(
 def _stream_usage_chunk(
     model: str,
     usage: dict[str, Any],
-) -> dict[str, Any]:
+) -> ChatCompletionChunk:
     """
     Build a streaming chunk dict for a usage/metadata event.
 
