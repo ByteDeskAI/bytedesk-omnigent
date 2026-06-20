@@ -1,8 +1,9 @@
 # Omnigent Server API
 
-Four namespaces: agent management (`/api/agents`), conversations
-(`/v1/conversations`), sessions (`/v1/sessions`), and session
-resources (`/v1/sessions/{session_id}/resources`).
+Five namespaces: agent management (`/api/agents`), conversations
+(`/v1/conversations`), sessions (`/v1/sessions`), session resources
+(`/v1/sessions/{session_id}/resources`), and ByteDesk integration capability
+planning (`/v1/integration-capabilities`).
 
 ## Compatibility Reference
 
@@ -12,6 +13,60 @@ resources (`/v1/sessions/{session_id}/resources`).
 | Conversations (`/v1/conversations`) | Omnigent (ours) | No external reference. |
 | Sessions (`/v1/sessions`) | Omnigent (ours) | No external reference. Session-first API for long-running agent interactions. See "Sessions API" section below. |
 | Session file resources (`/v1/sessions/{session_id}/resources/files`) | Omnigent (ours) | No external reference. Files are scoped to their owning session. |
+| Integration capabilities (`/v1/integration-capabilities`) | ByteDesk Omnigent extension | Ranked third-party/OAuth/workflow-harness blueprints for agent middleware expansion. |
+
+---
+
+## Integration Capabilities
+
+The ByteDesk extension exposes a read-only product catalog of high-value
+third-party integration and workflow-harness blueprints. Each entry describes how
+the capability improves individual agents, agent collectives, or third-party
+application interaction, plus the business case and future unlocks it enables.
+
+### List Integration Capabilities
+
+```
+GET /v1/integration-capabilities
+
+Query parameters:
+  category (string, optional)
+    One of: communication, project_management, knowledge, developer,
+    crm_support, commerce_billing, workflow_harness.
+
+  limit (integer, optional, default: 50, max: 100)
+    Number of entries to return.
+
+200 OK
+{
+  "object": "list",
+  "data": [
+    {
+      "slug": "archon-style-workflow-blueprints",
+      "name": "Archon-style deterministic workflow blueprints",
+      "category": "workflow_harness",
+      "auth_model": "Internal YAML/workflow schema",
+      "agent_value": ["..."],
+      "required_scopes": [],
+      "implementation_description": "...",
+      "future_unlocks": ["..."],
+      "business_case": "...",
+      "priority_score": 99,
+      "references": ["https://github.com/coleam00/Archon"]
+    }
+  ],
+  "categories": ["communication", "workflow_harness"]
+}
+```
+
+### Get Integration Capability
+
+```
+GET /v1/integration-capabilities/{slug}
+
+200 OK — same entry shape as list items
+404 Not Found — unknown slug
+```
 
 ---
 
