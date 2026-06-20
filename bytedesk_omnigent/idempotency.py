@@ -13,6 +13,7 @@ engine, like the signal bus and cron scheduler.
 from __future__ import annotations
 
 import json
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
@@ -23,6 +24,30 @@ from omnigent.db.utils import (
     make_managed_session_maker,
     now_epoch,
 )
+
+
+@runtime_checkable
+class IdempotencyStore(Protocol):
+    """At-most-once claim plane (ADR-0009 Idempotent Receiver).
+
+    The seam over the concrete backend: the first caller of ``(scope, key)``
+    wins (``claim`` returns ``True``), a duplicate delivery loses (``False``).
+    Implementations MUST preserve that atomic at-most-once contract.
+    """
+
+    def claim(self, *, scope: str, key: str, now: int | None = None) -> bool:
+        """Atomically claim ``(scope, key)``; ``True`` if this caller won."""
+        ...
+
+    def is_claimed(self, *, scope: str, key: str) -> bool:
+        """Whether ``(scope, key)`` has already been claimed."""
+        ...
+
+    def mark_dead_lettered(
+        self, *, scope: str, key: str, result: dict | None = None
+    ) -> None:
+        """Mark an already-claimed key as dead-lettered (work failed)."""
+        ...
 
 
 class SqlAlchemyIdempotencyStore:
@@ -89,13 +114,16 @@ class SqlAlchemyIdempotencyStore:
 # Lazily-built, per-URI cache of the idempotency store, mirroring the runtime
 # accessors for the signal bus + cron scheduler. Kept module-local (no lifespan
 # loop, so no runtime registration needed).
-_idempotency_store_cache: dict[str, SqlAlchemyIdempotencyStore] = {}
+_idempotency_store_cache: dict[str, IdempotencyStore] = {}
 
 
-def get_idempotency_store() -> SqlAlchemyIdempotencyStore:
+def get_idempotency_store() -> IdempotencyStore:
     """Return the durable idempotency store (BDP-2251, ADR-0142).
 
     Built lazily from the conversation store's database URI and cached per URI.
+    The default backend is :class:`SqlAlchemyIdempotencyStore`; the return type
+    is the :class:`IdempotencyStore` Protocol so callers depend on the seam, not
+    the concrete impl.
     """
     from omnigent.runtime import get_conversation_store
 
@@ -105,3 +133,10 @@ def get_idempotency_store() -> SqlAlchemyIdempotencyStore:
         store = SqlAlchemyIdempotencyStore(location)
         _idempotency_store_cache[location] = store
     return store
+
+
+__all__ = [
+    "IdempotencyStore",
+    "SqlAlchemyIdempotencyStore",
+    "get_idempotency_store",
+]

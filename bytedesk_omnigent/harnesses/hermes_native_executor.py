@@ -44,9 +44,18 @@ from bytedesk_omnigent.harnesses.config_apply import apply_spec_to_hermes
 _logger = logging.getLogger(__name__)
 
 # ── Env-var knobs (set by hermes_native_harness from the agent spec / runner) ─
-_HERMES_BIN = os.environ.get("HARNESS_HERMES_BIN", "hermes")
+_ENV_HERMES_BIN = "HARNESS_HERMES_BIN"
 _ENV_MODEL = "HARNESS_HERMES_MODEL"
 _ENV_CWD = "HARNESS_HERMES_CWD"
+
+
+def _default_hermes_bin() -> str:
+    """The default ``hermes`` binary — ``HARNESS_HERMES_BIN`` env, else ``hermes``.
+
+    Read at construction time (not import time) so a binary param / env set after
+    import is honored, and so importing this module pulls in no process state.
+    """
+    return os.environ.get(_ENV_HERMES_BIN, "hermes")
 
 # Sentinel pushed onto the per-turn queue when the session/prompt response
 # lands, so run_turn drains all preceding session/update notifications first.
@@ -138,9 +147,12 @@ class _HermesAcpSession:
     single self-owned session created via ``session/new``.
     """
 
-    def __init__(self, *, cwd: str, model: str | None) -> None:
+    def __init__(
+        self, *, cwd: str, model: str | None, hermes_bin: str | None = None
+    ) -> None:
         self._cwd = cwd
         self._model = model
+        self._hermes_bin = hermes_bin or _default_hermes_bin()
         self._proc: asyncio.subprocess.Process | None = None
         self._reader_task: asyncio.Task[None] | None = None
         self._stderr_task: asyncio.Task[None] | None = None
@@ -276,7 +288,7 @@ class _HermesAcpSession:
     # -- Session lifecycle ---------------------------------------------------
 
     async def start(self) -> None:
-        argv = [_HERMES_BIN, "acp"]
+        argv = [self._hermes_bin, "acp"]
         await self._start_process(argv, self._cwd)
         await self._request(
             "initialize",
@@ -401,11 +413,20 @@ class HermesNativeExecutor(Executor):
     (idempotent), then delivers the latest user text via ``session/prompt``.
     """
 
-    def __init__(self, model: str | None = None) -> None:
+    def __init__(self, model: str | None = None, hermes_bin: str | None = None) -> None:
         self._model = model or (os.environ.get(_ENV_MODEL) or None)
+        # Binary is a constructor param (BDP-2349 #42); the env is just the default
+        # so existing HARNESS_HERMES_BIN callers are byte-identical.
+        self._hermes_bin = hermes_bin or _default_hermes_bin()
         cwd = _resolve_cwd()
-        _logger.info("hermes-native: self-spawn mode (model=%s)", self._model)
-        self._session = _HermesAcpSession(cwd=cwd, model=self._model)
+        _logger.info(
+            "hermes-native: self-spawn mode (model=%s bin=%s)",
+            self._model,
+            self._hermes_bin,
+        )
+        self._session = _HermesAcpSession(
+            cwd=cwd, model=self._model, hermes_bin=self._hermes_bin
+        )
 
     def supports_streaming(self) -> bool:
         return True

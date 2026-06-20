@@ -12,7 +12,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from threading import Lock
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from opentelemetry import metrics as otel_metrics
 from opentelemetry.util.types import Attributes
@@ -834,6 +834,28 @@ def _create_resource_otel_instruments(meter: MeterLike) -> _ResourceOtelInstrume
     )
 
 
+@runtime_checkable
+class SnapshotPublisher(Protocol):
+    """
+    Publish a single server metrics snapshot (BDP-2349 #52).
+
+    The seam the periodic publish loop depends on, so the loop is typed
+    against this one-method Protocol rather than the concrete
+    :class:`ServerMetricsOtelPublisher`. The default publisher is the OTel
+    one; an alternative sink (e.g. a test double or a non-OTel exporter)
+    only has to implement :meth:`publish`.
+    """
+
+    def publish(self, snapshot: ServerMetricsSnapshot) -> None:
+        """
+        Publish one server metrics snapshot.
+
+        :param snapshot: Snapshot produced by
+            :meth:`ServerPerformanceMetrics.snapshot`.
+        """
+        ...
+
+
 class ServerMetricsOtelPublisher:
     """
     Publish server performance metrics through OpenTelemetry instruments.
@@ -970,15 +992,15 @@ def set_request_duration_for_access_log(duration_seconds: float | None) -> None:
 async def publish_server_metrics_periodically(
     metrics: ServerPerformanceMetrics,
     *,
-    otel_publisher: ServerMetricsOtelPublisher,
+    otel_publisher: SnapshotPublisher,
     interval_seconds: float = 10.0,
 ) -> None:
     """
     Publish server metrics snapshots to OpenTelemetry until cancelled.
 
     :param metrics: Metrics tracker to snapshot.
-    :param otel_publisher: OpenTelemetry publisher that emits
-        snapshot values as metrics.
+    :param otel_publisher: Snapshot publisher (the :class:`SnapshotPublisher`
+        seam) that emits snapshot values; defaults to the OTel publisher.
     :param interval_seconds: Delay between OTEL snapshots in seconds,
         e.g. ``10.0``.
     """

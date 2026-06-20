@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import os
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -74,6 +75,9 @@ def verify_hmac_signature(raw_body: bytes, secret: str, provided: str) -> bool:
     return hmac.compare_digest(expected, provided_hex)
 
 
+SecretResolver = Callable[[str], "str | None"]
+
+
 def default_secret_resolver(source: str) -> str | None:
     """Resolve a source's webhook secret from the environment.
 
@@ -83,6 +87,24 @@ def default_secret_resolver(source: str) -> str | None:
     """
     env_key = f"OMNIGENT_INGRESS_SECRET_{source.upper().replace('-', '_')}"
     return os.environ.get(env_key)
+
+
+# Injectable secret-resolver Strategy (BDP-2349 #16). Default = the env resolver
+# above; a deployment that keeps webhook secrets in a vault registers a different
+# resolver via `set_secret_resolver` instead of being hardwired to env. The route
+# resolves through `resolve_secret`, never `default_secret_resolver` directly.
+_secret_resolver: SecretResolver = default_secret_resolver
+
+
+def set_secret_resolver(resolver: SecretResolver | None) -> None:
+    """Install the active webhook secret *resolver* (``None`` restores the default)."""
+    global _secret_resolver
+    _secret_resolver = resolver if resolver is not None else default_secret_resolver
+
+
+def resolve_secret(source: str) -> str | None:
+    """Resolve *source*'s webhook secret via the active resolver Strategy."""
+    return _secret_resolver(source)
 
 
 def _to_binding(row: SqlWebhookBinding) -> WebhookBinding:
