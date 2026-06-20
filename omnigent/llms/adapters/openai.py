@@ -11,12 +11,12 @@ import codecs
 import json
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal, cast, overload
 
 import httpx
 
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.llms.adapters.base import BaseAdapter
+from omnigent.llms.adapters.base import BaseAdapter, ChatExtra
 from omnigent.llms.types import (
     NATIVE_TOOL_OUTPUT_TYPES,
     FunctionCallOutput,
@@ -33,6 +33,13 @@ from omnigent.llms.types import (
     ResponseTextDeltaEvent,
     Usage,
 )
+from omnigent.llms.wire_types import (
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatTool,
+    OpenAIConnection,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -43,7 +50,7 @@ _REQUEST_TIMEOUT = 120
 _STREAM_TIMEOUT = 300
 
 
-class OpenAICompatibleAdapter(BaseAdapter):
+class OpenAICompatibleAdapter(BaseAdapter[OpenAIConnection]):
     """
     Adapter for providers using the OpenAI Chat Completions format.
 
@@ -82,11 +89,11 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
     def _build_payload(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
+        tools: list[ChatTool] | None,
         stream: bool,
-        extra: dict[str, Any],
+        extra: ChatExtra,
     ) -> dict[str, Any]:
         """
         Build the Chat Completions request payload.
@@ -110,17 +117,43 @@ class OpenAICompatibleAdapter(BaseAdapter):
             payload.setdefault("stream_options", {"include_usage": True})
         return payload
 
+    @overload
     async def chat_completions(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
-        stream: bool,
-        extra: dict[str, Any],
+        tools: list[ChatTool] | None,
+        stream: Literal[False],
+        extra: ChatExtra,
         *,
-        connection_params: dict[str, str] | None = None,
+        connection_params: OpenAIConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> ChatCompletionResponse: ...
+
+    @overload
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: Literal[True],
+        extra: ChatExtra,
+        *,
+        connection_params: OpenAIConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: bool,
+        extra: ChatExtra,
+        *,
+        connection_params: OpenAIConnection | None = None,
         timeout: int | None = None,
-    ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]:
         """
         Send a Chat Completions request to the provider.
 
@@ -154,18 +187,24 @@ class OpenAICompatibleAdapter(BaseAdapter):
 
         if stream:
             effective_timeout = timeout if timeout is not None else _STREAM_TIMEOUT
-            return self._stream_request(
+            return cast(
+                "AsyncIterator[ChatCompletionChunk]",
+                self._stream_request(
+                    url,
+                    headers,
+                    payload,
+                    effective_timeout,
+                ),
+            )
+        effective_timeout = timeout if timeout is not None else _REQUEST_TIMEOUT
+        return cast(
+            "ChatCompletionResponse",
+            await self._send_request(
                 url,
                 headers,
                 payload,
                 effective_timeout,
-            )
-        effective_timeout = timeout if timeout is not None else _REQUEST_TIMEOUT
-        return await self._send_request(
-            url,
-            headers,
-            payload,
-            effective_timeout,
+            ),
         )
 
     async def _send_request(

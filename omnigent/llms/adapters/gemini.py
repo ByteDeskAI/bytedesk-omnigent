@@ -11,13 +11,22 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncIterator, Iterator
-from typing import Any
+from typing import Any, Literal, cast, overload
 
 import httpx
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.llms.adapters._content import parse_data_uri
-from omnigent.llms.adapters.base import BaseAdapter
+from omnigent.llms.adapters.base import BaseAdapter, ChatExtra
+from omnigent.llms.wire_types import (
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatTool,
+    ChatToolCall,
+    ChatUsage,
+    GeminiConnection,
+)
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 _REQUEST_TIMEOUT = 120
@@ -47,7 +56,7 @@ _GENERATION_CONFIG_NAMES = {
 }
 
 
-class GeminiAdapter(BaseAdapter):
+class GeminiAdapter(BaseAdapter[GeminiConnection]):
     """
     Adapter for the Google Gemini API.
 
@@ -88,17 +97,43 @@ class GeminiAdapter(BaseAdapter):
             "x-goog-api-key": api_key_override,
         }
 
+    @overload
     async def chat_completions(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
-        stream: bool,
-        extra: dict[str, Any],
+        tools: list[ChatTool] | None,
+        stream: Literal[False],
+        extra: ChatExtra,
         *,
-        connection_params: dict[str, str] | None = None,
+        connection_params: GeminiConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> ChatCompletionResponse: ...
+
+    @overload
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: Literal[True],
+        extra: ChatExtra,
+        *,
+        connection_params: GeminiConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: bool,
+        extra: ChatExtra,
+        *,
+        connection_params: GeminiConnection | None = None,
         timeout: int | None = None,
-    ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]:
         """
         Send a request to the Gemini API.
 
@@ -149,7 +184,7 @@ class GeminiAdapter(BaseAdapter):
         payload: dict[str, Any],
         model: str,
         timeout: int = _REQUEST_TIMEOUT,
-    ) -> dict[str, Any]:
+    ) -> ChatCompletionResponse:
         """
         Send a non-streaming Gemini request.
 
@@ -175,7 +210,7 @@ class GeminiAdapter(BaseAdapter):
         headers: dict[str, str],
         payload: dict[str, Any],
         timeout: int = _STREAM_TIMEOUT,
-    ) -> AsyncIterator[dict[str, Any]]:
+    ) -> AsyncIterator[ChatCompletionChunk]:
         """
         Send a streaming Gemini request.
 
@@ -209,9 +244,9 @@ class GeminiAdapter(BaseAdapter):
 
 
 def _chat_to_gemini(
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]] | None,
-    extra: dict[str, Any],
+    messages: list[ChatMessage],
+    tools: list[ChatTool] | None,
+    extra: ChatExtra,
 ) -> dict[str, Any]:
     """
     Convert Chat Completions messages to Gemini generateContent payload.
@@ -223,8 +258,11 @@ def _chat_to_gemini(
     """
     payload: dict[str, Any] = {}
 
-    # System instruction
-    system_parts = [m["content"] for m in messages if m["role"] == "system"]
+    # System instruction. System content is always a plain string on the
+    # wire; the cast narrows the typed ChatContent union with no runtime change.
+    system_parts = [
+        cast(str, m["content"]) for m in messages if m["role"] == "system"
+    ]
     if system_parts:
         payload["system_instruction"] = {"parts": [{"text": text} for text in system_parts]}
 
@@ -283,7 +321,7 @@ def _chat_to_gemini(
 
 
 def _assistant_tool_calls_to_parts(
-    m: dict[str, Any],
+    m: ChatMessage,
 ) -> list[dict[str, Any]]:
     """
     Convert assistant tool calls to Gemini functionCall parts.
@@ -294,7 +332,7 @@ def _assistant_tool_calls_to_parts(
     parts: list[dict[str, Any]] = []
     if content := m.get("content"):
         parts.append({"text": content})
-    for tc in m["tool_calls"]:
+    for tc in m.get("tool_calls") or []:
         func = tc["function"]
         parts.append(
             {
@@ -383,7 +421,7 @@ def _translate_part_to_gemini(part: dict[str, Any]) -> dict[str, Any]:
 
 
 def _convert_tools(
-    tools: list[dict[str, Any]],
+    tools: list[ChatTool],
 ) -> list[dict[str, Any]]:
     """
     Convert OpenAI tool schemas to Gemini functionDeclarations.
@@ -413,7 +451,7 @@ def _convert_tools(
 def _gemini_to_chat(
     resp: dict[str, Any],
     model: str,
-) -> dict[str, Any]:
+) -> ChatCompletionResponse:
     """
     Convert a Gemini generateContent response to Chat Completions format.
 
@@ -465,7 +503,7 @@ def _gemini_to_chat(
                 "message": {
                     "role": "assistant",
                     "content": content,
-                    "tool_calls": tool_calls or None,
+                    "tool_calls": cast("list[ChatToolCall] | None", tool_calls or None),
                 },
                 "finish_reason": finish_reason,
             }
@@ -476,7 +514,7 @@ def _gemini_to_chat(
 
 def _gemini_stream_chunk_to_chat(
     data: dict[str, Any],
-) -> Iterator[dict[str, Any]]:
+) -> Iterator[ChatCompletionChunk]:
     """
     Convert a single Gemini streaming chunk to Chat Completions chunks.
 
@@ -577,7 +615,7 @@ def _normalize_finish_reason(reason: str | None) -> str | None:
     return reason.lower()
 
 
-def _extract_usage(meta: dict[str, Any]) -> dict[str, Any]:
+def _extract_usage(meta: dict[str, Any]) -> ChatUsage:
     """
     Extract usage from Gemini usageMetadata.
 
@@ -594,7 +632,7 @@ def _extract_usage(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _empty_chat_response(model: str) -> dict[str, Any]:
+def _empty_chat_response(model: str) -> ChatCompletionResponse:
     """
     Return an empty Chat Completions response.
 

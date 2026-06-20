@@ -25,6 +25,13 @@ from omnigent.llms.types import (
     ResponseTextDeltaEvent,
     Usage,
 )
+from omnigent.llms.wire_types import (
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatToolCall,
+    ChatUsage,
+)
 
 # ── Input direction: Responses API -> Chat Completions ────
 
@@ -112,7 +119,7 @@ def _translate_block(block: dict[str, Any]) -> dict[str, Any]:
 def responses_input_to_chat_messages(
     input_items: list[dict[str, Any]],
     instructions: str | None,
-) -> list[dict[str, Any]]:
+) -> list[ChatMessage]:
     """
     Convert Responses API input items and instructions into Chat
     Completions messages.
@@ -129,12 +136,12 @@ def responses_input_to_chat_messages(
     :returns: Chat Completions message list suitable for any
         provider adapter.
     """
-    messages: list[dict[str, Any]] = []
+    messages: list[ChatMessage] = []
 
     if instructions:
         messages.append({"role": "system", "content": instructions})
 
-    pending_tool_calls: list[dict[str, Any]] = []
+    pending_tool_calls: list[ChatToolCall] = []
 
     for item in input_items:
         item_type = item.get("type")
@@ -201,7 +208,7 @@ def responses_input_to_chat_messages(
 
 
 def chat_response_to_response(
-    chat_dict: dict[str, Any],
+    chat_dict: ChatCompletionResponse,
 ) -> Response:
     """
     Convert a Chat Completions response dict into a Responses API
@@ -240,7 +247,7 @@ def chat_response_to_response(
     )
 
 
-def _extract_usage(usage_dict: dict[str, Any] | None) -> Usage | None:
+def _extract_usage(usage_dict: ChatUsage | None) -> Usage | None:
     """
     Map Chat Completions usage to Responses API usage.
 
@@ -312,7 +319,7 @@ def _extract_delta_content(
 
 
 async def chat_stream_to_response_events(
-    chunks: AsyncIterator[dict[str, Any]],
+    chunks: AsyncIterator[ChatCompletionChunk],
     model: str,
 ) -> AsyncIterator[ResponseStreamEvent]:
     """
@@ -334,7 +341,7 @@ async def chat_stream_to_response_events(
     accumulated_text = ""
     # tool_calls_by_index: {index: {"id": ..., "name": ..., "arguments": ...}}
     tool_calls_by_index: dict[int, dict[str, str]] = {}
-    usage_dict: dict[str, Any] | None = None
+    usage_dict: ChatUsage | None = None
     # Tracks whether a reasoning.started event has been emitted for the
     # current reasoning run; reset when a text delta arrives (reasoning
     # is always prepended before the answer).

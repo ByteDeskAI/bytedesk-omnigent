@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.llms.wire_types import Provider
 
 # Known providers and their default base URLs.
 # API keys come from connection_params at call time (llm.connection config),
@@ -32,6 +33,27 @@ PROVIDER_CONFIGS: dict[str, str | None] = {
 }
 
 _DEFAULT_PROVIDER = "openai"
+
+
+def validate_provider(provider: str) -> Provider:
+    """
+    Validate a provider identifier against the open provider registry.
+
+    The provider set is intentionally an open :data:`~omnigent.llms.wire_types.Provider`
+    ``NewType`` over ``str`` (not a closed ``Literal``), so it is checked at
+    this boundary against :data:`PROVIDER_CONFIGS` rather than by the type
+    system.
+
+    :param provider: A provider identifier, e.g. ``"anthropic"``.
+    :returns: The same value tagged as :data:`~omnigent.llms.wire_types.Provider`.
+    :raises OmnigentError: If *provider* is not in :data:`PROVIDER_CONFIGS`.
+    """
+    if provider not in PROVIDER_CONFIGS:
+        raise OmnigentError(
+            f"Unknown provider {provider!r}. Known providers: {sorted(PROVIDER_CONFIGS)}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return Provider(provider)
 
 
 @dataclass

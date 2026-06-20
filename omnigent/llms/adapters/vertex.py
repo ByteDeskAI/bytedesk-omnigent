@@ -12,11 +12,27 @@ Connection config (``project``, ``location``) must be provided via
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from typing import Any, Literal, cast, overload
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.llms.adapters.base import ChatExtra
 from omnigent.llms.adapters.gemini import GeminiAdapter
+from omnigent.llms.wire_types import (
+    ChatCompletionChunk,
+    ChatCompletionResponse,
+    ChatMessage,
+    ChatTool,
+    GeminiConnection,
+    VertexConnection,
+)
+
+# The union-returning ``chat_completions`` implementation type, used to
+# call ``super().chat_completions`` with a runtime ``bool`` ``stream``
+# (the parent's ``@overload``s only resolve for ``Literal`` ``stream``).
+_ChatCompletionsImpl = Callable[
+    ..., Awaitable[ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]]
+]
 
 _DEFAULT_SCOPES = ["https://www.googleapis.com/auth/cloud-platform"]
 
@@ -111,17 +127,43 @@ class VertexAdapter(GeminiAdapter):
             code=ErrorCode.INVALID_INPUT,
         )
 
+    @overload  # type: ignore[override]  # Vertex connection shape (project/location) intentionally differs from the GeminiConnection base param.
     async def chat_completions(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[ChatMessage],
         model: str,
-        tools: list[dict[str, Any]] | None,
-        stream: bool,
-        extra: dict[str, Any],
+        tools: list[ChatTool] | None,
+        stream: Literal[False],
+        extra: ChatExtra,
         *,
-        connection_params: dict[str, str] | None = None,
+        connection_params: VertexConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> ChatCompletionResponse: ...
+
+    @overload
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: Literal[True],
+        extra: ChatExtra,
+        *,
+        connection_params: VertexConnection | None = ...,
+        timeout: int | None = ...,
+    ) -> AsyncIterator[ChatCompletionChunk]: ...
+
+    async def chat_completions(
+        self,
+        messages: list[ChatMessage],
+        model: str,
+        tools: list[ChatTool] | None,
+        stream: bool,
+        extra: ChatExtra,
+        *,
+        connection_params: VertexConnection | None = None,
         timeout: int | None = None,
-    ) -> dict[str, Any] | AsyncIterator[dict[str, Any]]:
+    ) -> ChatCompletionResponse | AsyncIterator[ChatCompletionChunk]:
         """
         Send a request to Vertex AI.
 
@@ -140,7 +182,10 @@ class VertexAdapter(GeminiAdapter):
             or lacks required keys.
         """
         resolved_params = _resolve_vertex_params(connection_params)
-        return await super().chat_completions(
+        # ``stream`` is a runtime bool, so call the union-returning
+        # implementation rather than the parent's Literal-split overloads.
+        impl = cast("_ChatCompletionsImpl", super().chat_completions)
+        return await impl(
             messages,
             model,
             tools,
@@ -152,8 +197,8 @@ class VertexAdapter(GeminiAdapter):
 
 
 def _resolve_vertex_params(
-    connection_params: dict[str, str] | None,
-) -> dict[str, str]:
+    connection_params: VertexConnection | None,
+) -> GeminiConnection:
     """
     Convert Vertex-specific ``"project"``/``"location"`` keys into
     a ``"base_url"`` that the parent Gemini adapter understands.
@@ -163,7 +208,7 @@ def _resolve_vertex_params(
 
     :param connection_params: Raw connection params from the caller.
         Must contain ``"project"`` + ``"location"`` or ``"base_url"``.
-    :returns: Params with ``"base_url"`` resolved.
+    :returns: Params with ``"base_url"`` resolved, in the Gemini shape.
     :raises OmnigentError: If params are missing or incomplete.
     """
     if not connection_params:
@@ -175,7 +220,7 @@ def _resolve_vertex_params(
 
     # If caller provided a full base_url, pass through as-is.
     if "base_url" in connection_params:
-        return connection_params
+        return cast("GeminiConnection", connection_params)
 
     project = connection_params.get("project")
     location = connection_params.get("location")
@@ -189,10 +234,13 @@ def _resolve_vertex_params(
             "Vertex AI requires 'location' in connection_params (from llm.connection config)",
             code=ErrorCode.INVALID_INPUT,
         )
-    return {
-        **connection_params,
-        "base_url": _build_vertex_url(project, location),
-    }
+    return cast(
+        "GeminiConnection",
+        {
+            **connection_params,
+            "base_url": _build_vertex_url(project, location),
+        },
+    )
 
 
 def _build_vertex_url(project: str, location: str) -> str:
