@@ -73,13 +73,11 @@ patches:
                 # hot-reload (fresh import per conversation); this closes the gap
                 # for the long-lived server (seeding, spec validation, catalog).
                 command:
-                  - python
-                  - -m
-                  - watchfiles
-                  - --filter
-                  - python
-                  - python /app/entrypoint.py
-                  - /build/omnigent
+                  - sh
+                  - -c
+                  - |
+                    pip install -q 'nats-py>=2.7' && \
+                    exec python /app/entrypoint.py
                 env:
                   # hostPath bind mounts don't always deliver inotify events into
                   # the container; polling is reliable across the mount boundary.
@@ -110,6 +108,15 @@ patches:
                     value: /build
                   - name: OMNIGENT_EXTENSIONS
                     value: bytedesk_omnigent.extension:BytedeskExtension
+                  - name: OMNIGENT_NATS_URL
+                    value: nats://omnigent-nats:4222
+                readinessProbe:
+                  initialDelaySeconds: 60
+                  periodSeconds: 10
+                livenessProbe:
+                  initialDelaySeconds: 180
+                  periodSeconds: 15
+                  failureThreshold: 6
                 volumeMounts:
                   - name: omnigent-src
                     mountPath: /build
