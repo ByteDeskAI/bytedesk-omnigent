@@ -153,6 +153,24 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class GoogleWorkspaceWebhookAdapter:
+    """Google Workspace push-channel adapter.
+
+    Google Drive, Calendar, Gmail, and Admin SDK push notifications authenticate
+    by echoing the caller-provided ``X-Goog-Channel-Token`` rather than signing
+    the body. Route bindings by ``X-Goog-Resource-State`` (for example ``sync``
+    or ``exists``), with ``"*"`` as the catch-all when Google omits the state.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
+        provided = _header(headers, "x-goog-channel-token")
+        return bool(provided) and hmac.compare_digest(provided, secret)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-goog-resource-state") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +195,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("google-workspace", GoogleWorkspaceWebhookAdapter)
     return registry
 
 
