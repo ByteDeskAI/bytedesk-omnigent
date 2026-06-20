@@ -18,9 +18,14 @@ import importlib
 import logging
 import os
 from importlib.metadata import entry_points
-from typing import Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
-from fastapi import APIRouter, FastAPI
+if TYPE_CHECKING:
+    # Annotation-only (deferred by `from __future__ import annotations`).
+    # Kept out of the runtime import graph so importing this discovery hub —
+    # and therefore any PluggableRegistry that discovers extensions — does NOT
+    # drag in the ~100ms FastAPI stack on the runner hot path.
+    from fastapi import APIRouter, FastAPI
 
 logger = logging.getLogger(__name__)
 

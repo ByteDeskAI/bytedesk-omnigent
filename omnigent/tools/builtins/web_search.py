@@ -264,7 +264,9 @@ def _build_provider_registry() -> PluggableRegistry[WebSearchProvider]:
     registry: PluggableRegistry[WebSearchProvider] = PluggableRegistry("web_search")
     registry.register("google", _GoogleProvider)
     registry.register("perplexity", _PerplexityProvider)
-    registry.discover_extensions(hook="web_search_providers")
+    # Extension discovery deferred to server startup (Wave-2 composition root):
+    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
+    # Hook: 'web_search_providers'.
     return registry
 
 

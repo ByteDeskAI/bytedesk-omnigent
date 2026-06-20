@@ -190,7 +190,9 @@ def _build_registry() -> PluggableRegistry[HarnessDescriptor]:
     )
     for descriptor in rest:
         registry.register(descriptor.name, lambda d=descriptor: d)
-    registry.discover_extensions(hook="harness_descriptors")
+    # Extension discovery deferred to server startup (Wave-2 composition root):
+    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
+    # Hook: 'harness_descriptors'.
     return registry
 
 

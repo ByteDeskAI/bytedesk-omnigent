@@ -185,7 +185,9 @@ def build_spec_source_registry(
     registry: PluggableRegistry[SpecSource] = PluggableRegistry(
         SEAM, default=("filesystem", lambda: FilesystemSpecSource(root))
     )
-    registry.discover_extensions(hook=EXTENSION_HOOK)
+    # Extension discovery deferred to server startup (Wave-2 composition root):
+    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
+    # Hook: EXTENSION_HOOK.
     return registry
 
 
