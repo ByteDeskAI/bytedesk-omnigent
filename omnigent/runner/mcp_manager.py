@@ -10,7 +10,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from mcp.types import ElicitRequestParams, ElicitResult
 from mcp.types import Tool as McpToolDef
@@ -19,7 +19,50 @@ from omnigent.spec.types import AgentSpec, MCPServerConfig
 from omnigent.tools.base import is_valid_tool_name
 from omnigent.tools.mcp import McpServerConnection
 
+if TYPE_CHECKING:
+    import httpx
+
 _logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class McpManager(Protocol):
+    """The runner-side MCP manager seam (BDP-2348).
+
+    Formalizes the ``mcp_manager: Any`` duck type that the runner dispatch
+    sites share across the two concrete backends — the direct
+    :class:`RunnerMcpManager` (local MCP connections) and the
+    :class:`~omnigent.runner.proxy_mcp_manager.ProxyMcpManager` (calls routed
+    through the Omnigent server MCP proxy). Both already satisfy this Protocol
+    structurally; typing the carrier as :class:`McpManager` (sweep-2
+    BDP-2363) lets dispatch depend on the seam, not a concrete class.
+
+    The four methods are exactly the surface the dispatch sites call. Note that
+    ``call_tool``'s signature differs between backends (the direct manager
+    accepts a ``session_id`` keyword the proxy omits); the Protocol declares the
+    common shape and ``runtime_checkable`` matches on method presence.
+    """
+
+    async def schemas_for(self, spec: AgentSpec) -> McpSchemasResult:
+        """Resolve the MCP tool schemas available for *spec*."""
+        ...
+
+    async def call_tool(
+        self,
+        spec: AgentSpec | None,
+        tool_name: str,
+        arguments: dict[str, Any],
+    ) -> str:
+        """Dispatch *tool_name* with *arguments*; return the result string."""
+        ...
+
+    async def prewarm(self, spec: AgentSpec) -> None:
+        """Optionally warm connections for *spec* ahead of first use."""
+        ...
+
+    async def shutdown(self) -> None:
+        """Release any resources held by the manager."""
+        ...
 
 
 def _build_accept_content(
@@ -618,3 +661,44 @@ class RunnerMcpManager:
                 }
             )
         return {"specs": out_specs}
+
+
+def make_mcp_manager(
+    *,
+    session_id: str | None = None,
+    server_client: httpx.AsyncClient | None = None,
+    stdio_cwd: Path | None = None,
+    publish_event: Callable[[str, dict[str, Any]], None] | None = None,
+) -> McpManager:
+    """Construct the right :class:`McpManager` backend for the call context.
+
+    Selects between the two backends by whether a ``session_id`` is supplied:
+
+    - **Proxy mode** (``session_id`` given): a
+      :class:`~omnigent.runner.proxy_mcp_manager.ProxyMcpManager` bound to that
+      session, routing every MCP call through the Omnigent server proxy
+      (central policy enforcement). Requires ``server_client``.
+    - **Direct mode** (no ``session_id``): a :class:`RunnerMcpManager` holding
+      local MCP connections, enforcing policy in-runner.
+
+    Both returned managers satisfy the :class:`McpManager` Protocol.
+
+    :param session_id: Omnigent session id; its presence selects proxy mode.
+    :param server_client: HTTP client pointed at the Omnigent server. Used as
+        the proxy transport in proxy mode and as the elicitation channel in
+        direct mode.
+    :param stdio_cwd: Working directory for spawned stdio MCP subprocesses
+        (direct mode only).
+    :param publish_event: SSE publish callback for the proxy approval flow
+        (proxy mode only).
+    :returns: A direct or proxy MCP manager.
+    :raises ValueError: if proxy mode is selected without a ``server_client``.
+    """
+    if session_id is not None:
+        if server_client is None:
+            raise ValueError("proxy MCP manager requires a server_client")
+        from omnigent.runner.proxy_mcp_manager import ProxyMcpManager
+
+        return ProxyMcpManager(session_id, server_client, publish_event=publish_event)
+
+    return RunnerMcpManager(stdio_cwd=stdio_cwd, server_client=server_client)

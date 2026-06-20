@@ -27,11 +27,30 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from omnigent.tools.base import Tool, ToolContext
 
+if TYPE_CHECKING:
+    from omnigent.pluggable import PluggableRegistry
+
 _logger = logging.getLogger(__name__)
+
+
+@runtime_checkable
+class WebSearchProvider(Protocol):
+    """One web-search backend (the ``web_search`` pluggable seam, BDP-2348).
+
+    A provider runs a query using credentials carried in the agent's spec
+    config and returns a formatted, human-readable result string. Providers
+    are selected by name from ``config["search_provider"]`` via the seam's
+    :class:`~omnigent.pluggable.PluggableRegistry`; new backends (Brave,
+    SearXNG, Tavily, Bing, self-hosted) plug in by registration alone.
+    """
+
+    def search(self, query: str, config: dict[str, str]) -> str:
+        """Run *query* using *config* credentials; return a result string."""
+        ...
 
 
 class WebSearchTool(Tool):
@@ -166,80 +185,114 @@ class WebSearchTool(Tool):
         return _search(query, self._config)
 
 
+_UNCONFIGURED_HELP = (
+    "web_search requires configuration for non-OpenAI models. "
+    "(For OpenAI models, web_search works automatically with no "
+    "config needed.)\n\n"
+    "Set search_provider and credentials in config.yaml:\n"
+    "  tools:\n"
+    "    builtins:\n"
+    "      - name: web_search\n"
+    "        search_provider: perplexity  # or google\n"
+    "        api_key: ${PERPLEXITY_API_KEY}\n\n"
+    "Supported backends:\n"
+    "  - google (requires api_key + engine_id)\n"
+    "  - perplexity (requires api_key)"
+)
+
+
+class _GoogleProvider:
+    """Built-in ``google`` provider — Google Custom Search."""
+
+    def search(self, query: str, config: dict[str, str]) -> str:
+        """
+        Run a Google Custom Search query using spec config credentials.
+
+        :param query: The search query.
+        :param config: Must contain ``api_key`` and ``engine_id``.
+        :returns: Formatted results or an error message.
+        """
+        from omnigent.tools.builtins.web_search_google import (
+            _search_google,
+        )
+
+        api_key = config.get("api_key")
+        engine_id = config.get("engine_id")
+        if not api_key or not engine_id:
+            return "Google web search requires api_key and engine_id in the web_search config."
+
+        return _search_google(query, config)
+
+
+class _PerplexityProvider:
+    """Built-in ``perplexity`` provider — Perplexity online search."""
+
+    def search(self, query: str, config: dict[str, str]) -> str:
+        """
+        Run a Perplexity search query using spec config credentials.
+
+        :param query: The search query.
+        :param config: Must contain ``api_key``.
+        :returns: Answer with citations or an error message.
+        """
+        from omnigent.tools.builtins.web_search_perplexity import (
+            _search_perplexity,
+        )
+
+        api_key = config.get("api_key")
+        if not api_key:
+            return "Perplexity web search requires api_key in the web_search config."
+
+        return _search_perplexity(query, config)
+
+
+def _build_provider_registry() -> PluggableRegistry[WebSearchProvider]:
+    """Build the ``web_search`` provider seam registry, keyed by provider name.
+
+    The two built-in providers (``google``, ``perplexity``) are registered;
+    selection happens by name from ``config["search_provider"]``. There is no
+    registered default — selection is always explicit (an empty
+    ``search_provider`` is handled by :func:`_search` as the unconfigured help
+    path, preserving the historical message). Extensions can contribute
+    providers (Brave/SearXNG/Tavily/Bing/self-hosted) via a
+    ``web_search_providers`` hook.
+
+    :returns: The provider registry for the ``web_search`` seam.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[WebSearchProvider] = PluggableRegistry("web_search")
+    registry.register("google", _GoogleProvider)
+    registry.register("perplexity", _PerplexityProvider)
+    registry.discover_extensions(hook="web_search_providers")
+    return registry
+
+
 def _search(query: str, config: dict[str, str]) -> str:
     """
     Run a web search using the backend specified in config.
 
-    The ``search_provider`` key in config determines which backend
-    to use. No env var fallbacks — the spec must be self-contained.
+    The ``search_provider`` key in config selects a registered
+    :class:`WebSearchProvider` via the seam's
+    :class:`~omnigent.pluggable.PluggableRegistry`. No env var fallbacks —
+    the spec must be self-contained.
 
     :param query: The search query string.
     :param config: Spec-level config. Required keys:
 
-        - ``search_provider``: ``"google"`` or ``"perplexity"``
+        - ``search_provider``: a registered provider name (e.g. ``"google"``
+          or ``"perplexity"``)
         - ``api_key``: API key for the chosen backend
         - ``engine_id``: Required for Google only
 
     :returns: Search results, or an error message.
+    :raises ProviderNotRegistered: if ``search_provider`` names an unknown
+        provider (an empty/missing value returns the unconfigured help
+        message instead).
     """
     backend = config.get("search_provider")
+    if not backend:
+        return _UNCONFIGURED_HELP
 
-    if backend == "google":
-        return _run_google(query, config)
-
-    if backend == "perplexity":
-        return _run_perplexity(query, config)
-
-    return (
-        "web_search requires configuration for non-OpenAI models. "
-        "(For OpenAI models, web_search works automatically with no "
-        "config needed.)\n\n"
-        "Set search_provider and credentials in config.yaml:\n"
-        "  tools:\n"
-        "    builtins:\n"
-        "      - name: web_search\n"
-        "        search_provider: perplexity  # or google\n"
-        "        api_key: ${PERPLEXITY_API_KEY}\n\n"
-        "Supported backends:\n"
-        "  - google (requires api_key + engine_id)\n"
-        "  - perplexity (requires api_key)"
-    )
-
-
-def _run_google(query: str, config: dict[str, str]) -> str:
-    """
-    Run a Google Custom Search query using spec config credentials.
-
-    :param query: The search query.
-    :param config: Must contain ``api_key`` and ``engine_id``.
-    :returns: Formatted results or an error message.
-    """
-    from omnigent.tools.builtins.web_search_google import (
-        _search_google,
-    )
-
-    api_key = config.get("api_key")
-    engine_id = config.get("engine_id")
-    if not api_key or not engine_id:
-        return "Google web search requires api_key and engine_id in the web_search config."
-
-    return _search_google(query, config)
-
-
-def _run_perplexity(query: str, config: dict[str, str]) -> str:
-    """
-    Run a Perplexity search query using spec config credentials.
-
-    :param query: The search query.
-    :param config: Must contain ``api_key``.
-    :returns: Answer with citations or an error message.
-    """
-    from omnigent.tools.builtins.web_search_perplexity import (
-        _search_perplexity,
-    )
-
-    api_key = config.get("api_key")
-    if not api_key:
-        return "Perplexity web search requires api_key in the web_search config."
-
-    return _search_perplexity(query, config)
+    provider = _build_provider_registry().get(backend)
+    return provider.search(query, config)
