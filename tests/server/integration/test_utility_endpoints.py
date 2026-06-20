@@ -89,3 +89,32 @@ async def test_me_returns_null_user_without_auth(client: httpx.AsyncClient) -> N
     assert resp.status_code == 200
     data = resp.json()
     assert data["user_id"] is None
+
+
+# ── GET /v1/_capabilities (BDP-2374) ─────────────────────
+
+# Expected registered default impl per live pluggable seam. Regression net:
+# if a seam's default silently changes, this map drifts and the test fails.
+_EXPECTED_SEAM_DEFAULTS: dict[str, str | None] = {
+    "harness": "claude-sdk",
+    "artifact_store": "local",
+    "web_search": None,  # no registered default — selection is always explicit
+    "memory_embedder": "fastembed",
+    "agent_memory": "composed",
+    "spec_source": "filesystem",
+}
+
+
+async def test_capabilities_returns_manifest(client: httpx.AsyncClient) -> None:
+    """``GET /v1/_capabilities`` is unauthed 200 and lists every seam's default."""
+    resp = await client.get("/v1/_capabilities")
+    assert resp.status_code == 200
+    data = resp.json()
+    seams = {entry["seam"]: entry for entry in data["seams"]}
+    assert set(seams) == set(_EXPECTED_SEAM_DEFAULTS)
+    for seam, default_impl in _EXPECTED_SEAM_DEFAULTS.items():
+        entry = seams[seam]
+        # describe() keys + the manifest's override_env are all present.
+        assert {"names", "active", "default", "override_env"} <= set(entry), seam
+        assert entry["default"] == default_impl, seam
+        assert entry["override_env"] == f"OMNIGENT_USE_{seam.upper()}", seam
