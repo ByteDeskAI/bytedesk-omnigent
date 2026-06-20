@@ -47,6 +47,7 @@ from typing import Any
 
 from omnigent.spec.types import LocalToolInfo
 from omnigent.tools.base import Tool, ToolContext
+from omnigent.tools.result_formatter import DEFAULT_TOOL_RESULT_FORMATTER
 
 _logger = logging.getLogger(__name__)
 
@@ -262,21 +263,13 @@ def _stringify(value: Any) -> str:
     """
     Coerce a tool's return value into a string for the workflow.
 
-    Strings pass through; ``None`` becomes the empty string;
-    everything else routes through :func:`json.dumps` with a
-    fallback to :func:`repr` for objects JSON cannot encode.
-    The legacy omnigent path stringifies tool results the same
-    way, so behavior round-trips cleanly between paths.
+    Delegates to the shared :data:`DEFAULT_TOOL_RESULT_FORMATTER` so the
+    in-process raw-value path renders identically to the MCP
+    content-block path (``mcp._format_content_block``) — see
+    :mod:`omnigent.tools.result_formatter`.
 
     :param value: The wrapped callable's return value.
     :returns: A string suitable for the
         ``function_call_output.output`` field.
     """
-    if value is None:
-        return ""
-    if isinstance(value, str):
-        return value
-    try:
-        return json.dumps(value)
-    except (TypeError, ValueError):
-        return repr(value)
+    return DEFAULT_TOOL_RESULT_FORMATTER.format_value(value)
