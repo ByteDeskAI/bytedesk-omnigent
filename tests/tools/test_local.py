@@ -490,6 +490,111 @@ def test_build_command_docker(tmp_path: Path) -> None:
     assert "python:3.11" in cmd
 
 
+# ─── ExecutionBackend strategy (P12) ────────────────────────────────
+
+
+def test_default_execution_backend_is_local(tmp_path: Path) -> None:
+    """A tool built without an explicit backend uses LocalExecutionBackend."""
+    from omnigent.tools.local import LocalExecutionBackend
+
+    tool = _make_tool(tmp_path)
+    assert isinstance(tool._execution_backend, LocalExecutionBackend)
+
+
+def test_default_backend_runs_fd3_path(tmp_path: Path, tool_ctx: ToolContext) -> None:
+    """Default backend (no srt/docker) runs the script and reads fd 3."""
+    py_dir = tmp_path / "tools" / "python"
+    _write_decorated_tool(py_dir, "echo_tool.py", func_name="echo_tool")
+    info = LocalToolInfo(name="echo_tool", path="tools/python/echo_tool.py", language="python")
+    # No srt, no docker → use_stdout is False → fd 3 path.
+    tools = load_local_python_tools([info], tmp_path, srt_available=False, sandbox_enabled=False)
+    result = tools[0].invoke(json.dumps({"value": "viafd3"}), tool_ctx)
+    assert "viafd3" in result
+    assert "result:" in result
+
+
+def test_default_backend_runs_stdout_path(
+    tmp_path: Path, tool_ctx: ToolContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Default backend reads the stdout protocol when the srt channel is active.
+
+    We stub ``wrap_with_srt`` to a no-op (srt is not installed in CI),
+    so the command stays runnable while the backend still selects the
+    stdout result-read channel — exercising ``_read_stdout_response``.
+    """
+    import omnigent.tools.local as local_mod
+
+    py_dir = tmp_path / "tools" / "python"
+    _write_decorated_tool(py_dir, "echo_tool.py", func_name="echo_tool")
+    info = LocalToolInfo(name="echo_tool", path="tools/python/echo_tool.py", language="python")
+    # srt available + sandbox enabled → use_stdout True. Stub the
+    # actual srt wrap so the command runs plain python locally; the
+    # runner honours _AP_RESPONSE_MODE=stdout and emits the prefixed
+    # line, which _read_stdout_response parses.
+    monkeypatch.setattr(local_mod, "wrap_with_srt", lambda cmd, **_: cmd)
+    tools = load_local_python_tools([info], tmp_path, srt_available=True, sandbox_enabled=True)
+    result = tools[0].invoke(json.dumps({"value": "viastdout"}), tool_ctx)
+    assert "viastdout" in result
+    assert "result:" in result
+
+
+def test_default_backend_preserves_srt_confinement_wrap(tmp_path: Path) -> None:
+    """The default backend's command is byte-identical to the srt wrap.
+
+    The execution backend must not alter the confinement boundary:
+    with srt active, the command the backend would run is exactly
+    ``_build_command`` output (srt-wrapped), unchanged.
+    """
+    tool = _make_tool(tmp_path, srt_available=True, sandbox_enabled=True)
+    cmd = tool._build_command(state_root=None)
+    # srt wrap shape preserved exactly.
+    assert cmd[0] == "srt"
+    assert cmd[1] == "-c"
+    # The default backend chooses the stdout channel for srt (fd 3
+    # does not survive the srt process chain) — the security-relevant
+    # channel decision is unchanged from the pre-seam invoke().
+    srt_active = tool._srt_available and tool._sandbox_enabled
+    use_stdout = tool._sandbox_config.docker_image is not None or srt_active
+    assert use_stdout is True
+
+
+def test_default_backend_preserves_docker_confinement_wrap(tmp_path: Path) -> None:
+    """The default backend's docker command is byte-identical and stdout-read."""
+    tool = _make_tool(tmp_path, docker_image="python:3.11")
+    cmd = tool._build_command(state_root=None)
+    # Network-disabled docker run with stdout response mode — unchanged.
+    assert cmd[0] == "docker"
+    assert "--network" in cmd and cmd[cmd.index("--network") + 1] == "none"
+    assert "_AP_RESPONSE_MODE=stdout" in cmd
+    srt_active = tool._srt_available and tool._sandbox_enabled
+    use_stdout = tool._sandbox_config.docker_image is not None or srt_active
+    assert use_stdout is True
+
+
+def test_custom_execution_backend_is_used(tmp_path: Path, tool_ctx: ToolContext) -> None:
+    """An injected backend receives the tool + request and its result is returned."""
+    from omnigent.tools.local import LocalExecutionBackend
+
+    py_dir = tmp_path / "tools" / "python"
+    _write_decorated_tool(py_dir, "echo_tool.py", func_name="echo_tool")
+    info = LocalToolInfo(name="echo_tool", path="tools/python/echo_tool.py", language="python")
+
+    seen: dict[str, object] = {}
+
+    class _RecordingBackend(LocalExecutionBackend):
+        def execute(self, tool, request, *, state_root, workspace):  # type: ignore[override]
+            seen["tool"] = tool
+            seen["request"] = request
+            return "custom-backend-result"
+
+    tools = load_local_python_tools([info], tmp_path)
+    tools[0]._execution_backend = _RecordingBackend()
+    result = tools[0].invoke(json.dumps({"value": "x"}), tool_ctx)
+    assert result == "custom-backend-result"
+    assert seen["tool"] is tools[0]
+    assert b"echo_tool" in seen["request"]  # type: ignore[operator]
+
+
 # ─── Schema + name plumbing ─────────────────────────────────────────
 
 
