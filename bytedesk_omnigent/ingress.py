@@ -153,6 +153,37 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+@dataclass(frozen=True)
+class DeclarativeHmacWebhookAdapter:
+    """Config-driven HMAC webhook adapter for header-only SaaS contracts.
+
+    Most integration webhooks vary only by signature header, event header, and
+    optional signature prefix. This adapter lets Omnigent register those sources
+    from a manifest/config seam without adding a bespoke Python class per app.
+    """
+
+    signature_header: str
+    event_header: str | None = None
+    signature_prefix: str = ""
+    default_event: str = "*"
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, self.signature_header)
+        if not provided:
+            return False
+        if self.signature_prefix:
+            if not provided.startswith(self.signature_prefix):
+                return False
+            provided = provided[len(self.signature_prefix) :]
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(expected, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        if self.event_header is None:
+            return self.default_event
+        return _header(headers, self.event_header) or self.default_event
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -192,6 +223,26 @@ def register_webhook_adapter(
     if _webhook_adapter_registry is None:
         _webhook_adapter_registry = _build_webhook_adapter_registry()
     _webhook_adapter_registry.register(source, factory)
+
+
+def register_declarative_hmac_webhook_adapter(
+    source: str,
+    *,
+    signature_header: str,
+    event_header: str | None = None,
+    signature_prefix: str = "",
+    default_event: str = "*",
+) -> None:
+    """Register a manifest-described HMAC webhook adapter for *source*."""
+    register_webhook_adapter(
+        source,
+        lambda: DeclarativeHmacWebhookAdapter(
+            signature_header=signature_header,
+            event_header=event_header,
+            signature_prefix=signature_prefix,
+            default_event=default_event,
+        ),
+    )
 
 
 def resolve_webhook_adapter(source: str) -> WebhookSourceAdapter:
