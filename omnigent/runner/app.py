@@ -29,6 +29,14 @@ if TYPE_CHECKING:
     # graph (they are imported lazily inside the codex-native helpers).
     from omnigent.codex_native_app_server import CodexAppServerClient
     from omnigent.runner.cost_advisor import AdvisorTurnResult
+
+    # Boundary payload TypedDicts (sweep-2 BDP-2366). Imported type-only so
+    # the runtime ``app`` <-> ``tool_dispatch`` import stays lazy (the cycle
+    # both modules already break with function-level imports).
+    from omnigent.runner.tool_dispatch import (
+        SessionSnapshotPayload,
+        SubagentInboxPayload,
+    )
     from omnigent.terminals.registry import TerminalListEntry
 
 import httpx
@@ -837,7 +845,7 @@ async def _auto_create_grok_terminal(
     publish_event: Callable[[str, dict[str, Any]], None],
     *,
     server_client: httpx.AsyncClient | None = None,
-) -> "SessionResourceView":
+) -> SessionResourceView:
     """
     Auto-create a Grok TUI terminal for a grok-native session.
 
@@ -3789,20 +3797,19 @@ def _deliver_subagent_completion(entry: _SubagentWorkEntry) -> _SubagentDelivery
     output = entry.output
     if output is None:
         output = "[System: sub-agent completed with no output]"
-    inbox.put_nowait(
-        {
-            "type": "sub_agent",
-            "work_id": entry.work_id,
-            "task_id": entry.child_session_id,
-            "handle_id": entry.child_session_id,
-            "conversation_id": entry.child_session_id,
-            "tool_name": entry.agent,
-            "agent": entry.agent,
-            "title": entry.title,
-            "status": entry.status,
-            "output": output,
-        }
-    )
+    payload: SubagentInboxPayload = {
+        "type": "sub_agent",
+        "work_id": entry.work_id,
+        "task_id": entry.child_session_id,
+        "handle_id": entry.child_session_id,
+        "conversation_id": entry.child_session_id,
+        "tool_name": entry.agent,
+        "agent": entry.agent,
+        "title": entry.title,
+        "status": entry.status,
+        "output": output,
+    }
+    inbox.put_nowait(payload)
     entry.delivered = True
     return _SubagentDeliveryAck(
         entry=entry,
@@ -4849,7 +4856,9 @@ def create_runner_app(
                 resp = await server_client.get(f"/v1/sessions/{session_id}")
                 status_code = resp.status_code
                 if resp.status_code == 200:
-                    body = resp.json()
+                    # The GET /v1/sessions/{id} body — read defensively via
+                    # ``.get`` (sweep-2 BDP-2366 names the projected subset).
+                    body: SessionSnapshotPayload = resp.json()
                     raw_created = body.get("created_at")
                     if raw_created is not None:
                         created_at = float(raw_created)

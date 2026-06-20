@@ -8,7 +8,14 @@ the summarization prompt and response-parsing logic stay in one place.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Deferred so this shared hot-path module (imported by the runner) does
+    # not pull the LLM response dataclasses at import time. ``Response`` is a
+    # pure dataclass tree (no fastapi/openai) but the import stays lazy for
+    # parity with the rest of the runner-shared modules.
+    from omnigent.llms.types import Response
 
 _SUMMARIZATION_BASE_PROMPT = (
     "Summarize the conversation above so that a future assistant can continue\n"
@@ -98,14 +105,15 @@ def build_summarization_input(
     return [*messages, {"role": "user", "content": _SUMMARIZATION_TRIGGER_MESSAGE}]
 
 
-def extract_summary_text(resp: Any) -> str:
+def extract_summary_text(resp: Response) -> str:
     """
     Extract plain text from an LLM Responses API response object.
 
     Iterates over ``resp.output`` items and concatenates all text
     blocks found in their ``content`` attributes.
 
-    :param resp: Response object from ``llm_client.responses.create()``.
+    :param resp: :class:`~omnigent.llms.types.Response` from
+        ``llm_client.responses.create()``.
     :returns: Concatenated summary text, or ``""`` if no text blocks
         are present.
     """
