@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_demo_scenarios import (
+    compile_integration_demo_scenario,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -45,6 +48,19 @@ def create_integration_capabilities_router(
                 "categories": integration_capability_categories(),
             }
         )
+
+    @router.get("/integration-capabilities/{slug}/demo-scenario")
+    async def get_capability_demo_scenario(request: Request, slug: str) -> JSONResponse:
+        """Read a deterministic demo scenario for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        scenario = compile_integration_demo_scenario(slug)
+        if scenario is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(scenario.to_dict())
 
     @router.get("/integration-capabilities/{slug}")
     async def get_capability(request: Request, slug: str) -> JSONResponse:
