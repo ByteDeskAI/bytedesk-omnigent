@@ -44,17 +44,23 @@ from omnigent.stores.conversation_store.sqlalchemy_store import (
 from omnigent.stores.policy_store.sqlalchemy_store import SqlAlchemyPolicyStore
 from tests.parity._harness import (
     assert_or_capture_golden,
+    golden_capture_enabled,
     golden_exists,
 )
 
 
 def _replay_golden(name: str, observed: object) -> None:
-    """Assert against the golden baseline, or skip until one is captured.
+    """Capture the golden baseline, or assert against it (BDP-2326).
 
-    The capture wiring (``OMNIGENT_PARITY_CAPTURE=1`` on the legacy path)
-    lands as a focused follow-up; until a ``_golden/<name>.json`` exists,
-    the replay leg is a clean skip rather than a hard failure.
+    In capture mode (``OMNIGENT_PARITY_CAPTURE=1`` on the legacy path) the
+    normalized contract is written to ``_golden/<name>.json`` even when no
+    baseline exists yet — that first capture is the whole point of the
+    capture run. Outside capture mode the golden is asserted; if it is
+    somehow still absent the replay leg skips rather than hard-failing.
     """
+    if golden_capture_enabled():
+        assert_or_capture_golden(name, observed)
+        return
     if not golden_exists(name):
         pytest.skip(
             f"TODO(golden): capture {name!r} baseline "
