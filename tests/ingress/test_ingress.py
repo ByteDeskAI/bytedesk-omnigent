@@ -8,6 +8,8 @@ import json
 import time
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
@@ -15,7 +17,9 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    WebhookAdapterDescriptor,
     WebhookSourceAdapter,
+    describe_webhook_adapters,
     process_inbound,
     register_webhook_adapter,
     resolve_webhook_adapter,
@@ -156,8 +160,11 @@ def test_process_inbound_expired_wait_returns_410_not_409(tmp_path) -> None:
 def _restore_adapter_registry():
     """Restore the module-level adapter registry after a test registers one."""
     saved = _ingress_mod._webhook_adapter_registry
+    saved_descriptors = dict(_ingress_mod._webhook_adapter_descriptors)
+    _ingress_mod._webhook_adapter_registry = None
     yield
     _ingress_mod._webhook_adapter_registry = saved
+    _ingress_mod._webhook_adapter_descriptors = saved_descriptors
 
 
 def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
@@ -203,3 +210,78 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_webhook_adapter_manifest_describes_setup_contract(
+    _restore_adapter_registry,
+) -> None:
+    """The ingress adapter manifest exposes setup-safe integration metadata.
+
+    ByteDesk Platform can render the headers, event routing key, and secret env var
+    an operator needs without seeing any actual secret values.
+    """
+
+    class _BearerAdapter:
+        def verify(self, raw_body, headers, secret) -> bool:
+            return headers.get("x-example-token") == secret
+
+        def match_key(self, headers) -> str:
+            return headers.get("x-example-event", "*")
+
+    register_webhook_adapter(
+        "examplecrm",
+        _BearerAdapter,
+        descriptor=WebhookAdapterDescriptor(
+            source="examplecrm",
+            signature_headers=("x-example-token",),
+            event_headers=("x-example-event",),
+            auth_scheme="shared_token",
+            match_key_fallback="*",
+            secret_env="OMNIGENT_INGRESS_SECRET_EXAMPLECRM",
+        ),
+    )
+
+    manifest = describe_webhook_adapters()
+
+    assert manifest == [
+        {
+            "source": "examplecrm",
+            "signature_headers": ["x-example-token"],
+            "event_headers": ["x-example-event"],
+            "auth_scheme": "shared_token",
+            "match_key_fallback": "*",
+            "secret_env": "OMNIGENT_INGRESS_SECRET_EXAMPLECRM",
+        },
+        {
+            "source": "github",
+            "signature_headers": ["x-omnigent-signature", "x-hub-signature-256"],
+            "event_headers": ["x-omnigent-event"],
+            "auth_scheme": "hmac_sha256",
+            "match_key_fallback": "*",
+            "secret_env": "OMNIGENT_INGRESS_SECRET_GITHUB",
+        },
+    ]
+
+
+def test_ingress_router_exposes_webhook_adapter_manifest() -> None:
+    """The HTTP surface exposes adapter setup metadata to ByteDesk Platform."""
+    from bytedesk_omnigent.routes.ingress import create_ingress_router
+
+    app = FastAPI()
+    app.include_router(create_ingress_router(), prefix="/v1")
+
+    response = TestClient(app).get("/v1/ingress/adapters")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "adapters": [
+            {
+                "source": "github",
+                "signature_headers": ["x-omnigent-signature", "x-hub-signature-256"],
+                "event_headers": ["x-omnigent-event"],
+                "auth_scheme": "hmac_sha256",
+                "match_key_fallback": "*",
+                "secret_env": "OMNIGENT_INGRESS_SECRET_GITHUB",
+            }
+        ]
+    }

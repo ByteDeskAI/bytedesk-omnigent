@@ -17,6 +17,13 @@ def create_ingress_router() -> APIRouter:
     """Build the inbound-webhook ingress router."""
     router = APIRouter()
 
+    @router.get("/ingress/adapters")
+    async def adapters() -> dict[str, object]:
+        """Expose setup-safe webhook adapter metadata for integration UIs."""
+        from bytedesk_omnigent.ingress import describe_webhook_adapters
+
+        return {"adapters": describe_webhook_adapters()}
+
     @router.post("/ingress/{source}")
     async def receive(source: str, request: Request) -> JSONResponse:
         """Receive a signed external event and deliver it to the signal bus."""
