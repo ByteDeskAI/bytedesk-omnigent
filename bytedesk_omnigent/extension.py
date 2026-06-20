@@ -49,12 +49,16 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
+        from bytedesk_omnigent.routes.integration_harness import (
+            create_integration_harness_router,
+        )
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
             _health_router(),
             create_governance_router(auth_provider=auth_provider),
             create_ingress_router(),
+            create_integration_harness_router(),
             create_goals_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
         ]
