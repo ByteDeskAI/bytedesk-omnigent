@@ -12,6 +12,7 @@ import pytest
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
+    CloudEventsWebhookAdapter,
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
@@ -203,3 +204,37 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_cloudevents_adapter_verifies_bearer_token_and_reads_ce_type() -> None:
+    """CloudEvents-native providers (Salesforce Platform Events, Eventarc,
+    Azure Event Grid, and internal ByteDesk emitters) can authenticate with a
+    bearer token and route by the standard ``ce-type`` attribute without writing
+    a one-off adapter for every provider (iteration 38)."""
+    adapter = CloudEventsWebhookAdapter()
+
+    assert isinstance(adapter, WebhookSourceAdapter)
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"authorization": "Bearer shared-secret"}, "shared-secret"
+    ) is True
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"authorization": "bearer shared-secret"}, "shared-secret"
+    ) is True
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"x-omnigent-token": "shared-secret"}, "shared-secret"
+    ) is True
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"authorization": "Bearer wrong"}, "shared-secret"
+    ) is False
+    assert adapter.verify(b'{"id":"evt_1"}', {}, "shared-secret") is False
+
+    assert adapter.match_key({"ce-type": "com.salesforce.account.updated"}) == (
+        "com.salesforce.account.updated"
+    )
+    assert adapter.match_key({"ce-source": "/accounts/123"}) == "*"
+
+
+def test_salesforce_resolves_to_cloudevents_adapter() -> None:
+    """Salesforce Platform Events use the CloudEvents wire shape, so Omnigent
+    can bind ``source=salesforce`` without bespoke route glue (iteration 38)."""
+    assert isinstance(resolve_webhook_adapter("salesforce"), CloudEventsWebhookAdapter)

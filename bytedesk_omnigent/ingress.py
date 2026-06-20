@@ -153,6 +153,32 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class CloudEventsWebhookAdapter:
+    """CloudEvents adapter for standards-based SaaS/event-bus integrations.
+
+    Several high-value integration surfaces (Salesforce Platform Events, Google
+    Eventarc, Azure Event Grid, and internal ByteDesk emitters) already carry a
+    CloudEvents ``ce-type`` attribute. This adapter lets Omnigent bind those
+    events deterministically without adding one-off route glue per provider:
+    authenticate via ``Authorization: Bearer <token>`` (or ``X-Omnigent-Token``
+    for emitters that cannot set authorization) and route by ``ce-type``.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
+        authorization = _header(headers, "authorization")
+        token = ""
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer" and value:
+            token = value
+        if not token:
+            token = _header(headers, "x-omnigent-token")
+        return bool(token) and hmac.compare_digest(token, secret)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "ce-type") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +203,8 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("cloudevents", CloudEventsWebhookAdapter)
+    registry.register("salesforce", CloudEventsWebhookAdapter)
     return registry
 
 
