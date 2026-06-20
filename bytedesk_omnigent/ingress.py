@@ -335,6 +335,41 @@ def process_inbound(
     )
 
 
+def preview_inbound(
+    *,
+    source: str,
+    raw_body: bytes,
+    headers: Mapping[str, str],
+    secret: str,
+    store: IngressBindingStore,
+    adapter: WebhookSourceAdapter | None = None,
+) -> IngressResult:
+    """Verify and resolve an inbound event without delivering it.
+
+    This deterministic preflight harness lets ByteDesk Platform and connected-app
+    installers prove a webhook's signature, event extraction, and binding target
+    before enabling autonomous delivery. It deliberately stops before
+    ``bus.deliver`` so a setup wizard can safely test production credentials
+    against a parked signal without waking the agent.
+
+    Returns bad signature → 401, no binding → 404, matched preflight → 200.
+    """
+    if adapter is None:
+        adapter = GitHubWebhookAdapter()
+    if not adapter.verify(raw_body, headers, secret):
+        return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
+    match_key = adapter.match_key(headers)
+    binding = store.resolve_binding(source=source, match_key=match_key)
+    if binding is None:
+        return IngressResult(
+            IngressStatus.NO_BINDING, 404, detail=f"no binding for {source}/{match_key}"
+        )
+    return IngressResult(
+        IngressStatus.DELIVERED, 200, signal_id=binding.signal_id,
+        detail="preflight matched; delivery not attempted",
+    )
+
+
 # Lazily-built, per-URI cache of the binding store (mirrors the other accessors).
 _binding_store_cache: dict[str, IngressBindingStore] = {}
 
