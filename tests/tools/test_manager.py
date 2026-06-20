@@ -957,3 +957,75 @@ def test_web_search_does_not_emit_web_search_preview_for_databricks_model() -> N
         f"databricks-gpt-5-4 — Databricks does not support this tool type "
         f"and rejects the request with HTTP 400. Got schema: {schema!r}"
     )
+
+
+# ── BuiltinToolFactory: context-needing builtins register uniformly ──
+
+
+def test_context_needing_builtins_produce_correct_tool_types() -> None:
+    """
+    The BuiltinToolFactory path builds the same three context-needing
+    builtins (``web_search``, ``web_fetch``, ``upload_file``) the old
+    hand-written escapes produced — proving the collapse is behavior-
+    preserving.
+    """
+    from omnigent.tools.builtins.upload_file import UploadFileTool
+    from omnigent.tools.builtins.web_fetch import WebFetchTool
+    from omnigent.tools.builtins.web_search import WebSearchTool
+
+    spec = AgentSpec(
+        spec_version=1,
+        llm=LLMConfig(model="gpt-5.5"),
+        tools=ToolsConfig(
+            builtins=[
+                BuiltinToolConfig(name="web_search"),
+                BuiltinToolConfig(name="web_fetch"),
+                BuiltinToolConfig(name="upload_file"),
+            ]
+        ),
+    )
+    mgr = ToolManager(spec)
+
+    assert isinstance(mgr.get_tool("web_search"), WebSearchTool)
+    assert isinstance(mgr.get_tool("web_fetch"), WebFetchTool)
+    assert isinstance(mgr.get_tool("upload_file"), UploadFileTool)
+
+
+def test_context_builtin_factory_map_covers_exactly_the_escapes() -> None:
+    """
+    The context-factory registry holds exactly the three builtins
+    that need build context — no more, no less. A drift here means a
+    builtin was added/removed without keeping the escapes collapsed.
+    """
+    spec = AgentSpec(spec_version=1, llm=LLMConfig(model="gpt-5.5"))
+    mgr = ToolManager(spec)
+    assert set(mgr._context_builtin_factories()) == {
+        "web_search",
+        "web_fetch",
+        "upload_file",
+    }
+
+
+def test_web_search_factory_is_spec_overridable_via_config() -> None:
+    """
+    ``web_search`` flows the spec-level config dict through the
+    factory unchanged, so spec config (e.g. a custom engine_id)
+    reaches the tool — the "spec-overridable" property of P11.
+    """
+    spec = AgentSpec(
+        spec_version=1,
+        llm=LLMConfig(model="gpt-5.5"),
+        tools=ToolsConfig(
+            builtins=[
+                BuiltinToolConfig(
+                    name="web_search",
+                    config={"engine_id": "custom-engine-xyz"},
+                )
+            ]
+        ),
+    )
+    mgr = ToolManager(spec)
+    tool = mgr.get_tool("web_search")
+    assert tool is not None
+    # The config dict reached the WebSearchTool instance.
+    assert tool._config == {"engine_id": "custom-engine-xyz"}

@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import shutil
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.inner.os_env import OSEnvironment
@@ -90,6 +91,124 @@ class _UCFunctionSchemaTool(Tool):
             ``"function"`` sub-dict.
         """
         return self._schema
+
+
+@dataclass(frozen=True)
+class BuildContext:
+    """
+    Build-time context handed to a :class:`BuiltinToolFactory`.
+
+    Some builtins (``web_search``, ``web_fetch``, ``upload_file``)
+    cannot be constructed from spec-level config alone — they need
+    the parent :class:`AgentSpec` to inherit the LLM provider /
+    config. The plain ``_BUILTIN_REGISTRY`` factories take only a
+    ``config`` dict, so those three previously required hand-written
+    escape branches in :meth:`ToolManager._create_builtin`.
+
+    Carrying the spec here lets context-needing builtins register
+    through the same uniform factory path as config-only builtins —
+    the escapes collapse into one registry walk.
+
+    :param spec: The parsed :class:`AgentSpec` for this execution.
+    """
+
+    spec: AgentSpec
+
+
+class BuiltinToolFactory(Protocol):
+    """
+    Strategy for constructing a builtin that needs build context.
+
+    Mirrors the config-only ``_BUILTIN_REGISTRY`` factory shape but
+    additionally receives a :class:`BuildContext`, so a single
+    registry can hold both context-free and context-needing
+    builtins. ``config`` is the spec-level tool config dict (so
+    ``web_search`` / ``web_fetch`` stay spec-overridable); ``ctx``
+    carries the parent spec.
+    """
+
+    def __call__(
+        self,
+        config: dict[str, str] | None,
+        ctx: BuildContext,
+    ) -> Tool:
+        """
+        Build the tool.
+
+        :param config: Spec-level tool config dict, or ``None``.
+        :param ctx: The :class:`BuildContext` for this execution.
+        :returns: The constructed :class:`Tool`.
+        """
+        ...
+
+
+def _build_web_search(
+    config: dict[str, str] | None,
+    ctx: BuildContext,
+) -> Tool:
+    """
+    Build a :class:`WebSearchTool` for the parent's LLM.
+
+    Uses ``parse_model_string`` to infer the provider, except for
+    ``databricks-*`` models which don't support the native
+    ``web_search_preview`` schema and fall back to function-tool mode.
+
+    :param config: Spec-level tool config dict, e.g.
+        ``{"api_key": "...", "engine_id": "..."}``.
+    :param ctx: The :class:`BuildContext` (carries the parent spec).
+    :returns: A configured :class:`WebSearchTool`.
+    """
+    from omnigent.tools.builtins.web_search import WebSearchTool
+
+    llm_provider = None
+    if ctx.spec.executor.model:
+        model = ctx.spec.executor.model
+        # Databricks doesn't support web_search_preview; skip
+        # OpenAI provider inference for all databricks-* models.
+        if not model.startswith("databricks-"):
+            from omnigent.llms.routing import parse_model_string
+
+            llm_provider = parse_model_string(model).provider
+    return WebSearchTool(config=config, llm_provider=llm_provider)
+
+
+def _build_web_fetch(
+    config: dict[str, str] | None,
+    ctx: BuildContext,
+) -> Tool:
+    """
+    Build a WebFetchTool with the parent's spec.
+
+    :param config: Spec-level tool config dict (unused today; kept
+        for the :class:`BuiltinToolFactory` shape so ``web_fetch``
+        stays spec-overridable).
+    :param ctx: The :class:`BuildContext` (carries the parent spec).
+    :returns: A WebFetchTool that inherits the parent's LLM config.
+    """
+    from omnigent.tools.builtins.web_fetch import WebFetchTool
+
+    return WebFetchTool(parent_spec=ctx.spec)
+
+
+def _build_upload_file(
+    config: dict[str, str] | None,
+    ctx: BuildContext,
+) -> Tool:
+    """
+    Build an :class:`UploadFileTool`.
+
+    Takes no config or context today; registered as a
+    :class:`BuiltinToolFactory` only so it shares the uniform
+    dispatch path with the other context-needing builtins instead
+    of a hand-written escape.
+
+    :param config: Spec-level tool config dict (unused).
+    :param ctx: The :class:`BuildContext` (unused).
+    :returns: An :class:`UploadFileTool`.
+    """
+    from omnigent.tools.builtins.upload_file import UploadFileTool
+
+    return UploadFileTool()
 
 
 class ToolManager:
@@ -284,15 +403,38 @@ class ToolManager:
             read_tool = ReadSkillFileTool(all_skills)
             self._tools[read_tool.name()] = read_tool
 
+    def _context_builtin_factories(self) -> dict[str, BuiltinToolFactory]:
+        """
+        Return the registry of context-needing builtin factories.
+
+        These builtins can't be built from spec-level config alone —
+        they need the parent spec (LLM provider / config inheritance).
+        Registering them here lets :meth:`_create_builtin` treat them
+        uniformly with the config-only ``_BUILTIN_REGISTRY`` builtins
+        instead of carrying one ``if name == ...`` escape each.
+
+        ``web_search`` and ``web_fetch`` receive the spec-level
+        ``config`` dict, so they stay spec-overridable.
+
+        :returns: Map of builtin name to :class:`BuiltinToolFactory`.
+        """
+        return {
+            "web_search": _build_web_search,
+            "web_fetch": _build_web_fetch,
+            "upload_file": _build_upload_file,
+        }
+
     def _register_builtin_tools(self) -> None:
         """
         Register built-in tools declared in ``tools.builtins``.
 
         Most tools are looked up in the built-in registry and
         instantiated with spec-level config. Some (``web_search``,
-        ``web_fetch``, ``upload_file``) need runtime context the
-        registry doesn't have and are dispatched through
-        :meth:`_create_builtin` instead.
+        ``web_fetch``, ``upload_file``) need build context the
+        registry doesn't have and are dispatched through a
+        :class:`BuiltinToolFactory` (see
+        :meth:`_context_builtin_factories`); :meth:`_create_builtin`
+        unifies both paths.
         """
         for entry in self._spec.tools.builtins:
             tool = self._create_builtin(entry.name, entry.config)
@@ -321,54 +463,22 @@ class ToolManager:
         """
         Instantiate a built-in tool by name.
 
+        Context-needing builtins (``web_search``, ``web_fetch``,
+        ``upload_file``) are dispatched through their
+        :class:`BuiltinToolFactory` with a :class:`BuildContext`;
+        everything else falls through to the config-only
+        ``get_builtin_tool`` registry. Both paths produce the same
+        tools as before — the factory map only removes the
+        per-builtin ``if name == ...`` escapes.
+
         :param name: The builtin name from the spec.
         :param config: Optional spec-level config dict.
         :returns: A :class:`Tool` instance, or ``None``.
         """
-        if name == "web_search":
-            return self._create_web_search(config)
-        if name == "web_fetch":
-            return self._create_web_fetch()
-        if name == "upload_file":
-            from omnigent.tools.builtins.upload_file import UploadFileTool
-
-            return UploadFileTool()
+        factory = self._context_builtin_factories().get(name)
+        if factory is not None:
+            return factory(config, BuildContext(spec=self._spec))
         return get_builtin_tool(name, config=config)
-
-    def _create_web_search(self, config: dict[str, str] | None) -> Tool:
-        """
-        Build a :class:`WebSearchTool` for the parent's LLM.
-
-        Uses ``parse_model_string`` to infer the provider, except for
-        ``databricks-*`` models which don't support the native
-        ``web_search_preview`` schema and fall back to function-tool mode.
-
-        :param config: Spec-level tool config dict, e.g.
-            ``{"api_key": "...", "engine_id": "..."}``.
-        :returns: A configured :class:`WebSearchTool`.
-        """
-        from omnigent.tools.builtins.web_search import WebSearchTool
-
-        llm_provider = None
-        if self._spec.executor.model:
-            model = self._spec.executor.model
-            # Databricks doesn't support web_search_preview; skip
-            # OpenAI provider inference for all databricks-* models.
-            if not model.startswith("databricks-"):
-                from omnigent.llms.routing import parse_model_string
-
-                llm_provider = parse_model_string(model).provider
-        return WebSearchTool(config=config, llm_provider=llm_provider)
-
-    def _create_web_fetch(self) -> Tool:
-        """
-        Build a WebFetchTool with the parent's spec.
-
-        :returns: A WebFetchTool that inherits the parent's LLM config.
-        """
-        from omnigent.tools.builtins.web_fetch import WebFetchTool
-
-        return WebFetchTool(parent_spec=self._spec)
 
     def _register_sub_agent_tools(self) -> None:
         """

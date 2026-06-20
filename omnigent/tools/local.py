@@ -44,7 +44,7 @@ from types import ModuleType
 
 # Any: OpenAI function schemas contain heterogeneous values
 # (strings, ints, nested objects, arrays) — no specific type fits.
-from typing import Any
+from typing import Any, Protocol
 
 from omnigent_client.tools import ToolMetadata, get_tool_metadata
 
@@ -78,6 +78,102 @@ class LocalToolLoadError(Exception):
     """
 
 
+class ExecutionBackend(Protocol):
+    """
+    Strategy seam for how a :class:`LocalPythonTool` runs.
+
+    A backend bundles the two halves of one execution as a single
+    unit: building the subprocess command (with its confinement
+    wrapping) and reading the structured result back (over the fd 3
+    pipe or stdout). Bundling them keeps the command-shape decision
+    and the matching result-read protocol in lockstep — a backend
+    that changes how the command is wrapped also owns how its
+    response is recovered.
+
+    The only backend shipped today is :class:`LocalExecutionBackend`,
+    which preserves the existing srt / Docker / bwrap / uv tiers
+    exactly. The seam exists so future confinement backends
+    (gVisor, firejail, podman, a remote executor) can be added
+    without touching :class:`LocalPythonTool` — but those are out of
+    scope here.
+
+    Implementations are stateless with respect to a single call:
+    all per-invocation state (request bytes, state_root, workspace)
+    is passed in, and live-subprocess tracking stays on the owning
+    tool so :meth:`LocalPythonTool.cancel` can still kill children.
+    """
+
+    def execute(
+        self,
+        tool: LocalPythonTool,
+        request: bytes,
+        *,
+        state_root: str | None,
+        workspace: Path | None,
+    ) -> str:
+        """
+        Build the command, run it, and read the structured result.
+
+        :param tool: The owning :class:`LocalPythonTool` (provides
+            the sandbox config, srt/uv availability flags, and the
+            command-build / result-read helpers).
+        :param request: JSON-encoded request bytes for the runner.
+        :param state_root: Per-call ToolState directory, or ``None``.
+        :param workspace: Per-conversation workspace path, or ``None``.
+        :returns: The tool's string result, or an error string.
+        """
+        ...
+
+
+class LocalExecutionBackend:
+    """
+    Default execution backend — preserves the legacy tiers exactly.
+
+    This is a faithful extraction of the original ``invoke()``
+    dispatch: it builds the command via the tool's tier ladder
+    (Docker > srt+uv > srt > uv > plain), decides whether the fd 3
+    pipe survives the wrapping (it does not under srt or Docker, so
+    those use the stdout protocol), and reads the result back over
+    the matching channel.
+
+    The srt / Docker / bwrap confinement semantics are unchanged —
+    this class only relocates the *selection* of channel; the actual
+    wrap arguments come from the tool's :meth:`LocalPythonTool._build_command`
+    (which delegates to :func:`~omnigent.tools._srt.wrap_with_srt`),
+    so the security boundary is byte-identical to the pre-seam path.
+    """
+
+    def execute(
+        self,
+        tool: LocalPythonTool,
+        request: bytes,
+        *,
+        state_root: str | None,
+        workspace: Path | None,
+    ) -> str:
+        """
+        Run ``tool`` for one call, reading fd 3 or stdout as required.
+
+        srt and Docker both wrap the command in their own process
+        chain, so the fd 3 pipe doesn't survive to the inner Python
+        process — those use the stdout protocol instead. This is the
+        identical ``use_stdout`` decision the pre-seam ``invoke()``
+        made.
+
+        :param tool: The owning :class:`LocalPythonTool`.
+        :param request: JSON-encoded request bytes for the runner.
+        :param state_root: Per-call ToolState directory, or ``None``.
+        :param workspace: Per-conversation workspace path, or ``None``.
+        :returns: The tool's string result, or an error string.
+        """
+        srt_active = tool._srt_available and tool._sandbox_enabled
+        use_stdout = tool._sandbox_config.docker_image is not None or srt_active
+        cmd = tool._build_command(state_root=state_root)
+        if use_stdout:
+            return tool._invoke_stdout(cmd, request, workspace=workspace)
+        return tool._invoke_subprocess(cmd, request, workspace=workspace)
+
+
 class LocalPythonTool(Tool):
     """
     A tool backed by a ``@tool``-decorated function in a local Python file.
@@ -107,6 +203,7 @@ class LocalPythonTool(Tool):
         srt_available: bool,
         uv_available: bool,
         sandbox_enabled: bool = True,
+        execution_backend: ExecutionBackend | None = None,
     ) -> None:
         """
         Initialize from a discovered ``@tool`` function.
@@ -121,6 +218,11 @@ class LocalPythonTool(Tool):
         :param srt_available: Whether ``srt`` is on PATH.
         :param uv_available: Whether ``uv`` is on PATH.
         :param sandbox_enabled: Runtime policy for srt sandboxing.
+        :param execution_backend: Strategy for building the command
+            and reading the result. ``None`` uses
+            :class:`LocalExecutionBackend`, which preserves the
+            existing srt / Docker / bwrap / uv confinement tiers
+            byte-for-byte.
         """
         self._info = info
         self._metadata = metadata
@@ -129,6 +231,9 @@ class LocalPythonTool(Tool):
         self._sandbox_enabled = sandbox_enabled
         self._srt_available = srt_available
         self._uv_available = uv_available
+        self._execution_backend: ExecutionBackend = (
+            execution_backend if execution_backend is not None else LocalExecutionBackend()
+        )
         # Live subprocesses from any in-flight ``invoke()`` — tracked
         # as a set guarded by a lock so ``cancel()`` can kill all of
         # them at once. A single ``self._proc`` would race when the
@@ -239,15 +344,16 @@ class LocalPythonTool(Tool):
             }
         ).encode()
 
-        # srt and Docker both wrap the command in their own process
-        # chain, so the fd 3 pipe doesn't survive to the inner
-        # Python process. Use the stdout protocol instead.
-        srt_active = self._srt_available and self._sandbox_enabled
-        use_stdout = self._sandbox_config.docker_image is not None or srt_active
-        cmd = self._build_command(state_root=state_root)
-        if use_stdout:
-            return self._invoke_stdout(cmd, request, workspace=ctx.workspace)
-        return self._invoke_subprocess(cmd, request, workspace=ctx.workspace)
+        # The execution backend owns command-build + result-read as
+        # one unit. The default :class:`LocalExecutionBackend`
+        # preserves the legacy srt / Docker / bwrap / uv tiers and
+        # the fd 3-vs-stdout channel decision byte-for-byte.
+        return self._execution_backend.execute(
+            self,
+            request,
+            state_root=state_root,
+            workspace=ctx.workspace,
+        )
 
     def _invoke_subprocess(
         self,
