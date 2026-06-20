@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_verification_matrix import (
+    compile_integration_verification_matrix,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -58,5 +61,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(entry.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/verification-matrix")
+    async def get_capability_verification_matrix(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile rollout verification gates for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        matrix = compile_integration_verification_matrix(slug)
+        if matrix is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(matrix)
 
     return router
