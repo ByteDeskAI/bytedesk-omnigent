@@ -16,9 +16,13 @@ import os
 import secrets
 import time
 from dataclasses import dataclass
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 import httpx
 import jwt
+
+if TYPE_CHECKING:
+    from omnigent.pluggable import PluggableRegistry
 
 # ── PKCE helpers (RFC 7636) ──────────────────────────────────────
 
@@ -257,33 +261,100 @@ class OIDCConfig:
 
         allow_invites = env_var_is_truthy("OMNIGENT_OIDC_ALLOW_INVITES")
 
-        # Determine provider type and resolve endpoints.
-        is_github = issuer.rstrip("/") == _GITHUB_ISSUER
+        # Resolve provider type + endpoints through the IdP-adapter seam: GitHub
+        # (static, non-discovery endpoints) and generic OIDC discovery are
+        # registered adapters; the registry picks one by issuer.
+        params = IdPAdapterParams(
+            issuer=issuer,
+            client_id=client_id,
+            client_secret=client_secret,
+            redirect_uri=redirect_uri,
+            cookie_secret=cookie_secret,
+            session_ttl_hours=session_ttl_hours,
+            logout_redirect_uri=logout_redirect_uri,
+            allowed_domains=allowed_domains,
+            allow_invites=allow_invites,
+        )
+        adapter = _select_idp_adapter(issuer)
+        return adapter.resolve_config(params)
 
-        if is_github:
-            # Empty string (forwarded by `${VAR:-}` wrappers) → default.
-            scopes = (os.environ.get("OMNIGENT_OIDC_SCOPES") or _GITHUB_SCOPES).strip()
-            return OIDCConfig(
-                issuer=_GITHUB_ISSUER,
-                client_id=client_id,
-                client_secret=client_secret,
-                redirect_uri=redirect_uri,
-                cookie_secret=cookie_secret,
-                scopes=scopes,
-                session_ttl_hours=session_ttl_hours,
-                logout_redirect_uri=logout_redirect_uri,
-                allowed_domains=allowed_domains,
-                provider_type="github",
-                authorization_endpoint=_GITHUB_AUTHORIZATION_ENDPOINT,
-                token_endpoint=_GITHUB_TOKEN_ENDPOINT,
-                jwks_uri=None,
-                userinfo_endpoint=_GITHUB_USERINFO_ENDPOINT,
-                allow_invites=allow_invites,
-            )
 
-        # Standard OIDC: fetch discovery document.
+# ── IdP adapter seam (BDP-2350) ──────────────────────────────────
+
+
+@dataclass(frozen=True)
+class IdPAdapterParams:
+    """The IdP-agnostic config inputs shared by every adapter.
+
+    These are the values :meth:`OIDCConfig.from_env` has already read and
+    validated; an :class:`IdPAdapter` resolves the remaining provider-specific
+    fields (scopes default, endpoints, jwks/userinfo, ``provider_type``) and
+    assembles the final :class:`OIDCConfig`.
+    """
+
+    issuer: str
+    client_id: str
+    client_secret: str
+    redirect_uri: str
+    cookie_secret: bytes
+    session_ttl_hours: int
+    logout_redirect_uri: str | None
+    allowed_domains: frozenset[str] | None
+    allow_invites: bool
+
+
+@runtime_checkable
+class IdPAdapter(Protocol):
+    """An identity-provider adapter that resolves endpoints into an OIDCConfig.
+
+    Each adapter encapsulates one IdP's endpoint-resolution strategy — GitHub's
+    static OAuth endpoints vs generic OIDC ``.well-known`` discovery — so a new
+    IdP becomes a registered adapter rather than another ``if issuer == ...``
+    branch in :meth:`OIDCConfig.from_env`.
+    """
+
+    def resolve_config(self, params: IdPAdapterParams) -> OIDCConfig:
+        """Build the validated :class:`OIDCConfig` for this IdP.
+
+        :raises RuntimeError: On any resolution failure (e.g. discovery fetch
+            error or a discovery document missing required endpoints) — the
+            fail-closed posture: a misconfigured IdP must abort startup, never
+            yield a partially-configured auth provider.
+        """
+        ...
+
+
+class _GitHubIdPAdapter:
+    """GitHub OAuth adapter — static, non-discovery endpoints."""
+
+    def resolve_config(self, params: IdPAdapterParams) -> OIDCConfig:
+        # Empty string (forwarded by `${VAR:-}` wrappers) → default.
+        scopes = (os.environ.get("OMNIGENT_OIDC_SCOPES") or _GITHUB_SCOPES).strip()
+        return OIDCConfig(
+            issuer=_GITHUB_ISSUER,
+            client_id=params.client_id,
+            client_secret=params.client_secret,
+            redirect_uri=params.redirect_uri,
+            cookie_secret=params.cookie_secret,
+            scopes=scopes,
+            session_ttl_hours=params.session_ttl_hours,
+            logout_redirect_uri=params.logout_redirect_uri,
+            allowed_domains=params.allowed_domains,
+            provider_type="github",
+            authorization_endpoint=_GITHUB_AUTHORIZATION_ENDPOINT,
+            token_endpoint=_GITHUB_TOKEN_ENDPOINT,
+            jwks_uri=None,
+            userinfo_endpoint=_GITHUB_USERINFO_ENDPOINT,
+            allow_invites=params.allow_invites,
+        )
+
+
+class _DiscoveryOIDCAdapter:
+    """Generic OIDC adapter — resolves endpoints from the discovery document."""
+
+    def resolve_config(self, params: IdPAdapterParams) -> OIDCConfig:
         scopes = (os.environ.get("OMNIGENT_OIDC_SCOPES") or "openid email profile").strip()
-        discovery_url = issuer.rstrip("/") + "/.well-known/openid-configuration"
+        discovery_url = params.issuer.rstrip("/") + "/.well-known/openid-configuration"
         try:
             resp = httpx.get(discovery_url, timeout=10.0)
             resp.raise_for_status()
@@ -305,19 +376,43 @@ class OIDCConfig:
             )
 
         return OIDCConfig(
-            issuer=issuer,
-            client_id=client_id,
-            client_secret=client_secret,
-            redirect_uri=redirect_uri,
-            cookie_secret=cookie_secret,
+            issuer=params.issuer,
+            client_id=params.client_id,
+            client_secret=params.client_secret,
+            redirect_uri=params.redirect_uri,
+            cookie_secret=params.cookie_secret,
             scopes=scopes,
-            session_ttl_hours=session_ttl_hours,
-            logout_redirect_uri=logout_redirect_uri,
-            allowed_domains=allowed_domains,
+            session_ttl_hours=params.session_ttl_hours,
+            logout_redirect_uri=params.logout_redirect_uri,
+            allowed_domains=params.allowed_domains,
             provider_type="oidc",
             authorization_endpoint=authorization_endpoint,
             token_endpoint=token_endpoint,
             jwks_uri=jwks_uri,
             userinfo_endpoint=doc.get("userinfo_endpoint"),
-            allow_invites=allow_invites,
+            allow_invites=params.allow_invites,
         )
+
+
+def _build_idp_adapter_registry() -> PluggableRegistry[IdPAdapter]:
+    """Build the IdP-adapter seam registry.
+
+    ``oidc`` (generic discovery) is the registered default; ``github`` is the
+    static-endpoint adapter selected when the issuer is GitHub. Selection is by
+    issuer (:func:`_select_idp_adapter`), not by the override env, so the
+    default arm matches the historical ``else`` (any non-GitHub issuer → OIDC
+    discovery).
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[IdPAdapter] = PluggableRegistry(
+        "idp_adapter", default=("oidc", _DiscoveryOIDCAdapter)
+    )
+    registry.register("github", _GitHubIdPAdapter)
+    return registry
+
+
+def _select_idp_adapter(issuer: str) -> IdPAdapter:
+    """Pick the IdP adapter for *issuer* (GitHub → static, else → discovery)."""
+    key = "github" if issuer.rstrip("/") == _GITHUB_ISSUER else "oidc"
+    return _build_idp_adapter_registry().get(key)

@@ -1066,29 +1066,87 @@ def _classify_anthropic_exception(exception: BaseException) -> str | None:
     return None
 
 
+# A single inner-SDK exception classifier: maps an exception onto an Omnigent
+# semantic code, or returns ``None`` to defer to the next link in the chain.
+_InnerExceptionClassifier = Callable[[BaseException], "str | None"]
+
+
+class _InnerExceptionClassifierChain:
+    """Ordered Chain-of-Responsibility registry for inner-SDK classifiers.
+
+    Classifiers are tried **in registration order**, first non-``None`` wins —
+    the exact "first match wins" contract the old hardcoded tuple had. Order is
+    semantically load-bearing: if two SDK exception hierarchies ever overlap
+    (e.g. Anthropic subclassing an httpx type), the more-specific classifier
+    must be registered first. The chain makes that ordering an explicit,
+    appendable registry instead of an inline literal, so an extension can add a
+    provider-specific classifier (e.g. a Pi exception type) without editing this
+    module.
+    """
+
+    def __init__(self) -> None:
+        self._classifiers: list[_InnerExceptionClassifier] = []
+
+    def register(self, classifier: _InnerExceptionClassifier) -> None:
+        """Append *classifier* to the end of the chain (lowest precedence)."""
+        self._classifiers.append(classifier)
+
+    def classify(self, exception: BaseException) -> str | None:
+        """Run the chain; return the first non-``None`` code, else ``None``."""
+        for classifier in self._classifiers:
+            code = classifier(exception)
+            if code is not None:
+                return code
+        return None
+
+    def classifiers(self) -> tuple[_InnerExceptionClassifier, ...]:
+        """The registered classifiers, in chain order (for inspection/tests)."""
+        return tuple(self._classifiers)
+
+
+def _build_inner_exception_chain() -> _InnerExceptionClassifierChain:
+    """Build the inner-SDK classifier chain with the built-in classifiers.
+
+    **The registration order below is load-bearing and must match the historical
+    tuple exactly**: openai → anthropic → claude_sdk → httpx. Do not reorder.
+    """
+    chain = _InnerExceptionClassifierChain()
+    chain.register(_classify_openai_exception)
+    chain.register(_classify_anthropic_exception)
+    chain.register(_classify_claude_sdk_exception)
+    chain.register(_classify_httpx_exception)
+    return chain
+
+
+# Module-level chain, built once at import (the four built-ins are pure module
+# functions — no FastAPI / heavyweight imports at construction).
+_INNER_EXCEPTION_CHAIN = _build_inner_exception_chain()
+
+
 def classify_inner_exception(exception: BaseException) -> str | None:
     """
     Map any inner-SDK exception onto the Omnigent semantic code allowlist.
 
     Single entry point that fans out across the per-SDK
-    classifiers. First match wins. Returns ``None`` when no
-    classifier recognizes the exception — caller is expected
-    to fall back to ``type(exception).__name__`` so operators
-    can still grep.
+    classifiers via :data:`_INNER_EXCEPTION_CHAIN` (an ordered
+    Chain-of-Responsibility). First match wins. Returns ``None``
+    when no classifier recognizes the exception — caller is
+    expected to fall back to ``type(exception).__name__`` so
+    operators can still grep.
 
     Phase 3 of ``designs/RETRY_ACROSS_HARNESSES.md``: this
     function replaces the per-call fan-out at
     :meth:`ExecutorAdapter._build_error_detail`'s old code,
     which inlined three separate classifier calls. New
     classifiers (e.g. for a Pi-specific exception type)
-    plug in here once and benefit every consumer.
+    register on the chain once and benefit every consumer.
 
     Order matters when SDK exception hierarchies overlap. Today
     none do — each lazy import only matches its own SDK's
     classes — but if Anthropic ever subclasses an httpx
     exception (or vice versa), a more-specific classifier
-    must come first. Documented as a sequence rather than a
-    dict so the order is explicit.
+    must come first. The chain preserves registration order so
+    the ordering stays explicit.
 
     :param exception: The exception
         :meth:`ExecutorAdapter.run_turn` caught.
@@ -1096,15 +1154,9 @@ def classify_inner_exception(exception: BaseException) -> str | None:
         ``"rate_limit_exceeded"``), or ``None`` when no
         classifier matched.
     """
-    for classifier in (
-        _classify_openai_exception,
-        _classify_anthropic_exception,
-        _classify_claude_sdk_exception,
-        _classify_httpx_exception,
-    ):
-        code = classifier(exception)
-        if code is not None:
-            return code
+    code = _INNER_EXCEPTION_CHAIN.classify(exception)
+    if code is not None:
+        return code
     # Generic fallback: context-window overflow from any SDK that
     # stamps a recognized code on the exception or its cause chain
     # but wasn't caught by the per-SDK classifiers above (e.g.

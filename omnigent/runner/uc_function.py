@@ -34,10 +34,12 @@ import json
 import logging
 import re
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
+
+    from omnigent.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -140,7 +142,91 @@ def _build_select_statement(
     return sql, parameters
 
 
+@runtime_checkable
+class RemoteFunctionExecutor(Protocol):
+    """A backend that executes a declared remote function and returns its result.
+
+    The runner dispatches ``catalog_path:`` tools (declared with
+    :attr:`ToolRuntime.UC_FUNCTION`) through this seam. Databricks Unity Catalog
+    is the default backend; a non-Databricks remote-function backend can
+    register its own executor under a different name without touching the
+    dispatch path.
+    """
+
+    async def execute(
+        self,
+        catalog_path: str,
+        args: dict[str, object],
+        *,
+        profile: str | None = None,
+        warehouse_id: str | None = None,
+    ) -> str:
+        """Execute *catalog_path* with *args* and return the result string."""
+        ...
+
+
+class DatabricksRemoteFunctionExecutor:
+    """Default remote-function backend — Databricks UC via SQL Statement Exec."""
+
+    async def execute(
+        self,
+        catalog_path: str,
+        args: dict[str, object],
+        *,
+        profile: str | None = None,
+        warehouse_id: str | None = None,
+    ) -> str:
+        return await _execute_uc_function_databricks(
+            catalog_path, args, profile=profile, warehouse_id=warehouse_id
+        )
+
+
+def _build_remote_function_registry() -> PluggableRegistry[RemoteFunctionExecutor]:
+    """Build the remote-function-executor seam registry.
+
+    ``databricks`` is the registered default and built-in backend, so
+    :meth:`resolve_default` constructs the same UC executor the inline call used.
+    An alternative backend can register under another name and be selected via
+    ``OMNIGENT_USE_REMOTE_FUNCTION``.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[RemoteFunctionExecutor] = PluggableRegistry(
+        "remote_function", default=("databricks", DatabricksRemoteFunctionExecutor)
+    )
+    return registry
+
+
 async def execute_uc_function(
+    catalog_path: str,
+    args: dict[str, object],
+    *,
+    profile: str | None = None,
+    warehouse_id: str | None = None,
+) -> str:
+    """
+    Execute a declared remote function and return the result as a string.
+
+    Dispatches through the remote-function-executor seam
+    (:func:`_build_remote_function_registry`); the default backend is Databricks
+    Unity Catalog (:class:`DatabricksRemoteFunctionExecutor`). The signature and
+    behavior are unchanged — callers still invoke ``execute_uc_function`` and get
+    the Databricks UC result by default.
+
+    :param catalog_path: Three-level UC function name, e.g.
+        ``"my_catalog.my_schema.classify_sentiment"``.
+    :param args: Argument dict from the LLM.
+    :param profile: Databricks config profile name; ``None`` uses default.
+    :param warehouse_id: SQL warehouse ID; ``None`` falls back to env.
+    :returns: The function's return value as a string.
+    """
+    executor = _build_remote_function_registry().resolve_default()
+    return await executor.execute(
+        catalog_path, args, profile=profile, warehouse_id=warehouse_id
+    )
+
+
+async def _execute_uc_function_databricks(
     catalog_path: str,
     args: dict[str, object],
     *,
