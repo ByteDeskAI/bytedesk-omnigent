@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_readiness_assessment import (
+    compile_integration_readiness_assessment,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.post("/integration-capabilities/{slug}/readiness-assessment")
+    async def assess_capability_readiness(request: Request, slug: str) -> JSONResponse:
+        """Score submitted evidence against one capability's rollout matrix."""
+
+        require_user(request, auth_provider)
+        payload = await request.json()
+        evidence = payload.get("evidence", {}) if isinstance(payload, dict) else {}
+        assessment = compile_integration_readiness_assessment(slug, evidence=evidence)
+        if assessment is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(assessment)
 
     return router
