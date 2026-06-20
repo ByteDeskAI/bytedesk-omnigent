@@ -68,7 +68,9 @@ def _build_artifact_store_registry(
         "artifact_store", default=("local", _local)
     )
     registry.register("dbfs", _databricks)
-    registry.discover_extensions(hook="artifact_store_providers")
+    # Extension discovery deferred to server startup (Wave-2 composition root):
+    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
+    # Hook: 'artifact_store_providers'.
     return registry
 
 

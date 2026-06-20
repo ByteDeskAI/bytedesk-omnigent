@@ -154,7 +154,9 @@ def build_embedder_registry() -> PluggableRegistry[Embedder]:
     registry: PluggableRegistry[Embedder] = PluggableRegistry(
         EMBEDDER_SEAM, default=("fastembed", _fastembed)
     )
-    registry.discover_extensions(hook="memory_embedder_providers")
+    # Extension discovery deferred to server startup (Wave-2 composition root):
+    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
+    # Hook: 'memory_embedder_providers'.
     return registry
 
 
@@ -322,7 +324,9 @@ def build_memory_provider_registry(
     registry: PluggableRegistry[AgentMemoryProvider] = PluggableRegistry(
         PROVIDER_SEAM, default=("composed", _composed)
     )
-    registry.discover_extensions(hook="agent_memory_providers")
+    # Extension discovery deferred to server startup (Wave-2 composition root):
+    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
+    # Hook: 'agent_memory_providers'.
     return registry
 
 

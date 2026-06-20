@@ -24,10 +24,24 @@ import logging
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
-from omnigent.extensions import discover_extensions
 from omnigent.pluggable.errors import ProviderNotRegistered, RegistryConflict
 
 logger = logging.getLogger(__name__)
+
+
+def discover_extensions():
+    """Lazy proxy to :func:`omnigent.extensions.discover_extensions`.
+
+    ``omnigent.extensions`` is the server-side extension-discovery hub and is
+    heavyweight (its router types pull the FastAPI stack). Importing a
+    ``PluggableRegistry`` must NOT drag that onto the runner hot path
+    (e.g. ``omnigent.runner.identity``, which re-execs per spawn), so the
+    import is deferred to the moment discovery actually runs — which only
+    happens server-side. Kept as a module-level symbol so tests can patch it.
+    """
+    from omnigent.extensions import discover_extensions as _discover
+
+    return _discover()
 
 T = TypeVar("T")
 
