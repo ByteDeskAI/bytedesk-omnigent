@@ -153,6 +153,27 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class MondayWebhookAdapter:
+    """Monday.com adapter: HMAC-SHA256 over the raw body.
+
+    Reads the signature from ``X-Monday-Signature`` (or ``X-Omnigent-Signature``
+    for local/proxy normalization), accepting bare hex or ``sha256=<hex>``. The
+    routing match key comes from ``X-Monday-Event`` and falls back to ``"*"`` so
+    a per-source catch-all binding can still wake a parked integration session.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-monday-signature") or _header(
+            headers, "x-omnigent-signature"
+        )
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-monday-event") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +198,8 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("monday", MondayWebhookAdapter)
+    registry.register("monday.com", MondayWebhookAdapter)
     return registry
 
 
