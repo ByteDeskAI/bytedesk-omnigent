@@ -126,11 +126,11 @@ class MemoryAppendTool(Tool):
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
 
-        from omnigent.runtime import get_memory_store
+        from omnigent.runtime import get_memory_provider
 
-        store = get_memory_store()
+        provider = get_memory_provider()
         try:
-            memory_id = store.append(
+            memory_id = provider.write(
                 scope=scope,
                 owner=owner,
                 name=name,
@@ -205,23 +205,21 @@ class MemoryQueryTool(Tool):
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
 
-        from omnigent.runtime import get_memory_store
+        from omnigent.runtime import get_memory_provider
 
-        store = get_memory_store()
+        provider = get_memory_provider()
         try:
-            hits = store.query(
-                scope=scope, owner=owner, name=name, query=query, limit=int(limit)
+            hits = provider.recall(
+                scope=scope, owner=owner, name=name, query=query, k=int(limit)
             )
         except ValueError as exc:
             return json.dumps({"error": str(exc)})
-        # Out-of-band reinforcement: record recalled ids for a batched, off-path
-        # flush (T8). This is in-memory only — the recall above stayed a pure
-        # DB read; no last_accessed_at / access_count write happens inline.
-        if hits:
-            from omnigent.db.utils import now_epoch
-            from omnigent.stores.memory_store import get_reinforcement_buffer
-
-            get_reinforcement_buffer().record([h.id for h in hits], now=now_epoch())
+        # Out-of-band reinforcement: the provider records recalled ids for a
+        # batched, off-path flush (T8). This is in-memory only — the recall above
+        # stayed a pure DB read; no last_accessed_at / access_count write happens
+        # inline. Routed through the port (BDP-2369) — no reach-through to db.utils
+        # / the reinforcement-buffer module.
+        provider.note_recalled(hits)
         results = [
             {
                 "content": hit.content,
@@ -261,14 +259,14 @@ class MemoryCompartmentsListTool(Tool):
 
     def invoke(self, arguments: str, ctx: ToolContext) -> str:
         del arguments
-        from omnigent.runtime import get_memory_store
+        from omnigent.runtime import get_memory_provider
 
-        store = get_memory_store()
+        provider = get_memory_provider()
         comps: list[dict[str, Any]] = []
         if ctx.agent_id:
-            comps += store.list_compartments(scope="agent", owner=ctx.agent_id)
-        comps += store.list_compartments(scope="team")
-        comps += store.list_compartments(scope="topic")
+            comps += provider.list_compartments(scope="agent", owner=ctx.agent_id)
+        comps += provider.list_compartments(scope="team")
+        comps += provider.list_compartments(scope="topic")
         out = [{"scope": c["scope"], "name": c["name"]} for c in comps]
         # Always surface the standing org blackboard (BDP-2276 D6/E1) — the
         # store only lists compartments that hold a row, so an unwritten

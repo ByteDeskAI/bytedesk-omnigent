@@ -13,6 +13,7 @@ from omnigent.runtime.caps import RuntimeCaps
 from omnigent.stores.memory_store.pgvector import pgvector_installed as _pgvector_installed
 
 if TYPE_CHECKING:
+    from omnigent.stores.memory_store import AgentMemoryProvider
     from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runner.routing import RunnerRouter
     from omnigent.runtime.agent_cache import AgentCache
@@ -92,53 +93,78 @@ def get_conversation_store() -> ConversationStore:
     return store
 
 
-# Lazily-built, per-URI cache of the omnigent-native memory store (FU1,
-# ADR-0132). The memory plane shares the conversation store's database, so it
-# needs no separate ``init()`` wiring — it is constructed on first use from the
-# conversation store's ``storage_location`` and cached per URI (so a re-init
-# against a different DB, e.g. in tests, gets its own store).
-_memory_store_cache: dict[str, SqlAlchemyMemoryStore] = {}
+# Lazily-built, per-URI cache of the omnigent-native agent-memory provider
+# (FU1, ADR-0132; first-class pluggable port, BDP-2369). The memory plane shares
+# the conversation store's database, so it needs no separate ``init()`` wiring —
+# it is constructed on first use from the conversation store's
+# ``storage_location`` and cached per URI (so a re-init against a different DB,
+# e.g. in tests, gets its own provider).
+_memory_provider_cache: dict[str, AgentMemoryProvider] = {}
+
+
+def get_memory_provider() -> AgentMemoryProvider:
+    """
+    Return the active agent-memory provider (BDP-2369 pluggable port).
+
+    Resolves the active :class:`~omnigent.stores.memory_store.AgentMemoryProvider`
+    (``OMNIGENT_USE_AGENT_MEMORY`` override, else the in-tree composed provider:
+    store + embedder + recall mode) for the conversation store's database, cached
+    per URI. This is the single swap unit for the whole memory backend.
+
+    :returns: The active :class:`AgentMemoryProvider` for the active database.
+    :raises RuntimeError: If the runtime has not been initialized.
+    """
+    from omnigent.stores.memory_store import create_agent_memory_provider
+
+    location = get_conversation_store().storage_location
+    provider = _memory_provider_cache.get(location)
+    if provider is None:
+        provider = create_agent_memory_provider(location)
+        _memory_provider_cache[location] = provider
+    return provider
 
 
 def get_memory_store() -> SqlAlchemyMemoryStore:
     """
     Return the omnigent-native agent memory store (FU1, ADR-0132).
 
-    Built lazily from the canonical conversation store's database URI and
-    cached per URI. Omnigent is the sole writer of durable agent memory.
+    Convenience accessor for callers that need the concrete store surface
+    (append/query/reinforce/sweep). Delegates to :func:`get_memory_provider` and
+    returns the composed provider's underlying store, so all access still routes
+    through the pluggable port (BDP-2369).
 
-    :returns: The :class:`SqlAlchemyMemoryStore` for the active database.
-    :raises RuntimeError: If the runtime has not been initialized.
+    :returns: The :class:`SqlAlchemyMemoryStore` backing the active provider.
+    :raises RuntimeError: If the runtime has not been initialized, or the active
+        provider is fully external and exposes no SQLAlchemy store.
     """
-    from omnigent.db.utils import get_or_create_engine
-    from omnigent.stores.memory_store import SqlAlchemyMemoryStore
-
-    location = get_conversation_store().storage_location
-    store = _memory_store_cache.get(location)
+    provider = get_memory_provider()
+    store = getattr(provider, "store", None)
     if store is None:
-        embedder = _select_memory_embedder(get_or_create_engine(location))
-        store = SqlAlchemyMemoryStore(location, embedder=embedder)
-        _memory_store_cache[location] = store
+        raise RuntimeError(
+            "active agent-memory provider exposes no SQLAlchemy store; use "
+            "get_memory_provider() for store-agnostic access"
+        )
     return store
 
 
 def _select_memory_embedder(engine: Any):
-    """Return the semantic embedder for *engine*, or ``None`` for lexical recall.
+    """Select the recall embedder for *engine*, or ``None`` for lexical recall.
 
-    Semantic recall needs PostgreSQL **with the pgvector extension installed**
-    (the migration only builds the ``vector`` column when pgvector is available).
-    SQLite, and a Postgres without the extension, stay lexical — so the embedding
-    model is never loaded there and recall never casts a ``TEXT`` column to
-    ``vector``. Mirrors the migration's pgvector gate via the shared probe.
+    Kept as the runtime-level gate (so callers/tests that monkeypatch
+    ``runtime._pgvector_installed`` keep working) but the concrete embedder now
+    comes from the pluggable embedder registry (BDP-2369, sub-seam #8) instead of a
+    hard-coded constructor. Behavior is byte-identical: semantic recall needs
+    PostgreSQL **with the pgvector extension installed**; SQLite and a pgvector-less
+    Postgres stay lexical (the embedding model is never loaded there).
     """
     if engine.dialect.name != "postgresql":
         return None
     with engine.connect() as conn:
         if not _pgvector_installed(conn):
             return None
-    from omnigent.stores.memory_store.embeddings import FastEmbedEmbedder
+    from omnigent.stores.memory_store import build_embedder_registry
 
-    return FastEmbedEmbedder()
+    return build_embedder_registry().resolve_default()
 
 
 def get_agent_store() -> AgentStore:

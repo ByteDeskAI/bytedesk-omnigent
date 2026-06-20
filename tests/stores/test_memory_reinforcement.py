@@ -78,11 +78,16 @@ def test_query_builtin_reinforces_out_of_band(tmp_path, monkeypatch) -> None:
     from omnigent.tools.base import ToolContext
     from omnigent.tools.builtins.memory import MemoryAppendTool, MemoryQueryTool
 
+    from omnigent.stores.memory_store import ComposedAgentMemoryProvider
+
     store = _store(tmp_path)
     buf = ReinforcementBuffer(min_interval_seconds=60)
-    monkeypatch.setattr("omnigent.runtime.get_memory_store", lambda: store)
+    provider = ComposedAgentMemoryProvider(store)
+    monkeypatch.setattr("omnigent.runtime.get_memory_provider", lambda: provider)
+    # note_recalled (BDP-2369) records via the reinforcement module's buffer getter.
     monkeypatch.setattr(
-        "omnigent.stores.memory_store.get_reinforcement_buffer", lambda: buf
+        "omnigent.stores.memory_store.reinforcement.get_reinforcement_buffer",
+        lambda: buf,
     )
     ctx = ToolContext(task_id="t", agent_id="ag_m", conversation_id="c")
 

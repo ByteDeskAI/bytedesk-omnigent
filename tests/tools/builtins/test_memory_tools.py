@@ -11,7 +11,10 @@ import json
 
 import pytest
 
-from omnigent.stores.memory_store import SqlAlchemyMemoryStore
+from omnigent.stores.memory_store import (
+    ComposedAgentMemoryProvider,
+    SqlAlchemyMemoryStore,
+)
 from omnigent.tools.base import ToolContext
 from omnigent.tools.builtins.memory import (
     MemoryAppendTool,
@@ -22,9 +25,15 @@ from omnigent.tools.builtins.memory import (
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
-    """A temp-sqlite memory store wired in as the runtime's memory store."""
+    """A temp-sqlite memory store wired in behind the runtime's memory provider.
+
+    The tools go through ``get_memory_provider`` (BDP-2369), so wire the temp store
+    behind the in-tree composed provider rather than monkeypatching the legacy
+    store getter directly.
+    """
     s = SqlAlchemyMemoryStore(f"sqlite:///{tmp_path / 'mem.db'}")
-    monkeypatch.setattr("omnigent.runtime.get_memory_store", lambda: s)
+    provider = ComposedAgentMemoryProvider(s)
+    monkeypatch.setattr("omnigent.runtime.get_memory_provider", lambda: provider)
     return s
 
 
@@ -80,6 +89,24 @@ def test_compartments_list(store) -> None:
     names = {(c["scope"], c["name"]) for c in out["compartments"]}
     assert ("agent", "notes") in names
     assert ("topic", "arch") in names
+
+
+def test_query_routes_reinforcement_through_port(tmp_path, monkeypatch) -> None:
+    """The query tool reinforces via the provider port (provider.note_recalled),
+    NOT a reach-through to db.utils / the reinforcement-buffer module (BDP-2369)."""
+    from omnigent.stores.memory_store import ComposedAgentMemoryProvider
+
+    s = SqlAlchemyMemoryStore(f"sqlite:///{tmp_path / 'port.db'}")
+    provider = ComposedAgentMemoryProvider(s)
+    noted: list[list[str]] = []
+    monkeypatch.setattr(provider, "note_recalled",
+                        lambda hits: noted.append([h.id for h in hits]))
+    monkeypatch.setattr("omnigent.runtime.get_memory_provider", lambda: provider)
+
+    _append({"content": "alpha through the port"})
+    res = _query({"query": "alpha"})
+    assert len(res["results"]) == 1
+    assert noted and len(noted[0]) == 1, "recall must reinforce via the port"
 
 
 def test_invalid_scope_errors(store) -> None:
