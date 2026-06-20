@@ -13,6 +13,7 @@ import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
+    GitLabWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
     WebhookSourceAdapter,
@@ -180,6 +181,23 @@ def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
     """A source with no bespoke adapter falls back to the GitHub default (BDP-2354)."""
     assert isinstance(resolve_webhook_adapter("anything"), GitHubWebhookAdapter)
+
+
+def test_gitlab_adapter_verifies_shared_token_and_reads_event() -> None:
+    """GitLab webhooks use their shared secret token header rather than HMAC.
+
+    Registering a built-in adapter lets agents bind GitLab merge request and
+    pipeline events without each deployment hand-writing the token/event mapping.
+    """
+    adapter = resolve_webhook_adapter("gitlab")
+
+    assert isinstance(adapter, GitLabWebhookAdapter)
+    assert isinstance(adapter, WebhookSourceAdapter)
+    assert adapter.verify(b"{}", {"x-gitlab-token": "s3cr3t"}, "s3cr3t") is True
+    assert adapter.verify(b"{}", {"x-gitlab-token": "wrong"}, "s3cr3t") is False
+    assert adapter.verify(b"{}", {}, "s3cr3t") is False
+    assert adapter.match_key({"x-gitlab-event": "Merge Request Hook"}) == "Merge Request Hook"
+    assert adapter.match_key({}) == "*"
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:

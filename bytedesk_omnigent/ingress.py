@@ -153,6 +153,26 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class GitLabWebhookAdapter:
+    """GitLab webhook adapter: shared-token verification + GitLab event header.
+
+    GitLab sends the configured webhook secret in ``X-Gitlab-Token`` and the
+    event kind in ``X-Gitlab-Event``. This adapter lets Omnigent bind GitLab
+    merge request, pipeline, issue, and push hooks to durable signals without
+    deployments registering a custom source adapter.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
+        provided = _header(headers, "x-gitlab-token")
+        if not provided:
+            return False
+        return hmac.compare_digest(provided, secret)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-gitlab-event") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +197,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("gitlab", GitLabWebhookAdapter)
     return registry
 
 
