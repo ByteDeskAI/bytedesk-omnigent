@@ -1,23 +1,24 @@
 """Tool execution context — typed bundle for runner-local tool dispatch.
 
-Part of the omnigent core-refactor spine (BDP-2327, Phase 4). Today
-:func:`omnigent.runner.tool_dispatch.dispatch_tool_locally` and
-:func:`~omnigent.runner.tool_dispatch.execute_tool` each thread the same
-15+ positional/keyword params (``server_client``, ``terminal_registry``,
-``resource_registry``, ``agent_spec``, ``conversation_id``, ``task_id``,
-``agent_id``, ``agent_name``, ``runner_workspace``, ``mcp_manager``,
-``session_inbox``, ``session_async_tasks``, ``harness_client``,
-``publish_event``, ``filesystem_registry``) through a long kwargs list.
-Each new per-dispatch dependency widens both signatures.
+Part of the omnigent core-refactor spine (BDP-2327, Phase 4). This module
+provides :class:`ToolExecutionContext`, a frozen dataclass that bundles the
+per-dispatch dependencies of a runner-local tool call into one value
+(``server_client``, ``terminal_registry``, ``resource_registry``,
+``agent_spec``, ``conversation_id``, ``task_id``, ``agent_id``,
+``agent_name``, ``runner_workspace``, ``mcp_manager``, ``session_inbox``,
+``session_async_tasks``, ``harness_client``, ``publish_event``,
+``filesystem_registry``). One value carries those dependencies instead of
+a long parameter list, so a new per-dispatch dependency is a new field
+rather than a wider signature.
 
-:class:`ToolExecutionContext` is a frozen dataclass that bundles those
-params into one value. It is introduced behind
-``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT`` (default OFF): when the flag is
-off, ``execute_tool`` keeps its existing per-kwarg signature and behaves
-byte-identically to today; when the flag is on, ``execute_tool`` builds a
-context from those same args and dispatches through the context-consuming
-path. The two paths thread the identical values to the same per-tool
-``_execute_*`` helpers — the context is a carrier, not a behavior change.
+It supersedes the prior per-kwarg dispatch signature behind
+``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT`` (default OFF, strangler-fig): with
+the flag off the legacy per-kwarg ``execute_tool`` signature stays
+authoritative and behaves byte-identically to today; with the flag on,
+``execute_tool`` builds a context from those same args and dispatches
+through the context-consuming path. Both paths thread the identical values
+to the same per-tool ``_execute_*`` helpers — the context is a carrier, not
+a behavior change.
 
 **Reference semantics are the whole point.** The mutable coordination
 objects — ``session_inbox`` (the per-session :class:`asyncio.Queue` that

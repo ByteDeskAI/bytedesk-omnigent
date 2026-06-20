@@ -1,7 +1,14 @@
 """Consolidated harness-identity registry — one descriptor per harness.
 
-Part of the omnigent core-refactor spine (BDP-2327, Phase 1). Harness
-identity is spread across **four** legacy sources today:
+Part of the omnigent core-refactor spine (BDP-2327, Phase 1). This module
+provides one descriptor per harness: :class:`HarnessProvider` folds a
+harness's identity facets into a single value (``name``, ``aliases``,
+``is_native``, ``module_path``, ``config_schema``), and :func:`resolve`
+offers a single lookup that accepts a canonical id *or* any alias.
+
+:data:`HARNESS_PROVIDERS` is built **at import time** by reading the four
+existing identity sources, so it agrees with them by construction rather
+than duplicating their contents:
 
 1. :data:`omnigent.runtime.harnesses._HARNESS_MODULES` — harness name →
    the Python module that exports ``create_app()`` (includes inline
@@ -13,20 +20,13 @@ identity is spread across **four** legacy sources today:
    allowlist of harness ids accepted under ``executor.type: omnigent``
    (plus :data:`~omnigent.spec._omnigent_compat.OMNIGENT_HARNESS_ALIASES`).
 
-:class:`HarnessProvider` folds those facets into a single descriptor
-(``name``, ``aliases``, ``is_native``, ``module_path``, ``config_schema``)
-and :data:`HARNESS_PROVIDERS` is built **at import time from the four
-legacy sources**, so it agrees with them by construction rather than
-duplicating their contents. :func:`resolve` offers a single lookup that
-accepts a canonical id *or* any alias.
-
-This is a strangler-fig sidecar: the four legacy sources stay
-authoritative. :func:`resolve` is only consulted when
+This is a strangler-fig sidecar: those four sources stay authoritative.
+:func:`resolve` is only consulted when
 ``OMNIGENT_USE_HARNESS_PROVIDER_REGISTRY`` is on; with the flag off the
 registry is still built (cheap, import-time) but no live dispatch path
 reads it, so behavior is unchanged. A contract test pins this registry to
-the legacy sources so a future edit to either side fails loudly instead
-of drifting.
+the underlying sources so a future edit to either side fails loudly
+instead of drifting.
 """
 
 from __future__ import annotations

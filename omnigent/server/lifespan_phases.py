@@ -1,30 +1,25 @@
 """Lifespan phases — a depends_on DAG over the server startup/shutdown steps.
 
-Part of the omnigent core-refactor spine (BDP-2327, Phase 3). Today
-:func:`omnigent.server.create_app` builds one monolithic ``_lifespan``
-``@asynccontextmanager``: every startup step (anyio thread-limiter bump, log
-level, harness process manager, runner router, subagent block notifier,
-resource registry, runner WS factory, default-agent seed, policy registry,
-accounts auto-open, the metrics / memory-maintenance / extension background
-tasks) runs top-to-bottom in one function, and shutdown is the mirror
-sequence in a single ``finally`` block. The ordering is load-bearing but
-implicit — nothing names the dependency of one step on another.
+Part of the omnigent core-refactor spine (BDP-2327, Phase 3). This module
+models server startup/shutdown as a dependency DAG: each step (anyio
+thread-limiter bump, log level, harness process manager, runner router,
+subagent block notifier, resource registry, runner WS factory, default-agent
+seed, policy registry, accounts auto-open, the metrics / memory-maintenance /
+extension background tasks) is a :class:`LifespanPhase` (``startup`` /
+``shutdown`` + an explicit ``depends_on`` list). :class:`LifespanOrchestrator`
+topologically sorts the phases, runs ``startup`` in dependency order, and runs
+``shutdown`` in the exact reverse order, making the previously implicit step
+ordering an explicit, declared dependency graph. A dependency cycle is a
+wiring bug, so the orchestrator **fails loudly** (raises
+:class:`LifespanCycleError`) instead of guessing an order.
 
-This module factors each of those steps into a :class:`LifespanPhase`
-(``startup`` / ``shutdown`` + an explicit ``depends_on`` list) and runs them
-through :class:`LifespanOrchestrator`, which topologically sorts the phases,
-runs ``startup`` in dependency order, and runs ``shutdown`` in the exact
-reverse order. A dependency cycle is a wiring bug, so the orchestrator
-**fails loudly** (raises :class:`LifespanCycleError`) instead of guessing an
-order.
-
-The concrete phases here mirror the current ``_lifespan`` body **exactly** —
-same imports, same calls, same effective order. They are introduced behind
-``OMNIGENT_USE_LIFESPAN_PHASES`` (default OFF): when the flag is off the
-orchestrator is never built and ``create_app`` keeps the original
-``_lifespan`` as the live path, so a running server with the flag unset
-behaves byte-identically to today. When the flag is on, ``create_app``
-builds an equivalent lifespan from these phases.
+These phases supersede the prior inline server-lifespan path behind
+``OMNIGENT_USE_LIFESPAN_PHASES`` (default OFF, strangler-fig): with the flag
+off the legacy ``create_app`` lifespan stays the authoritative live path and
+a running server behaves byte-identically to today; with the flag on,
+``create_app`` builds an equivalent lifespan from these phases. The phases
+mirror the legacy startup/shutdown body exactly — same imports, same calls,
+same effective order.
 
 Phases read and write a shared :class:`LifespanContext`: the immutable wiring
 captured by ``create_app`` (stores, the runner router, the tunnel registry,
@@ -34,9 +29,9 @@ harness process manager, the notifier-uninstall callback, the background
 tasks). This keeps each phase self-contained — its shutdown undoes only what
 its startup did — without re-deriving anything from ``app.state``.
 
-This module imports omnigent runtime/server helpers (it has to, to mirror the
+This module imports omnigent runtime/server helpers (it has to, to wire the
 steps), but it does **not** touch the spawn engine and adds no behavior of
-its own beyond ordering — it is a faithful refactor of the existing body.
+its own beyond ordering.
 """
 
 from __future__ import annotations
