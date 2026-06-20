@@ -1,0 +1,7 @@
+{
+  "child_parent_eq_root": true,
+  "child_root_eq_root": true,
+  "grandchild_parent_eq_child": true,
+  "grandchild_root_eq_root": true,
+  "root_self_rooted": true
+}

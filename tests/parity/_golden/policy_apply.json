@@ -1,0 +1,6 @@
+{
+  "enabled": true,
+  "handler": "github_mcp_policy.block_push",
+  "name": "block_push",
+  "type": "python"
+}
