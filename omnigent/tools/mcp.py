@@ -23,7 +23,7 @@ from contextlib import AsyncExitStack, suppress
 from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Protocol, TypeVar, runtime_checkable
 
 from anyio.streams.memory import (
     MemoryObjectReceiveStream,
@@ -1142,14 +1142,40 @@ _PROBLEMATIC_SCHEMA_KEYWORDS = frozenset(
 )
 
 
-def _normalize_input_schema(
-    schema: dict[str, Any] | None,
-    tool_name: str,
-) -> dict[str, Any]:
+@runtime_checkable
+class SchemaNormalizer(Protocol):
     """
-    Normalize an MCP ``inputSchema`` for LLM consumption.
+    Strategy for normalizing an MCP ``inputSchema`` for a specific
+    LLM provider.
 
-    MCP allows schemas that LLM providers reject. This function
+    The default (OpenAI) strategy injects a ``properties`` key and
+    warns on problematic keywords without transforming them. Future
+    provider strategies (e.g. an Anthropic normalizer that rewrites
+    ``oneOf`` → ``anyOf`` and inlines ``$ref``) can be registered via
+    :func:`register_schema_normalizer` and selected by provider.
+    """
+
+    def normalize(
+        self,
+        schema: dict[str, Any] | None,
+        tool_name: str,
+    ) -> dict[str, Any]:
+        """
+        Normalize *schema* for this provider.
+
+        :param schema: The raw ``inputSchema`` dict, or ``None``.
+        :param tool_name: Tool name for log messages.
+        :returns: A normalized schema dict.
+        """
+        ...
+
+
+class _OpenAISchemaNormalizer:
+    """
+    Default :class:`SchemaNormalizer` reproducing the historical
+    OpenAI-locked behavior exactly.
+
+    MCP allows schemas that LLM providers reject. This strategy
     applies the minimum transformations needed to avoid the most
     common real-world failures, following the approach used by
     the OpenAI Agents Python SDK:
@@ -1162,27 +1188,87 @@ def _normalize_input_schema(
        ``properties``, but OpenAI rejects it (see
        openai/openai-agents-python#449).
     3. **Problematic keywords** (``$ref``, ``oneOf``, ``allOf``) →
-       log a warning. We don't attempt to transform these because
+       log a warning. This strategy does not transform these because
        inlining ``$ref`` and converting ``oneOf`` → ``anyOf`` is
        complex and lossy. Operators see the warning and can fix
        the MCP server's schema.
+    """
+
+    def normalize(
+        self,
+        schema: dict[str, Any] | None,
+        tool_name: str,
+    ) -> dict[str, Any]:
+        if schema is None:
+            return {"type": "object", "properties": {}}
+
+        # MCP allows {"type": "object"} with no properties key.
+        # OpenAI requires "properties" to be present, even if empty.
+        if schema.get("type") == "object" and "properties" not in schema:
+            schema = {**schema, "properties": {}}
+
+        _warn_problematic_keywords(schema, tool_name)
+        return schema
+
+
+# Schema normalizer registry keyed by LLM provider. The "openai"
+# entry is the default and must remain byte-identical to the
+# historical OpenAI-locked behavior (including the warn-only handling
+# of problematic keywords).
+_DEFAULT_SCHEMA_NORMALIZER = "openai"
+_SCHEMA_NORMALIZERS: dict[str, SchemaNormalizer] = {
+    _DEFAULT_SCHEMA_NORMALIZER: _OpenAISchemaNormalizer(),
+}
+
+
+def register_schema_normalizer(provider: str, normalizer: SchemaNormalizer) -> None:
+    """
+    Register a :class:`SchemaNormalizer` for *provider*.
+
+    Allows e.g. an Anthropic normalizer (oneOf→anyOf, $ref inlining)
+    to be plugged in later without touching call sites. Re-registering
+    an existing provider overwrites it.
+
+    :param provider: Registry key, e.g. ``"anthropic"``.
+    :param normalizer: A :class:`SchemaNormalizer` implementation.
+    """
+    _SCHEMA_NORMALIZERS[provider] = normalizer
+
+
+def get_schema_normalizer(
+    provider: str = _DEFAULT_SCHEMA_NORMALIZER,
+) -> SchemaNormalizer:
+    """
+    Look up a registered :class:`SchemaNormalizer` by provider.
+
+    :param provider: Registry key. Defaults to the OpenAI normalizer.
+    :returns: The registered normalizer.
+    :raises KeyError: If no normalizer is registered for *provider*.
+    """
+    return _SCHEMA_NORMALIZERS[provider]
+
+
+def _normalize_input_schema(
+    schema: dict[str, Any] | None,
+    tool_name: str,
+    provider: str = _DEFAULT_SCHEMA_NORMALIZER,
+) -> dict[str, Any]:
+    """
+    Normalize an MCP ``inputSchema`` for LLM consumption.
+
+    Delegates to a pluggable :class:`SchemaNormalizer` strategy keyed
+    by LLM *provider* (default: OpenAI). The default path is
+    byte-identical to the historical OpenAI-locked behavior.
 
     :param schema: The raw ``inputSchema`` dict from the MCP tool
         definition, or ``None`` if the tool has no parameters.
     :param tool_name: Tool name for log messages, e.g.
         ``"list_directory"``.
-    :returns: A normalized schema dict safe for OpenAI/Anthropic.
+    :param provider: LLM provider key selecting the normalizer
+        strategy. Defaults to ``"openai"``.
+    :returns: A normalized schema dict safe for the selected provider.
     """
-    if schema is None:
-        return {"type": "object", "properties": {}}
-
-    # MCP allows {"type": "object"} with no properties key.
-    # OpenAI requires "properties" to be present, even if empty.
-    if schema.get("type") == "object" and "properties" not in schema:
-        schema = {**schema, "properties": {}}
-
-    _warn_problematic_keywords(schema, tool_name)
-    return schema
+    return get_schema_normalizer(provider).normalize(schema, tool_name)
 
 
 def _warn_problematic_keywords(

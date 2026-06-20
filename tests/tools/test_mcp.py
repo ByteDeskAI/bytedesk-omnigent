@@ -2335,3 +2335,53 @@ async def test_call_tool_with_elicitation_raises_on_second_mrtr() -> None:
     )
 
     await conn.close()
+
+
+# ── SchemaNormalizer strategy (BDP-2365 P13) ──────────────
+
+
+def test_default_schema_normalizer_matches_legacy_openai_behavior(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    The default (openai) normalizer reproduces the historical
+    OpenAI-locked output exactly: None→empty object, properties
+    injection, warn-only on problematic keywords.
+    """
+    from omnigent.tools.mcp import _normalize_input_schema as _norm
+
+    assert _norm(None, "t") == {"type": "object", "properties": {}}
+    assert _norm({"type": "object"}, "t")["properties"] == {}
+    # array (non-object) untouched
+    arr = {"type": "array", "items": {"type": "string"}}
+    assert _norm(arr, "t") == arr
+    # warn-only on $ref, schema returned unchanged (still contains $ref)
+    ref = {"type": "object", "properties": {"i": {"$ref": "#/$defs/I"}}}
+    out = _norm(ref, "ref_tool")
+    assert out["properties"]["i"] == {"$ref": "#/$defs/I"}
+    assert any("$ref" in msg for msg in caplog.messages)
+
+
+def test_schema_normalizer_is_swappable_with_fake() -> None:
+    """
+    A fake SchemaNormalizer can be registered under a provider key and
+    selected; the default openai entry is untouched.
+    """
+    from omnigent.tools import mcp as _m
+
+    class _FakeNormalizer:
+        def normalize(self, schema, tool_name):  # type: ignore[no-untyped-def]
+            return {"fake": True, "tool": tool_name}
+
+    _m.register_schema_normalizer("fake-provider", _FakeNormalizer())
+    try:
+        assert _m._normalize_input_schema(
+            {"type": "object"}, "x", provider="fake-provider"
+        ) == {"fake": True, "tool": "x"}
+        # Default provider unchanged.
+        assert _m._normalize_input_schema(None, "y") == {
+            "type": "object",
+            "properties": {},
+        }
+    finally:
+        _m._SCHEMA_NORMALIZERS.pop("fake-provider", None)
