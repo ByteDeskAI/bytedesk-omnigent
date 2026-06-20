@@ -48,7 +48,11 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import httpx
 
+    from omnigent.runner.mcp_manager import McpManager
+    from omnigent.runner.resource_registry import SessionResourceRegistry
+    from omnigent.runner.tool_dispatch import AgentSpecLike
     from omnigent.runtime.filesystem_registry import FilesystemRegistry
+    from omnigent.terminals.registry import TerminalRegistry
 
 
 @dataclass(frozen=True)
@@ -91,15 +95,15 @@ class ToolExecutionContext:
     tool_name: str
     arguments: str
     server_client: httpx.AsyncClient | None = None
-    terminal_registry: Any | None = None
-    resource_registry: Any | None = None
-    agent_spec: Any | None = None
+    terminal_registry: TerminalRegistry | None = None
+    resource_registry: SessionResourceRegistry | None = None
+    agent_spec: AgentSpecLike | None = None
     conversation_id: str | None = None
     task_id: str | None = None
     agent_id: str | None = None
     agent_name: str | None = None
     runner_workspace: Path | None = None
-    mcp_manager: Any | None = None
+    mcp_manager: McpManager | None = None
     session_inbox: asyncio.Queue[dict[str, Any]] | None = None
     session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None = None
     harness_client: httpx.AsyncClient | None = None

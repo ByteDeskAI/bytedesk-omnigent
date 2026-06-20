@@ -26,13 +26,17 @@ import logging
 import os
 import tempfile
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol, cast
 
 if TYPE_CHECKING:
+    from omnigent.runner.mcp_manager import McpManager
+    from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runtime.filesystem_registry import FilesystemRegistry
+    from omnigent.spec.types import AgentSpec
+    from omnigent.terminals.registry import TerminalRegistry
 
 import httpx
 
@@ -97,6 +101,35 @@ from omnigent.tools.builtins.update_comment import UpdateCommentTool
 from omnigent.tools.builtins.upload_file import UploadFileTool, safe_resolve
 
 _logger = logging.getLogger(__name__)
+
+
+class AgentSpecLike(Protocol):
+    """Structural view of the runner's agent spec (sweep-2 BDP-2363).
+
+    The dispatch sites carry the agent spec as a bare ``Any`` and read it
+    defensively (``getattr(agent_spec, "x", None)``). This Protocol names the
+    exact attribute surface dispatch reads, turning unchecked ``getattr`` into
+    checked attribute access while staying import-free: the runner carrier
+    intentionally does not import the concrete
+    :class:`omnigent.spec.types.AgentSpec`, so this is declared as a
+    ``Protocol`` and the real ``AgentSpec`` satisfies it structurally.
+
+    Attribute types are deliberately loose (``Sequence``/``Any``) so the
+    concrete ``AgentSpec`` (whose fields are ``list[...]`` of concrete element
+    types) is a structural match, and so the element types stay unpinned —
+    dispatch reads them via further ``getattr``/duck typing.
+    """
+
+    name: str | None
+    tools: Any
+    skills: Sequence[Any]
+    skills_filter: str | list[str]
+    mcp_servers: Sequence[Any]
+    local_tools: Sequence[Any]
+    sub_agents: Sequence[Any]
+    executor: Any
+    os_env: Any
+
 
 _INBOX_OUTPUT_MAX_CHARS = 12000
 _OS_ENV_SHELL_DEFAULT_TIMEOUT_S = 120.0
@@ -366,7 +399,7 @@ def should_dispatch_locally(tool_name: str) -> bool:
     return tool_name in _ALL_LOCAL_TOOLS
 
 
-def _is_spec_local_python_tool(tool_name: str, agent_spec: Any | None) -> bool:
+def _is_spec_local_python_tool(tool_name: str, agent_spec: AgentSpecLike | None) -> bool:
     local_tools = getattr(agent_spec, "local_tools", None) or []
     return any(
         getattr(info, "name", None) == tool_name
@@ -380,7 +413,7 @@ async def _execute_local_python_tool(
     tool_name: str,
     args: str,
     *,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     task_id: str | None,
     agent_id: str | None,
@@ -389,7 +422,11 @@ async def _execute_local_python_tool(
     if agent_spec is None:
         return f"Error: {tool_name} not in local dispatch table (no agent spec)"
     try:
-        manager = ToolManager(agent_spec, workdir=runner_workspace)
+        # ``ToolManager`` requires the nominal ``AgentSpec``; the carried value
+        # is structurally ``AgentSpecLike`` but is always a real ``AgentSpec``
+        # at runtime. Cast (string forward-ref → no runtime import) to bridge
+        # the structural→nominal gap without re-pinning the carried type.
+        manager = ToolManager(cast("AgentSpec", agent_spec), workdir=runner_workspace)
         workspace = None
         if runner_workspace is not None and conversation_id is not None:
             workspace = runner_workspace / conversation_id
@@ -413,7 +450,7 @@ _callable_cache: dict[str, Callable[..., Any]] = {}
 
 def _resolve_spec_callable(
     tool_name: str,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
 ) -> Callable[..., Any] | str:
     """
     Look up a custom callable tool in the agent spec and resolve it.
@@ -455,7 +492,7 @@ async def _execute_spec_callable_tool(
     tool_name: str,
     args: dict[str, Any],
     *,
-    agent_spec: Any | None = None,
+    agent_spec: AgentSpecLike | None = None,
 ) -> str:
     """
     Execute a custom callable tool defined in the agent spec YAML.
@@ -489,7 +526,7 @@ async def _execute_spec_callable_tool(
 
 def _is_uc_function_tool(
     tool_name: str,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
 ) -> bool:
     """
     Check whether *tool_name* is a UC function tool in the spec.
@@ -511,7 +548,7 @@ def _is_uc_function_tool(
     )
 
 
-def _resolve_uc_profile(agent_spec: Any) -> str | None:
+def _resolve_uc_profile(agent_spec: AgentSpecLike | None) -> str | None:
     """
     Extract the Databricks profile from the agent spec's executor
     auth configuration.
@@ -544,7 +581,7 @@ async def _execute_uc_function_tool(
     tool_name: str,
     args: dict[str, Any],
     *,
-    agent_spec: Any | None = None,
+    agent_spec: AgentSpecLike | None = None,
 ) -> str:
     """
     Execute a Unity Catalog function tool and return the output
@@ -782,7 +819,7 @@ def _subagent_model_from_args(args: dict[str, Any]) -> str | None:
     return validate_model_override(raw_model)
 
 
-def _find_subagent_spec(sub_agent_name: str, agent_spec: Any | None) -> Any | None:
+def _find_subagent_spec(sub_agent_name: str, agent_spec: AgentSpecLike | None) -> Any | None:
     """
     Look up a named sub-agent's spec in the parent's ``sub_agents`` list.
 
@@ -800,7 +837,7 @@ def _find_subagent_spec(sub_agent_name: str, agent_spec: Any | None) -> Any | No
     return None
 
 
-def _subagent_harness(sub_agent_name: str, agent_spec: Any | None) -> str | None:
+def _subagent_harness(sub_agent_name: str, agent_spec: AgentSpecLike | None) -> str | None:
     """
     Resolve the declared harness for a named sub-agent.
 
@@ -825,7 +862,7 @@ def _normalize_subagent_model(
     model: str,
     *,
     sub_agent_name: str,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     harness: str | None,
 ) -> str:
     """
@@ -868,7 +905,7 @@ def _normalize_subagent_model(
     return normalized
 
 
-async def _execute_list_models_tool(*, agent_spec: Any | None) -> str:
+async def _execute_list_models_tool(*, agent_spec: AgentSpecLike | None) -> str:
     """
     Dispatch ``sys_list_models``: per-worker model availability.
 
@@ -894,7 +931,7 @@ async def _execute_subagent_tool(
     *,
     server_client: httpx.AsyncClient | None = None,
     conversation_id: str | None = None,
-    agent_spec: Any | None = None,
+    agent_spec: AgentSpecLike | None = None,
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
     session_inbox: asyncio.Queue[dict[str, Any]] | None = None,
 ) -> str:
@@ -1463,7 +1500,7 @@ async def _execute_session_create(
     server_client: httpx.AsyncClient | None,
     conversation_id: str | None,
     publish_event: Callable[[str, dict[str, Any]], None] | None,
-    agent_spec: Any | None = None,
+    agent_spec: AgentSpecLike | None = None,
     runner_workspace: Path | None = None,
 ) -> str:
     """
@@ -1658,7 +1695,7 @@ async def _upload_config_bundle(
     *,
     server_client: httpx.AsyncClient,
     conversation_id: str,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     runner_workspace: Path | None,
 ) -> dict[str, Any] | str:
     """
@@ -1725,7 +1762,7 @@ async def _session_create_from_config_path(
     server_client: httpx.AsyncClient,
     conversation_id: str,
     publish_event: Callable[[str, dict[str, Any]], None] | None,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     runner_workspace: Path | None,
 ) -> str:
     """
@@ -1800,7 +1837,7 @@ async def _execute_web_fetch_tool(
     *,
     server_client: httpx.AsyncClient | None,
     conversation_id: str | None,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     task_id: str | None,
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
     session_inbox: asyncio.Queue[dict[str, Any]] | None = None,
@@ -1864,7 +1901,7 @@ async def _execute_web_fetch_tool(
 
 def _has_subagent(
     sub_agent_name: str,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
 ) -> bool:
     """
     Check whether a sub-agent name exists in the parent spec.
@@ -2512,7 +2549,7 @@ async def _execute_agent_tool(
     args: dict[str, Any],
     *,
     server_client: httpx.AsyncClient | None,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     runner_workspace: Path | None,
 ) -> str:
@@ -2650,7 +2687,7 @@ async def _agent_download_via_rest(
     args: dict[str, Any],
     server_client: httpx.AsyncClient,
     *,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     runner_workspace: Path | None,
 ) -> str:
@@ -2796,7 +2833,7 @@ def _scan_local_agent_configs(configs_dir: Path) -> list[dict[str, str | None]]:
 async def _agent_list_via_rest(
     server_client: httpx.AsyncClient,
     *,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     runner_workspace: Path | None,
 ) -> str:
@@ -3367,15 +3404,15 @@ def _build_tool_execution_context(
     tool_name: str,
     arguments: str,
     server_client: httpx.AsyncClient | None,
-    terminal_registry: Any | None,
-    resource_registry: Any | None,
-    agent_spec: Any | None,
+    terminal_registry: TerminalRegistry | None,
+    resource_registry: SessionResourceRegistry | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     task_id: str | None,
     agent_id: str | None,
     agent_name: str | None,
     runner_workspace: Path | None,
-    mcp_manager: Any | None,
+    mcp_manager: McpManager | None,
     session_inbox: asyncio.Queue[dict[str, Any]] | None,
     session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None,
     harness_client: httpx.AsyncClient | None,
@@ -3453,15 +3490,15 @@ async def execute_tool(
     tool_name: str,
     arguments: str,
     server_client: httpx.AsyncClient | None = None,
-    terminal_registry: Any | None = None,
-    resource_registry: Any | None = None,
-    agent_spec: Any | None = None,
+    terminal_registry: TerminalRegistry | None = None,
+    resource_registry: SessionResourceRegistry | None = None,
+    agent_spec: AgentSpecLike | None = None,
     conversation_id: str | None = None,
     task_id: str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
     runner_workspace: Path | None = None,
-    mcp_manager: Any | None = None,
+    mcp_manager: McpManager | None = None,
     session_inbox: asyncio.Queue[dict[str, Any]] | None = None,
     session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None = None,
     harness_client: httpx.AsyncClient | None = None,
@@ -3582,7 +3619,9 @@ async def execute_tool(
             # /mcp endpoint, which enforces TOOL_CALL and TOOL_RESULT
             # policies centrally before forwarding to the runner's
             # /mcp/execute. No runner-side policy gate needed.
-            output = await mcp_manager.call_tool(agent_spec, tool_name, args)
+            output = await mcp_manager.call_tool(
+                cast("AgentSpec | None", agent_spec), tool_name, args
+            )
         elif tool_name in _OS_ENV_TOOLS:
             output = await _execute_os_env_tool(
                 tool_name,
@@ -3811,15 +3850,15 @@ async def dispatch_tool_locally(
     response_id: str,
     harness_client: httpx.AsyncClient,
     server_client: httpx.AsyncClient | None = None,
-    terminal_registry: Any | None = None,
-    resource_registry: Any | None = None,
-    agent_spec: Any | None = None,
+    terminal_registry: TerminalRegistry | None = None,
+    resource_registry: SessionResourceRegistry | None = None,
+    agent_spec: AgentSpecLike | None = None,
     conversation_id: str | None = None,
     task_id: str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
     runner_workspace: Path | None = None,
-    mcp_manager: Any | None = None,
+    mcp_manager: McpManager | None = None,
     session_inbox: asyncio.Queue[dict[str, Any]] | None = None,
     session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None = None,
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
@@ -3967,7 +4006,7 @@ def _runner_default_os_env_cwd(conversation_id: str | None) -> str:
 
 
 def _effective_runner_os_env_spec(
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     runner_workspace: Path | None = None,
 ) -> Any:
@@ -4056,7 +4095,7 @@ async def _execute_os_env_tool(
     tool_name: str,
     args: dict[str, Any],
     *,
-    agent_spec: Any | None = None,
+    agent_spec: AgentSpecLike | None = None,
     conversation_id: str | None = None,
     runner_workspace: Path | None = None,
     filesystem_registry: FilesystemRegistry | None = None,
@@ -4269,7 +4308,7 @@ async def _execute_file_tool(
     server_client: httpx.AsyncClient | None,
     *,
     conversation_id: str | None,
-    agent_spec: Any | None = None,
+    agent_spec: AgentSpecLike | None = None,
     runner_workspace: Path | None = None,
 ) -> str:
     """
@@ -4362,9 +4401,9 @@ async def _execute_terminal_tool(
     tool_name: str,
     args: dict[str, Any],
     *,
-    terminal_registry: Any | None,
-    resource_registry: Any | None = None,
-    agent_spec: Any | None,
+    terminal_registry: TerminalRegistry | None,
+    resource_registry: SessionResourceRegistry | None = None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     task_id: str | None,
     agent_id: str | None,
@@ -4411,7 +4450,9 @@ async def _execute_terminal_tool(
     del session_inbox
     if tool_name == SysTerminalLaunchTool.name():
         tool_instance: Any = SysTerminalLaunchTool(
-            spec=agent_spec,
+            # Nominal AgentSpec required; carried value is structurally
+            # AgentSpecLike but always a real AgentSpec at runtime.
+            spec=cast("AgentSpec", agent_spec),
             registry=terminal_registry,
         )
     elif tool_name == SysTerminalSendTool.name():
@@ -4460,8 +4501,8 @@ async def _emit_terminal_resource_event(
     output: str,
     args: dict[str, Any],
     conversation_id: str,
-    terminal_registry: Any,
-    resource_registry: Any | None,
+    terminal_registry: TerminalRegistry,
+    resource_registry: SessionResourceRegistry | None,
     publish_event: Callable[[str, dict[str, Any]], None],
 ) -> None:
     """Emit a ``session.resource.{created,deleted}`` event for a terminal tool.
@@ -4528,8 +4569,8 @@ async def _publish_terminal_created_event(
     conversation_id: str,
     terminal_name: str,
     session_key: str,
-    terminal_registry: Any,
-    resource_registry: Any | None,
+    terminal_registry: TerminalRegistry,
+    resource_registry: SessionResourceRegistry | None,
     publish_event: Callable[[str, dict[str, Any]], None],
 ) -> None:
     """Build and publish ``session.resource.created`` for a fresh launch.
@@ -4652,15 +4693,15 @@ async def _execute_async_inbox_tool(
     session_inbox: asyncio.Queue[dict[str, Any]] | None,
     session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None,
     server_client: httpx.AsyncClient | None,
-    terminal_registry: Any | None,
-    resource_registry: Any | None,
-    agent_spec: Any | None,
+    terminal_registry: TerminalRegistry | None,
+    resource_registry: SessionResourceRegistry | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     task_id: str | None,
     agent_id: str | None,
     agent_name: str | None,
     runner_workspace: Path | None,
-    mcp_manager: Any | None,
+    mcp_manager: McpManager | None,
     filesystem_registry: FilesystemRegistry | None = None,
     harness_client: httpx.AsyncClient | None = None,
 ) -> str:
@@ -5082,15 +5123,15 @@ def _spawn_async_tool(
     session_inbox: asyncio.Queue[dict[str, Any]] | None,
     session_async_tasks: dict[str, tuple[asyncio.Task[str], asyncio.Event]] | None,
     server_client: httpx.AsyncClient | None,
-    terminal_registry: Any | None,
-    resource_registry: Any | None,
-    agent_spec: Any | None,
+    terminal_registry: TerminalRegistry | None,
+    resource_registry: SessionResourceRegistry | None,
+    agent_spec: AgentSpecLike | None,
     conversation_id: str | None,
     task_id: str | None,
     agent_id: str | None,
     agent_name: str | None,
     runner_workspace: Path | None,
-    mcp_manager: Any | None,
+    mcp_manager: McpManager | None,
     filesystem_registry: FilesystemRegistry | None = None,
 ) -> str:
     """
@@ -5425,7 +5466,7 @@ async def _cancel_subagent_task(
 
 def _inject_orchestrator_skills(
     skills: list[Any],
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
 ) -> list[Any]:
     """
     Auto-inject built-in platform skills for every omnigent agent.
@@ -5466,7 +5507,7 @@ def _execute_skill_tool(
     tool_name: str,
     args: dict[str, Any],
     *,
-    agent_spec: Any | None,
+    agent_spec: AgentSpecLike | None,
     runner_workspace: Path | None,
 ) -> str:
     """
