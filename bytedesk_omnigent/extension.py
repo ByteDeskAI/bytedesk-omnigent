@@ -46,6 +46,9 @@ class BytedeskExtension:
 
     # ── routers ──────────────────────────────────────────────────────
     def routers(self, auth_provider: AuthProvider | None = None) -> list[APIRouter]:
+        from bytedesk_omnigent.routes.connected_app_manifests import (
+            create_connected_app_manifests_router,
+        )
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
@@ -57,6 +60,7 @@ class BytedeskExtension:
             create_ingress_router(),
             create_goals_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
+            create_connected_app_manifests_router(auth_provider=auth_provider),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
