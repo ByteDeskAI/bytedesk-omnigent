@@ -954,6 +954,15 @@ def create_app(
 
         _ensure_default_agents(agent_store, artifact_store, agent_cache)
 
+        # BDP-2374: run pluggable-seam extension discovery ONCE, now that the
+        # stores are wired. The seam modules deliberately do NOT discover at
+        # import (FastAPI-heavy entry-point extensions must stay off the runner
+        # hot path), so discovery is a server-startup concern. Error-isolated
+        # inside the helper — a bad extension can never break boot.
+        from omnigent.pluggable.manifest import discover_all_extensions
+
+        discover_all_extensions()
+
         # Populate the policy registry (builtins + user-configured
         # modules) so GET /v1/policy-registry serves the catalog.
         from omnigent.policies.registry import load_registry
@@ -1568,6 +1577,27 @@ def create_app(
                 content={"user_id": None, "login_url": login_url},
             )
         return {"user_id": user_id}
+
+    @app.get("/v1/_capabilities")
+    async def capabilities() -> dict[str, list[dict]]:
+        """Pluggable-seam capability manifest (BDP-2374).
+
+        Returns one entry per live pluggable seam — its registered
+        provider names, the active impl, the registered default, and the
+        ``OMNIGENT_USE_<SEAM>`` override env var — projected from
+        :data:`omnigent.pluggable.manifest.SEAMS`. Read-only and cheap
+        (no factories are invoked, only registry introspection).
+
+        Authentication: intentionally UNAUTHED, matching ``/v1/info`` —
+        it exposes only which backends are wired, no secret state — so a
+        client / operator can probe seam configuration before holding a
+        session.
+
+        :returns: ``{"seams": [<describe() + override_env>, ...]}``.
+        """
+        from omnigent.pluggable.manifest import capability_manifest
+
+        return {"seams": capability_manifest()}
 
     app.include_router(
         create_sessions_router(
