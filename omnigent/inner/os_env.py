@@ -12,11 +12,14 @@ import sys
 import tempfile
 import threading
 from abc import ABC, abstractmethod
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, TypeAlias, cast
 from urllib.parse import urlparse, urlunparse
+
+if TYPE_CHECKING:
+    from omnigent.pluggable import PluggableRegistry
 
 from omnigent.runner.identity import strip_runner_auth_secrets
 
@@ -821,13 +824,13 @@ class CallerProcessOSEnvironment(OSEnvironment):
         self.close()
 
 
-def create_os_environment(spec: OSEnvSpec | None) -> OSEnvironment | None:
-    """Instantiate the configured OS environment."""
-    if spec is None:
-        return None
-    if spec.type != "caller_process":
-        raise NotImplementedError(f"os_env type '{spec.type}' is not implemented")
+def _create_caller_process_os_environment(spec: OSEnvSpec) -> OSEnvironment:
+    """Build the in-process (``caller_process``) OS environment for *spec*.
 
+    The default — and historically only — OS-environment backend: the runner's
+    own process is the execution environment, with sandboxing applied per
+    ``spec.sandbox``.
+    """
     cwd = Path(spec.cwd or os.getcwd()).resolve(strict=False)
     fork_dir: Path | None = None
     if spec.fork:
@@ -856,6 +859,44 @@ def create_os_environment(spec: OSEnvSpec | None) -> OSEnvironment | None:
         _egress_rules=egress_rules,
         _egress_allow_private_destinations=egress_allow_private,
     )
+
+
+# An OS-environment builder: given a validated spec, construct the environment.
+_OSEnvBuilder: TypeAlias = "Callable[[OSEnvSpec], OSEnvironment]"
+
+
+def _build_os_environment_registry() -> PluggableRegistry[_OSEnvBuilder]:
+    """Build the OS-environment seam registry, keyed by ``OSEnvSpec.type``.
+
+    ``caller_process`` is the registered default and only built-in backend, so
+    selection is byte-identical to the historical ``type == "caller_process"``
+    check. Additional backends (e.g. a remote-pod or container OS environment)
+    can register their own builder under a new type name. The registry holds the
+    builder callables directly; ``create_os_environment`` passes the spec.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[_OSEnvBuilder] = PluggableRegistry(
+        "os_environment",
+        default=("caller_process", lambda: _create_caller_process_os_environment),
+    )
+    return registry
+
+
+def create_os_environment(spec: OSEnvSpec | None) -> OSEnvironment | None:
+    """Instantiate the configured OS environment.
+
+    Selection is a :class:`~omnigent.pluggable.PluggableRegistry` keyed by
+    ``spec.type`` (Abstract Factory). ``caller_process`` is the built-in default;
+    an unregistered type raises ``NotImplementedError`` exactly as before.
+    """
+    if spec is None:
+        return None
+    registry = _build_os_environment_registry()
+    if spec.type not in registry.names():
+        raise NotImplementedError(f"os_env type '{spec.type}' is not implemented")
+    builder = registry.get(spec.type)
+    return builder(spec)
 
 
 def default_os_env_spec_for_type(env_type: str) -> OSEnvSpec:

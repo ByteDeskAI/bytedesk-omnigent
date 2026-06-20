@@ -33,8 +33,9 @@ import logging
 import os
 import subprocess
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
 from cachetools import TTLCache
@@ -49,6 +50,9 @@ from omnigent.onboarding.provider_config import (
     ProviderEntry,
 )
 from omnigent.runtime.credentials.databricks import resolve_databricks_workspace
+
+if TYPE_CHECKING:
+    from omnigent.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -680,6 +684,52 @@ def _redacted_failure_reason(exc: Exception) -> str:
     return type(exc).__name__
 
 
+# A provider-listing fetch strategy: given a resolved provider (+ optional test
+# transport), enumerate its models. The three built-in strategies are the
+# per-API fetch functions defined below.
+_ListingFetch = Callable[..., ModelListing]
+
+
+def _listing_strategy_key(provider: ResolvedModelProvider) -> str:
+    """Select the listing-fetch strategy name for *provider*.
+
+    Preserves the historical branch precedence verbatim: a Databricks provider
+    uses the Databricks workspace listing; a ``key``-kind Anthropic-family
+    provider uses the Anthropic listing; everything else (OpenAI-family keys,
+    gateways, local) uses the OpenAI-compatible listing.
+
+    :param provider: The resolved provider descriptor (already past the
+        ``none`` / ``subscription`` short-circuits).
+    :returns: The registry key of the fetch strategy.
+    """
+    if provider.kind == DATABRICKS_KIND:
+        return "databricks"
+    if provider.kind == KEY_KIND and provider.family == ANTHROPIC_FAMILY:
+        return "anthropic"
+    return "openai_compatible"
+
+
+def _build_listing_fetch_registry() -> PluggableRegistry[_ListingFetch]:
+    """Build the listing-fetch seam registry, keyed by strategy name.
+
+    Replaces the inline ``kind``/``family`` if/elif/else with the canonical
+    pluggable recipe (BDP-2350). The three built-in providers are registered as
+    the same fetch functions the old dispatch called; ``openai_compatible`` is
+    the default (the historical ``else`` arm). The registry holds the fetch
+    callables directly — selection is by :func:`_listing_strategy_key`, not by
+    the override env, so :meth:`get` is used rather than ``resolve_default``.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[_ListingFetch] = PluggableRegistry(
+        "model_listing_fetch",
+        default=("openai_compatible", lambda: _fetch_openai_compatible_listing),
+    )
+    registry.register("databricks", lambda: _fetch_databricks_listing)
+    registry.register("anthropic", lambda: _fetch_anthropic_listing)
+    return registry
+
+
 def _listing_for_provider(
     provider: ResolvedModelProvider,
     *,
@@ -714,12 +764,8 @@ def _listing_for_provider(
     if cached is not None:
         return cached
     try:
-        if provider.kind == DATABRICKS_KIND:
-            listing = _fetch_databricks_listing(provider, transport=transport)
-        elif provider.kind == KEY_KIND and provider.family == ANTHROPIC_FAMILY:
-            listing = _fetch_anthropic_listing(provider, transport=transport)
-        else:
-            listing = _fetch_openai_compatible_listing(provider, transport=transport)
+        fetch = _build_listing_fetch_registry().get(_listing_strategy_key(provider))
+        listing = fetch(provider, transport=transport)
     except (httpx.HTTPError, OSError, ValueError, subprocess.SubprocessError) as exc:
         _logger.debug(
             "model enumeration failed for %s", provider.detail or provider.kind, exc_info=True

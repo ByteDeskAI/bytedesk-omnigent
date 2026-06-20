@@ -47,6 +47,8 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import MetricExporter
     from opentelemetry.sdk.trace import ReadableSpan, Span
 
+    from omnigent.pluggable import PluggableRegistry
+
 _logger = logging.getLogger(__name__)
 
 _RESP_PREFIX = "resp_"
@@ -506,6 +508,44 @@ def _create_otlp_metric_exporter() -> MetricExporter:
     return OTLPMetricExporter()
 
 
+def _build_metric_exporter_registry() -> PluggableRegistry[MetricExporter]:
+    """Build the metric-exporter seam registry, keyed by exporter name.
+
+    ``otlp`` is the registered default and the only built-in backend — the
+    historical behavior — so :meth:`resolve_default` constructs exactly the
+    OTLP exporter the inline code used to. Additional backends (e.g.
+    ``prometheus`` / ``console``) can register here later, and an operator can
+    pin one via the standard ``OTEL_METRICS_EXPORTER`` knob (consulted by
+    :func:`_metrics_exporter_name`) without touching this module.
+
+    Factories defer their optional OTel-exporter imports to selection time,
+    matching the old lazy ``_create_otlp_metric_exporter`` form.
+    """
+    from omnigent.pluggable import PluggableRegistry
+
+    registry: PluggableRegistry[MetricExporter] = PluggableRegistry(
+        "metric_exporter", default=("otlp", _create_otlp_metric_exporter)
+    )
+    return registry
+
+
+def _create_metric_exporter(exporter_name: str) -> MetricExporter:
+    """Create the metric exporter registered under *exporter_name*.
+
+    Selection is a :class:`~omnigent.pluggable.PluggableRegistry` keyed by the
+    OTEL exporter name. ``otlp`` is the default backend; an unknown name raises
+    :class:`~omnigent.pluggable.ProviderNotRegistered` so the caller can keep
+    metrics disabled rather than silently exporting nowhere.
+
+    :param exporter_name: The resolved OTEL metrics exporter name (e.g.
+        ``"otlp"``).
+    :returns: The constructed metric exporter.
+    :raises ValueError: If ``OTEL_EXPORTER_OTLP_PROTOCOL`` is unsupported.
+    :raises ProviderNotRegistered: If *exporter_name* has no registered backend.
+    """
+    return _build_metric_exporter_registry().get(exporter_name)
+
+
 def _init_otel_metrics() -> None:
     """
     Initialize the OpenTelemetry SDK meter provider when configured.
@@ -523,7 +563,7 @@ def _init_otel_metrics() -> None:
     if exporter_name == "none":
         _metrics_initialized = True
         return
-    if exporter_name != "otlp":
+    if exporter_name not in _build_metric_exporter_registry().names():
         _logger.warning(
             "unsupported OTEL_METRICS_EXPORTER=%s; server metrics export disabled",
             exporter_name,
@@ -537,7 +577,7 @@ def _init_otel_metrics() -> None:
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
         from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 
-        exporter = _create_otlp_metric_exporter()
+        exporter = _create_metric_exporter(exporter_name)
         reader = PeriodicExportingMetricReader(exporter)
         service_name = os.environ.get("OTEL_SERVICE_NAME", "omnigent")
         provider = MeterProvider(
