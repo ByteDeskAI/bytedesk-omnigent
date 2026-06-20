@@ -47,6 +47,9 @@ from omnigent.server.routes.agents_write import create_agents_write_router
 from omnigent.server.routes.builtin_agents import create_builtin_agents_router
 from omnigent.server.routes.comments import create_comments_router
 from omnigent.server.routes.default_policies import create_default_policies_router
+from omnigent.server.routes.integration_agent_blueprints import (
+    create_integration_agent_blueprints_router,
+)
 from omnigent.server.routes.policy_registry import create_policy_registry_router
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
 from omnigent.server.routes.session_policies import create_session_policies_router
@@ -1709,6 +1712,11 @@ def create_app(
         ),
         prefix="/v1",
         tags=["terminals"],
+    )
+    app.include_router(
+        create_integration_agent_blueprints_router(),
+        prefix="/v1",
+        tags=["integration_agent_blueprints"],
     )
     if comment_store is not None:
         app.include_router(
