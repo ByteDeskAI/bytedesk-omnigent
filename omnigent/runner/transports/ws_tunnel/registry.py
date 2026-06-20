@@ -294,6 +294,9 @@ class TunnelRegistry:
         if wait_state is not None:
             for waiter in list(wait_state.waiters):
                 _resolve_connect_waiter(waiter, session)
+        from omnigent.coordination.sync import claim_resource
+
+        claim_resource("runner", runner_id)
         return session
 
     def deregister(
@@ -336,6 +339,9 @@ class TunnelRegistry:
                 ConnectionError("tunnel closed before request completed"),
             )
         _retire_session_writer(removed, code=4003, reason="tunnel closed")
+        from omnigent.coordination.sync import release_resource
+
+        release_resource("runner", runner_id)
         return removed
 
     @staticmethod

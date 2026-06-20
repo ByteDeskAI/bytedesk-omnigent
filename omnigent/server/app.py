@@ -994,6 +994,10 @@ def create_app(
 
             discover_all_extensions()
 
+        from omnigent.coordination.lifecycle import start_coordination
+
+        await start_coordination()
+
         # Populate the policy registry (builtins + user-configured
         # modules) so GET /v1/policy-registry serves the catalog.
         from omnigent.policies.registry import load_registry
@@ -1051,6 +1055,9 @@ def create_app(
         try:
             yield
         finally:
+            from omnigent.coordination.lifecycle import stop_coordination
+
+            await stop_coordination()
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task

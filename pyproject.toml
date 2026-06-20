@@ -111,10 +111,13 @@ openai-agents = []
 # default install (it now lives in the `databricks` extra), but internal
 # CI / dev installs use `--extra all` and the test suite, deploy tooling,
 # and databricks_mcps servers import it.
-all = ["databricks-sdk>=0.56.0,<1"]
+all = ["databricks-sdk>=0.56.0,<1", "nats-py>=2.9,<3"]
 # From omnigent.
 bedrock = ["boto3>=1.30,<2", "botocore>=1.30,<2"]
 vertex = ["google-auth>=2.0,<3"]
+# NATS JetStream coordination backplane (`OMNIGENT_NATS_URL`). Lazy-imported
+# by omnigent.coordination.nats_backplane — only required when nats is active.
+coordination = ["nats-py>=2.9,<3"]
 # Modal sandbox launcher (`omnigent sandbox --provider modal`). The
 # launcher module ships in the base package and imports the SDK lazily,
 # so only users of the provider need this extra.

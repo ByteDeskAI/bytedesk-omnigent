@@ -33,9 +33,9 @@ metadata:
   labels:
     app.kubernetes.io/name: omnigent-server
 spec:
-  # MUST stay 1 — the server uses an in-memory runner registry; >1 replica is
-  # unsupported until a shared registry (e.g. Redis) is added. (One of the gaps
-  # to build before omnigent can fully replace OpenClaw at scale.)
+  # Default 1 for local smoke. Set replicas >= 2 when OMNIGENT_NATS_URL points at
+  # omnigent-nats — the coordination backplane (JetStream KV + fan-out) holds
+  # runner/host claims and the durable pending-elicitation index across replicas.
   replicas: 1
   strategy:
     type: Recreate
@@ -78,6 +78,10 @@ spec:
             # for a shared instance.
             - name: OMNIGENT_AUTH_ENABLED
               value: "0"
+            # Coordination backplane — unset keeps in-process (single-replica).
+            # Uncomment for multi-replica HA after scaling replicas above.
+            # - name: OMNIGENT_NATS_URL
+            #   value: nats://omnigent-nats:4222
             # ByteDesk platform MCP auth (BDP-2169, ADR-0138). Maya's
             # `bytedesk-platform` MCP tool uses the generic `oauth`
             # client-credentials provider (BDP-2182), which mints + refreshes a

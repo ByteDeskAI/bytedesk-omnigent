@@ -261,6 +261,9 @@ class HostRegistry:
                 )
                 old.outbound_queue.put_nowait(None)
             self._hosts[host_id] = conn
+        from omnigent.coordination.sync import claim_resource
+
+        claim_resource("host", host_id)
         return conn
 
     def deregister(self, host_id: str) -> None:
@@ -272,6 +275,9 @@ class HostRegistry:
         """
         with self._lock:
             self._hosts.pop(host_id, None)
+        from omnigent.coordination.sync import release_resource
+
+        release_resource("host", host_id)
 
     def get(self, host_id: str) -> HostConnection | None:
         """Look up a live host connection.

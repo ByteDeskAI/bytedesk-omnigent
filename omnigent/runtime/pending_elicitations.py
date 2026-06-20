@@ -28,10 +28,9 @@ otherwise render as nothing.
 
 Limitations:
 
-* In-memory only; multi-replica Omnigent deploys would each see their own
-  slice. This matches the existing ``_harness_elicitation_registry``
-  constraint — when a shared backplane is added for the registry,
-  this index should be wired through the same backplane.
+* With ``OMNIGENT_NATS_URL`` configured, upserts/deletes are mirrored to the
+  coordination backplane KV index and fan-out channel so peer replicas stay
+  consistent. Local memory remains the hot path on the owning replica.
 * Events emitted before the Omnigent server starts (e.g. between turns,
   with the session_stream having dropped them) are not tracked,
   same as every other AP-server-side in-memory state.
@@ -121,6 +120,7 @@ def record_publish(conversation_id: str, event: dict[str, Any]) -> None:
             return
         with _lock:
             _pending.setdefault(conversation_id, {})[elicitation_id] = event
+        _sync_backplane_upsert(conversation_id, elicitation_id, event)
         _notify_observer(conversation_id, event)
         return
     if event_type == "response.elicitation_resolved":
@@ -180,6 +180,68 @@ def resolve(conversation_id: str, elicitation_id: str) -> None:
         ids.pop(elicitation_id, None)
         if not ids:
             _pending.pop(conversation_id, None)
+    _sync_backplane_delete(conversation_id, elicitation_id)
+
+
+def apply_remote_upsert(
+    conversation_id: str,
+    elicitation_id: str,
+    event: dict[str, Any],
+) -> None:
+    """
+    Apply a pending upsert received from a peer replica (fan-out).
+
+    Does not re-publish to the backplane — the origin replica already did.
+    """
+    with _lock:
+        _pending.setdefault(conversation_id, {})[elicitation_id] = event
+
+
+def apply_remote_delete(conversation_id: str, elicitation_id: str) -> None:
+    """Apply a pending delete received from a peer replica (fan-out)."""
+    with _lock:
+        ids = _pending.get(conversation_id)
+        if ids is None:
+            return
+        ids.pop(elicitation_id, None)
+        if not ids:
+            _pending.pop(conversation_id, None)
+
+
+def _sync_backplane_upsert(
+    conversation_id: str,
+    elicitation_id: str,
+    event: dict[str, Any],
+) -> None:
+    from omnigent.coordination.lifecycle import (
+        fanout_pending_upsert,
+        get_active_backplane,
+        schedule_backplane,
+    )
+
+    backplane = get_active_backplane()
+    if backplane is None:
+        return
+    key = f"{conversation_id}/{elicitation_id}"
+    schedule_backplane(
+        backplane.index_put("pending", key, {"event": event}, ttl_s=3600)
+    )
+    fanout_pending_upsert(conversation_id, elicitation_id, event)
+
+
+def _sync_backplane_delete(conversation_id: str, elicitation_id: str) -> None:
+    from omnigent.coordination.lifecycle import (
+        fanout_pending_delete,
+        get_active_backplane,
+        schedule_backplane,
+    )
+
+    backplane = get_active_backplane()
+    if backplane is None:
+        return
+    key = f"{conversation_id}/{elicitation_id}"
+    schedule_backplane(backplane.index_delete("pending", key))
+    fanout_pending_delete(conversation_id, elicitation_id)
 
 
 def count_for(conversation_id: str) -> int:

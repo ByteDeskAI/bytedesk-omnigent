@@ -75,6 +75,12 @@ def _spec_source_registry() -> PluggableRegistry[Any]:
     return spec_source_registry
 
 
+def _coordination_backplane_registry() -> PluggableRegistry[Any]:
+    from omnigent.coordination.factory import get_coordination_registry
+
+    return get_coordination_registry()
+
+
 # (seam_name, registry_accessor, extension_hook) — the one declaration that drives
 # both startup discovery and the capability manifest. Adding a seam = one row here.
 SEAMS: tuple[tuple[str, Callable[[], PluggableRegistry[Any]], str], ...] = (
@@ -84,6 +90,7 @@ SEAMS: tuple[tuple[str, Callable[[], PluggableRegistry[Any]], str], ...] = (
     ("memory_embedder", _memory_embedder_registry, "memory_embedder_providers"),
     ("agent_memory", _agent_memory_registry, "agent_memory_providers"),
     ("spec_source", _spec_source_registry, "spec_source_providers"),
+    ("coordination_backplane", _coordination_backplane_registry, "coordination_backplane_providers"),
 )
 
 

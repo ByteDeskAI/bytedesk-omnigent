@@ -1,0 +1,81 @@
+# Omnigent coordination NATS — JetStream with durable PVC.
+# Enables omnigent-server replicas > 1 when OMNIGENT_NATS_URL is set.
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-nats
+  labels:
+    app.kubernetes.io/name: omnigent-nats
+spec:
+  selector:
+    app.kubernetes.io/name: omnigent-nats
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-nats
+  labels:
+    app.kubernetes.io/name: omnigent-nats
+spec:
+  serviceName: omnigent-nats
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-nats
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-nats
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.10-alpine
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-js"
+            - "-sd"
+            - "/data"
+            - "-m"
+            - "8222"
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: jetstream-data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: jetstream-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
