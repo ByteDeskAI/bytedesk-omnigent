@@ -17,10 +17,12 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from inspect import Parameter, signature
 from typing import Protocol, runtime_checkable
 
 from sqlalchemy import select
@@ -127,8 +129,19 @@ class WebhookSourceAdapter(Protocol):
         """Return whether *raw_body* is authentic for *secret* given *headers*."""
         ...
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
-        """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        """Return the binding match key (event name), ``"*"`` if none.
+
+        Header-only adapters can ignore ``raw_body`` and ``payload``; providers
+        such as Stripe carry the event type in the signed JSON body and use the
+        parsed payload to route to deterministic bindings.
+        """
         ...
 
 
@@ -149,8 +162,58 @@ class GitHubWebhookAdapter:
             return False
         return verify_hmac_signature(raw_body, secret, provided)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
         return _header(headers, "x-omnigent-event") or "*"
+
+
+class StripeWebhookAdapter:
+    """Stripe Events API adapter.
+
+    Stripe signs ``{timestamp}.{raw_body}`` in the ``Stripe-Signature`` header
+    (``t=...``, one or more ``v1=...`` signatures). The event type lives in the
+    JSON payload's ``type`` field, so this adapter is intentionally body-aware.
+    A five-minute replay window matches Stripe's recommended default.
+    """
+
+    def __init__(self, *, tolerance_seconds: int = 300) -> None:
+        self._tolerance_seconds = tolerance_seconds
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        header = _header(headers, "stripe-signature")
+        values = _parse_stripe_signature(header)
+        timestamps = values.get("t", [])
+        signatures = values.get("v1", [])
+        if not timestamps or not signatures:
+            return False
+        try:
+            timestamp = int(timestamps[0])
+        except ValueError:
+            return False
+        if abs(int(time.time()) - timestamp) > self._tolerance_seconds:
+            return False
+        signed_payload = str(timestamp).encode("utf-8") + b"." + raw_body
+        expected = hmac.new(
+            secret.encode("utf-8"), signed_payload, hashlib.sha256
+        ).hexdigest()
+        return any(hmac.compare_digest(expected, candidate) for candidate in signatures)
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (headers, raw_body)
+        event_type = payload.get("type") if payload is not None else None
+        return event_type if isinstance(event_type, str) and event_type else "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -165,6 +228,35 @@ def _header(headers: Mapping[str, str], name: str) -> str:
     return ""
 
 
+def _parse_stripe_signature(header: str) -> dict[str, list[str]]:
+    """Parse Stripe's comma-delimited signature header into a multimap."""
+    values: dict[str, list[str]] = {}
+    for part in header.split(","):
+        key, sep, value = part.strip().partition("=")
+        if not sep or not key:
+            continue
+        values.setdefault(key, []).append(value)
+    return values
+
+
+def _adapter_match_key(
+    adapter: WebhookSourceAdapter,
+    *,
+    headers: Mapping[str, str],
+    raw_body: bytes,
+    payload: Mapping[str, object] | None,
+) -> str:
+    """Call body-aware adapters while preserving legacy header-only adapters."""
+    parameters = signature(adapter.match_key).parameters
+    supports_body = any(
+        param.kind is Parameter.VAR_KEYWORD or name in {"raw_body", "payload"}
+        for name, param in parameters.items()
+    )
+    if supports_body:
+        return adapter.match_key(headers, raw_body=raw_body, payload=payload)
+    return adapter.match_key(headers)  # type: ignore[call-arg]
+
+
 def _build_webhook_adapter_registry():
     """The per-source webhook-adapter registry (BDP-2354).
 
@@ -177,6 +269,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("stripe", StripeWebhookAdapter)
     return registry
 
 
@@ -295,9 +388,9 @@ def process_inbound(
 
     The per-source :class:`WebhookSourceAdapter` (BDP-2354) owns BOTH signature
     verification (``verify(raw_body, headers, secret)``) and event routing
-    (``match_key(headers)``); it defaults to the GitHub HMAC-SHA256 adapter. The
-    *secret* is resolved by the caller via the existing SecretResolver and passed
-    in, so the two seams compose.
+    (``match_key(headers, raw_body=..., payload=...)``); it defaults to the
+    GitHub HMAC-SHA256 adapter. The *secret* is resolved by the caller via the
+    existing SecretResolver and passed in, so the two seams compose.
 
     Returns an :class:`IngressResult` carrying the HTTP status the route returns:
     bad signature → 401; no binding → 404 (never 2xx, BDP-1419); delivered → 202;
@@ -307,7 +400,9 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = _adapter_match_key(
+        adapter, headers=headers, raw_body=raw_body, payload=payload
+    )
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from collections.abc import Mapping
 
 import pytest
 
@@ -15,6 +16,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    StripeWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -25,6 +27,12 @@ from bytedesk_omnigent.ingress import (
 
 def _sign(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _stripe_signature(body: bytes, secret: str, timestamp: int) -> str:
+    signed = str(timestamp).encode() + b"." + body
+    digest = hmac.new(secret.encode(), signed, hashlib.sha256).hexdigest()
+    return f"t={timestamp},v1={digest}"
 
 
 def _hdrs(signature: str, event: str) -> dict[str, str]:
@@ -182,24 +190,86 @@ def test_resolve_webhook_adapter_defaults_to_github() -> None:
     assert isinstance(resolve_webhook_adapter("anything"), GitHubWebhookAdapter)
 
 
+def test_stripe_adapter_verifies_signature_and_routes_by_payload_type(monkeypatch) -> None:
+    """Stripe is a built-in body-aware adapter: signature over timestamp + body,
+    match key from the event payload's ``type`` field."""
+    now = 1_700_000_000
+    monkeypatch.setattr(_ingress_mod.time, "time", lambda: now)
+    adapter = StripeWebhookAdapter()
+    body = json.dumps({"id": "evt_123", "type": "invoice.paid"}).encode()
+    secret = "whsec_stripe"
+    headers = {"Stripe-Signature": _stripe_signature(body, secret, now)}
+
+    assert isinstance(resolve_webhook_adapter("stripe"), StripeWebhookAdapter)
+    assert adapter.verify(body, headers, secret) is True
+    assert adapter.verify(body, {"Stripe-Signature": "t=bad,v1=nope"}, secret) is False
+    assert adapter.verify(
+        body,
+        {"Stripe-Signature": _stripe_signature(body, secret, now - 301)},
+        secret,
+    ) is False
+    assert adapter.match_key(headers, payload={"type": "invoice.paid"}) == "invoice.paid"
+    assert adapter.match_key(headers, payload={}) == "*"
+
+
+def test_process_inbound_uses_body_aware_stripe_match_key(monkeypatch, tmp_path) -> None:
+    """A Stripe event can wake exactly the binding for its signed payload type."""
+    now = 1_700_000_000
+    monkeypatch.setattr(_ingress_mod.time, "time", lambda: now)
+    db = f"sqlite:///{tmp_path / 'stripe.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    secret = "whsec_stripe"
+    bus.register_wait(
+        signal_id="billing:invoice-paid", session_id="sess-billing", key="subscribe:stripe",
+        kind="subscribe", target="stripe", now=now,
+    )
+    store.register_binding(
+        source="stripe", match_key="invoice.paid", signal_id="billing:invoice-paid", now=now
+    )
+    body = json.dumps({"id": "evt_123", "type": "invoice.paid"}).encode()
+    payload = {"id": "evt_123", "type": "invoice.paid"}
+    result = process_inbound(
+        source="stripe",
+        raw_body=body,
+        headers={"Stripe-Signature": _stripe_signature(body, secret, now)},
+        secret=secret,
+        store=store,
+        bus=bus,
+        adapter=resolve_webhook_adapter("stripe"),
+        payload=payload,
+        now=now,
+    )
+
+    assert result.status is IngressStatus.DELIVERED
+    assert result.http_status == 202
+    assert result.signal_id == "billing:invoice-paid"
+
+
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
     """A second source registers its own signature scheme + event header; the
     registry resolves it instead of the GitHub default (BDP-2354)."""
 
-    class _StripeAdapter:
+    class _BillingAdapter:
         # A different scheme: a shared-token header (not HMAC) and a different
         # event header — proving the adapter owns BOTH halves of the contract.
         def verify(self, raw_body, headers, secret) -> bool:
-            return headers.get("stripe-token") == secret
+            return headers.get("billing-token") == secret
 
-        def match_key(self, headers) -> str:
-            return headers.get("stripe-event", "*")
+        def match_key(
+            self,
+            headers: Mapping[str, str],
+            *,
+            raw_body: bytes | None = None,
+            payload: Mapping[str, object] | None = None,
+        ) -> str:
+            return headers.get("billing-event", "*")
 
-    register_webhook_adapter("stripe", _StripeAdapter)
-    adapter = resolve_webhook_adapter("stripe")
-    assert isinstance(adapter, _StripeAdapter)
-    assert adapter.verify(b"{}", {"stripe-token": "whsec"}, "whsec") is True
-    assert adapter.verify(b"{}", {"stripe-token": "wrong"}, "whsec") is False
-    assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
+    register_webhook_adapter("billing", _BillingAdapter)
+    adapter = resolve_webhook_adapter("billing")
+    assert isinstance(adapter, _BillingAdapter)
+    assert adapter.verify(b"{}", {"billing-token": "whsec"}, "whsec") is True
+    assert adapter.verify(b"{}", {"billing-token": "wrong"}, "whsec") is False
+    assert adapter.match_key({"billing-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
