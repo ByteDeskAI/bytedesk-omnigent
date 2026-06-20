@@ -14,6 +14,8 @@ is unit-proven without FastAPI; the route is thin glue.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
 import hmac
 import os
@@ -153,6 +155,30 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class ShopifyWebhookAdapter:
+    """Shopify webhook adapter: base64 HMAC body signature + topic routing.
+
+    Shopify signs the raw request body with HMAC-SHA256 and sends the digest as
+    base64 in ``X-Shopify-Hmac-Sha256``. The event topic lives in
+    ``X-Shopify-Topic`` (for example ``orders/create`` or ``app/uninstalled``),
+    which becomes the Omnigent binding ``match_key``.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-shopify-hmac-sha256")
+        if not provided:
+            return False
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
+        try:
+            actual = base64.b64decode(provided, validate=True)
+        except (binascii.Error, ValueError):
+            return False
+        return hmac.compare_digest(expected, actual)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-shopify-topic") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +203,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("shopify", ShopifyWebhookAdapter)
     return registry
 
 

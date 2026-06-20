@@ -2,6 +2,7 @@
 end-to-end through the durable signal bus (BDP-2249, ADR-0142)."""
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
 import json
@@ -15,6 +16,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    ShopifyWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -25,6 +27,11 @@ from bytedesk_omnigent.ingress import (
 
 def _sign(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+
+
+def _shopify_sign(body: bytes, secret: str) -> str:
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("ascii")
 
 
 def _hdrs(signature: str, event: str) -> dict[str, str]:
@@ -203,3 +210,78 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_shopify_adapter_verifies_base64_hmac_and_routes_topic() -> None:
+    """Shopify uses base64 HMAC signatures and X-Shopify-Topic routing."""
+    adapter = ShopifyWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+    body = b'{"id":123,"total_price":"42.00"}'
+    secret = "shopify-shared-secret"
+    signature = _shopify_sign(body, secret)
+
+    assert adapter.verify(
+        body,
+        {"X-Shopify-Hmac-Sha256": signature, "X-Shopify-Topic": "orders/create"},
+        secret,
+    ) is True
+    assert adapter.verify(
+        body,
+        {"X-Shopify-Hmac-Sha256": "not-base64!"},
+        secret,
+    ) is False
+    assert adapter.verify(
+        body,
+        {"X-Shopify-Hmac-Sha256": _shopify_sign(body, "wrong")},
+        secret,
+    ) is False
+    assert adapter.match_key({"X-Shopify-Topic": "orders/create"}) == "orders/create"
+    assert adapter.match_key({}) == "*"
+
+
+def test_resolve_webhook_adapter_has_builtin_shopify_adapter() -> None:
+    assert isinstance(resolve_webhook_adapter("shopify"), ShopifyWebhookAdapter)
+
+
+def test_process_inbound_delivers_shopify_topic_to_signal_bus(tmp_path) -> None:
+    db = f"sqlite:///{tmp_path / 'shopify.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "shopify-secret"
+    body = json.dumps({"id": 123, "total_price": "42.00"}).encode()
+
+    bus.register_wait(
+        signal_id="shopify:order:123",
+        session_id="sess-commerce",
+        key="subscribe:shopify",
+        kind="subscribe",
+        target="shopify",
+        now=now,
+    )
+    store.register_binding(
+        source="shopify",
+        match_key="orders/create",
+        signal_id="shopify:order:123",
+        now=now,
+    )
+
+    result = process_inbound(
+        source="shopify",
+        raw_body=body,
+        headers={
+            "X-Shopify-Hmac-Sha256": _shopify_sign(body, secret),
+            "X-Shopify-Topic": "orders/create",
+        },
+        secret=secret,
+        store=store,
+        bus=bus,
+        adapter=resolve_webhook_adapter("shopify"),
+        payload={"id": 123, "total_price": "42.00"},
+        now=now + 1,
+    )
+
+    assert result.status is IngressStatus.DELIVERED
+    assert result.http_status == 202
+    assert result.signal_id == "shopify:order:123"
+    assert bus.list_pending(target="shopify") == []
