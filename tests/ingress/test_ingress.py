@@ -15,6 +15,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    JiraWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -203,3 +204,40 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_jira_adapter_routes_on_webhook_event_payload(tmp_path) -> None:
+    """Jira webhooks carry the durable event name in the JSON ``webhookEvent``
+    field, so the built-in adapter must route on payload content instead of a
+    source-specific header."""
+    db = f"sqlite:///{tmp_path / 'jira.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "jira-secret"
+
+    bus.register_wait(
+        signal_id="jira:issue-created", session_id="sess-jira", key="subscribe:jira",
+        kind="subscribe", target="jira", now=now,
+    )
+    store.register_binding(
+        source="jira", match_key="jira:issue_created", signal_id="jira:issue-created", now=now
+    )
+
+    payload = {"webhookEvent": "jira:issue_created", "issue": {"key": "BDP-2371"}}
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    res = process_inbound(
+        source="jira", raw_body=body,
+        headers={"x-hub-signature-256": "sha256=" + _sign(body, secret)},
+        secret=secret, store=store, bus=bus, adapter=JiraWebhookAdapter(),
+        payload=payload, now=now + 1,
+    )
+
+    assert res.status is IngressStatus.DELIVERED
+    assert res.http_status == 202
+    assert res.signal_id == "jira:issue-created"
+
+
+def test_jira_adapter_is_registered_builtin_source(_restore_adapter_registry) -> None:
+    adapter = resolve_webhook_adapter("jira")
+    assert isinstance(adapter, JiraWebhookAdapter)
