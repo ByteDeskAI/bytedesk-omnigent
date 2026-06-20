@@ -153,6 +153,27 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class SentryWebhookAdapter:
+    """Sentry hook adapter: HMAC-SHA256 signature + resource routing.
+
+    Sentry sends a raw-body HMAC in ``Sentry-Hook-Signature`` and the resource
+    family (``issue``, ``error``, ``metric_alert``, etc.) in
+    ``Sentry-Hook-Resource``. Mapping that resource to the binding key lets
+    Omnigent wake specialized remediation agents for production incidents while
+    retaining the same signed-ingress + durable signal-bus path as first-party
+    webhooks.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "sentry-hook-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "sentry-hook-resource") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +198,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("sentry", SentryWebhookAdapter)
     return registry
 
 
