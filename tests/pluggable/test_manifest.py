@@ -20,6 +20,7 @@ _EXPECTED_SEAMS: dict[str, tuple[str, str | None]] = {
     "memory_embedder": ("OMNIGENT_USE_MEMORY_EMBEDDER", "fastembed"),
     "agent_memory": ("OMNIGENT_USE_AGENT_MEMORY", "composed"),
     "spec_source": ("OMNIGENT_USE_SPEC_SOURCE", "filesystem"),
+    "coordination_backplane": ("OMNIGENT_USE_COORDINATION_BACKPLANE", "inprocess"),
 }
 
 

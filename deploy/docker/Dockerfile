@@ -136,6 +136,8 @@ RUN test -f ./omnigent/server/static/web-ui/index.html \
 # psycopg[binary] is not a baseline dep — pulled in by the
 # [databricks] extra in pyproject — so add it explicitly here.
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'psycopg[binary]>=3.1,<4'
+# NATS coordination backplane (OMNIGENT_NATS_URL) — lazy-imported at runtime.
+RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'nats-py>=2.9,<3'
 
 # ── Node alias stage ─────────────────────────────────────
 # Pure alias so the host stage can COPY node out of a version-pinned
