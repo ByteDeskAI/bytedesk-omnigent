@@ -12,6 +12,7 @@ import pytest
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
+    AirtableWebhookAdapter,
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
@@ -203,3 +204,36 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_airtable_adapter_verifies_hmac_and_derives_event_from_payload() -> None:
+    """Airtable webhooks do not send a GitHub-style event header; route by the
+    notification kind in the JSON payload so agents can bind to base/table changes."""
+    adapter = AirtableWebhookAdapter()
+    body = json.dumps(
+        {
+            "base": {"id": "appBase"},
+            "webhook": {"id": "achWebhook"},
+            "actionMetadata": {"source": "client"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    secret = "airtable-secret"
+    signature = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-airtable-webhook-signature": signature}, secret) is True
+    assert (
+        adapter.verify(
+            body, {"x-airtable-webhook-signature": "sha256=" + signature}, secret
+        )
+        is True
+    )
+    assert adapter.verify(body, {"x-airtable-webhook-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({}, payload=json.loads(body)) == "base.changed"
+    assert adapter.match_key({}, payload={"webhook": {"id": "achWebhook"}}) == "webhook.changed"
+    assert adapter.match_key({}, payload={}) == "*"
+
+
+def test_airtable_source_is_registered_by_default(_restore_adapter_registry) -> None:
+    assert isinstance(resolve_webhook_adapter("airtable"), AirtableWebhookAdapter)
