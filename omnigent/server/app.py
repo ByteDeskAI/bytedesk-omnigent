@@ -1872,7 +1872,7 @@ def create_app(
                 conv.agent_id,
             )
             try:
-                routed = runner_router.client_for_session_resources(conv.id)
+                routed = await runner_router.aclient_for_session_resources(conv.id)
             except OmnigentError:
                 _logger.exception(
                     "Failed to resolve runner client for session %s on reconnect",
@@ -1911,6 +1911,10 @@ def create_app(
                 routed.client,
                 conversation_store,
             )
+
+    from omnigent.server.routes.peer_tunnel import create_peer_tunnel_router
+
+    app.include_router(create_peer_tunnel_router(tunnel_registry))
 
     # WS tunnel endpoint for runners (RUNNER.md §2-3).
     app.include_router(

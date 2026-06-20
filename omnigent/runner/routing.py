@@ -1,10 +1,10 @@
 """Conversation-aware runner routing for the Omnigent server.
 
-The tunnel registry is the source of truth for online runners. This
-module turns that registry into the one dispatch decision the server
-needs: given a conversation and harness kind, read the bound runner and
-return an ``httpx`` client that talks to that runner over the WebSocket
-tunnel.
+The tunnel registry is the source of truth for online runners on this
+replica. When coordination is enabled, :meth:`RunnerRouter.aclient_*`
+also resolves cross-replica ownership via
+:class:`CoordinationBackplane.resolve_resource` and forwards HTTP through
+the peer tunnel proxy.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ from typing import TYPE_CHECKING
 
 import httpx
 
+from omnigent.coordination.peer_forward import PeerTunnelTransport
+from omnigent.coordination.protocol import ResourceKind
+from omnigent.coordination.replica_id import server_replica_id
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.harness_aliases import canonicalize_harness
 from omnigent.runner.transports.ws_tunnel.transport import WSTunnelTransport
@@ -89,10 +92,8 @@ class RunnerRouter:
         """
         Return the runner client for a harness-backed conversation turn.
 
-        Dispatch is a read-only operation for runner affinity. The
-        session must already have ``conversations.runner_id`` set by
-        ``PATCH /v1/sessions/{id}``; dispatch never picks or persists
-        a runner itself.
+        Local-registry only — use :meth:`aclient_for_conversation` in
+        async server code for cross-replica forwarding.
 
         :param conversation_id: Conversation id, e.g.
             ``"conv_0123456789abcdef"``.
@@ -107,7 +108,25 @@ class RunnerRouter:
         if conv is None:
             raise OmnigentError("conversation not found", code=ErrorCode.NOT_FOUND)
         if conv.runner_id:
-            return self._routed_pinned_runner(conv.runner_id, harness=harness)
+            return self._routed_pinned_runner_local(conv.runner_id, harness=harness)
+        raise OmnigentError(
+            f"conversation {conversation_id!r} is not bound to a runner; "
+            "resume the session to bind a registered runner",
+            code=ErrorCode.CONFLICT,
+        )
+
+    async def aclient_for_conversation(
+        self,
+        *,
+        conversation_id: str,
+        harness: str,
+    ) -> RoutedRunner:
+        """Async variant with coordination-backed cross-replica routing."""
+        conv = self._conversation_store.get_conversation(conversation_id)
+        if conv is None:
+            raise OmnigentError("conversation not found", code=ErrorCode.NOT_FOUND)
+        if conv.runner_id:
+            return await self._route_runner(conv.runner_id, harness=harness)
         raise OmnigentError(
             f"conversation {conversation_id!r} is not bound to a runner; "
             "resume the session to bind a registered runner",
@@ -116,34 +135,28 @@ class RunnerRouter:
 
     def client_for_session_resources(self, conversation_id: str) -> RoutedRunner:
         """
-        Return a runner client for session resource access.
+        Return a runner client for session resource access (local only).
 
-        Resource APIs use the same session affinity as dispatch. The
-        session must already have ``conversations.runner_id`` set by
-        ``PATCH /v1/sessions/{id}``; resource access never selects or
-        persists a runner itself.
-
-        :param conversation_id: Conversation/session id, e.g.
-            ``"conv_0123456789abcdef"``.
-        :returns: Selected runner id and client.
-        :raises OmnigentError: If the conversation is missing, the
-            pinned runner is offline, or no online runner is available.
+        Use :meth:`aclient_for_session_resources` in async server code.
         """
         conv = self._conversation_store.get_conversation(conversation_id)
         if conv is None:
             raise OmnigentError("conversation not found", code=ErrorCode.NOT_FOUND)
         if conv.runner_id:
-            session = self._registry.get(conv.runner_id)
-            if session is None:
-                raise OmnigentError(
-                    f"runner {conv.runner_id!r} is offline for conversation {conversation_id!r}",
-                    code=ErrorCode.RUNNER_UNAVAILABLE,
-                )
-            return RoutedRunner(
-                runner_id=conv.runner_id,
-                client=self._client_for_runner(conv.runner_id),
-            )
+            return self._routed_runner_local(conv.runner_id, conversation_id)
+        raise OmnigentError(
+            f"conversation {conversation_id!r} is not bound to a runner; "
+            "resume the session to bind a registered runner",
+            code=ErrorCode.CONFLICT,
+        )
 
+    async def aclient_for_session_resources(self, conversation_id: str) -> RoutedRunner:
+        """Async variant with coordination-backed cross-replica routing."""
+        conv = self._conversation_store.get_conversation(conversation_id)
+        if conv is None:
+            raise OmnigentError("conversation not found", code=ErrorCode.NOT_FOUND)
+        if conv.runner_id:
+            return await self._route_runner(conv.runner_id)
         raise OmnigentError(
             f"conversation {conversation_id!r} is not bound to a runner; "
             "resume the session to bind a registered runner",
@@ -151,38 +164,25 @@ class RunnerRouter:
         )
 
     def client_for_existing_conversation(self, conversation_id: str) -> RoutedRunner | None:
-        """
-        Return the pinned runner client for an already-started conversation.
-
-        Used by server surfaces like terminal listing and interrupt
-        forwarding that know the conversation but do not know the
-        harness kind. Unpinned or missing conversations return
-        ``None`` so callers can fall back to local test/in-process
-        behavior.
-
-        :param conversation_id: Conversation id, e.g.
-            ``"conv_0123456789abcdef"``.
-        :returns: A routed runner when the conversation is pinned;
-            ``None`` when it is not pinned or not found.
-        :raises OmnigentError: If the pinned runner is offline.
-        """
+        """Return the pinned runner client (local registry only)."""
         conv = self._conversation_store.get_conversation(conversation_id)
         if conv is None or not conv.runner_id:
             return None
-        session = self._registry.get(conv.runner_id)
-        if session is None:
-            raise OmnigentError(
-                f"runner {conv.runner_id!r} is offline for conversation {conversation_id!r}",
-                code=ErrorCode.RUNNER_UNAVAILABLE,
-            )
-        return RoutedRunner(
-            runner_id=conv.runner_id,
-            client=self._client_for_runner(conv.runner_id),
-        )
+        return self._routed_runner_local(conv.runner_id, conversation_id)
+
+    async def aclient_for_existing_conversation(
+        self,
+        conversation_id: str,
+    ) -> RoutedRunner | None:
+        """Async variant with coordination-backed cross-replica routing."""
+        conv = self._conversation_store.get_conversation(conversation_id)
+        if conv is None or not conv.runner_id:
+            return None
+        return await self._route_runner(conv.runner_id)
 
     def runner_is_online(self, runner_id: str) -> bool:
         """
-        Return whether *runner_id* is currently connected.
+        Return whether *runner_id* is currently connected locally.
 
         :param runner_id: Runner UUID, e.g.
             ``"runner_0123456789abcdef"``.
@@ -216,16 +216,62 @@ class RunnerRouter:
         for client in clients:
             await client.aclose()
 
-    def _routed_pinned_runner(self, runner_id: str, *, harness: str) -> RoutedRunner:
-        """
-        Return a routed runner after validating hard affinity.
+    async def _resolve_owner(self, kind: ResourceKind, resource_id: str) -> str | None:
+        from omnigent.coordination.lifecycle import get_active_backplane
 
-        :param runner_id: Pinned runner UUID.
-        :param harness: Harness kind requested by the agent spec.
-        :returns: Selected runner id and client.
-        :raises OmnigentError: If the runner is offline or
-            lacks the requested harness capability.
-        """
+        backplane = get_active_backplane()
+        if backplane is None:
+            return None
+        return await backplane.resolve_resource(kind, resource_id)
+
+    async def _route_runner(
+        self,
+        runner_id: str,
+        *,
+        harness: str | None = None,
+    ) -> RoutedRunner:
+        session = self._registry.get(runner_id)
+        if session is not None:
+            if harness is not None and not _runner_supports_harness(session, harness):
+                raise OmnigentError(
+                    f"runner {runner_id!r} does not support harness {harness!r}",
+                    code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
+                )
+            return RoutedRunner(
+                runner_id=runner_id,
+                client=self._client_for_runner(runner_id),
+            )
+
+        owner = await self._resolve_owner("runner", runner_id)
+        if owner is None:
+            raise OmnigentError(
+                f"runner {runner_id!r} is offline; resume the session to bind a registered runner",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
+        local = server_replica_id()
+        if owner == local:
+            raise OmnigentError(
+                f"runner {runner_id!r} is offline on replica {local!r}",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
+        return RoutedRunner(
+            runner_id=runner_id,
+            client=self._client_for_peer_runner(owner, runner_id),
+        )
+
+    def _routed_runner_local(self, runner_id: str, conversation_id: str) -> RoutedRunner:
+        session = self._registry.get(runner_id)
+        if session is None:
+            raise OmnigentError(
+                f"runner {runner_id!r} is offline for conversation {conversation_id!r}",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
+        return RoutedRunner(
+            runner_id=runner_id,
+            client=self._client_for_runner(runner_id),
+        )
+
+    def _routed_pinned_runner_local(self, runner_id: str, *, harness: str) -> RoutedRunner:
         session = self._registry.get(runner_id)
         if session is None:
             raise OmnigentError(
@@ -257,6 +303,26 @@ class RunnerRouter:
                     timeout=httpx.Timeout(5.0, read=None),
                 )
                 self._clients[runner_id] = client
+            return client
+
+    def _client_for_peer_runner(
+        self,
+        owner_replica: str,
+        runner_id: str,
+    ) -> httpx.AsyncClient:
+        cache_key = f"peer:{owner_replica}:{runner_id}"
+        with self._lock:
+            client = self._clients.get(cache_key)
+            if client is None:
+                client = httpx.AsyncClient(
+                    transport=PeerTunnelTransport(
+                        target_replica=owner_replica,
+                        runner_id=runner_id,
+                    ),
+                    base_url="http://runner",
+                    timeout=httpx.Timeout(5.0, read=None),
+                )
+                self._clients[cache_key] = client
             return client
 
 

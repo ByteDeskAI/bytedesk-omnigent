@@ -16,6 +16,22 @@ spec:
       port: 80
       targetPort: 8000
 ---
+# Headless service for per-pod DNS (cross-replica peer tunnel forwarding).
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-server-peer
+  labels:
+    app.kubernetes.io/name: omnigent-server
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: omnigent-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
