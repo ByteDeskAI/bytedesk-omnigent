@@ -286,3 +286,90 @@ def test_openai_mode_is_not_async() -> None:
     """OpenAI passthrough mode should not enter Omnigent async dispatch."""
     tool = WebSearchTool(llm_provider="openai")
     assert tool.is_async() is False
+
+
+# ── Provider registry seam (BDP-2348) ─────────────────────────────────────
+
+
+def test_provider_registry_registers_builtin_providers() -> None:
+    """The seam registry exposes exactly the two built-in providers by name."""
+    from omnigent.tools.builtins.web_search import (
+        WebSearchProvider,
+        _build_provider_registry,
+    )
+
+    registry = _build_provider_registry()
+    assert set(registry.names()) == {"google", "perplexity"}
+    # Each registered factory yields a structural WebSearchProvider.
+    for name in ("google", "perplexity"):
+        assert isinstance(registry.get(name), WebSearchProvider)
+
+
+@pytest.mark.parametrize(
+    ("provider", "patch_target", "fake_json", "expected_fragments"),
+    [
+        (
+            "google",
+            "omnigent.tools.builtins.web_search_google.httpx.get",
+            {
+                "items": [
+                    {
+                        "title": "Python Docs",
+                        "link": "https://docs.python.org",
+                        "snippet": "Welcome to Python.",
+                    },
+                ],
+            },
+            ("1. Python Docs", "https://docs.python.org"),
+        ),
+        (
+            "perplexity",
+            "omnigent.tools.builtins.web_search_perplexity.httpx.post",
+            {
+                "choices": [{"message": {"content": "Python is a language."}}],
+                "citations": ["https://python.org"],
+            },
+            ("Python is a language.", "[1] https://python.org"),
+        ),
+    ],
+)
+def test_each_provider_branch_selects_same_impl_identical_shape(
+    tool_ctx: ToolContext,
+    provider: str,
+    patch_target: str,
+    fake_json: dict[str, object],
+    expected_fragments: tuple[str, ...],
+) -> None:
+    """
+    Every ``search_provider`` branch resolves through the registry to the
+    same impl the legacy if-ladder used, returning the identical result shape.
+    """
+    fake_response = MagicMock()
+    fake_response.json.return_value = fake_json
+
+    config = {
+        "search_provider": provider,
+        "api_key": "k",
+        "engine_id": "e",
+    }
+    tool = WebSearchTool(config=config, llm_provider="anthropic")
+    with patch(patch_target) as mock_http:
+        mock_http.return_value = fake_response
+        result = tool.invoke(json.dumps({"query": "python"}), tool_ctx)
+
+    for fragment in expected_fragments:
+        assert fragment in result
+
+
+def test_unknown_provider_raises_provider_not_registered(
+    tool_ctx: ToolContext,
+) -> None:
+    """An unknown (but non-empty) ``search_provider`` raises ProviderNotRegistered."""
+    from omnigent.pluggable import ProviderNotRegistered
+
+    tool = WebSearchTool(
+        config={"search_provider": "bing", "api_key": "k"},
+        llm_provider="anthropic",
+    )
+    with pytest.raises(ProviderNotRegistered):
+        tool.invoke(json.dumps({"query": "test"}), tool_ctx)
