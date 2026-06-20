@@ -93,6 +93,13 @@ dependencies = [
     # version against the latest PyPI release. Previously only a
     # transitive dep; pinned here now that we import it directly.
     "packaging>=23,<26",
+    # DI composition root (BDP-2368) — DeclarativeContainer with real
+    # Singleton/Scoped/Transient lifetimes for omnigent.server.container.
+    # Cython C-extension, but ships abi3 manylinux + musllinux wheels for
+    # both x86_64 and aarch64, so the multi-arch image build resolves
+    # prebuilt wheels on amd64 and arm64 (no in-image compile). Gated
+    # behind OMNIGENT_USE_DI_CONTAINER (default OFF) at the call site.
+    "dependency-injector>=4.49,<5",
 ]
 
 [project.optional-dependencies]
