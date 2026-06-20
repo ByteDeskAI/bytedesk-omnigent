@@ -240,18 +240,20 @@ class RetryPolicy:
             means no server hint — pure exponential backoff applies.
         :returns: Delay in seconds.
         """
-        import random
+        # Delegates to the registered ``backoff_policy`` Strategy (BDP-2361,
+        # P9) so the exp-full-jitter curve is defined in one place. This path
+        # is 1-indexed, so the 0-based exponent is ``retry_index - 1``; the
+        # server ``retry_after`` floor and the ``self.jitter`` flag are passed
+        # through. Behavior is byte-identical to the prior inline math.
+        from omnigent.runtime.backoff import default_backoff_policy
 
-        delay: float = self.backoff_base_s * float(2 ** (retry_index - 1))
-        if retry_after_s is not None:
-            delay = max(delay, retry_after_s)
-        delay = min(delay, self.backoff_max_s)
-        if self.jitter:
-            # ``random.uniform`` is typed as ``Any``-returning by
-            # the stdlib stub; cast to float so the function's
-            # declared return type holds without leaking ``Any``.
-            delay = float(delay * random.uniform(0.5, 1.5))
-        return delay
+        return default_backoff_policy().compute_delay(
+            retry_index - 1,
+            self.backoff_base_s,
+            self.backoff_max_s,
+            retry_after_s=retry_after_s,
+            jitter=self.jitter,
+        )
 
 
 @dataclass(frozen=True)
@@ -958,7 +960,7 @@ class MCPServerConfig:
     # OAuth client-credentials auth — mints + caches + refreshes a bearer
     # token at connection time and injects it as ``Authorization``. Like
     # ``databricks_profile``, explicit ``headers`` win if both set it.
-    oauth: "MCPOAuthConfig | None" = None
+    oauth: MCPOAuthConfig | None = None
     # Stdio-only fields.
     command: str | None = None
     args: list[str] = field(default_factory=list)

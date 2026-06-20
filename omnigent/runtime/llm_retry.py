@@ -6,13 +6,9 @@ backoff delays, and provides a retry loop that emits SSE events.
 
 from __future__ import annotations
 
-import json
 import logging
-import random
-import re
 import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
 from typing import Any, TypeVar
 
 import httpx
@@ -23,99 +19,35 @@ from omnigent.llms.errors import (
     PermanentLLMError,
     RetryableLLMError,
 )
+from omnigent.runtime.overflow_detect import OverflowTokens, detect_overflow
 from omnigent.spec.types import RetryPolicy
 
 _logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
-
-@dataclass
-class _OverflowTokens:
-    """
-    Token counts parsed from a provider context-overflow error body.
-
-    :param max_context_tokens: The model's context window size as
-        reported by the provider, e.g. ``128000``.
-    :param actual_tokens: The token count the provider measured for
-        the rejected request, e.g. ``142000``.
-    """
-
-    max_context_tokens: int
-    actual_tokens: int
+# Backwards-compat alias: ``_OverflowTokens`` was the local dataclass before
+# the overflow parsers were lifted into the pluggable ``overflow_detector``
+# seam (BDP-2360, P6). Kept so any importer of the old name keeps working.
+_OverflowTokens = OverflowTokens
 
 
-def _detect_context_overflow(body: str) -> _OverflowTokens | None:
+def _detect_context_overflow(body: str) -> OverflowTokens | None:
     """
     Parse provider-specific context-overflow error messages and
     extract token counts.
 
-    Matches conservatively — only well-known error shapes produce a
-    result. Unknown 400 errors return ``None`` so they propagate as
-    ``PermanentLLMError`` rather than entering a compact-retry loop.
-
-    Supported providers:
-
-    - **OpenAI**: ``error.code == "context_length_exceeded"``
-    - **Anthropic**: ``"{input} + {max_tokens} > {limit}"`` or
-      ``"prompt is too long: {actual} tokens > {limit} maximum"``
-    - **Gemini**: ``"input token count ({actual}) exceeds the
-      maximum number of tokens allowed ({limit})"``
+    Thin wrapper over the ``overflow_detector`` pluggable seam
+    (:func:`omnigent.runtime.overflow_detect.detect_overflow`, BDP-2360):
+    the OpenAI / Anthropic / Gemini parsers that used to be inlined here are
+    now registered detectors tried as a chain. Behavior is byte-identical —
+    same regexes, same conservative "unknown 400 → ``None``" handling.
 
     :param body: The raw HTTP response body string from the provider.
     :returns: Parsed token counts, or ``None`` if the body does not
         match any known overflow pattern.
     """
-    # OpenAI: {"error": {"code": "context_length_exceeded", ...}}
-    try:
-        parsed = json.loads(body)
-        error_obj = parsed.get("error", {})
-        if error_obj.get("code") == "context_length_exceeded":
-            msg = error_obj.get("message", "")
-            max_m = re.search(r"maximum context length is (\d+) tokens", msg)
-            act_m = re.search(r"you requested (\d+) tokens", msg)
-            if max_m and act_m:
-                return _OverflowTokens(
-                    max_context_tokens=int(max_m.group(1)),
-                    actual_tokens=int(act_m.group(1)),
-                )
-    except (json.JSONDecodeError, AttributeError):
-        pass
-
-    # Anthropic: "{input} + {max_tokens} > {limit}"
-    # The total request size is input + max_tokens; capture both so
-    # actual_tokens reflects the full request (not just the prompt).
-    anthropic_sum = re.search(r"(\d+)\s*\+\s*(\d+)\s*>\s*(\d+)", body)
-    if anthropic_sum:
-        return _OverflowTokens(
-            max_context_tokens=int(anthropic_sum.group(3)),
-            actual_tokens=int(anthropic_sum.group(1)) + int(anthropic_sum.group(2)),
-        )
-
-    # Anthropic: "prompt is too long: {actual} tokens > {limit} maximum"
-    anthropic_long = re.search(
-        r"prompt is too long:\s*(\d+)\s*tokens\s*>\s*(\d+)\s*maximum",
-        body,
-    )
-    if anthropic_long:
-        return _OverflowTokens(
-            max_context_tokens=int(anthropic_long.group(2)),
-            actual_tokens=int(anthropic_long.group(1)),
-        )
-
-    # Gemini: "input token count ({actual}) exceeds ... ({limit})"
-    gemini_match = re.search(
-        r"input token count \((\d+)\) exceeds the maximum number"
-        r" of tokens allowed \((\d+)\)",
-        body,
-    )
-    if gemini_match:
-        return _OverflowTokens(
-            max_context_tokens=int(gemini_match.group(2)),
-            actual_tokens=int(gemini_match.group(1)),
-        )
-
-    return None
+    return detect_overflow(body)
 
 
 def classify_llm_error(
@@ -226,11 +158,15 @@ def compute_backoff_delay(
     :param backoff_max_s: Maximum delay cap in seconds, e.g. ``30.0``.
     :returns: Delay in seconds with jitter applied, e.g. ``1.47``.
     """
-    delay = min(backoff_base_s * (2**attempt_index), backoff_max_s)
-    # Jitter: multiply by uniform(0.5, 1.5) to spread retries across
-    # concurrent clients (matches RetryPolicy.compute_backoff_delay).
-    delay *= random.uniform(0.5, 1.5)
-    return float(delay)
+    # Delegates to the registered ``backoff_policy`` Strategy (BDP-2361, P9)
+    # so the exp-full-jitter curve lives in one place. ``attempt_index`` is
+    # already the 0-based exponent this curve uses; jitter is always on, no
+    # server retry-after hint on this path (matching the prior inline math).
+    from omnigent.runtime.backoff import default_backoff_policy
+
+    return default_backoff_policy().compute_delay(
+        attempt_index, backoff_base_s, backoff_max_s
+    )
 
 
 def _safe_response_text(response: httpx.Response) -> str:

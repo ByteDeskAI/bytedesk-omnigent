@@ -394,22 +394,20 @@ def _effort_to_budget(effort: str, max_tokens: int) -> int:
     """
     Map a reasoning effort string to a thinking budget.
 
+    Thin wrapper over the ``reasoning_tier`` pluggable seam (BDP-2360):
+    resolves the Anthropic provider and asks it for the native knob
+    (``budget_tokens``). Behavior is byte-identical to the prior inlined
+    ``match`` — the same per-tier caps and ``max_tokens`` clamp.
+
     :param effort: ``"low"``, ``"medium"``, or ``"high"``.
     :param max_tokens: The max_tokens setting for the request.
     :returns: Budget token count.
     """
-    effort = validate_effort_or_llm_error(effort, "Anthropic", ANTHROPIC_EFFORTS)
-    match effort:
-        case "low":
-            return min(1024, max_tokens)
-        case "medium":
-            return min(4096, max_tokens)
-        case "high":
-            return min(8192, max_tokens)
-        case "xhigh" | "max":
-            return max_tokens
-        case _:
-            raise ValueError(f"Unsupported Anthropic reasoning effort: {effort}")
+    from omnigent.llms.reasoning_tier import reasoning_tier_registry
+
+    provider = reasoning_tier_registry().get("anthropic")
+    knob = provider.native_knob(effort, max_tokens)
+    return int(knob)
 
 
 # ── Response translation ──────────────────────────────────
