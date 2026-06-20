@@ -1,38 +1,32 @@
-"""Tool dispatcher registry — Strategy + Registry over the elif chain.
+"""Tool dispatcher registry — Strategy + Registry over tool dispatch.
 
-Part of the omnigent core-refactor spine (BDP-2327, Phase 5). Today
-:func:`omnigent.runner.tool_dispatch.execute_tool` routes a tool call
-through a ~170-line ``if mcp_manager is not None / elif tool_name in
-<set>`` chain. Each branch maps a tool *category* (MCP, OS env, REST,
-file, terminal, async inbox, sub-agent, …) to a per-tool
-``_execute_*`` helper, with a fixed precedence: **MCP first** (an
-unconditional override whenever an ``mcp_manager`` is present), then the
-static name-set branches in declaration order, then the predicate-based
-tail (``_is_spec_local_python_tool`` → ``_is_uc_function_tool`` →
-catch-all ``_execute_spec_callable_tool``).
+Part of the omnigent core-refactor spine (BDP-2327, Phase 5). This module
+provides a Strategy + Registry over runner-local tool dispatch: each tool
+*category* (MCP, OS env, REST, file, terminal, async inbox, sub-agent, …)
+is a dispatcher :class:`Strategy` held in a :class:`DispatcherRegistry`.
+A dispatcher pairs a ``matches(ctx)`` predicate with a ``dispatch(ctx)``
+coroutine; the registry walks the dispatchers in precedence order and
+routes a tool call to the first match. The dispatch bodies delegate to
+the per-tool ``_execute_*`` helpers in ``tool_dispatch``, so there is one
+dispatch implementation behind the strategies, not two.
 
-This module re-expresses that same chain as a list of dispatcher
-:class:`Strategy` objects held in a :class:`DispatcherRegistry`. Each
-dispatcher pairs a ``matches(ctx)`` predicate with a ``dispatch(ctx)``
-coroutine; the registry walks them in **the same precedence as the elif
-chain** and routes to the first match. The dispatch bodies delegate to
-the *same* ``_execute_*`` helpers the elif chain calls, threading the
-identical per-branch kwargs — so there is one dispatch implementation,
-not two.
-
-It is introduced behind ``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY``
-(default OFF). When the flag is off, ``execute_tool`` keeps its existing
-elif chain verbatim and behaves byte-identically to today. When the flag
-is on, ``execute_tool`` builds a :class:`ToolExecutionContext` (reusing
-the Phase 4 carrier) and dispatches through the registry. Either way the
-routing decision and the helper called are identical — the registry is a
-structural restatement of the elif chain, not a behavior change.
-
-**Precedence is load-bearing.** ``_NATIVE_RELAY_BUILTIN_TOOLS`` and the
+Precedence is fixed and load-bearing: **MCP first** (an unconditional
+override whenever an ``mcp_manager`` is present), then the static
+name-set categories in declaration order, then the predicate-based tail
+(``_is_spec_local_python_tool`` → ``_is_uc_function_tool`` → catch-all
+``_execute_spec_callable_tool``). ``_NATIVE_RELAY_BUILTIN_TOOLS`` and the
 per-category tool sets are imported from ``tool_dispatch`` (never
-re-declared), so the registry can never drift from the elif chain's
-category membership. ``register_default_dispatchers`` builds the
-strategies in exactly the elif order; a future reorder must touch both.
+re-declared), so the registry's category membership tracks ``tool_dispatch``
+by construction; ``register_default_dispatchers`` builds the strategies in
+that precedence order.
+
+It supersedes the prior inline dispatch path behind
+``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` (default OFF, strangler-fig): with
+the flag off the legacy ``execute_tool`` path stays authoritative and
+behaves byte-identically to today; with the flag on, ``execute_tool``
+builds a :class:`ToolExecutionContext` (the Phase 4 carrier) and dispatches
+through the registry. The routing decision and the helper called are
+identical either way.
 
 **Reference semantics carry through.** The mutable coordination objects
 (``session_inbox``, ``session_async_tasks``) ride inside the
