@@ -12,6 +12,7 @@ import pytest
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
+    BitbucketWebhookAdapter,
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
@@ -175,6 +176,31 @@ def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
     assert adapter.verify(body, {}, secret) is False  # no signature header
     assert adapter.match_key({"x-omnigent-event": "build.finished"}) == "build.finished"
     assert adapter.match_key({}) == "*"  # absent → catch-all
+
+
+def test_bitbucket_adapter_verifies_hmac_and_reads_event_key() -> None:
+    """Bitbucket Cloud webhooks carry the HMAC in ``X-Hub-Signature`` and the
+    route key in ``X-Event-Key``; the built-in adapter makes Bitbucket PR/push
+    events first-class ingress sources instead of forcing bespoke glue."""
+    adapter = BitbucketWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+    body = b'{"repository":{"full_name":"acme/api"}}'
+    secret = "bitbucket-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-hub-signature": "sha256=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature": sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature": "sha256=bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-event-key": "pullrequest:fulfilled"}) == "pullrequest:fulfilled"
+    assert adapter.match_key({}) == "*"
+
+
+def test_resolve_webhook_adapter_has_builtin_bitbucket_adapter(
+    _restore_adapter_registry,
+) -> None:
+    """The Bitbucket source resolves without deployment-specific registration."""
+    assert isinstance(resolve_webhook_adapter("bitbucket"), BitbucketWebhookAdapter)
 
 
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
