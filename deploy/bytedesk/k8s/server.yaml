@@ -3,16 +3,6 @@
 # the SPA + REST/SSE API, accepts runner WebSocket tunnels at /v1/runner/tunnel,
 # and NEVER executes agents itself. Agents run on the RUNNER (runner.yaml).
 apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: omnigent-artifacts
-spec:
-  accessModes: ["ReadWriteOnce"]
-  resources:
-    requests:
-      storage: 10Gi
----
-apiVersion: v1
 kind: Service
 metadata:
   name: omnigent-server
@@ -33,12 +23,15 @@ metadata:
   labels:
     app.kubernetes.io/name: omnigent-server
 spec:
-  # Default 1 for local smoke. Set replicas >= 2 when OMNIGENT_NATS_URL points at
-  # omnigent-nats — the coordination backplane (JetStream KV + fan-out) holds
-  # runner/host claims and the durable pending-elicitation index across replicas.
-  replicas: 1
+  # Multi-replica HA requires OMNIGENT_NATS_URL (coordination backplane). Artifacts
+  # use emptyDir so every replica can mount; swap to a RWX PVC when durable
+  # cross-replica artifact storage is required.
+  replicas: 2
   strategy:
-    type: Recreate
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app.kubernetes.io/name: omnigent-server
@@ -78,10 +71,9 @@ spec:
             # for a shared instance.
             - name: OMNIGENT_AUTH_ENABLED
               value: "0"
-            # Coordination backplane — unset keeps in-process (single-replica).
-            # Uncomment for multi-replica HA after scaling replicas above.
-            # - name: OMNIGENT_NATS_URL
-            #   value: nats://omnigent-nats:4222
+            # Coordination backplane — JetStream KV + fan-out across replicas.
+            - name: OMNIGENT_NATS_URL
+              value: nats://omnigent-nats:4222
             # ByteDesk platform MCP auth (BDP-2169, ADR-0138). Maya's
             # `bytedesk-platform` MCP tool uses the generic `oauth`
             # client-credentials provider (BDP-2182), which mints + refreshes a
@@ -160,8 +152,7 @@ spec:
               readOnly: true
       volumes:
         - name: artifacts
-          persistentVolumeClaim:
-            claimName: omnigent-artifacts
+          emptyDir: {}
         - name: config
           configMap:
             name: omnigent-config
