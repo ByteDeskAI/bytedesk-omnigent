@@ -170,10 +170,30 @@ class BytedeskExtension:
         from bytedesk_omnigent.scheduler import cron_scheduler_loop
         from bytedesk_omnigent.sessions import (
             build_cron_dispatch,
+            build_self_call_initiator_from_env,
             get_session_initiator,
+            set_session_initiator,
         )
 
+        # Register the live session initiator (BDP-2347): without it the cron
+        # clock fires but dispatches nothing (the silent log-only no-op). The
+        # self-call initiator re-enters the runtime via the trusted sessions HTTP
+        # route — the same registry also backs run_task's dispatch. Honour an
+        # already-registered initiator (tests / a future in-process one); else
+        # build one from the env, which fail-closes to None when unconfigured.
         initiator = get_session_initiator()
+        if initiator is None:
+            initiator = build_self_call_initiator_from_env()
+            if initiator is not None:
+                set_session_initiator(initiator)
+                logger.info("cron dispatch: live SessionInitiator registered")
+            else:
+                logger.warning(
+                    "cron dispatch: no SessionInitiator configured (set %s) — "
+                    "scheduled triggers will log only, not dispatch",
+                    "OMNIGENT_SELF_BASE_URL",
+                )
+
         dispatch = build_cron_dispatch(initiator) if initiator is not None else None
         await cron_scheduler_loop(dispatch=dispatch)
 
