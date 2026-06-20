@@ -46,6 +46,17 @@ Stream delivery is at-least-once; consumers dedupe on `(conversation_id, event_i
 - Platform `ByteDesk.Realtime` / RabbitMQ / gateway changes
 - NATS broker clustering in MVP (JetStream PVC fixes process-state loss; broker HA is phase 4)
 
+## Cross-replica runner dispatch (peer tunnel)
+
+When the local ``TunnelRegistry`` misses a pinned runner, ``RunnerRouter.aclient_*``
+calls ``resolve_resource("runner", id)``. If the owner replica differs, dispatch
+uses ``PeerTunnelTransport`` → ``GET/POST …/v1/_coord/peer/tunnel/runner/{id}/{path}``
+on the peer pod (per-pod DNS via headless Service ``omnigent-server-peer``,
+``OMNIGENT_PEER_URL_TEMPLATE`` default
+``http://{replica_id}.omnigent-server-peer:8000``). Loop guard: if resolve
+returns this replica but the local tunnel is absent, return ``runner_unavailable``
+(do not forward to self).
+
 ## Consequences
 
 - `nats-py` dependency in omnigent
