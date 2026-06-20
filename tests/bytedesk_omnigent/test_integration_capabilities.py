@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.integration_capabilities import (
+    compile_integration_marketplace_listing,
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
@@ -55,6 +56,33 @@ def test_catalog_lookup_and_categories():
     assert get_integration_capability("missing") is None
 
 
+def test_compile_integration_marketplace_listing_packages_catalog_strategy():
+    listing = compile_integration_marketplace_listing("slack-command-center")
+
+    assert listing is not None
+    assert listing.capability_slug == "slack-command-center"
+    assert listing.name == "Slack command center"
+    assert listing.package_type == "integration_capability"
+    assert listing.summary.startswith("Connect Slack command center")
+    assert listing.audience == ["operations teams", "team leads", "agent operators"]
+    assert listing.install_requirements == [
+        "Configure OAuth 2.0 bot + user tokens.",
+        "Grant scopes: channels:history, chat:write, commands, users:read.",
+        "Map the connected account to a ByteDesk tenant and Omnigent policy profile.",
+    ]
+    assert "communication" in listing.tags
+    assert "priority:98" in listing.tags
+    assert listing.safety_notes == [
+        "Start in observe-only mode until tenant policy gates are configured.",
+        "Require approval for write or external-message actions before autonomous execution.",
+    ]
+    assert listing.to_dict()["business_case"] == listing.business_case
+
+
+def test_compile_integration_marketplace_listing_handles_missing_slug():
+    assert compile_integration_marketplace_listing("not-real") is None
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")
@@ -72,6 +100,11 @@ def test_integration_capabilities_router_lists_and_reads_entries():
     assert detail.status_code == 200
     assert detail.json()["name"] == "Slack command center"
 
+    listing = client.get("/v1/integration-capabilities/slack-command-center/marketplace-listing")
+    assert listing.status_code == 200
+    assert listing.json()["capability_slug"] == "slack-command-center"
+    assert listing.json()["package_type"] == "integration_capability"
+
 
 def test_integration_capabilities_router_filters_and_404s():
     app = FastAPI()
@@ -86,3 +119,7 @@ def test_integration_capabilities_router_filters_and_404s():
     missing = client.get("/v1/integration-capabilities/not-real")
     assert missing.status_code == 404
     assert missing.json()["error"] == "not_found"
+
+    missing_listing = client.get("/v1/integration-capabilities/not-real/marketplace-listing")
+    assert missing_listing.status_code == 404
+    assert missing_listing.json()["error"] == "not_found"
