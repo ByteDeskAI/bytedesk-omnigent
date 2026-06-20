@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from sqlalchemy import select, update
 
 from bytedesk_omnigent.db_models import SqlCronTrigger
+from bytedesk_omnigent.lifecycle import ScheduleKind
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -37,7 +38,7 @@ class CronTrigger:
     id: str
     agent_id: str
     key: str
-    schedule_kind: str  # "interval" | "cron" | "once"
+    schedule_kind: ScheduleKind  # interval | cron | once
     schedule_expr: str
     next_fire_at: int
     enabled: bool
@@ -121,7 +122,7 @@ def _to_trigger(row: SqlCronTrigger) -> CronTrigger:
         id=row.id,
         agent_id=row.agent_id,
         key=row.key,
-        schedule_kind=row.schedule_kind,
+        schedule_kind=ScheduleKind(row.schedule_kind),
         schedule_expr=row.schedule_expr,
         next_fire_at=row.next_fire_at,
         enabled=row.enabled,

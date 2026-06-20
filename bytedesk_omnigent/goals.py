@@ -19,11 +19,17 @@ from typing import Any
 from sqlalchemy import select, update
 
 from bytedesk_omnigent.db_models import SqlGoal, SqlScoreboardEntry
+from bytedesk_omnigent.lifecycle import (
+    WorkflowLifecycle,
+    WorkflowLifecycleStatus,
+)
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
     now_epoch,
 )
+
+_LIFECYCLE = WorkflowLifecycle()
 
 
 @dataclass(frozen=True)
@@ -33,7 +39,7 @@ class Goal:
     id: str
     title: str
     owner_agent_id: str | None
-    status: str
+    status: WorkflowLifecycleStatus
     priority: int
     source: str | None
     payload: dict[str, Any] | None
@@ -46,7 +52,7 @@ def _to_goal(row: SqlGoal) -> Goal:
         id=row.id,
         title=row.title,
         owner_agent_id=row.owner_agent_id,
-        status=row.status,
+        status=WorkflowLifecycleStatus(row.status),
         priority=row.priority,
         source=row.source,
         payload=json.loads(row.payload) if row.payload is not None else None,
@@ -127,13 +133,19 @@ class SqlAlchemyGoalStore:
 
         Re-arms accountability escalation on every (re-)transition to ``blocked``
         by resetting ``escalated_at`` to NULL, so a goal that is unblocked and
-        later re-blocked escalates once again (BDP-2283).
+        later re-blocked escalates once again (BDP-2283). Rejects a genuinely
+        illegal transition (e.g. ``done -> in_progress``) via the lifecycle
+        state machine (BDP-2356).
         """
         now = now_epoch() if now is None else now
-        values: dict[str, Any] = {"status": status, "updated_at": now}
-        if status == "blocked":
+        target = WorkflowLifecycleStatus(status)
+        values: dict[str, Any] = {"status": target, "updated_at": now}
+        if target is WorkflowLifecycleStatus.BLOCKED:
             values["escalated_at"] = None
         with self._write_session() as session:
+            current = session.get(SqlGoal, goal_id)
+            if current is not None:
+                _LIFECYCLE.check(WorkflowLifecycleStatus(current.status), target)
             session.execute(
                 update(SqlGoal).where(SqlGoal.id == goal_id).values(**values)
             )
@@ -150,12 +162,16 @@ class SqlAlchemyGoalStore:
         that doesn't exist. ``open`` clears the owner (it returns to the backlog).
         """
         now = now_epoch() if now is None else now
-        values: dict[str, Any] = {"status": status, "updated_at": now}
-        if status == "blocked":
+        target = WorkflowLifecycleStatus(status)
+        values: dict[str, Any] = {"status": target, "updated_at": now}
+        if target is WorkflowLifecycleStatus.BLOCKED:
             values["escalated_at"] = None
-        if status == "open":
+        if target is WorkflowLifecycleStatus.OPEN:
             values["owner_agent_id"] = None
         with self._write_session() as session:
+            current = session.get(SqlGoal, goal_id)
+            if current is not None and current.owner_agent_id == owner_agent_id:
+                _LIFECYCLE.check(WorkflowLifecycleStatus(current.status), target)
             result = session.execute(
                 update(SqlGoal)
                 .where(

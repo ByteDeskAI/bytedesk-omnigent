@@ -27,6 +27,7 @@ from typing import Any
 from sqlalchemy import func, select, update
 
 from bytedesk_omnigent.db_models import SqlAgentMessage, SqlPendingWait
+from bytedesk_omnigent.lifecycle import WaitKind, WaitStatus
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -61,9 +62,9 @@ class PendingWait:
     signal_id: str
     session_id: str
     key: str
-    kind: str
+    kind: WaitKind
     target: str | None
-    status: str
+    status: WaitStatus
     created_at: int
     expires_at: int | None
 
@@ -73,9 +74,9 @@ def _to_pending_wait(row: SqlPendingWait) -> PendingWait:
         signal_id=row.signal_id,
         session_id=row.session_id,
         key=row.key,
-        kind=row.kind,
+        kind=WaitKind(row.kind),
         target=row.target,
-        status=row.status,
+        status=WaitStatus(row.status),
         created_at=row.created_at,
         expires_at=row.expires_at,
     )

@@ -19,11 +19,18 @@ from dataclasses import dataclass
 from sqlalchemy import select, update
 
 from bytedesk_omnigent.db_models import SqlDeliberation, SqlDeliberationPosition
+from bytedesk_omnigent.lifecycle import (
+    DeliberationLifecycle,
+    DeliberationStatus,
+    Stance,
+)
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
     now_epoch,
 )
+
+_LIFECYCLE = DeliberationLifecycle()
 
 
 @dataclass(frozen=True)
@@ -33,7 +40,7 @@ class Deliberation:
     id: str
     topic: str
     proposal: str
-    status: str
+    status: DeliberationStatus
     decision: str | None
     decided_by: str | None
     opened_by: str | None
@@ -48,7 +55,7 @@ class Position:
     id: str
     deliberation_id: str
     agent_id: str
-    stance: str
+    stance: Stance
     body: str
     round: int
     created_at: int
@@ -59,7 +66,7 @@ def _to_delib(row: SqlDeliberation) -> Deliberation:
         id=row.id,
         topic=row.topic,
         proposal=row.proposal,
-        status=row.status,
+        status=DeliberationStatus(row.status),
         decision=row.decision,
         decided_by=row.decided_by,
         opened_by=row.opened_by,
@@ -73,7 +80,7 @@ def _to_position(row: SqlDeliberationPosition) -> Position:
         id=row.id,
         deliberation_id=row.deliberation_id,
         agent_id=row.agent_id,
-        stance=row.stance,
+        stance=Stance(row.stance),
         body=row.body,
         round=row.round,
         created_at=row.created_at,
