@@ -61,6 +61,13 @@ from omnigent.runner.resource_registry import (
     TerminalExitEvent,
     TerminalLifecycle,
 )
+from omnigent.runner.subagent_status import (
+    _TERMINAL as _SUBAGENT_TERMINAL_STATUSES,
+)
+from omnigent.runner.subagent_status import (
+    SubagentWorkStatus,
+    TerminalStatus,
+)
 from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
 from omnigent.spec.parser import discover_host_skills
 from omnigent.spec.types import AgentSpec, LocalToolInfo, SkillSpec
@@ -99,7 +106,8 @@ def _client_safe_error_detail(exc: BaseException, *, context: str) -> str:
 
 SpecResolver = Callable[[str, str | None], Awaitable[Any | None]]
 _NO_BODY_STATUS_CODES = {204, 304}
-_SUBAGENT_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
+# _SUBAGENT_TERMINAL_STATUSES is the enum-derived terminal frozenset, imported
+# from omnigent.runner.subagent_status as the single source of truth.
 _SUBAGENT_DELIVERY_DELIVERED = "delivered"
 _SUBAGENT_DELIVERY_ALREADY_DELIVERED = "already_delivered"
 _SUBAGENT_DELIVERY_UNTRACKED = "untracked"
@@ -3501,7 +3509,7 @@ class _SubagentWorkEntry:
     agent: str
     title: str
     wrapper_label: str | None = None
-    status: str = "launching"
+    status: SubagentWorkStatus = SubagentWorkStatus.LAUNCHING
     output: str | None = None
     created_at: float = dataclasses.field(default_factory=time.time)
     completed_at: float | None = None
@@ -3605,8 +3613,8 @@ def mark_subagent_work_started(child_session_id: str) -> _SubagentWorkEntry | No
     entry = _subagent_work_by_child.get(child_session_id)
     if entry is None:
         return None
-    if entry.status == "launching":
-        entry.status = "running"
+    if entry.status == SubagentWorkStatus.LAUNCHING:
+        entry.status = SubagentWorkStatus.RUNNING
     return entry
 
 
@@ -3687,23 +3695,31 @@ def list_subagent_work(parent_session_id: str) -> list[_SubagentWorkEntry]:
 def mark_subagent_work_terminal(
     child_session_id: str,
     *,
-    status: str,
+    status: TerminalStatus,
     output: str | None,
 ) -> _SubagentDeliveryAck:
     """
     Mark a sub-agent dispatch terminal and notify the parent inbox.
 
     :param child_session_id: Child session id, e.g. ``"conv_child456"``.
-    :param status: Terminal status: ``"completed"``, ``"failed"``, or
-        ``"cancelled"``.
+    :param status: Terminal status — one of
+        :data:`SubagentWorkStatus.COMPLETED`,
+        :data:`SubagentWorkStatus.FAILED`, or
+        :data:`SubagentWorkStatus.CANCELLED`. A bare wire string
+        (``"completed"`` / ``"failed"`` / ``"cancelled"``) is accepted and
+        coerced; the ``TerminalStatus`` annotation makes a non-terminal value
+        a type error at call sites.
     :param output: Child output or error text. ``None`` means the
         completion had no assistant text to deliver.
         If an earlier terminal report could not be delivered, a later
         report for the same child replaces the undelivered status and
         output before retrying parent inbox delivery.
     :returns: Delivery acknowledgement for this terminal report.
-    :raises ValueError: If ``status`` is not terminal.
+    :raises ValueError: If ``status`` is not a terminal status.
     """
+    # Coerce wire strings to the enum and keep a runtime terminal guard for
+    # safety, even though ``TerminalStatus`` enforces the subset at type level.
+    status = SubagentWorkStatus(status)
     if status not in _SUBAGENT_TERMINAL_STATUSES:
         raise ValueError(
             f"sub-agent terminal status must be one of "

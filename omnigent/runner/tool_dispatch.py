@@ -46,6 +46,12 @@ from omnigent.model_override import (
     normalize_model_for_provider,
     validate_model_override,
 )
+from omnigent.runner.subagent_status import (
+    _ACTIVE as _SUBAGENT_ACTIVE_STATUSES,
+)
+from omnigent.runner.subagent_status import (
+    SubagentWorkStatus,
+)
 from omnigent.runner.tool_execution_context import ToolExecutionContext
 from omnigent.runtime import pending_elicitations
 from omnigent.session_lifecycle import (
@@ -1023,11 +1029,7 @@ async def _execute_subagent_tool(
             )
         child_wrapper_label = _session_wrapper_label(existing)
         existing_work = _runner_app.get_subagent_work(child_session_id)
-        if existing_work is not None and existing_work.status in (
-            "launching",
-            "running",
-            "waiting",
-        ):
+        if existing_work is not None and existing_work.status in _SUBAGENT_ACTIVE_STATUSES:
             return (
                 f"Error: sub-agent {sub_agent_name!r} title {session_name!r} "
                 "already has a launching or running turn; wait for completion before sending again"
@@ -1282,7 +1284,7 @@ async def _send_to_existing_session(
     parsed = _parse_session_title(snap_data.get("title"))
     agent_label = parsed.agent or "agent"
     existing_work = _runner_app.get_subagent_work(target_session_id)
-    if existing_work is not None and existing_work.status in ("launching", "running", "waiting"):
+    if existing_work is not None and existing_work.status in _SUBAGENT_ACTIVE_STATUSES:
         return (
             f"Error: session {target_session_id!r} already has a launching or running turn; "
             "wait for completion before sending again"
@@ -5358,10 +5360,10 @@ async def _cancel_subagent_task(
     # route to the child during that window — otherwise cancelling a slow-to-
     # start sub-agent would silently no-op and leave it running. Only terminal
     # states (``completed`` / ``failed`` / ``cancelled``) short-circuit here.
-    if entry.status not in ("launching", "running", "waiting"):
+    if entry.status not in _SUBAGENT_ACTIVE_STATUSES:
         return json.dumps(
             {
-                "cancelled": entry.status == "cancelled",
+                "cancelled": entry.status == SubagentWorkStatus.CANCELLED,
                 "task_id": task_id,
                 "status": entry.status,
             }
