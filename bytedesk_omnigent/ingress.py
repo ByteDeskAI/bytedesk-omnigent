@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import os
 import uuid
+from base64 import b64encode
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -153,6 +154,29 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class ZendeskWebhookAdapter:
+    """Zendesk webhook adapter for support-ticket automation.
+
+    Zendesk signs ``timestamp + raw_body`` with HMAC-SHA256 and base64-encodes
+    the digest in ``X-Zendesk-Webhook-Signature``. Omnigent deployments attach
+    ``X-Omnigent-Event`` to the Zendesk webhook configuration so ticket events
+    can route to exact bindings while still supporting the ``"*"`` catch-all.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        signature = _header(headers, "x-zendesk-webhook-signature")
+        timestamp = _header(headers, "x-zendesk-webhook-signature-timestamp")
+        if not signature or not timestamp:
+            return False
+        expected = hmac.new(
+            secret.encode("utf-8"), timestamp.encode("utf-8") + raw_body, hashlib.sha256
+        ).digest()
+        return hmac.compare_digest(b64encode(expected).decode("ascii"), signature)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-omnigent-event") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +201,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("zendesk", ZendeskWebhookAdapter)
     return registry
 
 
