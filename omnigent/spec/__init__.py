@@ -16,6 +16,13 @@ from omnigent.spec._omnigent_compat import (
     load_omnigent_yaml,
 )
 from omnigent.spec.parser import expand_env_vars, parse, parse_default_policies, parse_server_llm
+from omnigent.spec.source import (
+    FilesystemSpecSource,
+    SpecSource,
+    build_spec_source_registry,
+    decode_raw_spec,
+    spec_source_registry,
+)
 from omnigent.spec.tar_utils import ExtractionError, extract_safe
 from omnigent.spec.types import (
     DEFAULT_ASK_TIMEOUT,
@@ -57,6 +64,7 @@ __all__ = [
     "ExecutorAuth",
     "ExecutorSpec",
     "ExtractionError",
+    "FilesystemSpecSource",
     "FunctionPolicySpec",
     "FunctionRef",
     "GuardrailsSpec",
@@ -73,9 +81,12 @@ __all__ = [
     "ProviderAuth",
     "RetryPolicy",
     "SkillSpec",
+    "SpecSource",
     "ToolRuntime",
     "ToolsConfig",
     "ValidationResult",
+    "build_spec_source_registry",
+    "decode_raw_spec",
     "expand_env_vars",
     "extract_safe",
     "load",
@@ -83,6 +94,7 @@ __all__ = [
     "parse",
     "parse_default_policies",
     "parse_server_llm",
+    "spec_source_registry",
     "validate",
 ]
 
