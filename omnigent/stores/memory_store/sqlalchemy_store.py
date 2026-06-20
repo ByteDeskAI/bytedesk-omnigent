@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import math
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from sqlalchemy import select, text, update
@@ -113,12 +114,36 @@ class SqlAlchemyMemoryStore:
         self._session = make_managed_session_maker(self._engine)
         self._is_sqlite = self._engine.dialect.name == "sqlite"
         self._embedder = embedder
+        # Per-call recall-mode override (sub-seam #30, BDP-2369): ``None`` keeps the
+        # historical embedder+dialect decision; ``"semantic"`` / ``"lexical"`` force
+        # a branch for the duration of a :meth:`recall_mode` context.
+        self._recall_mode_override: str | None = None
         ensure_memories_fts_table(self._engine)
 
     @property
     def engine(self):
         """The underlying SQLAlchemy engine (used for advisory-lock coordination)."""
         return self._engine
+
+    @property
+    def embedder(self) -> Embedder | None:
+        """The attached recall embedder, or ``None`` for lexical-only recall."""
+        return self._embedder
+
+    @contextmanager
+    def recall_mode(self, mode: str | None):
+        """Force the recall branch for the duration of the block (sub-seam #30).
+
+        :param mode: ``"semantic"`` / ``"lexical"`` to force that branch, or
+            ``None`` to keep the default embedder+dialect auto-selection. Restores
+            the prior override on exit (nesting-safe).
+        """
+        previous = self._recall_mode_override
+        self._recall_mode_override = mode
+        try:
+            yield
+        finally:
+            self._recall_mode_override = previous
 
     # ── compartments ──────────────────────────────────────────────
 
@@ -299,6 +324,27 @@ class SqlAlchemyMemoryStore:
             )
         return result.rowcount or 0
 
+    def note_recalled(
+        self, hits: list[MemoryHit], *, now: int | None = None
+    ) -> None:
+        """Record recalled hits for out-of-band reinforcement (BDP-2369).
+
+        Encapsulates the in-memory reinforcement-buffer write so callers (the
+        ``memory_query`` tool) go through the store/port instead of reaching past
+        it into ``db.utils`` + the buffer module directly. This stays a pure
+        in-memory record — the durable clock reset happens later in the batched
+        :meth:`reinforce` flush, keeping the recall path a pure DB read.
+
+        :param hits: The hits a recall surfaced.
+        :param now: Current epoch seconds; defaults to :func:`now_epoch`.
+        """
+        if not hits:
+            return
+        from omnigent.stores.memory_store.reinforcement import get_reinforcement_buffer
+
+        now = now if now is not None else now_epoch()
+        get_reinforcement_buffer().record([h.id for h in hits], now=now)
+
     # ── read (PURE — no writes on this path) ───────────────────────
 
     def query(
@@ -374,7 +420,7 @@ class SqlAlchemyMemoryStore:
             returned = [hit for _, hit in scored[:limit]]
             # Recall observability (T13): counts make decay/floor tuning
             # falsifiable rather than guessed (ADR-0132 / Hermes lesson).
-            mode = "semantic" if (self._embedder is not None and not self._is_sqlite) else "lexical"
+            mode = "semantic" if self._use_semantic() else "lexical"
             _logger.info(
                 "memory_query scope=%s owner=%s name=%s mode=%s candidates=%d "
                 "considered=%d dropped_sub_floor=%d returned=%d",
@@ -389,13 +435,31 @@ class SqlAlchemyMemoryStore:
             )
             return returned
 
+    def _use_semantic(self) -> bool:
+        """Whether this recall should use the semantic (pgvector) branch.
+
+        Default decision (override unset): semantic only when an embedder is
+        attached and the dialect is PostgreSQL — the historical gate. A
+        :meth:`recall_mode` override forces ``semantic`` / ``lexical``; a forced
+        ``semantic`` is still only honored when the embedder+dialect substrate
+        exists (otherwise the store cannot cast a ``TEXT`` column to ``vector``), so
+        it degrades to lexical rather than crashing.
+        """
+        substrate = self._embedder is not None and not self._is_sqlite
+        override = self._recall_mode_override
+        if override == "lexical":
+            return False
+        if override == "semantic":
+            return substrate
+        return substrate
+
     def _candidates(self, session, comp, query: str, limit: int) -> dict[str, float]:
         """Candidate memory ids -> relevance for *comp*.
 
-        Semantic (pgvector cosine similarity) when an embedder is attached and
-        the dialect is PostgreSQL; otherwise lexical (relevance 1.0).
+        Semantic (pgvector cosine similarity) when :meth:`_use_semantic`; otherwise
+        lexical (relevance 1.0).
         """
-        if self._embedder is not None and not self._is_sqlite:
+        if self._use_semantic():
             return self._semantic_candidates(session, comp.id, query, limit)
         return {mid: 1.0 for mid in self._lexical_candidate_ids(session, comp.id, query, limit)}
 

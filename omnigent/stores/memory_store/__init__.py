@@ -6,6 +6,16 @@ semantic-ready on PostgreSQL (tsvector GIN + a ``vector(384)`` column the
 migration adds). See :mod:`omnigent.stores.memory_store.sqlalchemy_store`.
 """
 
+from omnigent.stores.memory_store.provider import (
+    AgentMemoryProvider,
+    ComposedAgentMemoryProvider,
+    Memory,
+    RecallMode,
+    build_embedder_registry,
+    build_memory_provider_registry,
+    create_agent_memory_provider,
+    select_default_embedder,
+)
 from omnigent.stores.memory_store.reinforcement import (
     ReinforcementBuffer,
     get_reinforcement_buffer,
@@ -16,8 +26,16 @@ from omnigent.stores.memory_store.sqlalchemy_store import (
 )
 
 __all__ = [
+    "AgentMemoryProvider",
+    "ComposedAgentMemoryProvider",
+    "Memory",
     "MemoryHit",
+    "RecallMode",
     "ReinforcementBuffer",
     "SqlAlchemyMemoryStore",
+    "build_embedder_registry",
+    "build_memory_provider_registry",
+    "create_agent_memory_provider",
     "get_reinforcement_buffer",
+    "select_default_embedder",
 ]
