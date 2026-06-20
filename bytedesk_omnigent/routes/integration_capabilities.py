@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_cutover_checklist import (
+    compile_integration_cutover_checklist,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/cutover-checklist")
+    async def get_capability_cutover_checklist(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile the activation cutover checklist for one integration."""
+
+        require_user(request, auth_provider)
+        checklist = compile_integration_cutover_checklist(slug)
+        if checklist is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(checklist)
 
     return router
