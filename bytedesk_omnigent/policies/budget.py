@@ -19,8 +19,7 @@ what it cannot price).
 
 from __future__ import annotations
 
-from typing import Any
-
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -68,7 +67,7 @@ def cost_hard_stop(max_cost_usd: float) -> PolicyCallable:
     return evaluate  # type: ignore[return-value]
 
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.budget.cost_hard_stop",
         "kind": "factory",

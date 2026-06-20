@@ -25,7 +25,7 @@ class _MixedLauncher(_FakeLauncher, ProviderMetadataMixin):
     """A launcher that opts into the mixin; default metadata must reflect the
     same flags it already declares (behavior unchanged)."""
 
-    provider_kind: ClassVar[str] = ProviderKind.SANDBOX
+    provider_kind: ClassVar[ProviderKind] = ProviderKind.SANDBOX
 
 
 class _ForwardingLauncher(ProviderMetadataMixin):
@@ -35,7 +35,7 @@ class _ForwardingLauncher(ProviderMetadataMixin):
     supports_local_port_forward: ClassVar[bool] = True
     supports_cli_bootstrap: ClassVar[bool] = True
     wheel_build_index_url: ClassVar[str | None] = "https://pypi.internal/simple"
-    provider_kind: ClassVar[str] = ProviderKind.SANDBOX
+    provider_kind: ClassVar[ProviderKind] = ProviderKind.SANDBOX
     provider_capabilities: ClassVar[dict[str, object]] = {"managed": True}
 
 
@@ -95,7 +95,7 @@ def test_harness_metadata_defaults_are_conservative() -> None:
     # harness opting in advertises only what it explicitly sets.
     class _FakeHarness(ProviderMetadataMixin):
         provider: ClassVar[str] = "grok-native"
-        provider_kind: ClassVar[str] = ProviderKind.HARNESS
+        provider_kind: ClassVar[ProviderKind] = ProviderKind.HARNESS
         provider_capabilities: ClassVar[dict[str, object]] = {"native": True, "acp": True}
 
     meta = _FakeHarness().metadata()
@@ -126,3 +126,25 @@ def test_to_dict_is_json_safe_round_trip() -> None:
         "wheel_build_index_url": None,
         "capabilities": {"managed_only": True},
     }
+
+
+def test_provider_kind_wire_values_match_old_string_constants() -> None:
+    """BDP-2358: ProviderKind became a StrEnum; its members MUST stay
+    byte-for-byte the old ``ClassVar[str]`` wire strings so persisted/serialized
+    ``kind`` values remain compatible."""
+    import json
+    from enum import StrEnum
+
+    assert issubclass(ProviderKind, StrEnum)
+    # Exact wire strings (the closed set the rest of the codebase serializes).
+    assert ProviderKind.SANDBOX.value == "sandbox"
+    assert ProviderKind.HARNESS.value == "harness"
+    assert ProviderKind.UNKNOWN.value == "unknown"
+    # As a StrEnum, a member also compares equal to its bare wire string at runtime.
+    assert ProviderKind.SANDBOX == "sandbox"  # type: ignore[comparison-overlap]
+    # No accidental extra members crept in.
+    assert {k.value for k in ProviderKind} == {"sandbox", "harness", "unknown"}
+    # A StrEnum member JSON-serializes as its bare wire string (not "ProviderKind.SANDBOX").
+    assert json.dumps(ProviderKind.HARNESS) == '"harness"'
+    # Default kind is still UNKNOWN and bounded to the closed set.
+    assert ProviderMetadata(name="x").kind.value == "unknown"

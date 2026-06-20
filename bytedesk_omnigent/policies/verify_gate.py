@@ -20,6 +20,7 @@ import json
 import logging
 from typing import Any
 
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _log = logging.getLogger(__name__)
@@ -138,7 +139,7 @@ def verify_as_gate(
 
 # ── Registry ─────────────────────────────────────────────────────────────────
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.verify_gate.verify_as_gate",
         "kind": "factory",

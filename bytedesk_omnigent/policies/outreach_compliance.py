@@ -14,8 +14,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from typing import Any
 
+from bytedesk_omnigent.policies import PolicyRegistryRaw
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -132,7 +132,7 @@ def outreach_compliance(
     return evaluate  # type: ignore[return-value]
 
 
-POLICY_REGISTRY: list[dict[str, Any]] = [
+POLICY_REGISTRY: list[PolicyRegistryRaw] = [
     {
         "handler": "bytedesk_omnigent.policies.outreach_compliance.outreach_compliance",
         "kind": "factory",

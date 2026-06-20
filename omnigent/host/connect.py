@@ -22,6 +22,7 @@ from websockets.exceptions import InvalidStatus, InvalidURI
 
 from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE,
+    FsEntryType,
     HostCreateWorktreeFrame,
     HostCreateWorktreeResultFrame,
     HostHelloFrame,
@@ -956,6 +957,7 @@ class HostProcess:
             )
         from stat import S_ISDIR, S_ISREG
 
+        entry_type: FsEntryType
         if S_ISDIR(st.st_mode):
             entry_type = "directory"
         elif S_ISREG(st.st_mode):
@@ -1035,6 +1037,7 @@ class HostProcess:
                 st = de.stat(follow_symlinks=True)
             except OSError:
                 continue
+            entry_type: FsEntryType
             if S_ISDIR(st.st_mode):
                 entry_type = "directory"
                 size: int | None = None

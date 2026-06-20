@@ -24,7 +24,7 @@ from __future__ import annotations
 import json
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NotRequired, TypedDict, cast
 
 from sqlalchemy import select, update
 
@@ -33,6 +33,25 @@ from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
 )
+
+
+class TokenUsage(TypedDict, total=False):
+    """Cumulative LLM token-usage blob persisted in ``session_usage``.
+
+    All keys are optional — an unset column decodes to an empty ``{}`` and a
+    blob may carry only a subset — so the shape is documented at author time
+    without forcing every field to be present (``total=False``).
+
+    :param input_tokens: Cumulative prompt tokens, e.g. ``1500``.
+    :param output_tokens: Cumulative completion tokens, e.g. ``350``.
+    :param total_tokens: Cumulative total tokens, e.g. ``1850``.
+    :param by_model: Optional per-model breakdown keyed by model id.
+    """
+
+    input_tokens: NotRequired[int]
+    output_tokens: NotRequired[int]
+    total_tokens: NotRequired[int]
+    by_model: NotRequired[dict[str, Any]]  # type: ignore[explicit-any]
 
 
 @dataclass(frozen=True)
@@ -55,7 +74,7 @@ class SessionStateSnapshot:
 
     conversation_id: str
     state: dict[str, Any] = field(default_factory=dict)
-    usage: dict[str, Any] = field(default_factory=dict)
+    usage: TokenUsage = field(default_factory=TokenUsage)
 
 
 def sql_conversation_to_session_state(row: SqlConversation) -> SessionStateSnapshot:
@@ -69,7 +88,9 @@ def sql_conversation_to_session_state(row: SqlConversation) -> SessionStateSnaps
     :returns: A :class:`SessionStateSnapshot` dataclass instance.
     """
     state: dict[str, Any] = json.loads(row.session_state) if row.session_state else {}
-    usage: dict[str, Any] = json.loads(row.session_usage) if row.session_usage else {}
+    usage: TokenUsage = (
+        cast(TokenUsage, json.loads(row.session_usage)) if row.session_usage else TokenUsage()
+    )
     return SessionStateSnapshot(
         conversation_id=row.id,
         state=state,

@@ -19,6 +19,7 @@ import json
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select, update
 
@@ -42,7 +43,7 @@ class Task:
     status: str
     priority: int
     source: str | None
-    payload: dict | None
+    payload: dict[str, Any] | None
     created_at: int
     updated_at: int
 
@@ -79,7 +80,7 @@ class TaskStore(ABC):
         priority: int = 3,
         source: str | None = None,
         required_capability: str | None = None,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         now: int | None = None,
     ) -> Task:
         """Create an ``open``, unassigned task. Lower ``priority`` sorts first."""
@@ -150,7 +151,7 @@ class SqlAlchemyTaskStore(TaskStore):
         priority: int = 3,
         source: str | None = None,
         required_capability: str | None = None,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         now: int | None = None,
     ) -> Task:
         """Create an ``open``, unassigned task. Lower ``priority`` numbers sort first."""
@@ -256,7 +257,7 @@ class SqlAlchemyTaskStore(TaskStore):
         backlog (clears owner + assignee). Returns True iff this owner's task advanced.
         """
         now = now_epoch() if now is None else now
-        values: dict = {"status": status, "updated_at": now}
+        values: dict[str, Any] = {"status": status, "updated_at": now}
         if status == "open":
             values["owner_agent_id"] = None
             values["assignee_agent_id"] = None

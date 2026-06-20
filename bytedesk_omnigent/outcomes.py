@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import func, select
 
@@ -70,7 +71,7 @@ class SqlAlchemyOutcomeLedger:
         metric: str,
         value: float = 1.0,
         ref: str | None = None,
-        meta: dict | None = None,
+        meta: dict[str, Any] | None = None,
         now: int | None = None,
     ) -> BusinessOutcome:
         """Append an outcome and roll its cumulative total into the scoreboard.

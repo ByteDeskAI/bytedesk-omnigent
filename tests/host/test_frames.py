@@ -127,6 +127,42 @@ def test_launch_runner_result_frame_failure_round_trip() -> None:
     assert decoded.error == "workspace path does not exist"
 
 
+def test_status_and_type_literal_aliases_match_documented_wire_sets() -> None:
+    """BDP-2358: host result-frame status/type closed sets are Literal aliases.
+
+    Their wire strings must match the docstrings byte-for-byte so retyping the
+    fields stays wire-compatible with existing producers/consumers.
+    """
+    import typing
+
+    from omnigent.host.frames import (
+        FsEntryType,
+        FsOpStatus,
+        LaunchRunnerStatus,
+        StopRunnerStatus,
+    )
+
+    assert set(typing.get_args(LaunchRunnerStatus)) == {"launched", "failed"}
+    assert set(typing.get_args(StopRunnerStatus)) == {"stopped", "failed"}
+    assert set(typing.get_args(FsOpStatus)) == {"ok", "failed"}
+    assert set(typing.get_args(FsEntryType)) == {"directory", "file", "other"}
+
+
+def test_stat_result_type_literal_round_trips() -> None:
+    """A stat_result ``type`` (the FsEntryType closed set) survives encode→decode."""
+    original = HostStatResultFrame(
+        request_id="req_stat_1",
+        status="ok",
+        exists=True,
+        type="directory",
+        canonical_path="/Users/x/universe",
+    )
+    decoded = decode_host_frame(encode_host_frame(original))
+    assert isinstance(decoded, HostStatResultFrame)
+    assert decoded.status == "ok"
+    assert decoded.type == "directory"
+
+
 def test_hello_frame_configured_harnesses_round_trip() -> None:
     """
     Verify the hello frame's configured_harnesses map survives

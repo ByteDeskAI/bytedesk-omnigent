@@ -24,6 +24,7 @@ that derives the default from existing attributes rather than duplicating them.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, ClassVar
 
 __all__ = [
@@ -34,15 +35,17 @@ __all__ = [
 ]
 
 
-# Coarse classification of what a provider IS. Kept as plain string constants
-# (no Enum) to match the stringly-typed ``provider`` / harness-name surface the
-# rest of the codebase already uses and serializes.
-class ProviderKind:
+# Coarse classification of what a provider IS. A ``StrEnum`` so each member IS
+# its wire string (``ProviderKind.SANDBOX == "sandbox"`` and JSON-serializes as
+# ``"sandbox"``) — wire-compatible with the stringly-typed ``provider`` /
+# harness-name surface the rest of the codebase serializes, while catching typos
+# and invalid values at author time.
+class ProviderKind(StrEnum):
     """Coarse provider categories used by :attr:`ProviderMetadata.kind`."""
 
-    SANDBOX: ClassVar[str] = "sandbox"
-    HARNESS: ClassVar[str] = "harness"
-    UNKNOWN: ClassVar[str] = "unknown"
+    SANDBOX = "sandbox"
+    HARNESS = "harness"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True)
@@ -74,7 +77,7 @@ class ProviderMetadata:
     """
 
     name: str
-    kind: str = ProviderKind.UNKNOWN
+    kind: ProviderKind = ProviderKind.UNKNOWN
     supports_local_port_forward: bool = False
     supports_cli_bootstrap: bool = False
     wheel_build_index_url: str | None = None
@@ -115,7 +118,7 @@ class ProviderMetadataMixin:
     # Coarse classification used when building the default metadata. Subclasses
     # may override; sandbox launchers leave the default since this mixin's
     # default reads launcher ``ClassVar`` flags.
-    provider_kind: ClassVar[str] = ProviderKind.UNKNOWN
+    provider_kind: ClassVar[ProviderKind] = ProviderKind.UNKNOWN
 
     # Extra, provider-specific capability flags merged into
     # :attr:`ProviderMetadata.capabilities`. JSON-serializable scalars only.
@@ -144,7 +147,9 @@ class ProviderMetadataMixin:
         )
 
 
-def metadata_for(provider: object, *, kind: str = ProviderKind.UNKNOWN) -> ProviderMetadata:
+def metadata_for(
+    provider: object, *, kind: ProviderKind = ProviderKind.UNKNOWN
+) -> ProviderMetadata:
     """Derive :class:`ProviderMetadata` for any provider object.
 
     Helper for callers that want a metadata record from a provider that does NOT

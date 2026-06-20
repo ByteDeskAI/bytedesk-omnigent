@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 from sqlalchemy import select, update
 
@@ -35,7 +36,7 @@ class Goal:
     status: str
     priority: int
     source: str | None
-    payload: dict | None
+    payload: dict[str, Any] | None
     created_at: int
     updated_at: int
 
@@ -73,7 +74,7 @@ class SqlAlchemyGoalStore:
         title: str,
         priority: int = 3,
         source: str | None = None,
-        payload: dict | None = None,
+        payload: dict[str, Any] | None = None,
         now: int | None = None,
     ) -> Goal:
         """Create an ``open`` goal. Lower ``priority`` numbers sort first."""
@@ -129,7 +130,7 @@ class SqlAlchemyGoalStore:
         later re-blocked escalates once again (BDP-2283).
         """
         now = now_epoch() if now is None else now
-        values: dict = {"status": status, "updated_at": now}
+        values: dict[str, Any] = {"status": status, "updated_at": now}
         if status == "blocked":
             values["escalated_at"] = None
         with self._write_session() as session:
@@ -149,7 +150,7 @@ class SqlAlchemyGoalStore:
         that doesn't exist. ``open`` clears the owner (it returns to the backlog).
         """
         now = now_epoch() if now is None else now
-        values: dict = {"status": status, "updated_at": now}
+        values: dict[str, Any] = {"status": status, "updated_at": now}
         if status == "blocked":
             values["escalated_at"] = None
         if status == "open":

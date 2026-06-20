@@ -192,3 +192,33 @@ def test_set_state_is_noop_for_unknown(
     """``set_state`` on an unknown conversation matches zero rows (no error, no row)."""
     store.set_state("conv_does_not_exist", {"x": 1})
     assert store.get_snapshot("conv_does_not_exist") is None
+
+
+def test_token_usage_typeddict_shape_and_default(
+    store: SqlAlchemySessionStateStore,
+    conversation_id: str,
+) -> None:
+    """BDP-2358: ``SessionStateSnapshot.usage`` is the ``TokenUsage`` TypedDict.
+
+    It is a plain dict at runtime (no behavior change) — defaults to ``{}`` and
+    round-trips a usage blob unchanged — while documenting the token-usage shape.
+    """
+    import typing
+
+    from bytedesk_omnigent.session_state_store import TokenUsage
+
+    # All keys optional (total=False) so an empty blob and a partial blob both fit.
+    assert TokenUsage.__required_keys__ == frozenset()
+    assert {"input_tokens", "output_tokens", "total_tokens", "by_model"} <= set(
+        typing.get_type_hints(TokenUsage)
+    )
+
+    # Default snapshot usage is an empty dict (runtime-identical to before).
+    assert SessionStateSnapshot(conversation_id="c1").usage == {}
+
+    # A real usage blob round-trips byte-for-byte through the store facade.
+    blob = {"input_tokens": 1500, "output_tokens": 350, "total_tokens": 1850}
+    store.set_usage(conversation_id, blob)
+    snap = store.get_snapshot(conversation_id)
+    assert snap is not None
+    assert snap.usage == blob
