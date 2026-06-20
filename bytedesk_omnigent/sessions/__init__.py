@@ -19,15 +19,19 @@ degrade posture the signal bus / cron clock shipped with.
 from __future__ import annotations
 
 from bytedesk_omnigent.sessions.initiate import (
+    HttpSelfCallInitiator,
     SessionInitiator,
     build_cron_dispatch,
+    build_self_call_initiator_from_env,
     get_session_initiator,
     set_session_initiator,
 )
 
 __all__ = [
+    "HttpSelfCallInitiator",
     "SessionInitiator",
     "build_cron_dispatch",
+    "build_self_call_initiator_from_env",
     "get_session_initiator",
     "set_session_initiator",
 ]
