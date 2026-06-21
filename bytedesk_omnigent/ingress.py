@@ -836,6 +836,29 @@ class MondayWebhookAdapter:
     def match_key(self, headers: Mapping[str, str]) -> str:
         return _header(headers, "x-monday-event") or "*"
 
+class ServiceNowWebhookAdapter:
+    """ServiceNow incident/change events over the shared webhook ingress surface.
+
+    ServiceNow is a high-value ITSM/enterprise workflow integration, but it
+    should not require a bespoke FastAPI route. This adapter keeps the contract
+    in the existing per-source registry: HMAC-SHA256 over the raw body with a
+    ServiceNow-specific signature header and a ServiceNow-specific normalized
+    event header for binding resolution. ``X-Omnigent-Signature`` remains
+    accepted so ByteDesk Platform or an integration gateway can normalize
+    captured ServiceNow events before forwarding them into Omnigent.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-servicenow-signature") or _header(
+            headers, "x-omnigent-signature"
+        )
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-servicenow-event") or "*"
+
 
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
@@ -926,6 +949,8 @@ def _build_webhook_adapter_registry():
     registry.register("salesforce", CloudEventsWebhookAdapter)
     registry.register("monday", MondayWebhookAdapter)
     registry.register("monday.com", MondayWebhookAdapter)
+    registry.register("service-now", ServiceNowWebhookAdapter)
+    registry.register("servicenow", ServiceNowWebhookAdapter)
     return registry
 
 
