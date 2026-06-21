@@ -88,6 +88,9 @@ from bytedesk_omnigent.integration_evidence_assessment import (
 from bytedesk_omnigent.integration_data_boundary import (
     compile_integration_data_boundary,
 )
+from bytedesk_omnigent.integration_ownership_matrix import (
+    compile_integration_ownership_matrix,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -469,5 +472,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(manifest)
+
+    @router.get("/integration-capabilities/{slug}/ownership-matrix")
+    async def get_capability_ownership_matrix(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile launch owners and approvers for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        matrix = compile_integration_ownership_matrix(slug)
+        if matrix is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(matrix)
 
     return router
