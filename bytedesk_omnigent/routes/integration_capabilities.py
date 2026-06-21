@@ -11,6 +11,10 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_evidence_assessment import (
+    IntegrationEvidenceItem,
+    assess_integration_evidence,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +80,24 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.post("/integration-capabilities/{slug}/evidence-assessment")
+    async def assess_capability_evidence(request: Request, slug: str) -> JSONResponse:
+        """Preview whether supplied evidence satisfies activation gates."""
+
+        require_user(request, auth_provider)
+        payload = await request.json()
+        evidence_items = tuple(
+            IntegrationEvidenceItem.from_payload(item)
+            for item in payload.get("evidence_items", [])
+            if isinstance(item, dict)
+        )
+        assessment = assess_integration_evidence(slug, evidence_items=evidence_items)
+        if assessment is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(assessment)
 
     return router
