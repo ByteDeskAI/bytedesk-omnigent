@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from bytedesk_omnigent.integration_capabilities import (
     CapabilityCategory,
     compile_integration_marketplace_listing,
+    compile_integration_staffing_plan,
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
@@ -90,5 +91,19 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(listing.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/staffing-plan")
+    async def get_staffing_plan(request: Request, slug: str) -> JSONResponse:
+        """Read the deterministic agent staffing plan for one blueprint."""
+
+        require_user(request, auth_provider)
+        plan = compile_integration_staffing_plan(slug)
+        if plan is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(plan.to_dict())
+
 
     return router

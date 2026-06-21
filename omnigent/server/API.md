@@ -1334,3 +1334,6 @@ against the snapshot to reconcile accepted inputs.
 - Additional output item types: `image_generation_call`, `web_search_call`, `file_search_call`,
   `code_interpreter_call`, `mcp_tool_call`, `computer_call`, `local_shell_call`, `apply_patch_call`,
   `compaction`
+
+
+GET /v1/integration-capabilities/{slug}/staffing-plan

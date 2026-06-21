@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.integration_capabilities import (
     compile_integration_marketplace_listing,
+    compile_integration_staffing_plan,
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
@@ -105,6 +106,10 @@ def test_integration_capabilities_router_lists_and_reads_entries():
     assert listing.json()["capability_slug"] == "slack-command-center"
     assert listing.json()["package_type"] == "integration_capability"
 
+    staffing = client.get("/v1/integration-capabilities/slack-command-center/staffing-plan")
+    assert staffing.status_code == 200
+    assert staffing.json()["primary_agent_role"] == "communication-intake-agent"
+
 
 def test_integration_capabilities_router_filters_and_404s():
     app = FastAPI()
@@ -123,3 +128,7 @@ def test_integration_capabilities_router_filters_and_404s():
     missing_listing = client.get("/v1/integration-capabilities/not-real/marketplace-listing")
     assert missing_listing.status_code == 404
     assert missing_listing.json()["error"] == "not_found"
+
+    missing_staffing = client.get("/v1/integration-capabilities/not-real/staffing-plan")
+    assert missing_staffing.status_code == 404
+    assert missing_staffing.json()["error"] == "not_found"
