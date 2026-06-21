@@ -7,6 +7,7 @@ import hmac
 import json
 import time
 from collections.abc import Mapping
+from base64 import b64encode
 
 import pytest
 
@@ -19,6 +20,7 @@ from bytedesk_omnigent.ingress import (
     SlackWebhookAdapter,
     StripeWebhookAdapter,
     JsonPayloadWebhookAdapter,
+    MicrosoftTeamsWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -245,6 +247,22 @@ def test_process_inbound_delivers_real_github_event_header(tmp_path) -> None:
     assert result.status is IngressStatus.DELIVERED
     assert result.http_status == 202
     assert result.signal_id == "github:issue:123"
+def test_microsoft_teams_adapter_verifies_authorization_hmac_and_routes_message() -> None:
+    """Teams outgoing webhooks sign the raw body with a base64 HMAC in the
+    Authorization header; Omnigent should support that native wire contract
+    without a custom relay translating it to GitHub-style headers."""
+    adapter = MicrosoftTeamsWebhookAdapter()
+    body = json.dumps({"text": "@omni summarize this incident"}).encode()
+    secret = "teams-shared-secret"
+    signature = b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
+
+    assert adapter.verify(body, {"authorization": f"HMAC {signature}"}, secret) is True
+    assert adapter.verify(body, {"Authorization": f"hmac {signature}"}, secret) is True
+    assert adapter.verify(body, {"authorization": signature}, secret) is True
+    assert adapter.verify(body, {"authorization": "HMAC bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({}) == "message"
+    assert adapter.match_key({"x-omnigent-event": "teams.incident"}) == "teams.incident"
 
 
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
@@ -378,6 +396,45 @@ def test_slack_adapter_rejects_stale_timestamp(monkeypatch: pytest.MonkeyPatch) 
     }
 
     assert SlackWebhookAdapter().verify(body, headers, secret) is False
+def test_resolve_webhook_adapter_has_builtin_microsoft_teams_adapter() -> None:
+    """Microsoft Teams is a first-party connected-app ingress source so Platform
+    installs can target /v1/ingress/microsoft-teams directly."""
+    assert isinstance(resolve_webhook_adapter("microsoft-teams"), MicrosoftTeamsWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("teams"), MicrosoftTeamsWebhookAdapter)
+
+
+def test_process_inbound_delivers_microsoft_teams_message_to_signal_bus(tmp_path) -> None:
+    db = f"sqlite:///{tmp_path / 'teams.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "teams-shared-secret"
+    body = json.dumps({"text": "@omni triage INC-42"}).encode()
+    signature = b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
+
+    bus.register_wait(
+        signal_id="teams:incident:42", session_id="sess-teams", key="subscribe:teams",
+        kind="subscribe", target="microsoft-teams", now=now,
+    )
+    store.register_binding(
+        source="microsoft-teams", match_key="message", signal_id="teams:incident:42", now=now
+    )
+
+    res = process_inbound(
+        source="microsoft-teams",
+        raw_body=body,
+        headers={"Authorization": f"HMAC {signature}"},
+        secret=secret,
+        store=store,
+        bus=bus,
+        adapter=resolve_webhook_adapter("microsoft-teams"),
+        payload={"text": "@omni triage INC-42"},
+        now=now + 1,
+    )
+
+    assert res.status is IngressStatus.DELIVERED
+    assert res.http_status == 202
+    assert res.signal_id == "teams:incident:42"
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
