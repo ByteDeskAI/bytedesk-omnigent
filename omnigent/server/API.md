@@ -1337,3 +1337,5 @@ against the snapshot to reconcile accepted inputs.
 
 
 GET /v1/integration-capabilities/{slug}/staffing-plan
+
+GET /v1/integration-capabilities/{slug}/cutover-checklist
