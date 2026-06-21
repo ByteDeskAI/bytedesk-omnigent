@@ -28,6 +28,7 @@ from bytedesk_omnigent.ingress import (
     HubSpotWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    MondayWebhookAdapter,
     IntercomWebhookAdapter,
     JiraWebhookAdapter,
     JsonPayloadWebhookAdapter,
@@ -605,6 +606,30 @@ def test_google_workspace_adapter_verifies_channel_token_and_reads_resource_stat
 def test_google_workspace_source_resolves_bespoke_adapter() -> None:
     """The google-workspace source uses the push-channel token adapter."""
     assert isinstance(resolve_webhook_adapter("google-workspace"), GoogleWorkspaceWebhookAdapter)
+
+
+def test_monday_adapter_verifies_signature_and_reads_monday_event() -> None:
+    """Monday.com webhook ingress uses its own source adapter so teams can bind
+    board/item automation events without custom deployment code."""
+    adapter = MondayWebhookAdapter()
+    body = b'{"event":{"type":"item.updated"}}'
+    secret = "monday-signing-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-monday-signature": sig}, secret) is True
+    assert adapter.verify(body, {"X-Monday-Signature": "sha256=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-monday-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-monday-event": "item.updated"}) == "item.updated"
+    assert adapter.match_key({}) == "*"
+
+
+def test_resolve_webhook_adapter_registers_monday_builtin() -> None:
+    """The monday source resolves to the built-in adapter without app-specific
+    bootstrap code, while unknown sources still use the safe GitHub-compatible default."""
+    assert isinstance(resolve_webhook_adapter("monday"), MondayWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("monday.com"), MondayWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("unknown-service"), GitHubWebhookAdapter)
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
