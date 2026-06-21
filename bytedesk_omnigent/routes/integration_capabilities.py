@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_consent_manifest import (
+    compile_integration_consent_manifest,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -61,6 +64,21 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(entry.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/consent-manifest")
+    async def get_capability_consent_manifest(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile consent copy and scope rationales for one integration."""
+
+        require_user(request, auth_provider)
+        manifest = compile_integration_consent_manifest(slug)
+        if manifest is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(manifest)
 
     @router.get("/integration-capabilities/{slug}/verification-matrix")
     async def get_capability_verification_matrix(
