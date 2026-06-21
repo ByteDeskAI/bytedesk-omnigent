@@ -19,6 +19,9 @@ from bytedesk_omnigent.integration_verification_matrix import (
 from bytedesk_omnigent.integration_demo_scenarios import (
     compile_integration_demo_scenario,
 )
+from bytedesk_omnigent.integration_readiness_assessment import (
+    compile_integration_readiness_assessment,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
