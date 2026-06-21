@@ -29,6 +29,7 @@ from bytedesk_omnigent.ingress import (
     IngressBindingStore,
     IngressStatus,
     MondayWebhookAdapter,
+    SalesforceWebhookAdapter,
     ServiceNowWebhookAdapter,
     IntercomWebhookAdapter,
     JiraWebhookAdapter,
@@ -655,6 +656,30 @@ def test_resolve_webhook_adapter_registers_servicenow_builtin() -> None:
     assert isinstance(resolve_webhook_adapter("service-now"), ServiceNowWebhookAdapter)
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
 
+def test_salesforce_adapter_verifies_base64_hmac_and_reads_event_headers() -> None:
+    """Salesforce callbacks use a base64 HMAC header and route by Salesforce or
+    CloudEvents event type headers, so they need a first-class built-in adapter."""
+    adapter = resolve_webhook_adapter("salesforce")
+    assert isinstance(adapter, SalesforceWebhookAdapter)
+
+    body = b'{"ChangeEventHeader":{"entityName":"Opportunity"}}'
+    secret = "salesforce-client-secret"
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
+    signature = b64encode(digest).decode("ascii")
+
+    assert adapter.verify(body, {"x-salesforce-signature": signature}, secret) is True
+    assert adapter.verify(body, {"x-salesforce-signature": "not-valid"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert (
+        adapter.match_key({"x-salesforce-event": "OpportunityChangeEvent"})
+        == "OpportunityChangeEvent"
+    )
+    assert (
+        adapter.match_key({"ce-type": "com.salesforce.event.OpportunityChangeEvent"})
+        == "com.salesforce.event.OpportunityChangeEvent"
+    )
+    assert adapter.match_key({}) == "*"
+
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
     """A second source registers its own signature scheme + event header; the
@@ -1208,5 +1233,5 @@ def test_cloudevents_adapter_verifies_bearer_token_and_reads_ce_type() -> None:
     assert adapter.match_key({"ce-source": "/accounts/123"}) == "*"
 
 
-def test_salesforce_resolves_to_cloudevents_adapter(_restore_adapter_registry) -> None:
-    assert isinstance(resolve_webhook_adapter("salesforce"), CloudEventsWebhookAdapter)
+def test_salesforce_resolves_to_dedicated_adapter(_restore_adapter_registry) -> None:
+    assert isinstance(resolve_webhook_adapter("salesforce"), SalesforceWebhookAdapter)

@@ -859,6 +859,28 @@ class ServiceNowWebhookAdapter:
     def match_key(self, headers: Mapping[str, str]) -> str:
         return _header(headers, "x-servicenow-event") or "*"
 
+class SalesforceWebhookAdapter:
+    """Salesforce Platform/Event Relay adapter.
+
+    Salesforce-style callbacks commonly carry a base64-encoded HMAC-SHA256
+    digest in ``X-Salesforce-Signature``. Route by ``X-Salesforce-Event`` when
+    supplied by a connector, or by CloudEvents ``ce-type`` for Event Relay.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-salesforce-signature")
+        if not provided:
+            return False
+        try:
+            provided_digest = b64decode(provided, validate=True)
+        except ValueError:
+            return False
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
+        return hmac.compare_digest(expected, provided_digest)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-salesforce-event") or _header(headers, "ce-type") or "*"
+
 
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
@@ -946,7 +968,7 @@ def _build_webhook_adapter_registry():
     registry.register("google-workspace", GoogleWorkspaceWebhookAdapter)
     registry.register("airtable", AirtableWebhookAdapter)
     registry.register("cloudevents", CloudEventsWebhookAdapter)
-    registry.register("salesforce", CloudEventsWebhookAdapter)
+    registry.register("salesforce", SalesforceWebhookAdapter)
     registry.register("monday", MondayWebhookAdapter)
     registry.register("monday.com", MondayWebhookAdapter)
     registry.register("service-now", ServiceNowWebhookAdapter)
