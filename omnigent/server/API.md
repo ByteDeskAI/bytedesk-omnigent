@@ -68,6 +68,41 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Get Integration Configuration Manifest
+
+```
+GET /v1/integration-capabilities/{slug}/configuration-manifest
+
+200 OK
+{
+  "object": "integration_configuration_manifest",
+  "capability_slug": "slack-command-center",
+  "capability_name": "Slack command center",
+  "category": "communication",
+  "auth_model": "OAuth 2.0 bot + user tokens",
+  "configuration_keys": [
+    "SLACK_COMMAND_CENTER_CLIENT_ID",
+    "SLACK_COMMAND_CENTER_CLIENT_SECRET",
+    "SLACK_COMMAND_CENTER_REDIRECT_URI",
+    "SLACK_COMMAND_CENTER_SIGNING_SECRET",
+    "SLACK_COMMAND_CENTER_WEBHOOK_BASE_URL"
+  ],
+  "slots": [
+    {
+      "key": "SLACK_COMMAND_CENTER_CLIENT_SECRET",
+      "label": "OAuth client secret",
+      "required": true,
+      "secret": true,
+      "purpose": "Provider-issued secret used only during token exchange or refresh."
+    }
+  ],
+  "minimum_required_slots": 5,
+  "deployment_notes": ["..."]
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management
