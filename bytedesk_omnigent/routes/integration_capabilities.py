@@ -75,6 +75,9 @@ from bytedesk_omnigent.integration_telemetry_contract import (
 from bytedesk_omnigent.integration_tool_contracts import (
     compile_integration_tool_contract,
 )
+from bytedesk_omnigent.integration_coordination_topology import (
+    compile_integration_coordination_topology,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -409,5 +412,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(contract)
+
+    @router.get("/integration-capabilities/{slug}/coordination-topology")
+    async def get_capability_coordination_topology(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile managed-agent roles and handoffs for one integration."""
+
+        require_user(request, auth_provider)
+        topology = compile_integration_coordination_topology(slug)
+        if topology is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(topology)
 
     return router
