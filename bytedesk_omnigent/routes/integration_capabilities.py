@@ -98,6 +98,7 @@ from bytedesk_omnigent.integration_slo_profiles import compile_integration_slo_p
 from bytedesk_omnigent.integration_agent_prompt_pack import (
     compile_integration_agent_prompt_pack,
 )
+from bytedesk_omnigent.integration_access_plan import compile_integration_access_plan
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -537,5 +538,18 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(pack)
+
+    @router.get("/integration-capabilities/{slug}/access-plan")
+    async def get_capability_access_plan(request: Request, slug: str) -> JSONResponse:
+        """Compile least-privilege access roles for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        plan = compile_integration_access_plan(slug)
+        if plan is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(plan)
 
     return router
