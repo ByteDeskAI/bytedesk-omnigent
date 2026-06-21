@@ -5,6 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from bytedesk_omnigent.integration_agent_prompt_pack import (
+    compile_integration_agent_prompt_pack,
+)
 from bytedesk_omnigent.integration_capabilities import (
     CapabilityCategory,
     get_integration_capability,
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/agent-prompt-pack")
+    async def get_capability_agent_prompt_pack(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile a deterministic prompt pack for creating an integration agent."""
+
+        require_user(request, auth_provider)
+        pack = compile_integration_agent_prompt_pack(slug)
+        if pack is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(pack)
 
     return router
