@@ -25,6 +25,7 @@ from bytedesk_omnigent.ingress import (
     MicrosoftTeamsWebhookAdapter,
     LinearWebhookAdapter,
     ShopifyWebhookAdapter,
+    TrelloWebhookAdapter,
     WebhookSourceAdapter,
     preview_inbound,
     process_inbound,
@@ -748,3 +749,32 @@ def test_discord_adapter_is_registered_by_default() -> None:
     deployment-specific registration.
     """
     assert isinstance(resolve_webhook_adapter("discord"), DiscordWebhookAdapter)
+def test_trello_adapter_verifies_hmac_sha1_and_reads_action_type() -> None:
+    """Trello signs raw_body + callback_url with HMAC-SHA1 and carries the
+    action type separately for routing through webhook bindings."""
+    adapter = TrelloWebhookAdapter()
+    body = b'{"action":{"type":"cardMoved"}}'
+    app_secret = "trello-app-secret"
+    callback_url = "https://omnigent.example.com/v1/ingress/trello"
+    signed = body + callback_url.encode("utf-8")
+    signature = b64encode(
+        hmac.new(app_secret.encode("utf-8"), signed, hashlib.sha1).digest()
+    ).decode("ascii")
+
+    headers = {
+        "x-trello-webhook": signature,
+        "x-trello-callback-url": callback_url,
+        "x-trello-action-type": "cardMoved",
+    }
+
+    assert adapter.verify(body, headers, app_secret) is True
+    assert adapter.verify(body, {**headers, "x-trello-webhook": "bad"}, app_secret) is False
+    assert adapter.verify(body, {"x-trello-webhook": signature}, app_secret) is False
+    assert adapter.match_key(headers) == "cardMoved"
+    assert adapter.match_key({}) == "*"
+
+
+def test_trello_adapter_is_registered_by_default() -> None:
+    """Trello can be enabled by configuring OMNIGENT_INGRESS_SECRET_TRELLO;
+    no deployment-specific adapter registration is required."""
+    assert isinstance(resolve_webhook_adapter("trello"), TrelloWebhookAdapter)

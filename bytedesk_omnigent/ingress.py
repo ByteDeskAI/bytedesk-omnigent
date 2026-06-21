@@ -469,6 +469,34 @@ class DiscordWebhookAdapter:
         return _header(headers, "x-discord-event") or "*"
 
 
+class TrelloWebhookAdapter:
+    """Trello webhook adapter using its HMAC-SHA1 callback contract.
+
+    Trello sends ``X-Trello-Webhook`` as a base64-encoded HMAC-SHA1 digest over
+    ``raw_body + callback_url`` using the app secret. Omnigent expects the edge
+    or route deployment to supply the callback URL it registered with Trello via
+    ``X-Trello-Callback-Url`` so verification remains deterministic without
+    hardcoding deployment URLs. ``X-Trello-Action-Type`` is the binding match key
+    when present; otherwise the source-level ``"*"`` binding can catch it.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-trello-webhook")
+        callback_url = _header(headers, "x-trello-callback-url")
+        if not provided or not callback_url:
+            return False
+        try:
+            provided_digest = b64decode(provided, validate=True)
+        except ValueError:
+            return False
+        signed = raw_body + callback_url.encode("utf-8")
+        expected = hmac.new(secret.encode("utf-8"), signed, hashlib.sha1).digest()
+        return hmac.compare_digest(expected, provided_digest)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-trello-action-type") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -547,6 +575,7 @@ def _build_webhook_adapter_registry():
     registry.register("linear", LinearWebhookAdapter)
     registry.register("shopify", ShopifyWebhookAdapter)
     registry.register("discord", DiscordWebhookAdapter)
+    registry.register("trello", TrelloWebhookAdapter)
     return registry
 
 
