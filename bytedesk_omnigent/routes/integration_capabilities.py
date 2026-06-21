@@ -53,11 +53,22 @@ from bytedesk_omnigent.integration_dependency_graph import (
 from bytedesk_omnigent.integration_deprecation_plan import (
     compile_integration_deprecation_plan,
 )
+from bytedesk_omnigent.integration_evidence_assessment import (
+    IntegrationEvidenceItem,
+    assess_integration_evidence,
+)
 from bytedesk_omnigent.integration_evidence_packet import (
     compile_integration_evidence_packet,
 )
+from bytedesk_omnigent.integration_gap_analysis import (
+    IntegrationImplementationSignal,
+    analyze_integration_capability_gaps,
+)
 from bytedesk_omnigent.integration_incident_drills import (
     compile_integration_incident_drill,
+)
+from bytedesk_omnigent.integration_invocation_contracts import (
+    compile_integration_invocation_contract,
 )
 from bytedesk_omnigent.integration_launch_brief import compile_integration_launch_brief
 from bytedesk_omnigent.integration_lifecycle_plan import (
@@ -70,6 +81,9 @@ from bytedesk_omnigent.integration_ownership_matrix import (
     compile_integration_ownership_matrix,
 )
 from bytedesk_omnigent.integration_pilot_plans import compile_integration_pilot_plan
+from bytedesk_omnigent.integration_readiness_assessment import (
+    compile_integration_readiness_assessment,
+)
 from bytedesk_omnigent.integration_recommendations import (
     recommend_integration_capabilities,
 )
@@ -97,6 +111,9 @@ from bytedesk_omnigent.integration_tool_contracts import (
 )
 from bytedesk_omnigent.integration_value_scorecards import (
     compile_integration_value_scorecard,
+)
+from bytedesk_omnigent.integration_verification_assessment import (
+    assess_integration_verification_evidence,
 )
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
@@ -140,6 +157,159 @@ def create_integration_capabilities_router(
                 "categories": integration_capability_categories(),
             }
         )
+
+    @router.get("/integration-capabilities/recommendations")
+    async def recommend_capabilities(
+        request: Request,
+        goal: str = Query(..., description="Natural-language integration goal"),
+        category: CapabilityCategory | None = None,
+        limit: int = Query(default=3, ge=1, le=10),
+    ) -> JSONResponse:
+        """Rank catalog entries for a natural-language integration goal."""
+
+        require_user(request, auth_provider)
+        if not goal.strip():
+            raise HTTPException(status_code=422, detail="goal must not be blank")
+        report = recommend_integration_capabilities(goal, category=category, limit=limit)
+        return JSONResponse(report.to_dict())
+
+    @router.get("/integration-capabilities/bundles")
+    async def list_capability_bundles(request: Request) -> JSONResponse:
+        """List productized capability bundles for agent workforce offers."""
+
+        require_user(request, auth_provider)
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": [
+                    bundle.to_dict() for bundle in list_integration_capability_bundles()
+                ],
+            }
+        )
+
+    @router.get("/integration-capabilities/bundles/{slug}")
+    async def get_capability_bundle(request: Request, slug: str) -> JSONResponse:
+        """Read one compiled capability bundle by slug."""
+
+        require_user(request, auth_provider)
+        bundle = compile_integration_capability_bundle(slug)
+        if bundle is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration bundle: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(bundle.to_dict())
+
+    @router.post("/integration-capability-gaps/analyze")
+    async def analyze_capability_gaps(
+        request: Request, payload: Annotated[dict, Body(...)]
+    ) -> JSONResponse:
+        """Analyze catalog coverage from platform-supplied implementation signals."""
+
+        require_user(request, auth_provider)
+        implemented = set(payload.get("implemented_slugs") or ())
+        signals = tuple(
+            IntegrationImplementationSignal(
+                slug=item.get("slug"),
+                source=item.get("source", "unknown"),
+                title=item.get("title", ""),
+                url=item.get("url"),
+            )
+            for item in payload.get("open_signals") or ()
+            if isinstance(item, dict)
+        )
+        report = analyze_integration_capability_gaps(
+            implemented_slugs=implemented, open_signals=signals
+        )
+        return JSONResponse(report.to_dict())
+
+    @router.post("/integration-capabilities/{slug}/readiness-assessment")
+    async def assess_capability_readiness(
+        request: Request, slug: str, payload: Annotated[dict, Body(...)]
+    ) -> JSONResponse:
+        """Assess rollout readiness from supplied gate evidence."""
+
+        require_user(request, auth_provider)
+        evidence = payload.get("evidence") or {}
+        if not isinstance(evidence, dict):
+            return JSONResponse(
+                {"error": "invalid_evidence_payload"}, status_code=422
+            )
+        assessment = compile_integration_readiness_assessment(slug, evidence=evidence)
+        if assessment is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(assessment)
+
+    @router.post("/integration-capabilities/{slug}/verification-assessment")
+    async def assess_capability_verification(
+        request: Request, slug: str, payload: Annotated[dict, Body(...)]
+    ) -> JSONResponse:
+        """Assess submitted verification evidence for one capability."""
+
+        require_user(request, auth_provider)
+        provided = payload.get("provided_evidence")
+        if not isinstance(provided, dict) or any(
+            not isinstance(value, list | tuple) for value in provided.values()
+        ):
+            return JSONResponse(
+                {"error": "invalid_evidence_payload"}, status_code=422
+            )
+        assessment = assess_integration_verification_evidence(
+            slug, provided_evidence=provided
+        )
+        if assessment is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(assessment)
+
+    @router.post("/integration-capabilities/{slug}/evidence-assessment")
+    async def assess_capability_evidence(
+        request: Request, slug: str, payload: Annotated[dict, Body(...)]
+    ) -> JSONResponse:
+        """Assess evidence items against the capability verification matrix."""
+
+        require_user(request, auth_provider)
+        items = tuple(
+            IntegrationEvidenceItem(
+                gate_id=item.get("gate_id", ""),
+                evidence=tuple(item.get("evidence") or ()),
+                source=item.get("source", "unknown"),
+            )
+            for item in payload.get("evidence_items") or ()
+            if isinstance(item, dict)
+        )
+        assessment = assess_integration_evidence(slug, evidence_items=items)
+        if assessment is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(assessment)
+
+    @router.post("/integration-capabilities/{slug}/invocation-contract")
+    async def get_capability_invocation_contract(
+        request: Request, slug: str, payload: Annotated[dict, Body(...)]
+    ) -> JSONResponse:
+        """Compile an invocation contract for one capability call."""
+
+        require_user(request, auth_provider)
+        contract = compile_integration_invocation_contract(
+            slug,
+            requester=payload.get("requester", ""),
+            context_refs=tuple(payload.get("context_refs") or ()),
+            idempotency_key=payload.get("idempotency_key", ""),
+        )
+        if contract is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(contract)
 
     @router.get("/integration-capabilities/{slug}")
     async def get_capability(request: Request, slug: str) -> JSONResponse:
@@ -322,21 +492,6 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(drill)
-
-    @router.get("/integration-capabilities/recommendations")
-    async def recommend_capabilities(
-        request: Request,
-        goal: str = Query(..., description="Natural-language integration goal"),
-        category: CapabilityCategory | None = None,
-        limit: int = Query(default=3, ge=1, le=10),
-    ) -> JSONResponse:
-        """Rank catalog entries for a natural-language integration goal."""
-
-        require_user(request, auth_provider)
-        if not goal.strip():
-            raise HTTPException(status_code=422, detail="goal must not be blank")
-        report = recommend_integration_capabilities(goal, category=category, limit=limit)
-        return JSONResponse(report.to_dict())
 
     @router.get("/integration-capabilities/{slug}/evidence-packet")
     async def get_capability_evidence_packet(
@@ -599,33 +754,6 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(questionnaire)
-
-    @router.get("/integration-capabilities/bundles")
-    async def list_capability_bundles(request: Request) -> JSONResponse:
-        """List productized capability bundles for agent workforce offers."""
-
-        require_user(request, auth_provider)
-        return JSONResponse(
-            {
-                "object": "list",
-                "data": [
-                    bundle.to_dict() for bundle in list_integration_capability_bundles()
-                ],
-            }
-        )
-
-    @router.get("/integration-capabilities/bundles/{slug}")
-    async def get_capability_bundle(request: Request, slug: str) -> JSONResponse:
-        """Read one compiled capability bundle by slug."""
-
-        require_user(request, auth_provider)
-        bundle = compile_integration_capability_bundle(slug)
-        if bundle is None:
-            return JSONResponse(
-                {"error": "not_found", "detail": f"unknown integration bundle: {slug}"},
-                status_code=404,
-            )
-        return JSONResponse(bundle.to_dict())
 
     @router.get("/integration-capabilities/{slug}/configuration-manifest")
     async def get_capability_configuration_manifest(
