@@ -60,6 +60,9 @@ from bytedesk_omnigent.integration_gap_analysis import (
     analyze_integration_capability_gaps,
 )
 from bytedesk_omnigent.integration_pilot_plans import compile_integration_pilot_plan
+from bytedesk_omnigent.integration_acceptance_suite import (
+    compile_integration_acceptance_suite,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -321,5 +324,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(plan.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/acceptance-suite")
+    async def get_capability_acceptance_suite(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile deterministic acceptance scenarios for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        suite = compile_integration_acceptance_suite(slug)
+        if suite is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(suite)
 
     return router
