@@ -73,6 +73,9 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.connected_app_manifests import (
             create_connected_app_manifests_router,
         )
+        from bytedesk_omnigent.routes.integration_handoff_packages import (
+            create_integration_handoff_packages_router,
+        )
         from bytedesk_omnigent.routes.integration_oauth_states import (
             create_integration_oauth_states_router,
         )
@@ -93,6 +96,7 @@ class BytedeskExtension:
             create_tasks_router(auth_provider=auth_provider),
             create_integration_workflow_plans_router(auth_provider=auth_provider),
             create_connected_app_manifests_router(auth_provider=auth_provider),
+            create_integration_handoff_packages_router(),
             create_integration_oauth_states_router(auth_provider=auth_provider),
             create_integration_replay_plans_router(auth_provider=auth_provider),
         ]
