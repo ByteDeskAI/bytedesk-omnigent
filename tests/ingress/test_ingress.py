@@ -29,6 +29,7 @@ from bytedesk_omnigent.ingress import (
     ShopifyWebhookAdapter,
     TrelloWebhookAdapter,
     JiraWebhookAdapter,
+    IntercomWebhookAdapter,
     WebhookSourceAdapter,
     preview_inbound,
     ZendeskWebhookAdapter,
@@ -52,6 +53,8 @@ def _stripe_signature(body: bytes, secret: str, timestamp: int) -> str:
 def _shopify_sign(body: bytes, secret: str) -> str:
     digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
     return base64.b64encode(digest).decode("ascii")
+def _sign_sha1(body: bytes, secret: str) -> str:
+    return hmac.new(secret.encode(), body, hashlib.sha1).hexdigest()
 
 
 def _hdrs(signature: str, event: str) -> dict[str, str]:
@@ -521,6 +524,29 @@ def test_asana_adapter_verifies_x_hook_signature_and_reads_event() -> None:
     assert adapter.verify(body, {}, secret) is False
     assert adapter.match_key({"x-asana-event": "task.changed"}) == "task.changed"
     assert adapter.match_key({}) == "*"
+
+
+def test_intercom_adapter_verifies_sha1_signature_and_reads_topic() -> None:
+    """Intercom sends HMAC-SHA1 in ``X-Hub-Signature`` and event topics in
+    ``X-Topic``; the built-in adapter maps that contract into ingress bindings.
+    """
+    adapter = IntercomWebhookAdapter()
+    body = b'{"type":"notification_event","topic":"conversation.user.created"}'
+    secret = "intercom-client-secret"
+    sig = _sign_sha1(body, secret)
+
+    assert isinstance(adapter, WebhookSourceAdapter)
+    assert adapter.verify(body, {"x-hub-signature": "sha1=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature": sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature": "sha1=bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-topic": "conversation.user.created"}) == "conversation.user.created"
+    assert adapter.match_key({}) == "*"
+
+
+def test_resolve_webhook_adapter_has_built_in_intercom_adapter() -> None:
+    """Intercom is a first-class source, not a deployment-local custom adapter."""
+    assert isinstance(resolve_webhook_adapter("intercom"), IntercomWebhookAdapter)
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:

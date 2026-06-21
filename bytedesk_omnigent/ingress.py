@@ -632,6 +632,23 @@ class JiraWebhookAdapter:
             if isinstance(event, str) and event:
                 return event
         return _header(headers, "x-atlassian-event") or _header(headers, "x-omnigent-event") or "*"
+class IntercomWebhookAdapter:
+    """Intercom adapter: HMAC-SHA1 signature + topic-based event routing.
+
+    Intercom webhooks sign the raw body in ``X-Hub-Signature`` using a SHA1 HMAC
+    (bare hex or ``sha1=<hex>``). The routed event topic lives in ``X-Topic``.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-hub-signature")
+        if not provided:
+            return False
+        expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha1).hexdigest()
+        provided_hex = provided.split("=", 1)[1] if "=" in provided else provided
+        return hmac.compare_digest(expected, provided_hex)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-topic") or "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -727,6 +744,7 @@ def _build_webhook_adapter_registry():
         "webhook_source", default=default
     )
     registry.register("jira", JiraWebhookAdapter)
+    registry.register("intercom", IntercomWebhookAdapter)
     return registry
 
 
