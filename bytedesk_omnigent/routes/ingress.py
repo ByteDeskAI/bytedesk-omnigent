@@ -107,6 +107,12 @@ def create_ingress_router(auth_provider: AuthProvider | None = None) -> APIRoute
             },
             status_code=result.http_status,
         )
+    @router.get("/ingress/adapters")
+    async def adapters() -> dict[str, object]:
+        """Expose setup-safe webhook adapter metadata for integration UIs."""
+        from bytedesk_omnigent.ingress import describe_webhook_adapters
+
+        return {"adapters": describe_webhook_adapters()}
 
     @router.post("/ingress/{source}")
     async def receive(source: str, request: Request) -> JSONResponse:
