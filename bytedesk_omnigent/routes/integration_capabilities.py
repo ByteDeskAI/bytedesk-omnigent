@@ -109,6 +109,9 @@ from bytedesk_omnigent.integration_capability_bundles import (
     compile_integration_capability_bundle,
     list_integration_capability_bundles,
 )
+from bytedesk_omnigent.integration_configuration_manifest import (
+    compile_integration_configuration_manifest,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -603,5 +606,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(bundle.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/configuration-manifest")
+    async def get_capability_configuration_manifest(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile secret-free deployment configuration slots for one blueprint."""
+
+        require_user(request, auth_provider)
+        manifest = compile_integration_configuration_manifest(slug)
+        if manifest is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(manifest)
 
     return router
