@@ -63,6 +63,9 @@ from bytedesk_omnigent.integration_pilot_plans import compile_integration_pilot_
 from bytedesk_omnigent.integration_acceptance_suite import (
     compile_integration_acceptance_suite,
 )
+from bytedesk_omnigent.integration_redaction_profile import (
+    compile_integration_redaction_profile,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -339,5 +342,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(suite)
+
+    @router.get("/integration-capabilities/{slug}/redaction-profile")
+    async def get_capability_redaction_profile(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile secret-safe logging rules for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        profile = compile_integration_redaction_profile(slug)
+        if profile is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(profile)
 
     return router
