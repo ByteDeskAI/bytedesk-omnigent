@@ -15,6 +15,7 @@ import pytest
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
+    DiscordWebhookAdapter,
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
@@ -704,3 +705,46 @@ def test_process_inbound_delivers_shopify_topic_to_signal_bus(tmp_path) -> None:
     assert result.signal_id == "shopify:order:123"
     assert bus.list_pending(target="shopify") == []
 
+
+def test_discord_adapter_verifies_ed25519_signature_and_reads_event() -> None:
+    """Discord signs interaction callbacks with Ed25519 over
+    ``timestamp + raw_body``. The built-in adapter should let a hosted Omnigent
+    bind Discord events without custom deployment code.
+    """
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+    private_key = Ed25519PrivateKey.generate()
+    public_hex = private_key.public_key().public_bytes(
+        encoding=serialization.Encoding.Raw,
+        format=serialization.PublicFormat.Raw,
+    ).hex()
+    timestamp = "1717171717"
+    body = b'{"type":2,"data":{"name":"assign_agent"}}'
+    signature = private_key.sign(timestamp.encode("utf-8") + body).hex()
+
+    adapter = DiscordWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+    assert adapter.verify(
+        body,
+        {
+            "X-Signature-Ed25519": signature,
+            "X-Signature-Timestamp": timestamp,
+            "X-Discord-Event": "interaction.create",
+        },
+        public_hex,
+    ) is True
+    assert adapter.verify(
+        body,
+        {"X-Signature-Ed25519": signature, "X-Signature-Timestamp": "bad"},
+        public_hex,
+    ) is False
+    assert adapter.match_key({"X-Discord-Event": "interaction.create"}) == "interaction.create"
+    assert adapter.match_key({}) == "*"
+
+
+def test_discord_adapter_is_registered_by_default() -> None:
+    """The stock registry should resolve the Discord adapter without requiring
+    deployment-specific registration.
+    """
+    assert isinstance(resolve_webhook_adapter("discord"), DiscordWebhookAdapter)

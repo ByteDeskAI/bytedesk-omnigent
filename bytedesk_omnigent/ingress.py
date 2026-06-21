@@ -348,7 +348,14 @@ class MicrosoftTeamsWebhookAdapter:
         expected = hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).digest()
         return hmac.compare_digest(expected, actual)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
         return _header(headers, "x-omnigent-event") or "message"
 
 
@@ -408,8 +415,58 @@ class ShopifyWebhookAdapter:
             return False
         return hmac.compare_digest(expected, actual)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
         return _header(headers, "x-shopify-topic") or "*"
+
+
+class DiscordWebhookAdapter:
+    """Discord interaction/webhook adapter using Ed25519 request signatures.
+
+    Discord signs ``X-Signature-Timestamp + raw_body`` with the application's
+    Ed25519 private key and sends the hex signature in
+    ``X-Signature-Ed25519``. The configured ingress "secret" is the Discord
+    application public key as a hex string. ``X-Discord-Event`` optionally
+    carries a routable event name; absent means the per-source ``"*"`` binding.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        signature = _header(headers, "x-signature-ed25519")
+        timestamp = _header(headers, "x-signature-timestamp")
+        if not signature or not timestamp:
+            return False
+        try:
+            from cryptography.exceptions import InvalidSignature
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PublicKey,
+            )
+        except ImportError:
+            return False
+
+        try:
+            public_key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(secret))
+            public_key.verify(
+                bytes.fromhex(signature), timestamp.encode("utf-8") + raw_body
+            )
+        except (InvalidSignature, ValueError):
+            return False
+        return True
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
+        return _header(headers, "x-discord-event") or "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -489,6 +546,7 @@ def _build_webhook_adapter_registry():
     registry.register("teams", MicrosoftTeamsWebhookAdapter)
     registry.register("linear", LinearWebhookAdapter)
     registry.register("shopify", ShopifyWebhookAdapter)
+    registry.register("discord", DiscordWebhookAdapter)
     return registry
 
 
