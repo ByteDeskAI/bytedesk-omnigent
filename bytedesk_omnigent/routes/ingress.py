@@ -74,6 +74,40 @@ def create_ingress_router(auth_provider: AuthProvider | None = None) -> APIRoute
         )
         return JSONResponse({"binding": asdict(binding)}, status_code=201)
 
+    @router.post("/ingress/{source}/preview")
+    async def preview(source: str, request: Request) -> JSONResponse:
+        """Verify and resolve a signed event without delivering it."""
+        from bytedesk_omnigent.ingress import (
+            get_binding_store,
+            preview_inbound,
+            resolve_secret,
+            resolve_webhook_adapter,
+        )
+
+        secret = resolve_secret(source)
+        if secret is None:
+            return JSONResponse(
+                {"status": "unknown_source", "detail": f"no secret configured for {source}"},
+                status_code=404,
+            )
+        raw = await request.body()
+        result = preview_inbound(
+            source=source,
+            raw_body=raw,
+            headers=request.headers,
+            secret=secret,
+            store=get_binding_store(),
+            adapter=resolve_webhook_adapter(source),
+        )
+        return JSONResponse(
+            {
+                "status": result.status.value,
+                "signal_id": result.signal_id,
+                "detail": result.detail,
+            },
+            status_code=result.http_status,
+        )
+
     @router.post("/ingress/{source}")
     async def receive(source: str, request: Request) -> JSONResponse:
         """Receive a signed external event and deliver it to the signal bus."""

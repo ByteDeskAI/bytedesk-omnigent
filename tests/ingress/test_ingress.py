@@ -25,6 +25,7 @@ from bytedesk_omnigent.ingress import (
     LinearWebhookAdapter,
     ShopifyWebhookAdapter,
     WebhookSourceAdapter,
+    preview_inbound,
     process_inbound,
     register_webhook_adapter,
     resolve_webhook_adapter,
@@ -173,6 +174,59 @@ def test_process_inbound_expired_wait_returns_410_not_409(tmp_path) -> None:
     )
     assert res.status is IngressStatus.EXPIRED
     assert res.http_status == 410
+
+
+def test_preview_inbound_verifies_and_resolves_without_delivering(tmp_path) -> None:
+    """The ingress preflight harness validates the signed event and binding without
+    waking the parked agent, so Platform can test connected-app routing safely."""
+    db = f"sqlite:///{tmp_path / 'preview.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "preview-secret"
+    bus.register_wait(
+        signal_id="ticket:zendesk:123", session_id="sess-support", key="k",
+        kind="subscribe", target="zendesk", now=now,
+    )
+    store.register_binding(
+        source="zendesk", match_key="ticket.created", signal_id="ticket:zendesk:123",
+        now=now,
+    )
+    body = json.dumps({"ticket": 123}).encode()
+
+    preview = preview_inbound(
+        source="zendesk", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "ticket.created"),
+        secret=secret, store=store,
+    )
+
+    assert preview.status is IngressStatus.DELIVERED
+    assert preview.http_status == 200
+    assert preview.signal_id == "ticket:zendesk:123"
+    assert preview.detail == "preflight matched; delivery not attempted"
+    assert bus.list_pending(target="zendesk")[0].signal_id == "ticket:zendesk:123"
+
+
+def test_preview_inbound_reports_bad_signature_and_missing_binding(tmp_path) -> None:
+    db = f"sqlite:///{tmp_path / 'preview-errors.db'}"
+    store = IngressBindingStore(db)
+    secret = "preview-secret"
+    body = b"{}"
+
+    bad = preview_inbound(
+        source="hubspot", raw_body=body, headers=_hdrs("bad", "contact.created"),
+        secret=secret, store=store,
+    )
+    assert bad.status is IngressStatus.BAD_SIGNATURE
+    assert bad.http_status == 401
+
+    missing = preview_inbound(
+        source="hubspot", raw_body=body,
+        headers=_hdrs(_sign(body, secret), "contact.created"), secret=secret,
+        store=store,
+    )
+    assert missing.status is IngressStatus.NO_BINDING
+    assert missing.http_status == 404
 
 
 # ── per-source webhook signature adapter (BDP-2354) ──────────────────────────
