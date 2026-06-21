@@ -49,6 +49,9 @@ from bytedesk_omnigent.integration_incident_drills import (
 from bytedesk_omnigent.integration_recommendations import (
     recommend_integration_capabilities,
 )
+from bytedesk_omnigent.integration_evidence_packet import (
+    compile_integration_evidence_packet,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -267,5 +270,20 @@ def create_integration_capabilities_router(
             raise HTTPException(status_code=422, detail="goal must not be blank")
         report = recommend_integration_capabilities(goal, category=category, limit=limit)
         return JSONResponse(report.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/evidence-packet")
+    async def get_capability_evidence_packet(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile an operator evidence packet for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        packet = compile_integration_evidence_packet(slug)
+        if packet is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(packet)
 
     return router
