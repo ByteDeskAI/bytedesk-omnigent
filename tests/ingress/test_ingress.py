@@ -19,6 +19,7 @@ from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     DiscordWebhookAdapter,
     AsanaWebhookAdapter,
+    DeclarativeHmacWebhookAdapter,
     GitHubWebhookAdapter,
     HubSpotWebhookAdapter,
     GitLabWebhookAdapter,
@@ -40,6 +41,7 @@ from bytedesk_omnigent.ingress import (
     WebhookSourceAdapter,
     describe_webhook_adapters,
     process_inbound,
+    register_declarative_hmac_webhook_adapter,
     register_webhook_adapter,
     resolve_webhook_adapter,
     verify_hmac_signature,
@@ -1025,3 +1027,49 @@ def test_ingress_router_exposes_webhook_adapter_manifest() -> None:
             }
         ]
     }
+def test_declarative_hmac_adapter_supports_header_only_saas_contracts() -> None:
+    """A no-code integration can describe its HMAC signature + event headers
+    instead of shipping a bespoke adapter class for every SaaS webhook source."""
+    body = b'{"record":"rec_123"}'
+    secret = "airtable-or-notion-secret"
+    signature = _sign(body, secret)
+    adapter = DeclarativeHmacWebhookAdapter(
+        signature_header="x-saas-signature",
+        event_header="x-saas-event",
+        signature_prefix="v1=",
+        default_event="webhook.notification",
+    )
+
+    assert adapter.verify(
+        body,
+        {"X-SaaS-Signature": f"v1={signature}", "X-SaaS-Event": "record.changed"},
+        secret,
+    ) is True
+    assert adapter.verify(body, {"x-saas-signature": signature}, secret) is False
+    assert adapter.verify(body, {"x-saas-signature": "v1=deadbeef"}, secret) is False
+    assert adapter.match_key({"X-SaaS-Event": "record.changed"}) == "record.changed"
+    assert adapter.match_key({}) == "webhook.notification"
+
+
+def test_register_declarative_hmac_adapter_resolves_for_source(
+    _restore_adapter_registry,
+) -> None:
+    """Integration manifests can install a SaaS source adapter by source name."""
+    body = b'{"issue":"ISS-1"}'
+    secret = "shared"
+    signature = _sign(body, secret)
+
+    register_declarative_hmac_webhook_adapter(
+        "jira-lite",
+        signature_header="x-jira-lite-signature",
+        event_header="x-jira-lite-event",
+        signature_prefix="sha256=",
+    )
+
+    adapter = resolve_webhook_adapter("jira-lite")
+    assert adapter.verify(
+        body,
+        {"x-jira-lite-signature": f"sha256={signature}"},
+        secret,
+    ) is True
+    assert adapter.match_key({"x-jira-lite-event": "issue.updated"}) == "issue.updated"
