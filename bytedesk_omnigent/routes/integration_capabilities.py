@@ -105,6 +105,10 @@ from bytedesk_omnigent.integration_invocation_contracts import (
 from bytedesk_omnigent.integration_onboarding_questionnaire import (
     compile_integration_onboarding_questionnaire,
 )
+from bytedesk_omnigent.integration_capability_bundles import (
+    compile_integration_capability_bundle,
+    list_integration_capability_bundles,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -572,5 +576,32 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(questionnaire)
+
+    @router.get("/integration-capabilities/bundles")
+    async def list_capability_bundles(request: Request) -> JSONResponse:
+        """List productized capability bundles for agent workforce offers."""
+
+        require_user(request, auth_provider)
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": [
+                    bundle.to_dict() for bundle in list_integration_capability_bundles()
+                ],
+            }
+        )
+
+    @router.get("/integration-capabilities/bundles/{slug}")
+    async def get_capability_bundle(request: Request, slug: str) -> JSONResponse:
+        """Read one compiled capability bundle by slug."""
+
+        require_user(request, auth_provider)
+        bundle = compile_integration_capability_bundle(slug)
+        if bundle is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration bundle: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(bundle.to_dict())
 
     return router
