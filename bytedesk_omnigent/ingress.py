@@ -689,6 +689,24 @@ class IntercomWebhookAdapter:
 
     def match_key(self, headers: Mapping[str, str]) -> str:
         return _header(headers, "x-topic") or "*"
+class GitLabWebhookAdapter:
+    """GitLab webhook adapter: shared-token verification + GitLab event header.
+
+    GitLab sends the configured webhook secret in ``X-Gitlab-Token`` and the
+    event kind in ``X-Gitlab-Event``. This adapter lets Omnigent bind GitLab
+    merge request, pipeline, issue, and push hooks to durable signals without
+    deployments registering a custom source adapter.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
+        provided = _header(headers, "x-gitlab-token")
+        if not provided:
+            return False
+        return hmac.compare_digest(provided, secret)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-gitlab-event") or "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -785,6 +803,7 @@ def _build_webhook_adapter_registry():
     )
     registry.register("jira", JiraWebhookAdapter)
     registry.register("intercom", IntercomWebhookAdapter)
+    registry.register("gitlab", GitLabWebhookAdapter)
     return registry
 
 
