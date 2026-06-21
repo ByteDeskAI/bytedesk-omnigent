@@ -46,6 +46,9 @@ from bytedesk_omnigent.integration_autonomy_policy import (
 from bytedesk_omnigent.integration_incident_drills import (
     compile_integration_incident_drill,
 )
+from bytedesk_omnigent.integration_recommendations import (
+    recommend_integration_capabilities,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -249,5 +252,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(drill)
+
+    @router.get("/integration-capabilities/recommendations")
+    async def recommend_capabilities(
+        request: Request,
+        goal: str = Query(..., description="Natural-language integration goal"),
+        category: CapabilityCategory | None = None,
+        limit: int = Query(default=3, ge=1, le=10),
+    ) -> JSONResponse:
+        """Rank catalog entries for a natural-language integration goal."""
+
+        require_user(request, auth_provider)
+        if not goal.strip():
+            raise HTTPException(status_code=422, detail="goal must not be blank")
+        report = recommend_integration_capabilities(goal, category=category, limit=limit)
+        return JSONResponse(report.to_dict())
 
     return router
