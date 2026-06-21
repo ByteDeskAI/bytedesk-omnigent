@@ -82,6 +82,9 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.integration_handoff_packages import (
             create_integration_handoff_packages_router,
         )
+        from bytedesk_omnigent.routes.integration_harness import (
+            create_integration_harness_router,
+        )
         from bytedesk_omnigent.routes.integration_oauth_states import (
             create_integration_oauth_states_router,
         )
@@ -105,6 +108,7 @@ class BytedeskExtension:
             create_integration_activation_gates_router(),
             create_integration_authorization_router(auth_provider=auth_provider),
             create_integration_handoff_packages_router(),
+            create_integration_harness_router(),
             create_integration_oauth_states_router(auth_provider=auth_provider),
             create_integration_replay_plans_router(auth_provider=auth_provider),
         ]
