@@ -28,6 +28,7 @@ from bytedesk_omnigent.ingress import (
     LinearWebhookAdapter,
     ShopifyWebhookAdapter,
     TrelloWebhookAdapter,
+    JiraWebhookAdapter,
     WebhookSourceAdapter,
     preview_inbound,
     ZendeskWebhookAdapter,
@@ -589,19 +590,59 @@ def test_process_inbound_with_json_payload_adapter_delivers_bound_jira_event(tmp
     store.register_binding(
         source="jira", match_key="jira:issue_updated", signal_id="issue:OPS-42", now=now
     )
-    body = json.dumps({"webhookEvent": "jira:issue_updated", "issue": "OPS-42"}).encode()
+    payload = {"webhookEvent": "jira:issue_updated", "issue": "OPS-42"}
+    body = json.dumps(payload).encode()
 
     res = process_inbound(
         source="jira", raw_body=body,
         headers={"x-omnigent-signature": _sign(body, secret)},
         secret=secret, store=store, bus=bus,
         adapter=resolve_webhook_adapter("jira"),
-        payload={"issue": "OPS-42"}, now=now + 1,
+        payload=payload, now=now + 1,
     )
 
     assert res.status is IngressStatus.DELIVERED
     assert res.http_status == 202
     assert res.signal_id == "issue:OPS-42"
+
+
+def test_jira_adapter_routes_on_webhook_event_payload(tmp_path) -> None:
+    """Jira webhooks carry the durable event name in the JSON ``webhookEvent``
+    field, so the built-in adapter must route on payload content instead of a
+    source-specific header."""
+    db = f"sqlite:///{tmp_path / 'jira-native.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "jira-secret"
+
+    bus.register_wait(
+        signal_id="jira:issue-created", session_id="sess-jira", key="subscribe:jira",
+        kind="subscribe", target="jira", now=now,
+    )
+    store.register_binding(
+        source="jira", match_key="jira:issue_created", signal_id="jira:issue-created", now=now
+    )
+
+    payload = {"webhookEvent": "jira:issue_created", "issue": {"key": "BDP-2371"}}
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    res = process_inbound(
+        source="jira", raw_body=body,
+        headers={"x-hub-signature-256": "sha256=" + _sign(body, secret)},
+        secret=secret, store=store, bus=bus, adapter=JiraWebhookAdapter(),
+        payload=payload, now=now + 1,
+    )
+
+    assert res.status is IngressStatus.DELIVERED
+    assert res.http_status == 202
+    assert res.signal_id == "jira:issue-created"
+
+
+def test_jira_adapter_is_registered_builtin_source(_restore_adapter_registry) -> None:
+    adapter = resolve_webhook_adapter("jira")
+    assert isinstance(adapter, JiraWebhookAdapter)
+
+
 def test_linear_adapter_verifies_signature_and_routes_by_payload() -> None:
     """Linear signs the raw body in ``Linear-Signature`` and carries the event
     discriminator in the JSON payload, so the built-in adapter composes a stable
@@ -853,3 +894,9 @@ def test_hubspot_adapter_verifies_legacy_signature_and_extracts_subscription_typ
 
 def test_hubspot_source_is_registered_by_default() -> None:
     assert isinstance(resolve_webhook_adapter("hubspot"), HubSpotWebhookAdapter)
+    assert res.signal_id == "jira:issue-created"
+
+
+def test_jira_adapter_is_registered_builtin_source(_restore_adapter_registry) -> None:
+    adapter = resolve_webhook_adapter("jira")
+    assert isinstance(adapter, JiraWebhookAdapter)
