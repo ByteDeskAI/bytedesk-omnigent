@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_coordination_topology import (
+    compile_integration_coordination_topology,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/coordination-topology")
+    async def get_capability_coordination_topology(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile managed-agent roles and handoffs for one integration."""
+
+        require_user(request, auth_provider)
+        topology = compile_integration_coordination_topology(slug)
+        if topology is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(topology)
 
     return router
