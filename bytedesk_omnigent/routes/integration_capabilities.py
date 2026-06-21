@@ -99,6 +99,9 @@ from bytedesk_omnigent.integration_agent_prompt_pack import (
     compile_integration_agent_prompt_pack,
 )
 from bytedesk_omnigent.integration_access_plan import compile_integration_access_plan
+from bytedesk_omnigent.integration_invocation_contracts import (
+    compile_integration_invocation_contract,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
