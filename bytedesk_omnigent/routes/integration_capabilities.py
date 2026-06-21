@@ -11,6 +11,10 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_gap_analysis import (
+    IntegrationImplementationSignal,
+    analyze_integration_capability_gaps,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +80,27 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.post("/integration-capability-gaps/analyze")
+    async def analyze_capability_gaps(request: Request) -> JSONResponse:
+        """Compile a catalog gap report from Platform-supplied evidence."""
+
+        require_user(request, auth_provider)
+        payload = await request.json()
+        implemented_slugs = set(payload.get("implemented_slugs") or [])
+        open_signals = tuple(
+            IntegrationImplementationSignal(
+                slug=item.get("slug"),
+                source=item["source"],
+                title=item["title"],
+                url=item.get("url"),
+            )
+            for item in payload.get("open_signals") or []
+        )
+        report = analyze_integration_capability_gaps(
+            implemented_slugs=implemented_slugs,
+            open_signals=open_signals,
+        )
+        return JSONResponse(report.to_dict())
 
     return router
