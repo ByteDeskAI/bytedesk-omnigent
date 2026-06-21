@@ -10,6 +10,7 @@ release, policies, tools) onto :class:`~bytedesk_omnigent.extension.BytedeskExte
 from __future__ import annotations
 
 from bytedesk_omnigent.extension import BytedeskExtension
+from bytedesk_omnigent.oauth_refresh import compile_oauth_refresh_plan
 from bytedesk_omnigent.provider_metadata import (
     ProviderKind,
     ProviderMetadata,
@@ -22,5 +23,6 @@ __all__ = [
     "ProviderKind",
     "ProviderMetadata",
     "ProviderMetadataMixin",
+    "compile_oauth_refresh_plan",
     "metadata_for",
 ]
