@@ -148,7 +148,6 @@ class WebhookSourceAdapter(Protocol):
         such as Stripe or JSON payload relays use body/payload data to route to
         deterministic bindings.
         """
-        ...
 
 
 class GitHubWebhookAdapter:
@@ -494,7 +493,14 @@ class TrelloWebhookAdapter:
         expected = hmac.new(secret.encode("utf-8"), signed, hashlib.sha1).digest()
         return hmac.compare_digest(expected, provided_digest)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
         return _header(headers, "x-trello-action-type") or "*"
 
 
@@ -517,8 +523,55 @@ class ZendeskWebhookAdapter:
         ).digest()
         return hmac.compare_digest(b64encode(expected).decode("ascii"), signature)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
         return _header(headers, "x-omnigent-event") or "*"
+
+
+class HubSpotWebhookAdapter:
+    """HubSpot legacy webhook adapter.
+
+    HubSpot's legacy webhook signature is ``sha256(clientSecret + rawBody)`` in
+    ``X-HubSpot-Signature``. Unlike GitHub-style sources, HubSpot carries the
+    event route inside the JSON body (usually a list of event objects with
+    ``subscriptionType``), so this adapter extracts the first event type from the
+    raw payload and falls back to ``"*"`` for account-wide catch-all bindings.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-hubspot-signature")
+        if not provided:
+            return False
+        expected = hashlib.sha256(secret.encode("utf-8") + raw_body).hexdigest()
+        return hmac.compare_digest(expected, provided)
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = headers
+        if payload is None:
+            try:
+                payload = json.loads(raw_body.decode("utf-8")) if raw_body else None
+            except (UnicodeDecodeError, ValueError, TypeError):
+                return "*"
+        event = payload[0] if isinstance(payload, list) and payload else payload
+        if not isinstance(event, dict):
+            return "*"
+        for field in ("subscriptionType", "eventType", "event_type", "type"):
+            value = event.get(field)
+            if isinstance(value, str) and value.strip():
+                return value
+        return "*"
 
 
 class AsanaWebhookAdapter:
@@ -622,6 +675,10 @@ def _build_webhook_adapter_registry():
     registry.register("trello", TrelloWebhookAdapter)
     registry.register("zendesk", ZendeskWebhookAdapter)
     registry.register("asana", AsanaWebhookAdapter)
+    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
+        "webhook_source", default=("github", lambda: GitHubWebhookAdapter())
+    )
+    registry.register("hubspot", lambda: HubSpotWebhookAdapter())
     return registry
 
 
@@ -774,6 +831,7 @@ def process_inbound(
     match_key = _adapter_match_key(
         adapter, headers=headers, raw_body=raw_body, payload=payload
     )
+    match_key = _adapter_match_key(adapter, raw_body, headers)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
@@ -834,6 +892,16 @@ def preview_inbound(
         IngressStatus.DELIVERED, 200, signal_id=binding.signal_id,
         detail="preflight matched; delivery not attempted",
     )
+def _adapter_match_key(
+    adapter: WebhookSourceAdapter,
+    raw_body: bytes,
+    headers: Mapping[str, str],
+) -> str:
+    """Call source adapters with body-aware routing while preserving old plugins."""
+    try:
+        return adapter.match_key(raw_body, headers)
+    except TypeError:
+        return adapter.match_key(headers)  # type: ignore[call-arg]
 
 
 # Lazily-built, per-URI cache of the binding store (mirrors the other accessors).

@@ -18,6 +18,7 @@ from bytedesk_omnigent.ingress import (
     DiscordWebhookAdapter,
     AsanaWebhookAdapter,
     GitHubWebhookAdapter,
+    HubSpotWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
     SlackWebhookAdapter,
@@ -834,3 +835,21 @@ def test_zendesk_adapter_verifies_timestamped_signature_and_event_header() -> No
 def test_zendesk_adapter_is_registered_builtin() -> None:
     """Zendesk is a built-in ingress adapter, not caller-registered boilerplate."""
     assert isinstance(resolve_webhook_adapter("zendesk"), ZendeskWebhookAdapter)
+def test_hubspot_adapter_verifies_legacy_signature_and_extracts_subscription_type() -> None:
+    """HubSpot signs ``clientSecret + rawBody`` and carries the routing event in
+    the JSON body, so the built-in adapter must not require a deployment shim."""
+    adapter = HubSpotWebhookAdapter()
+    body = json.dumps(
+        [{"subscriptionType": "contact.propertyChange", "objectId": 123}],
+        separators=(",", ":"),
+    ).encode()
+    secret = "hubspot-client-secret"
+    signature = hashlib.sha256(secret.encode() + body).hexdigest()
+
+    assert adapter.verify(body, {"X-HubSpot-Signature": signature}, secret) is True
+    assert adapter.verify(body, {"X-HubSpot-Signature": "bad"}, secret) is False
+    assert adapter.match_key(body, {}) == "contact.propertyChange"
+
+
+def test_hubspot_source_is_registered_by_default() -> None:
+    assert isinstance(resolve_webhook_adapter("hubspot"), HubSpotWebhookAdapter)
