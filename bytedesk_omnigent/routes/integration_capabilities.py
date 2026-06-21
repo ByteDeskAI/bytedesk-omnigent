@@ -2,9 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
+from bytedesk_omnigent.integration_acceptance_suite import (
+    compile_integration_acceptance_suite,
+)
+from bytedesk_omnigent.integration_access_plan import compile_integration_access_plan
+from bytedesk_omnigent.integration_agent_prompt_pack import (
+    compile_integration_agent_prompt_pack,
+)
+from bytedesk_omnigent.integration_autonomy_policy import (
+    compile_integration_autonomy_policy,
+)
 from bytedesk_omnigent.integration_capabilities import (
     CapabilityCategory,
     compile_integration_marketplace_listing,
@@ -13,98 +23,6 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
-from bytedesk_omnigent.integration_consent_manifest import (
-    compile_integration_consent_manifest,
-)
-from bytedesk_omnigent.integration_verification_matrix import (
-    compile_integration_verification_matrix,
-)
-from bytedesk_omnigent.integration_demo_scenarios import (
-    compile_integration_demo_scenario,
-)
-from bytedesk_omnigent.integration_readiness_assessment import (
-    compile_integration_readiness_assessment,
-)
-from bytedesk_omnigent.integration_dependency_graph import (
-    compile_integration_dependency_graph,
-)
-from bytedesk_omnigent.integration_risk_register import (
-    compile_integration_risk_register,
-)
-from bytedesk_omnigent.integration_cutover_checklist import (
-    compile_integration_cutover_checklist,
-)
-from bytedesk_omnigent.integration_sandbox_fixtures import (
-    compile_integration_sandbox_fixtures,
-)
-from bytedesk_omnigent.integration_verification_assessment import (
-    assess_integration_verification_evidence,
-)
-from bytedesk_omnigent.integration_autonomy_policy import (
-    compile_integration_autonomy_policy,
-)
-from bytedesk_omnigent.integration_incident_drills import (
-    compile_integration_incident_drill,
-)
-from bytedesk_omnigent.integration_recommendations import (
-    recommend_integration_capabilities,
-)
-from bytedesk_omnigent.integration_evidence_packet import (
-    compile_integration_evidence_packet,
-)
-from bytedesk_omnigent.integration_tenant_routing import (
-    compile_integration_tenant_routing_manifest,
-)
-from bytedesk_omnigent.integration_gap_analysis import (
-    IntegrationImplementationSignal,
-    analyze_integration_capability_gaps,
-)
-from bytedesk_omnigent.integration_pilot_plans import compile_integration_pilot_plan
-from bytedesk_omnigent.integration_acceptance_suite import (
-    compile_integration_acceptance_suite,
-)
-from bytedesk_omnigent.integration_redaction_profile import (
-    compile_integration_redaction_profile,
-)
-from bytedesk_omnigent.integration_value_scorecards import (
-    compile_integration_value_scorecard,
-)
-from bytedesk_omnigent.integration_telemetry_contract import (
-    compile_integration_telemetry_contract,
-)
-from bytedesk_omnigent.integration_tool_contracts import (
-    compile_integration_tool_contract,
-)
-from bytedesk_omnigent.integration_coordination_topology import (
-    compile_integration_coordination_topology,
-)
-from bytedesk_omnigent.integration_remediation_playbook import (
-    compile_integration_remediation_playbook,
-)
-from bytedesk_omnigent.integration_evidence_assessment import (
-    IntegrationEvidenceItem,
-    assess_integration_evidence,
-)
-from bytedesk_omnigent.integration_data_boundary import (
-    compile_integration_data_boundary,
-)
-from bytedesk_omnigent.integration_ownership_matrix import (
-    compile_integration_ownership_matrix,
-)
-from bytedesk_omnigent.integration_deprecation_plan import (
-    compile_integration_deprecation_plan,
-)
-from bytedesk_omnigent.integration_slo_profiles import compile_integration_slo_profile
-from bytedesk_omnigent.integration_agent_prompt_pack import (
-    compile_integration_agent_prompt_pack,
-)
-from bytedesk_omnigent.integration_access_plan import compile_integration_access_plan
-from bytedesk_omnigent.integration_invocation_contracts import (
-    compile_integration_invocation_contract,
-)
-from bytedesk_omnigent.integration_onboarding_questionnaire import (
-    compile_integration_onboarding_questionnaire,
-)
 from bytedesk_omnigent.integration_capability_bundles import (
     compile_integration_capability_bundle,
     list_integration_capability_bundles,
@@ -112,8 +30,75 @@ from bytedesk_omnigent.integration_capability_bundles import (
 from bytedesk_omnigent.integration_configuration_manifest import (
     compile_integration_configuration_manifest,
 )
+from bytedesk_omnigent.integration_consent_manifest import (
+    compile_integration_consent_manifest,
+)
+from bytedesk_omnigent.integration_coordination_topology import (
+    compile_integration_coordination_topology,
+)
+from bytedesk_omnigent.integration_cutover_checklist import (
+    compile_integration_cutover_checklist,
+)
+from bytedesk_omnigent.integration_data_boundary import (
+    compile_integration_data_boundary,
+)
+from bytedesk_omnigent.integration_demo_scenarios import (
+    compile_integration_demo_scenario,
+)
+from bytedesk_omnigent.integration_dependency_graph import (
+    compile_integration_dependency_graph,
+)
+from bytedesk_omnigent.integration_deprecation_plan import (
+    compile_integration_deprecation_plan,
+)
+from bytedesk_omnigent.integration_evidence_packet import (
+    compile_integration_evidence_packet,
+)
+from bytedesk_omnigent.integration_incident_drills import (
+    compile_integration_incident_drill,
+)
+from bytedesk_omnigent.integration_onboarding_questionnaire import (
+    compile_integration_onboarding_questionnaire,
+)
+from bytedesk_omnigent.integration_ownership_matrix import (
+    compile_integration_ownership_matrix,
+)
+from bytedesk_omnigent.integration_pilot_plans import compile_integration_pilot_plan
+from bytedesk_omnigent.integration_recommendations import (
+    recommend_integration_capabilities,
+)
+from bytedesk_omnigent.integration_redaction_profile import (
+    compile_integration_redaction_profile,
+)
+from bytedesk_omnigent.integration_remediation_playbook import (
+    compile_integration_remediation_playbook,
+)
+from bytedesk_omnigent.integration_risk_register import (
+    compile_integration_risk_register,
+)
+from bytedesk_omnigent.integration_sandbox_fixtures import (
+    compile_integration_sandbox_fixtures,
+)
+from bytedesk_omnigent.integration_slo_profiles import compile_integration_slo_profile
+from bytedesk_omnigent.integration_telemetry_contract import (
+    compile_integration_telemetry_contract,
+)
+from bytedesk_omnigent.integration_tenant_routing import (
+    compile_integration_tenant_routing_manifest,
+)
+from bytedesk_omnigent.integration_tool_contracts import (
+    compile_integration_tool_contract,
+)
+from bytedesk_omnigent.integration_value_scorecards import (
+    compile_integration_value_scorecard,
+)
+from bytedesk_omnigent.integration_verification_matrix import (
+    compile_integration_verification_matrix,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
+
+_FAILED_GATE_ID_QUERY = Query(default=[])
 
 
 def create_integration_capabilities_router(

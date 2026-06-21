@@ -170,6 +170,42 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         references=("https://api.slack.com/authentication/oauth-v2",),
     ),
     IntegrationCapability(
+        slug="microsoft-teams-command-center",
+        name="Microsoft Teams command center",
+        category="communication",
+        status="candidate",
+        auth_model="Microsoft Graph OAuth 2.0 + bot framework",
+        agent_value=(
+            "Let agents participate in Teams channels and chats with thread-aware status updates, clarifying questions, and approval prompts.",
+            "Bridge Microsoft 365 collaboration context into Omnigent Tasks while keeping approvals visible to enterprise operators.",
+        ),
+        required_scopes=(
+            "ChannelMessage.Read.All",
+            "ChannelMessage.Send",
+            "Chat.ReadWrite",
+            "User.ReadBasic.All",
+        ),
+        implementation_description=(
+            "Extend the existing Teams webhook direction into a full command-center connector: Microsoft Graph subscriptions normalize "
+            "channel/chat events into Omnigent signals, bot-framework activities carry safe outbound replies, and mutating actions remain "
+            "behind policy-gated adaptive-card approvals."
+        ),
+        future_unlocks=(
+            "Enterprise rollout path for Microsoft 365-first customers.",
+            "ByteDesk Platform approval cards embedded directly in Teams workspaces.",
+            "Cross-channel incident rooms where Slack and Teams users can coordinate through shared Omnigent task state.",
+        ),
+        business_case=(
+            "Complements Slack coverage for enterprises standardized on Microsoft 365, widening Omnigent's reachable collaboration market "
+            "without requiring teams to abandon their existing chat and approval workflows."
+        ),
+        priority_score=93,
+        references=(
+            "https://learn.microsoft.com/en-us/graph/teams-concept-overview",
+            "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/what-are-bots",
+        ),
+    ),
+    IntegrationCapability(
         slug="notion-knowledge-operator",
         name="Notion knowledge operator",
         category="knowledge",

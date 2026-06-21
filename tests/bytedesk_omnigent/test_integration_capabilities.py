@@ -7,7 +7,6 @@ from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.integration_capabilities import (
     compile_integration_marketplace_listing,
-    compile_integration_staffing_plan,
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
@@ -84,6 +83,18 @@ def test_compile_integration_marketplace_listing_handles_missing_slug():
     assert compile_integration_marketplace_listing("not-real") is None
 
 
+def test_catalog_includes_teams_command_center_blueprint():
+    teams = get_integration_capability("microsoft-teams-command-center")
+
+    assert teams is not None
+    assert teams.category == "communication"
+    assert teams.auth_model == "Microsoft Graph OAuth 2.0 + bot framework"
+    assert "ChannelMessage.Read.All" in teams.required_scopes
+    assert "ChannelMessage.Send" in teams.required_scopes
+    assert any("approvals" in value.lower() for value in teams.agent_value)
+    assert any("ByteDesk" in value for value in teams.future_unlocks)
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")
@@ -119,7 +130,10 @@ def test_integration_capabilities_router_filters_and_404s():
     response = client.get("/v1/integration-capabilities?category=communication")
     assert response.status_code == 200
     data = response.json()["data"]
-    assert [entry["slug"] for entry in data] == ["slack-command-center"]
+    assert [entry["slug"] for entry in data] == [
+        "slack-command-center",
+        "microsoft-teams-command-center",
+    ]
 
     missing = client.get("/v1/integration-capabilities/not-real")
     assert missing.status_code == 404
