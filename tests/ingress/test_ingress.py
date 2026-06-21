@@ -29,6 +29,7 @@ from bytedesk_omnigent.ingress import (
     IngressBindingStore,
     IngressStatus,
     MondayWebhookAdapter,
+    NotionWebhookAdapter,
     SalesforceWebhookAdapter,
     ServiceNowWebhookAdapter,
     IntercomWebhookAdapter,
@@ -687,6 +688,28 @@ def test_salesforce_adapter_verifies_base64_hmac_and_reads_event_headers() -> No
     )
     assert adapter.match_key({}) == "*"
 
+def test_notion_adapter_verifies_signature_and_reads_event_headers() -> None:
+    """A built-in Notion adapter makes Notion automation events first-class
+    without requiring every deployment to register the same HMAC adapter.
+    """
+    adapter = NotionWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+    body = b'{"type":"page.updated","page":{"id":"pg_123"}}'
+    secret = "notion-webhook-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-notion-signature": sig}, secret) is True
+    assert adapter.verify(body, {"x-notion-signature": "sha256=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-notion-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-notion-event": "page.updated"}) == "page.updated"
+    assert adapter.match_key({"x-notion-event-type": "database.updated"}) == "database.updated"
+    assert adapter.match_key({}) == "*"
+
+def test_resolve_webhook_adapter_registers_notion_builtin() -> None:
+    """The registry resolves Notion by name instead of falling back to GitHub."""
+    assert isinstance(resolve_webhook_adapter("notion"), NotionWebhookAdapter)
+
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
     """A second source registers its own signature scheme + event header; the
@@ -736,7 +759,7 @@ def test_json_payload_adapter_routes_by_payload_event_fields() -> None:
 
 def test_builtin_json_saas_sources_resolve_payload_adapter() -> None:
     assert isinstance(resolve_webhook_adapter("json"), JsonPayloadWebhookAdapter)
-    assert isinstance(resolve_webhook_adapter("notion"), JsonPayloadWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("notion"), NotionWebhookAdapter)
     assert isinstance(resolve_webhook_adapter("jira"), JiraWebhookAdapter)
     assert isinstance(resolve_webhook_adapter("trello"), TrelloWebhookAdapter)
     assert isinstance(resolve_webhook_adapter("asana"), AsanaWebhookAdapter)
