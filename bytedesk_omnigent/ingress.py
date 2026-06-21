@@ -590,6 +590,25 @@ class IngressBindingStore:
             chosen = exact or star
             return _to_binding(chosen) if chosen is not None else None
 
+    def list_bindings(
+        self, *, source: str | None = None, enabled: bool | None = None
+    ) -> list[WebhookBinding]:
+        """List webhook bindings for operator/API management.
+
+        Results are deterministic by source then match key so ByteDesk Platform can
+        diff the registered ingress surface without reading the database directly.
+        """
+        with self._session() as session:
+            stmt = select(SqlWebhookBinding)
+            if source is not None:
+                stmt = stmt.where(SqlWebhookBinding.source == source)
+            if enabled is not None:
+                stmt = stmt.where(SqlWebhookBinding.enabled.is_(enabled))
+            rows = session.execute(
+                stmt.order_by(SqlWebhookBinding.source, SqlWebhookBinding.match_key)
+            ).scalars().all()
+            return [_to_binding(row) for row in rows]
+
 
 def process_inbound(
     *,

@@ -66,7 +66,7 @@ class BytedeskExtension:
         return [
             _health_router(),
             create_governance_router(auth_provider=auth_provider),
-            create_ingress_router(),
+            create_ingress_router(auth_provider=auth_provider),
             create_integration_approval_router(auth_provider=auth_provider),
             create_goals_router(auth_provider=auth_provider),
             create_integration_capabilities_router(auth_provider=auth_provider),
