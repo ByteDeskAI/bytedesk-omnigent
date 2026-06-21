@@ -59,6 +59,7 @@ from bytedesk_omnigent.integration_evidence_packet import (
 from bytedesk_omnigent.integration_incident_drills import (
     compile_integration_incident_drill,
 )
+from bytedesk_omnigent.integration_launch_brief import compile_integration_launch_brief
 from bytedesk_omnigent.integration_onboarding_questionnaire import (
     compile_integration_onboarding_questionnaire,
 )
@@ -192,6 +193,19 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(listing.to_dict())
+
+    @router.get("/integration-capabilities/{slug}/launch-brief")
+    async def get_capability_launch_brief(request: Request, slug: str) -> JSONResponse:
+        """Compile the operator-facing launch sequence for one blueprint."""
+
+        require_user(request, auth_provider)
+        brief = compile_integration_launch_brief(slug)
+        if brief is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(brief)
 
     @router.get("/integration-capabilities/{slug}/staffing-plan")
     async def get_staffing_plan(request: Request, slug: str) -> JSONResponse:
