@@ -46,38 +46,32 @@ class BytedeskExtension:
 
     # ── routers ──────────────────────────────────────────────────────
     def routers(self, auth_provider: AuthProvider | None = None) -> list[APIRouter]:
+        from bytedesk_omnigent.routes.connected_app_manifests import (
+            create_connected_app_manifests_router,
+        )
+        from bytedesk_omnigent.routes.goals import (
+            create_goals_router,
+        )
         from bytedesk_omnigent.routes.governance import (
             create_governance_router,
         )
         from bytedesk_omnigent.routes.ingress import (
             create_ingress_router,
         )
+        from bytedesk_omnigent.routes.integration_activation_gates import (
+            create_integration_activation_gates_router,
+        )
         from bytedesk_omnigent.routes.integration_approval import (
             create_integration_approval_router,
         )
-        from bytedesk_omnigent.routes.integration_event_routes import (
-            create_integration_event_routes_router,
-        )
-        from bytedesk_omnigent.routes.integration_secret_plans import (
-            create_integration_secret_plans_router,
-        )
-        from bytedesk_omnigent.routes.goals import (
-            create_goals_router,
+        from bytedesk_omnigent.routes.integration_authorization import (
+            create_integration_authorization_router,
         )
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
         )
-        from bytedesk_omnigent.routes.integration_workflow_plans import (
-            create_integration_workflow_plans_router,
-        )
-        from bytedesk_omnigent.routes.connected_app_manifests import (
-            create_connected_app_manifests_router,
-        )
-        from bytedesk_omnigent.routes.integration_activation_gates import (
-            create_integration_activation_gates_router,
-        )
-        from bytedesk_omnigent.routes.integration_authorization import (
-            create_integration_authorization_router,
+        from bytedesk_omnigent.routes.integration_event_routes import (
+            create_integration_event_routes_router,
         )
         from bytedesk_omnigent.routes.integration_handoff_packages import (
             create_integration_handoff_packages_router,
@@ -91,6 +85,15 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.integration_replay_plans import (
             create_integration_replay_plans_router,
         )
+        from bytedesk_omnigent.routes.integration_rollback import (
+            create_integration_rollback_router,
+        )
+        from bytedesk_omnigent.routes.integration_secret_plans import (
+            create_integration_secret_plans_router,
+        )
+        from bytedesk_omnigent.routes.integration_workflow_plans import (
+            create_integration_workflow_plans_router,
+        )
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
@@ -100,6 +103,7 @@ class BytedeskExtension:
             create_integration_approval_router(auth_provider=auth_provider),
             create_integration_event_routes_router(auth_provider=auth_provider),
             create_integration_secret_plans_router(auth_provider=auth_provider),
+            create_integration_rollback_router(),
             create_goals_router(auth_provider=auth_provider),
             create_integration_capabilities_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
