@@ -40,6 +40,9 @@ from bytedesk_omnigent.integration_sandbox_fixtures import (
 from bytedesk_omnigent.integration_verification_assessment import (
     assess_integration_verification_evidence,
 )
+from bytedesk_omnigent.integration_autonomy_policy import (
+    compile_integration_autonomy_policy,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -215,5 +218,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(fixtures)
+
+    @router.get("/integration-capabilities/{slug}/autonomy-policy")
+    async def get_capability_autonomy_policy(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile safe default autonomy boundaries for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        policy = compile_integration_autonomy_policy(slug)
+        if policy is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(policy)
 
     return router
