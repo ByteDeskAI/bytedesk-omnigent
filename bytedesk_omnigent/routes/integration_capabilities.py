@@ -66,6 +66,9 @@ from bytedesk_omnigent.integration_acceptance_suite import (
 from bytedesk_omnigent.integration_redaction_profile import (
     compile_integration_redaction_profile,
 )
+from bytedesk_omnigent.integration_value_scorecards import (
+    compile_integration_value_scorecard,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -357,5 +360,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(profile)
+
+    @router.get("/integration-capabilities/{slug}/value-scorecard")
+    async def get_capability_value_scorecard(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile product and sales value scoring for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        scorecard = compile_integration_value_scorecard(slug)
+        if scorecard is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(scorecard)
 
     return router
