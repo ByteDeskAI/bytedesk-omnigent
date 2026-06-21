@@ -73,6 +73,9 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.connected_app_manifests import (
             create_connected_app_manifests_router,
         )
+        from bytedesk_omnigent.routes.integration_oauth_states import (
+            create_integration_oauth_states_router,
+        )
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
@@ -87,6 +90,7 @@ class BytedeskExtension:
             create_tasks_router(auth_provider=auth_provider),
             create_integration_workflow_plans_router(auth_provider=auth_provider),
             create_connected_app_manifests_router(auth_provider=auth_provider),
+            create_integration_oauth_states_router(auth_provider=auth_provider),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
