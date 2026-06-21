@@ -52,6 +52,9 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
         )
+        from bytedesk_omnigent.routes.integration_workflow_plans import (
+            create_integration_workflow_plans_router,
+        )
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
@@ -61,6 +64,7 @@ class BytedeskExtension:
             create_goals_router(auth_provider=auth_provider),
             create_integration_capabilities_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
+            create_integration_workflow_plans_router(auth_provider=auth_provider),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
