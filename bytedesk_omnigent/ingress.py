@@ -726,6 +726,31 @@ class GoogleWorkspaceWebhookAdapter:
         return _header(headers, "x-goog-resource-state") or "*"
 
 
+class CloudEventsWebhookAdapter:
+    """CloudEvents adapter for standards-based SaaS/event-bus integrations."""
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
+        authorization = _header(headers, "authorization")
+        token = ""
+        scheme, _, value = authorization.partition(" ")
+        if scheme.lower() == "bearer" and value:
+            token = value
+        if not token:
+            token = _header(headers, "x-omnigent-token")
+        return bool(token) and hmac.compare_digest(token, secret)
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = (raw_body, payload)
+        return _header(headers, "ce-type") or "*"
+
+
 class AirtableWebhookAdapter:
     """Airtable webhook adapter: HMAC verification + payload-derived routing."""
 
@@ -876,6 +901,8 @@ def _build_webhook_adapter_registry():
     registry.register("gitlab", GitLabWebhookAdapter)
     registry.register("google-workspace", GoogleWorkspaceWebhookAdapter)
     registry.register("airtable", AirtableWebhookAdapter)
+    registry.register("cloudevents", CloudEventsWebhookAdapter)
+    registry.register("salesforce", CloudEventsWebhookAdapter)
     return registry
 
 

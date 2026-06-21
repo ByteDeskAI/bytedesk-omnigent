@@ -19,6 +19,7 @@ from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     AirtableWebhookAdapter,
     AsanaWebhookAdapter,
+    CloudEventsWebhookAdapter,
     DeclarativeHmacWebhookAdapter,
     DiscordWebhookAdapter,
     GitHubWebhookAdapter,
@@ -1131,3 +1132,32 @@ def test_airtable_adapter_verifies_hmac_and_derives_event_from_payload() -> None
 
 def test_airtable_source_is_registered_by_default(_restore_adapter_registry) -> None:
     assert isinstance(resolve_webhook_adapter("airtable"), AirtableWebhookAdapter)
+
+
+def test_cloudevents_adapter_verifies_bearer_token_and_reads_ce_type() -> None:
+    """CloudEvents-native providers authenticate with bearer/shared tokens."""
+    adapter = CloudEventsWebhookAdapter()
+
+    assert isinstance(adapter, WebhookSourceAdapter)
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"authorization": "Bearer shared-secret"}, "shared-secret"
+    ) is True
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"authorization": "bearer shared-secret"}, "shared-secret"
+    ) is True
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"x-omnigent-token": "shared-secret"}, "shared-secret"
+    ) is True
+    assert adapter.verify(
+        b'{"id":"evt_1"}', {"authorization": "Bearer wrong"}, "shared-secret"
+    ) is False
+    assert adapter.verify(b'{"id":"evt_1"}', {}, "shared-secret") is False
+
+    assert adapter.match_key({"ce-type": "com.salesforce.account.updated"}) == (
+        "com.salesforce.account.updated"
+    )
+    assert adapter.match_key({"ce-source": "/accounts/123"}) == "*"
+
+
+def test_salesforce_resolves_to_cloudevents_adapter(_restore_adapter_registry) -> None:
+    assert isinstance(resolve_webhook_adapter("salesforce"), CloudEventsWebhookAdapter)
