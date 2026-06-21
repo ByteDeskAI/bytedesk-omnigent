@@ -72,6 +72,9 @@ from bytedesk_omnigent.integration_value_scorecards import (
 from bytedesk_omnigent.integration_telemetry_contract import (
     compile_integration_telemetry_contract,
 )
+from bytedesk_omnigent.integration_tool_contracts import (
+    compile_integration_tool_contract,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -387,6 +390,19 @@ def create_integration_capabilities_router(
 
         require_user(request, auth_provider)
         contract = compile_integration_telemetry_contract(slug)
+        if contract is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(contract)
+
+    @router.get("/integration-capabilities/{slug}/tool-contract")
+    async def get_capability_tool_contract(request: Request, slug: str) -> JSONResponse:
+        """Compile the least-privilege tool surface for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        contract = compile_integration_tool_contract(slug)
         if contract is None:
             return JSONResponse(
                 {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
