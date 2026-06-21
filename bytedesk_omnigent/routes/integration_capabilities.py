@@ -25,6 +25,9 @@ from bytedesk_omnigent.integration_readiness_assessment import (
 from bytedesk_omnigent.integration_dependency_graph import (
     compile_integration_dependency_graph,
 )
+from bytedesk_omnigent.integration_risk_register import (
+    compile_integration_risk_register,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -142,5 +145,18 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(graph)
+
+    @router.get("/integration-capabilities/{slug}/risk-register")
+    async def get_capability_risk_register(request: Request, slug: str) -> JSONResponse:
+        """Compile rollout risks and controls for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        register = compile_integration_risk_register(slug)
+        if register is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(register)
 
     return router
