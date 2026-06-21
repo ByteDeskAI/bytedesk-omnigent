@@ -16,6 +16,7 @@ import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     DiscordWebhookAdapter,
+    AsanaWebhookAdapter,
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
@@ -500,6 +501,24 @@ def test_process_inbound_delivers_microsoft_teams_message_to_signal_bus(tmp_path
     assert res.status is IngressStatus.DELIVERED
     assert res.http_status == 202
     assert res.signal_id == "teams:incident:42"
+def test_asana_adapter_verifies_x_hook_signature_and_reads_event() -> None:
+    """Asana webhooks sign the raw body in ``X-Hook-Signature``. The built-in
+    adapter makes Asana a first-class ingress source instead of requiring each
+    deployment to hand-register the same header mapping."""
+    adapter = resolve_webhook_adapter("asana")
+    assert isinstance(adapter, AsanaWebhookAdapter)
+
+    body = b'{"events":[{"action":"changed"}]}'
+    secret = "asana-webhook-secret"
+    signature = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-hook-signature": signature}, secret) is True
+    assert adapter.verify(body, {"X-Hook-Signature": signature}, secret) is True
+    assert adapter.verify(body, {"x-hook-signature": "sha256=" + signature}, secret) is True
+    assert adapter.verify(body, {"x-hook-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-asana-event": "task.changed"}) == "task.changed"
+    assert adapter.match_key({}) == "*"
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
