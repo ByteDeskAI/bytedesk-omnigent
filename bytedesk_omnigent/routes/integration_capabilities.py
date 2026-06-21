@@ -59,6 +59,7 @@ from bytedesk_omnigent.integration_gap_analysis import (
     IntegrationImplementationSignal,
     analyze_integration_capability_gaps,
 )
+from bytedesk_omnigent.integration_pilot_plans import compile_integration_pilot_plan
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -307,5 +308,18 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(manifest)
+
+    @router.get("/integration-capabilities/{slug}/pilot-plan")
+    async def get_capability_pilot_plan(request: Request, slug: str) -> JSONResponse:
+        """Compile the tenant-safe first pilot plan for one integration."""
+
+        require_user(request, auth_provider)
+        plan = compile_integration_pilot_plan(slug)
+        if plan is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(plan.to_dict())
 
     return router
