@@ -32,6 +32,7 @@ from bytedesk_omnigent.ingress import (
     MondayWebhookAdapter,
     NotionWebhookAdapter,
     SalesforceWebhookAdapter,
+    SentryWebhookAdapter,
     ServiceNowWebhookAdapter,
     IntercomWebhookAdapter,
     JiraWebhookAdapter,
@@ -733,6 +734,28 @@ def test_resolve_webhook_adapter_has_builtin_bitbucket_adapter(
 ) -> None:
     """The Bitbucket source resolves without deployment-specific registration."""
     assert isinstance(resolve_webhook_adapter("bitbucket"), BitbucketWebhookAdapter)
+
+def test_sentry_adapter_verifies_hook_signature_and_routes_resource() -> None:
+    """Sentry webhook ingress is source-native: the Sentry hook signature verifies
+    the raw body and the resource header becomes the binding match key."""
+    adapter = resolve_webhook_adapter("sentry")
+    assert isinstance(adapter, SentryWebhookAdapter)
+    assert isinstance(adapter, WebhookSourceAdapter)
+
+    body = b'{"action":"created","data":{"issue":{"id":"ISSUE-1"}}}'
+    secret = "sentry-client-secret"
+    signature = _sign(body, secret)
+
+    assert adapter.verify(
+        body, {"sentry-hook-signature": signature}, secret
+    ) is True
+    assert adapter.verify(
+        body, {"sentry-hook-signature": "sha256=" + signature}, secret
+    ) is True
+    assert adapter.verify(body, {"sentry-hook-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"sentry-hook-resource": "issue"}) == "issue"
+    assert adapter.match_key({}) == "*"
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:

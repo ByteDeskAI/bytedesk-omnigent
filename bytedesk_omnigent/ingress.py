@@ -928,6 +928,26 @@ class BitbucketWebhookAdapter:
     def match_key(self, headers: Mapping[str, str]) -> str:
         return _header(headers, "x-event-key") or "*"
 
+class SentryWebhookAdapter:
+    """Sentry hook adapter: HMAC-SHA256 signature + resource routing.
+
+    Sentry sends a raw-body HMAC in ``Sentry-Hook-Signature`` and the resource
+    family (``issue``, ``error``, ``metric_alert``, etc.) in
+    ``Sentry-Hook-Resource``. Mapping that resource to the binding key lets
+    Omnigent wake specialized remediation agents for production incidents while
+    retaining the same signed-ingress + durable signal-bus path as first-party
+    webhooks.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "sentry-hook-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "sentry-hook-resource") or "*"
+
 
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
@@ -1001,6 +1021,7 @@ def _build_webhook_adapter_registry():
     registry.register("json", JsonPayloadWebhookAdapter)
     registry.register("notion", NotionWebhookAdapter)
     registry.register("bitbucket", BitbucketWebhookAdapter)
+    registry.register("sentry", SentryWebhookAdapter)
     registry.register("microsoft-teams", MicrosoftTeamsWebhookAdapter)
     registry.register("teams", MicrosoftTeamsWebhookAdapter)
     registry.register("linear", LinearWebhookAdapter)
