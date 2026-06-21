@@ -726,6 +726,40 @@ class GoogleWorkspaceWebhookAdapter:
         return _header(headers, "x-goog-resource-state") or "*"
 
 
+class AirtableWebhookAdapter:
+    """Airtable webhook adapter: HMAC verification + payload-derived routing."""
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-airtable-webhook-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        explicit = _header(headers, "x-omnigent-event")
+        if explicit:
+            return explicit
+        if payload is None and raw_body:
+            try:
+                decoded = json.loads(raw_body.decode("utf-8"))
+            except (UnicodeDecodeError, ValueError, TypeError):
+                decoded = None
+            payload = decoded if isinstance(decoded, Mapping) else None
+        if not isinstance(payload, Mapping):
+            return "*"
+        if isinstance(payload.get("base"), Mapping):
+            return "base.changed"
+        if isinstance(payload.get("webhook"), Mapping):
+            return "webhook.changed"
+        return "*"
+
+
 @dataclass(frozen=True)
 class DeclarativeHmacWebhookAdapter:
     """Config-driven HMAC webhook adapter for header-only SaaS contracts.
@@ -841,6 +875,7 @@ def _build_webhook_adapter_registry():
     registry.register("intercom", IntercomWebhookAdapter)
     registry.register("gitlab", GitLabWebhookAdapter)
     registry.register("google-workspace", GoogleWorkspaceWebhookAdapter)
+    registry.register("airtable", AirtableWebhookAdapter)
     return registry
 
 

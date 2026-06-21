@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
+    AirtableWebhookAdapter,
     AsanaWebhookAdapter,
     DeclarativeHmacWebhookAdapter,
     DiscordWebhookAdapter,
@@ -1094,3 +1095,39 @@ def test_register_declarative_hmac_adapter_resolves_for_source(
         secret,
     ) is True
     assert adapter.match_key({"x-jira-lite-event": "issue.updated"}) == "issue.updated"
+
+
+def test_airtable_adapter_verifies_hmac_and_derives_event_from_payload() -> None:
+    """Airtable routes by JSON payload shape when no explicit event header exists."""
+    adapter = AirtableWebhookAdapter()
+    body = json.dumps(
+        {
+            "base": {"id": "appBase"},
+            "webhook": {"id": "achWebhook"},
+            "actionMetadata": {"source": "client"},
+        },
+        separators=(",", ":"),
+    ).encode()
+    secret = "airtable-secret"
+    signature = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-airtable-webhook-signature": signature}, secret) is True
+    assert (
+        adapter.verify(
+            body, {"x-airtable-webhook-signature": "sha256=" + signature}, secret
+        )
+        is True
+    )
+    assert adapter.verify(body, {"x-airtable-webhook-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({}, payload=json.loads(body)) == "base.changed"
+    assert (
+        adapter.match_key({}, payload={"webhook": {"id": "achWebhook"}})
+        == "webhook.changed"
+    )
+    assert adapter.match_key({"x-omnigent-event": "override"}, payload={}) == "override"
+    assert adapter.match_key({}, payload={}) == "*"
+
+
+def test_airtable_source_is_registered_by_default(_restore_adapter_registry) -> None:
+    assert isinstance(resolve_webhook_adapter("airtable"), AirtableWebhookAdapter)
