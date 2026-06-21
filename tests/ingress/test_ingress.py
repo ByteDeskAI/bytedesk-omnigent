@@ -18,6 +18,7 @@ import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     AirtableWebhookAdapter,
+    BitbucketWebhookAdapter,
     AsanaWebhookAdapter,
     CloudEventsWebhookAdapter,
     DeclarativeHmacWebhookAdapter,
@@ -709,6 +710,29 @@ def test_notion_adapter_verifies_signature_and_reads_event_headers() -> None:
 def test_resolve_webhook_adapter_registers_notion_builtin() -> None:
     """The registry resolves Notion by name instead of falling back to GitHub."""
     assert isinstance(resolve_webhook_adapter("notion"), NotionWebhookAdapter)
+
+def test_bitbucket_adapter_verifies_hmac_and_reads_event_key() -> None:
+    """Bitbucket Cloud webhooks carry the HMAC in ``X-Hub-Signature`` and the
+    route key in ``X-Event-Key``; the built-in adapter makes Bitbucket PR/push
+    events first-class ingress sources instead of forcing bespoke glue."""
+    adapter = BitbucketWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+    body = b'{"repository":{"full_name":"acme/api"}}'
+    secret = "bitbucket-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-hub-signature": "sha256=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature": sig}, secret) is True
+    assert adapter.verify(body, {"x-hub-signature": "sha256=bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-event-key": "pullrequest:fulfilled"}) == "pullrequest:fulfilled"
+    assert adapter.match_key({}) == "*"
+
+def test_resolve_webhook_adapter_has_builtin_bitbucket_adapter(
+    _restore_adapter_registry,
+) -> None:
+    """The Bitbucket source resolves without deployment-specific registration."""
+    assert isinstance(resolve_webhook_adapter("bitbucket"), BitbucketWebhookAdapter)
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
