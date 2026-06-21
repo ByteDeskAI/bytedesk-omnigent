@@ -1343,3 +1343,5 @@ GET /v1/integration-capabilities/{slug}/cutover-checklist
 GET /v1/integration-capabilities/{slug}/consent-manifest
 
 GET /v1/integration-capabilities/{slug}/autonomy-policy
+
+GET /v1/integration-capabilities/{slug}/deprecation-plan

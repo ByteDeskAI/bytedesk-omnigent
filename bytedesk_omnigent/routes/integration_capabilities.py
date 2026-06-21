@@ -91,6 +91,9 @@ from bytedesk_omnigent.integration_data_boundary import (
 from bytedesk_omnigent.integration_ownership_matrix import (
     compile_integration_ownership_matrix,
 )
+from bytedesk_omnigent.integration_deprecation_plan import (
+    compile_integration_deprecation_plan,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -487,5 +490,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/deprecation-plan")
+    async def get_capability_deprecation_plan(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile safe retirement phases for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        plan = compile_integration_deprecation_plan(slug)
+        if plan is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(plan)
 
     return router
