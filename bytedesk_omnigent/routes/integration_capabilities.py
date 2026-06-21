@@ -95,6 +95,9 @@ from bytedesk_omnigent.integration_deprecation_plan import (
     compile_integration_deprecation_plan,
 )
 from bytedesk_omnigent.integration_slo_profiles import compile_integration_slo_profile
+from bytedesk_omnigent.integration_agent_prompt_pack import (
+    compile_integration_agent_prompt_pack,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -519,5 +522,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(profile)
+
+    @router.get("/integration-capabilities/{slug}/agent-prompt-pack")
+    async def get_capability_agent_prompt_pack(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile a deterministic prompt pack for creating an integration agent."""
+
+        require_user(request, auth_provider)
+        pack = compile_integration_agent_prompt_pack(slug)
+        if pack is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(pack)
 
     return router
