@@ -81,6 +81,10 @@ from bytedesk_omnigent.integration_coordination_topology import (
 from bytedesk_omnigent.integration_remediation_playbook import (
     compile_integration_remediation_playbook,
 )
+from bytedesk_omnigent.integration_evidence_assessment import (
+    IntegrationEvidenceItem,
+    assess_integration_evidence,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
