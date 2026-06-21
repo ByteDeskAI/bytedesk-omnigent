@@ -7,8 +7,8 @@ import hashlib
 import hmac
 import json
 import time
-from collections.abc import Mapping
 from base64 import b64encode
+from collections.abc import Mapping
 
 import pytest
 from fastapi import FastAPI
@@ -17,29 +17,29 @@ from fastapi.testclient import TestClient
 import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
-    DiscordWebhookAdapter,
     AsanaWebhookAdapter,
     DeclarativeHmacWebhookAdapter,
+    DiscordWebhookAdapter,
     GitHubWebhookAdapter,
-    HubSpotWebhookAdapter,
     GitLabWebhookAdapter,
+    GoogleWorkspaceWebhookAdapter,
+    HubSpotWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    IntercomWebhookAdapter,
+    JiraWebhookAdapter,
+    JsonPayloadWebhookAdapter,
+    LinearWebhookAdapter,
+    MicrosoftTeamsWebhookAdapter,
+    ShopifyWebhookAdapter,
     SlackWebhookAdapter,
     StripeWebhookAdapter,
-    JsonPayloadWebhookAdapter,
-    MicrosoftTeamsWebhookAdapter,
-    LinearWebhookAdapter,
-    ShopifyWebhookAdapter,
     TrelloWebhookAdapter,
-    JiraWebhookAdapter,
-    IntercomWebhookAdapter,
-    WebhookSourceAdapter,
-    preview_inbound,
-    ZendeskWebhookAdapter,
     WebhookAdapterDescriptor,
     WebhookSourceAdapter,
+    ZendeskWebhookAdapter,
     describe_webhook_adapters,
+    preview_inbound,
     process_inbound,
     register_declarative_hmac_webhook_adapter,
     register_webhook_adapter,
@@ -551,7 +551,10 @@ def test_intercom_adapter_verifies_sha1_signature_and_reads_topic() -> None:
     assert adapter.verify(body, {"x-hub-signature": sig}, secret) is True
     assert adapter.verify(body, {"x-hub-signature": "sha1=bad"}, secret) is False
     assert adapter.verify(body, {}, secret) is False
-    assert adapter.match_key({"x-topic": "conversation.user.created"}) == "conversation.user.created"
+    assert (
+        adapter.match_key({"x-topic": "conversation.user.created"})
+        == "conversation.user.created"
+    )
     assert adapter.match_key({}) == "*"
 
 
@@ -575,6 +578,31 @@ def test_gitlab_adapter_verifies_shared_token_and_reads_event() -> None:
     assert adapter.verify(b"{}", {}, "s3cr3t") is False
     assert adapter.match_key({"x-gitlab-event": "Merge Request Hook"}) == "Merge Request Hook"
     assert adapter.match_key({}) == "*"
+def test_google_workspace_adapter_verifies_channel_token_and_reads_resource_state() -> None:
+    """Google Workspace push channels authenticate with X-Goog-Channel-Token.
+
+    Route Drive/Calendar/Gmail changes by resource state so agents can bind to
+    states such as ``exists`` while ``sync`` notifications remain separate.
+    """
+    adapter = GoogleWorkspaceWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+
+    headers = {
+        "X-Goog-Channel-Token": "shared-channel-secret",
+        "X-Goog-Resource-State": "exists",
+        "X-Goog-Resource-ID": "drive-resource-123",
+    }
+
+    assert adapter.verify(b"", headers, "shared-channel-secret") is True
+    assert adapter.verify(b"", headers, "wrong-secret") is False
+    assert adapter.verify(b"", {}, "shared-channel-secret") is False
+    assert adapter.match_key(headers) == "exists"
+    assert adapter.match_key({"X-Goog-Channel-Token": "shared-channel-secret"}) == "*"
+
+
+def test_google_workspace_source_resolves_bespoke_adapter() -> None:
+    """The google-workspace source uses the push-channel token adapter."""
+    assert isinstance(resolve_webhook_adapter("google-workspace"), GoogleWorkspaceWebhookAdapter)
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
@@ -625,10 +653,10 @@ def test_json_payload_adapter_routes_by_payload_event_fields() -> None:
 
 def test_builtin_json_saas_sources_resolve_payload_adapter() -> None:
     assert isinstance(resolve_webhook_adapter("json"), JsonPayloadWebhookAdapter)
-    assert isinstance(resolve_webhook_adapter("jira"), JsonPayloadWebhookAdapter)
-    assert isinstance(resolve_webhook_adapter("trello"), JsonPayloadWebhookAdapter)
-    assert isinstance(resolve_webhook_adapter("asana"), JsonPayloadWebhookAdapter)
     assert isinstance(resolve_webhook_adapter("notion"), JsonPayloadWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("jira"), JiraWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("trello"), TrelloWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("asana"), AsanaWebhookAdapter)
 
 
 def test_process_inbound_with_json_payload_adapter_delivers_bound_jira_event(tmp_path) -> None:
@@ -943,17 +971,13 @@ def test_hubspot_adapter_verifies_legacy_signature_and_extracts_subscription_typ
 
     assert adapter.verify(body, {"X-HubSpot-Signature": signature}, secret) is True
     assert adapter.verify(body, {"X-HubSpot-Signature": "bad"}, secret) is False
-    assert adapter.match_key(body, {}) == "contact.propertyChange"
+    assert adapter.match_key({}, raw_body=body) == "contact.propertyChange"
 
 
 def test_hubspot_source_is_registered_by_default() -> None:
     assert isinstance(resolve_webhook_adapter("hubspot"), HubSpotWebhookAdapter)
-    assert res.signal_id == "jira:issue-created"
 
 
-def test_jira_adapter_is_registered_builtin_source(_restore_adapter_registry) -> None:
-    adapter = resolve_webhook_adapter("jira")
-    assert isinstance(adapter, JiraWebhookAdapter)
 def test_webhook_adapter_manifest_describes_setup_contract(
     _restore_adapter_registry,
 ) -> None:
@@ -985,24 +1009,23 @@ def test_webhook_adapter_manifest_describes_setup_contract(
 
     manifest = describe_webhook_adapters()
 
-    assert manifest == [
-        {
-            "source": "examplecrm",
-            "signature_headers": ["x-example-token"],
-            "event_headers": ["x-example-event"],
-            "auth_scheme": "shared_token",
-            "match_key_fallback": "*",
-            "secret_env": "OMNIGENT_INGRESS_SECRET_EXAMPLECRM",
-        },
-        {
-            "source": "github",
-            "signature_headers": ["x-omnigent-signature", "x-hub-signature-256"],
-            "event_headers": ["x-omnigent-event"],
-            "auth_scheme": "hmac_sha256",
-            "match_key_fallback": "*",
-            "secret_env": "OMNIGENT_INGRESS_SECRET_GITHUB",
-        },
-    ]
+    by_source = {entry["source"]: entry for entry in manifest}
+    assert by_source["examplecrm"] == {
+        "source": "examplecrm",
+        "signature_headers": ["x-example-token"],
+        "event_headers": ["x-example-event"],
+        "auth_scheme": "shared_token",
+        "match_key_fallback": "*",
+        "secret_env": "OMNIGENT_INGRESS_SECRET_EXAMPLECRM",
+    }
+    assert by_source["github"] == {
+        "source": "github",
+        "signature_headers": ["x-omnigent-signature", "x-hub-signature-256"],
+        "event_headers": ["x-omnigent-event"],
+        "auth_scheme": "hmac_sha256",
+        "match_key_fallback": "*",
+        "secret_env": "OMNIGENT_INGRESS_SECRET_GITHUB",
+    }
 
 
 def test_ingress_router_exposes_webhook_adapter_manifest() -> None:
@@ -1015,18 +1038,16 @@ def test_ingress_router_exposes_webhook_adapter_manifest() -> None:
     response = TestClient(app).get("/v1/ingress/adapters")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "adapters": [
-            {
-                "source": "github",
-                "signature_headers": ["x-omnigent-signature", "x-hub-signature-256"],
-                "event_headers": ["x-omnigent-event"],
-                "auth_scheme": "hmac_sha256",
-                "match_key_fallback": "*",
-                "secret_env": "OMNIGENT_INGRESS_SECRET_GITHUB",
-            }
-        ]
+    adapters = {entry["source"]: entry for entry in response.json()["adapters"]}
+    assert adapters["github"] == {
+        "source": "github",
+        "signature_headers": ["x-omnigent-signature", "x-hub-signature-256"],
+        "event_headers": ["x-omnigent-event"],
+        "auth_scheme": "hmac_sha256",
+        "match_key_fallback": "*",
+        "secret_env": "OMNIGENT_INGRESS_SECRET_GITHUB",
     }
+    assert "google-workspace" in adapters
 def test_declarative_hmac_adapter_supports_header_only_saas_contracts() -> None:
     """A no-code integration can describe its HMAC signature + event headers
     instead of shipping a bespoke adapter class for every SaaS webhook source."""

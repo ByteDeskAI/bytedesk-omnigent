@@ -22,9 +22,8 @@ import json
 import os
 import time
 import uuid
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from binascii import Error as BinasciiError
-from base64 import b64encode
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -707,6 +706,26 @@ class GitLabWebhookAdapter:
 
     def match_key(self, headers: Mapping[str, str]) -> str:
         return _header(headers, "x-gitlab-event") or "*"
+
+
+class GoogleWorkspaceWebhookAdapter:
+    """Google Workspace push-channel adapter.
+
+    Google Drive, Calendar, Gmail, and Admin SDK push notifications authenticate
+    by echoing the caller-provided ``X-Goog-Channel-Token`` rather than signing
+    the body. Route bindings by ``X-Goog-Resource-State`` (for example ``sync``
+    or ``exists``), with ``"*"`` as the catch-all when Google omits the state.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
+        provided = _header(headers, "x-goog-channel-token")
+        return bool(provided) and hmac.compare_digest(provided, secret)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-goog-resource-state") or "*"
+
+
 @dataclass(frozen=True)
 class DeclarativeHmacWebhookAdapter:
     """Config-driven HMAC webhook adapter for header-only SaaS contracts.
@@ -802,14 +821,12 @@ def _build_webhook_adapter_registry():
     """
     from omnigent.pluggable import PluggableRegistry
 
-    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry[
-        WebhookSourceAdapter
-    ](
-        "webhook_source", default=("github", GitHubWebhookAdapter)
+    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
+        "webhook_source", default=("github", lambda: GitHubWebhookAdapter())
     )
     registry.register("slack", SlackWebhookAdapter)
     registry.register("stripe", StripeWebhookAdapter)
-    for source in ("json", "jira", "trello", "asana", "notion"):
+    for source in ("json", "notion"):
         registry.register(source, JsonPayloadWebhookAdapter)
     registry.register("microsoft-teams", MicrosoftTeamsWebhookAdapter)
     registry.register("teams", MicrosoftTeamsWebhookAdapter)
@@ -819,26 +836,19 @@ def _build_webhook_adapter_registry():
     registry.register("trello", TrelloWebhookAdapter)
     registry.register("zendesk", ZendeskWebhookAdapter)
     registry.register("asana", AsanaWebhookAdapter)
-    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
-        "webhook_source", default=("github", lambda: GitHubWebhookAdapter())
-    )
     registry.register("hubspot", lambda: HubSpotWebhookAdapter())
-    default: tuple[str, Callable[[], WebhookSourceAdapter]] = (
-        "github",
-        GitHubWebhookAdapter,
-    )
-    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
-        "webhook_source", default=default
-    )
     registry.register("jira", JiraWebhookAdapter)
     registry.register("intercom", IntercomWebhookAdapter)
     registry.register("gitlab", GitLabWebhookAdapter)
+    registry.register("google-workspace", GoogleWorkspaceWebhookAdapter)
     return registry
 
 
 def _adapter_match_key(
     adapter: WebhookSourceAdapter,
+    *,
     headers: Mapping[str, str],
+    raw_body: bytes,
     payload: Mapping[str, object] | None,
 ) -> str:
     """Resolve an adapter match key with payload-aware adapters.
@@ -848,7 +858,7 @@ def _adapter_match_key(
     body-aware adapters (Jira, Notion, Intercom) to route from JSON payloads.
     """
     try:
-        return adapter.match_key(headers, payload)
+        return adapter.match_key(headers, raw_body=raw_body, payload=payload)
     except TypeError:
         return adapter.match_key(headers)  # type: ignore[call-arg]
 
@@ -1058,8 +1068,6 @@ def process_inbound(
     match_key = _adapter_match_key(
         adapter, headers=headers, raw_body=raw_body, payload=payload
     )
-    match_key = _adapter_match_key(adapter, raw_body, headers)
-    match_key = _adapter_match_key(adapter, headers, payload)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
@@ -1110,7 +1118,9 @@ def preview_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = _adapter_match_key(
+        adapter, headers=headers, raw_body=raw_body, payload=None
+    )
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
@@ -1120,18 +1130,6 @@ def preview_inbound(
         IngressStatus.DELIVERED, 200, signal_id=binding.signal_id,
         detail="preflight matched; delivery not attempted",
     )
-def _adapter_match_key(
-    adapter: WebhookSourceAdapter,
-    raw_body: bytes,
-    headers: Mapping[str, str],
-) -> str:
-    """Call source adapters with body-aware routing while preserving old plugins."""
-    try:
-        return adapter.match_key(raw_body, headers)
-    except TypeError:
-        return adapter.match_key(headers)  # type: ignore[call-arg]
-
-
 # Lazily-built, per-URI cache of the binding store (mirrors the other accessors).
 _binding_store_cache: dict[str, IngressBindingStore] = {}
 
