@@ -28,6 +28,7 @@ from bytedesk_omnigent.ingress import (
     TrelloWebhookAdapter,
     WebhookSourceAdapter,
     preview_inbound,
+    ZendeskWebhookAdapter,
     process_inbound,
     register_webhook_adapter,
     resolve_webhook_adapter,
@@ -778,3 +779,39 @@ def test_trello_adapter_is_registered_by_default() -> None:
     """Trello can be enabled by configuring OMNIGENT_INGRESS_SECRET_TRELLO;
     no deployment-specific adapter registration is required."""
     assert isinstance(resolve_webhook_adapter("trello"), TrelloWebhookAdapter)
+def test_zendesk_adapter_verifies_timestamped_signature_and_event_header() -> None:
+    """Zendesk signs ``timestamp + body`` with HMAC-SHA256/base64 and carries the
+    routable event in an Omnigent-managed header so teams can bind ticket events
+    to parked agents without custom glue."""
+    body = b'{"ticket_id":123,"status":"open"}'
+    secret = "zendesk-signing-secret"
+    timestamp = "1712345678"
+    digest = hmac.new(secret.encode(), timestamp.encode() + body, hashlib.sha256).digest()
+    signature = base64.b64encode(digest).decode()
+
+    adapter = ZendeskWebhookAdapter()
+
+    assert adapter.verify(
+        body,
+        {
+            "x-zendesk-webhook-signature": signature,
+            "x-zendesk-webhook-signature-timestamp": timestamp,
+        },
+        secret,
+    ) is True
+    assert adapter.verify(
+        body,
+        {
+            "x-zendesk-webhook-signature": signature,
+            "x-zendesk-webhook-signature-timestamp": "1712345679",
+        },
+        secret,
+    ) is False
+    assert adapter.verify(body, {"x-zendesk-webhook-signature": signature}, secret) is False
+    assert adapter.match_key({"x-omnigent-event": "ticket.updated"}) == "ticket.updated"
+    assert adapter.match_key({}) == "*"
+
+
+def test_zendesk_adapter_is_registered_builtin() -> None:
+    """Zendesk is a built-in ingress adapter, not caller-registered boilerplate."""
+    assert isinstance(resolve_webhook_adapter("zendesk"), ZendeskWebhookAdapter)
