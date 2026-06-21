@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from bytedesk_omnigent.integration_gap_analysis import (
     IntegrationImplementationSignal,
     analyze_integration_capability_gaps,
+)
+from bytedesk_omnigent.routes.integration_capabilities import (
+    create_integration_capabilities_router,
 )
 
 
@@ -81,3 +87,41 @@ def test_gap_analysis_output_is_json_ready_and_secret_free():
         "gaps",
         "open_work",
     }
+
+
+def test_integration_gap_analysis_route_compiles_platform_supplied_evidence():
+    app = FastAPI()
+    app.include_router(create_integration_capabilities_router(), prefix="/v1")
+    client = TestClient(app)
+
+    response = client.post(
+        "/v1/integration-capability-gaps/analyze",
+        json={
+            "implemented_slugs": ["slack-command-center", "missing-catalog-entry"],
+            "open_signals": [
+                {
+                    "source": "pr#118",
+                    "title": "feat: add integration workflow harness compiler",
+                    "url": "https://github.com/ByteDeskAI/bytedesk-omnigent/pull/118",
+                },
+                {
+                    "slug": "github-engineering-copilot",
+                    "source": "branch",
+                    "title": "feature/loop/github-copilot",
+                },
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["object"] == "integration_capability_gap_report"
+    assert payload["covered_slugs"] == [
+        "archon-style-workflow-blueprints",
+        "github-engineering-copilot",
+        "slack-command-center",
+    ]
+    assert payload["implemented_count"] == 1
+    assert payload["open_work_count"] == 2
+    assert payload["next_recommended_slug"] == "linear-jira-work-intake"
+    assert payload["open_work"][0]["slug"] == "archon-style-workflow-blueprints"

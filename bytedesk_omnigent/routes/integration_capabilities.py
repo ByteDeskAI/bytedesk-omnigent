@@ -55,6 +55,10 @@ from bytedesk_omnigent.integration_evidence_packet import (
 from bytedesk_omnigent.integration_tenant_routing import (
     compile_integration_tenant_routing_manifest,
 )
+from bytedesk_omnigent.integration_gap_analysis import (
+    IntegrationImplementationSignal,
+    analyze_integration_capability_gaps,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
