@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
 import time
 import uuid
@@ -139,8 +140,8 @@ class WebhookSourceAdapter(Protocol):
         """Return the binding match key (event name), ``"*"`` if none.
 
         Header-only adapters can ignore ``raw_body`` and ``payload``; providers
-        such as Stripe carry the event type in the signed JSON body and use the
-        parsed payload to route to deterministic bindings.
+        such as Stripe or JSON payload relays use body/payload data to route to
+        deterministic bindings.
         """
         ...
 
@@ -270,6 +271,56 @@ class StripeWebhookAdapter:
         return event_type if isinstance(event_type, str) and event_type else "*"
 
 
+class JsonPayloadWebhookAdapter:
+    """HMAC adapter for SaaS webhooks whose event name lives in JSON payloads.
+
+    Many work-management systems (Jira, Trello, Asana, and Notion-like relays)
+    do not expose a stable event header. They POST a signed JSON body with the
+    routing signal in fields such as ``event``, ``type``, ``webhookEvent``,
+    ``issue_event_type_name``, or nested ``action.type``. This adapter keeps the
+    default Omnigent/GitHub HMAC verification contract while deterministically
+    deriving the binding match key from those payload fields.
+    """
+
+    event_paths = (
+        "event",
+        "type",
+        "webhookEvent",
+        "webhook_event",
+        "event_type",
+        "issue_event_type_name",
+        "action.type",
+        "action",
+    )
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        return GitHubWebhookAdapter().verify(raw_body, headers, secret)
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        header_event = _header(headers, "x-omnigent-event")
+        if header_event:
+            return header_event
+        if payload is None:
+            try:
+                decoded = json.loads(raw_body.decode("utf-8")) if raw_body else None
+            except (UnicodeDecodeError, ValueError):
+                return "*"
+            payload = decoded if isinstance(decoded, Mapping) else None
+        if not isinstance(payload, Mapping):
+            return "*"
+        for path in self.event_paths:
+            value = _json_path(payload, path)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -300,7 +351,7 @@ def _adapter_match_key(
     raw_body: bytes,
     payload: Mapping[str, object] | None,
 ) -> str:
-    """Call body-aware adapters while preserving legacy header-only adapters."""
+    """Call body-aware adapters while preserving legacy adapter signatures."""
     parameters = signature(adapter.match_key).parameters
     supports_body = any(
         param.kind is Parameter.VAR_KEYWORD or name in {"raw_body", "payload"}
@@ -308,7 +359,20 @@ def _adapter_match_key(
     )
     if supports_body:
         return adapter.match_key(headers, raw_body=raw_body, payload=payload)
-    return adapter.match_key(headers)  # type: ignore[call-arg]
+    try:
+        return adapter.match_key(headers)  # type: ignore[call-arg]
+    except TypeError:
+        return adapter.match_key(raw_body, headers)  # type: ignore[call-arg]
+
+
+def _json_path(payload: Mapping[str, object], dotted_path: str) -> object | None:
+    """Read a dotted JSON path from a decoded object, returning ``None`` if absent."""
+    current: object = payload
+    for part in dotted_path.split("."):
+        if not isinstance(current, Mapping) or part not in current:
+            return None
+        current = current[part]
+    return current
 
 
 def _build_webhook_adapter_registry():
@@ -320,11 +384,15 @@ def _build_webhook_adapter_registry():
     """
     from omnigent.pluggable import PluggableRegistry
 
-    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
+    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry[
+        WebhookSourceAdapter
+    ](
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
     registry.register("slack", SlackWebhookAdapter)
     registry.register("stripe", StripeWebhookAdapter)
+    for source in ("json", "jira", "trello", "asana", "notion"):
+        registry.register(source, JsonPayloadWebhookAdapter)
     return registry
 
 
