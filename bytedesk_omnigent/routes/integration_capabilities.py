@@ -94,6 +94,7 @@ from bytedesk_omnigent.integration_ownership_matrix import (
 from bytedesk_omnigent.integration_deprecation_plan import (
     compile_integration_deprecation_plan,
 )
+from bytedesk_omnigent.integration_slo_profiles import compile_integration_slo_profile
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -505,5 +506,18 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(plan)
+
+    @router.get("/integration-capabilities/{slug}/slo-profile")
+    async def get_capability_slo_profile(request: Request, slug: str) -> JSONResponse:
+        """Compile operator-facing SLO targets for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        profile = compile_integration_slo_profile(slug)
+        if profile is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(profile)
 
     return router
