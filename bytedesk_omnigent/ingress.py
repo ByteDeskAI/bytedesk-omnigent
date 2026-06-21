@@ -350,6 +350,42 @@ class MicrosoftTeamsWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "message"
 
 
+class LinearWebhookAdapter:
+    """Linear issue/project webhook adapter.
+
+    Linear signs the raw JSON body with HMAC-SHA256 in ``Linear-Signature`` and
+    carries the routable event in the payload rather than a header. Omnigent maps
+    ``{"type":"Issue","action":"update"}`` to the binding key
+    ``Issue.update`` so one agent can await specific work-management events while
+    another uses the ``*`` catch-all for broad triage.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "linear-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(
+        self,
+        headers: Mapping[str, str],
+        *,
+        raw_body: bytes | None = None,
+        payload: Mapping[str, object] | None = None,
+    ) -> str:
+        _ = raw_body
+        if payload is not None:
+            event_type = payload.get("type")
+            action = payload.get("action")
+            if isinstance(event_type, str) and event_type:
+                if isinstance(action, str) and action:
+                    return f"{event_type}.{action}"
+                return event_type
+            if isinstance(action, str) and action:
+                return action
+        return _header(headers, "linear-event") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -404,6 +440,7 @@ def _json_path(payload: Mapping[str, object], dotted_path: str) -> object | None
     return current
 
 
+
 def _build_webhook_adapter_registry():
     """The per-source webhook-adapter registry (BDP-2354).
 
@@ -424,6 +461,7 @@ def _build_webhook_adapter_registry():
         registry.register(source, JsonPayloadWebhookAdapter)
     registry.register("microsoft-teams", MicrosoftTeamsWebhookAdapter)
     registry.register("teams", MicrosoftTeamsWebhookAdapter)
+    registry.register("linear", LinearWebhookAdapter)
     return registry
 
 

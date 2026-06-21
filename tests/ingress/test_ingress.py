@@ -21,6 +21,7 @@ from bytedesk_omnigent.ingress import (
     StripeWebhookAdapter,
     JsonPayloadWebhookAdapter,
     MicrosoftTeamsWebhookAdapter,
+    LinearWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -517,3 +518,52 @@ def test_process_inbound_with_json_payload_adapter_delivers_bound_jira_event(tmp
     assert res.status is IngressStatus.DELIVERED
     assert res.http_status == 202
     assert res.signal_id == "issue:OPS-42"
+def test_linear_adapter_verifies_signature_and_routes_by_payload() -> None:
+    """Linear signs the raw body in ``Linear-Signature`` and carries the event
+    discriminator in the JSON payload, so the built-in adapter composes a stable
+    ``type.action`` match key for agent subscriptions.
+    """
+    adapter = LinearWebhookAdapter()
+    body = json.dumps({"type": "Issue", "action": "update"}).encode()
+    secret = "linear-secret"
+    signature = _sign(body, secret)
+
+    assert adapter.verify(body, {"Linear-Signature": signature}, secret) is True
+    assert adapter.verify(body, {"Linear-Signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({}, {"type": "Issue", "action": "update"}) == "Issue.update"
+    assert adapter.match_key({}, {"type": "Project"}) == "Project"
+    assert adapter.match_key({}, {}) == "*"
+
+
+def test_process_inbound_delivers_linear_payload_routed_event(tmp_path) -> None:
+    """The ingress registry resolves ``source=linear`` to the built-in Linear
+    adapter, allowing an agent to wait on a precise work-management event without
+    a custom deployment hook.
+    """
+    db = f"sqlite:///{tmp_path / 'linear.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "linear-secret"
+    payload = {"type": "Issue", "action": "update", "data": {"identifier": "ENG-42"}}
+    body = json.dumps(payload).encode()
+
+    bus.register_wait(
+        signal_id="linear:issue:update", session_id="sess-linear", key="subscribe:linear",
+        kind="subscribe", target="linear", now=now,
+    )
+    store.register_binding(
+        source="linear", match_key="Issue.update", signal_id="linear:issue:update", now=now
+    )
+
+    result = process_inbound(
+        source="linear", raw_body=body,
+        headers={"Linear-Signature": _sign(body, secret)},
+        secret=secret, store=store, bus=bus, payload=payload, now=now + 1,
+        adapter=resolve_webhook_adapter("linear"),
+    )
+
+    assert result.status is IngressStatus.DELIVERED
+    assert result.http_status == 202
+    assert result.signal_id == "linear:issue:update"
