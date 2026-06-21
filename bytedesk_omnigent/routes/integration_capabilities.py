@@ -60,6 +60,9 @@ from bytedesk_omnigent.integration_incident_drills import (
     compile_integration_incident_drill,
 )
 from bytedesk_omnigent.integration_launch_brief import compile_integration_launch_brief
+from bytedesk_omnigent.integration_lifecycle_plan import (
+    compile_integration_lifecycle_plan,
+)
 from bytedesk_omnigent.integration_onboarding_questionnaire import (
     compile_integration_onboarding_questionnaire,
 )
@@ -521,6 +524,19 @@ def create_integration_capabilities_router(
 
         require_user(request, auth_provider)
         plan = compile_integration_deprecation_plan(slug)
+        if plan is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(plan)
+
+    @router.get("/integration-capabilities/{slug}/lifecycle-plan")
+    async def get_capability_lifecycle_plan(request: Request, slug: str) -> JSONResponse:
+        """Compile rollout lifecycle states for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        plan = compile_integration_lifecycle_plan(slug)
         if plan is None:
             return JSONResponse(
                 {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
