@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 
 from bytedesk_omnigent.integration_capabilities import (
     CapabilityCategory,
+    compile_integration_marketplace_listing,
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
@@ -76,5 +77,18 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/marketplace-listing")
+    async def get_capability_marketplace_listing(request: Request, slug: str) -> JSONResponse:
+        """Compile one integration blueprint into ByteDesk marketplace metadata."""
+
+        require_user(request, auth_provider)
+        listing = compile_integration_marketplace_listing(slug)
+        if listing is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(listing.to_dict())
 
     return router

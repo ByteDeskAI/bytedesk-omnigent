@@ -53,6 +53,36 @@ class IntegrationCapability:
         return data
 
 
+@dataclass(frozen=True)
+class IntegrationMarketplaceListing:
+    """ByteDesk Platform marketplace package metadata for a catalog capability."""
+
+    capability_slug: str
+    name: str
+    package_type: Literal["integration_capability"]
+    summary: str
+    audience: list[str]
+    value_props: list[str]
+    install_requirements: list[str]
+    safety_notes: list[str]
+    tags: list[str]
+    business_case: str
+    future_unlocks: list[str]
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        for key in (
+            "audience",
+            "value_props",
+            "install_requirements",
+            "safety_notes",
+            "tags",
+            "future_unlocks",
+        ):
+            data[key] = list(data[key])
+        return data
+
+
 _CAPABILITIES: tuple[IntegrationCapability, ...] = (
     IntegrationCapability(
         slug="slack-command-center",
@@ -348,3 +378,55 @@ def integration_capability_categories() -> list[str]:
     """Return the stable category names currently represented in the catalog."""
 
     return sorted({entry.category for entry in _CAPABILITIES})
+
+
+def compile_integration_marketplace_listing(slug: str) -> IntegrationMarketplaceListing | None:
+    """Compile a catalog entry into deterministic ByteDesk marketplace copy."""
+
+    capability = get_integration_capability(slug)
+    if capability is None:
+        return None
+
+    scopes = ", ".join(capability.required_scopes) or "no external OAuth scopes"
+    return IntegrationMarketplaceListing(
+        capability_slug=capability.slug,
+        name=capability.name,
+        package_type="integration_capability",
+        summary=(
+            f"Connect {capability.name} to Omnigent so managed agents can coordinate "
+            f"through {capability.category.replace('_', ' ')} workflows."
+        ),
+        audience=list(_marketplace_audience(capability.category)),
+        value_props=list(capability.agent_value),
+        install_requirements=[
+            f"Configure {capability.auth_model}.",
+            f"Grant scopes: {scopes}.",
+            "Map the connected account to a ByteDesk tenant and Omnigent policy profile.",
+        ],
+        safety_notes=[
+            "Start in observe-only mode until tenant policy gates are configured.",
+            "Require approval for write or external-message actions before autonomous execution.",
+        ],
+        tags=[
+            capability.category,
+            capability.status,
+            f"priority:{capability.priority_score}",
+            "omnigent",
+            "bytedesk-platform",
+        ],
+        business_case=capability.business_case,
+        future_unlocks=list(capability.future_unlocks),
+    )
+
+
+def _marketplace_audience(category: CapabilityCategory) -> tuple[str, ...]:
+    audiences: dict[CapabilityCategory, tuple[str, ...]] = {
+        "communication": ("operations teams", "team leads", "agent operators"),
+        "project_management": ("delivery teams", "project managers", "agent operators"),
+        "knowledge": ("knowledge managers", "operations teams", "agent operators"),
+        "developer": ("engineering teams", "platform teams", "agent operators"),
+        "crm_support": ("support teams", "customer success teams", "agent operators"),
+        "commerce_billing": ("revenue teams", "finance operators", "agent operators"),
+        "workflow_harness": ("platform teams", "automation leads", "agent operators"),
+    }
+    return audiences[category]

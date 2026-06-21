@@ -68,6 +68,29 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Compile Marketplace Listing
+
+```
+GET /v1/integration-capabilities/{slug}/marketplace-listing
+
+200 OK
+{
+  "capability_slug": "slack-command-center",
+  "name": "Slack command center",
+  "package_type": "integration_capability",
+  "summary": "Connect Slack command center to Omnigent ...",
+  "audience": ["operations teams", "team leads", "agent operators"],
+  "value_props": ["..."],
+  "install_requirements": ["Configure OAuth 2.0 bot + user tokens.", "..."],
+  "safety_notes": ["Start in observe-only mode until tenant policy gates are configured.", "..."],
+  "tags": ["communication", "candidate", "priority:98", "omnigent", "bytedesk-platform"],
+  "business_case": "...",
+  "future_unlocks": ["..."]
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management
