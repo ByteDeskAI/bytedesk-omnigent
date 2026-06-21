@@ -69,6 +69,9 @@ from bytedesk_omnigent.integration_redaction_profile import (
 from bytedesk_omnigent.integration_value_scorecards import (
     compile_integration_value_scorecard,
 )
+from bytedesk_omnigent.integration_telemetry_contract import (
+    compile_integration_telemetry_contract,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -375,5 +378,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(scorecard)
+
+    @router.get("/integration-capabilities/{slug}/telemetry-contract")
+    async def get_capability_telemetry_contract(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile observability events and metrics for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        contract = compile_integration_telemetry_contract(slug)
+        if contract is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(contract)
 
     return router
