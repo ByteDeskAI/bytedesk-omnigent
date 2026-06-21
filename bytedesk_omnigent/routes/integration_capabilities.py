@@ -102,6 +102,9 @@ from bytedesk_omnigent.integration_access_plan import compile_integration_access
 from bytedesk_omnigent.integration_invocation_contracts import (
     compile_integration_invocation_contract,
 )
+from bytedesk_omnigent.integration_onboarding_questionnaire import (
+    compile_integration_onboarding_questionnaire,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -554,5 +557,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(plan)
+
+    @router.get("/integration-capabilities/{slug}/onboarding-questionnaire")
+    async def get_capability_onboarding_questionnaire(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile pre-activation onboarding questions for one blueprint."""
+
+        require_user(request, auth_provider)
+        questionnaire = compile_integration_onboarding_questionnaire(slug)
+        if questionnaire is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(questionnaire)
 
     return router
