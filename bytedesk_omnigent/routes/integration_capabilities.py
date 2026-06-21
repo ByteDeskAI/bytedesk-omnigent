@@ -52,6 +52,9 @@ from bytedesk_omnigent.integration_recommendations import (
 from bytedesk_omnigent.integration_evidence_packet import (
     compile_integration_evidence_packet,
 )
+from bytedesk_omnigent.integration_tenant_routing import (
+    compile_integration_tenant_routing_manifest,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -285,5 +288,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(packet)
+
+    @router.get("/integration-capabilities/{slug}/tenant-routing-manifest")
+    async def get_capability_tenant_routing_manifest(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile tenant/workspace routing rules for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        manifest = compile_integration_tenant_routing_manifest(slug)
+        if manifest is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(manifest)
 
     return router
