@@ -17,6 +17,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import os
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -153,6 +154,55 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class SlackWebhookAdapter:
+    """Slack Events API adapter: verify ``v0`` signatures and route by event type.
+
+    Slack signs ``v0:{timestamp}:{raw_body}`` with HMAC-SHA256 in
+    ``X-Slack-Signature`` and includes the UNIX timestamp in
+    ``X-Slack-Request-Timestamp``. Events do not carry the routing event name in
+    a header, so this adapter reads the parsed JSON payload supplied by
+    ``process_inbound`` and emits stable match keys:
+
+    - ``event_callback:<event.type>`` for normal Events API callbacks
+    - top-level ``type`` (for example ``url_verification``) otherwise
+    - ``"*"`` when no payload event type is available
+    """
+
+    _VERSION = "v0"
+    _MAX_SKEW_SECONDS = 60 * 5
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-slack-signature")
+        timestamp = _header(headers, "x-slack-request-timestamp")
+        if not provided or not timestamp:
+            return False
+        try:
+            request_ts = int(timestamp)
+        except ValueError:
+            return False
+        if abs(int(time.time()) - request_ts) > self._MAX_SKEW_SECONDS:
+            return False
+        base = b":".join((self._VERSION.encode(), timestamp.encode(), raw_body))
+        digest = hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+        return hmac.compare_digest(f"{self._VERSION}={digest}", provided)
+
+    def match_key(
+        self, headers: Mapping[str, str], payload: Mapping[str, object] | None = None
+    ) -> str:
+        _ = headers
+        if not isinstance(payload, Mapping):
+            return "*"
+        event = payload.get("event")
+        if isinstance(event, Mapping):
+            event_type = event.get("type")
+            if isinstance(event_type, str) and event_type:
+                top_level = payload.get("type")
+                prefix = top_level if isinstance(top_level, str) and top_level else "event"
+                return f"{prefix}:{event_type}"
+        top_level = payload.get("type")
+        return top_level if isinstance(top_level, str) and top_level else "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -177,6 +227,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("slack", SlackWebhookAdapter)
     return registry
 
 
@@ -202,6 +253,18 @@ def resolve_webhook_adapter(source: str) -> WebhookSourceAdapter:
     if source in _webhook_adapter_registry.names():
         return _webhook_adapter_registry.get(source)
     return _webhook_adapter_registry.resolve_default()
+
+
+def _adapter_match_key(
+    adapter: WebhookSourceAdapter,
+    headers: Mapping[str, str],
+    payload: dict | None,
+) -> str:
+    """Call old header-only adapters and newer payload-aware adapters safely."""
+    try:
+        return adapter.match_key(headers, payload)  # type: ignore[misc, call-arg]
+    except TypeError:
+        return adapter.match_key(headers)
 
 
 def _to_binding(row: SqlWebhookBinding) -> WebhookBinding:
@@ -307,7 +370,7 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = _adapter_match_key(adapter, headers, payload)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
