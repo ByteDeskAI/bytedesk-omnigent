@@ -128,6 +128,17 @@ class BytedeskExtension:
 
         return [InfisicalBackend()]
 
+    def principal_resolvers(self) -> list:
+        """No request-principal resolver yet (BDP-2388 increment 1).
+
+        The principal Chain-of-Responsibility seam exists in core; this
+        extension contributes no resolver yet (the ByteDesk gateway-header
+        resolver is a later increment). Returning ``[]`` keeps the empty,
+        zero-behavior-change default while satisfying the extended
+        ``OmnigentExtension`` Protocol.
+        """
+        return []
+
     # ── background lifespan tasks (started + cancelled by the server) ─
     def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
         """The org background loops + the boot-time tool-step resume sweep. The
