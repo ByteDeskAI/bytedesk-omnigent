@@ -89,7 +89,7 @@ patches:
                   # mode — so it 403s the terminal + session-updates WebSockets
                   # ("Bridge closed: code 1006"). Allowlist the ingress origin.
                   - name: OMNIGENT_WS_ALLOWED_ORIGINS
-                    value: "http://omnigent.bytedesk.localhost"
+                    value: "http://omnigent.bytedesk.localhost,https://omnigent.dev.bytedesk.ai,https://mass-laptop01.taild12d8f.ts.net"
                   # The pods run as root; without this they write root-owned
                   # __pycache__/*.pyc into the /build hostPath (= this repo),
                   # which Ryan then can't manage. Disable bytecode caching so the
