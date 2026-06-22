@@ -920,12 +920,14 @@ def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any] 
 
     ``dbfs:/Volumes/...`` URIs use
     :class:`DatabricksVolumesArtifactStore` (requires
-    ``databricks-sdk``). All other locations use
+    ``databricks-sdk``). ``nats://`` URIs use the durable JetStream
+    Object Store backend (BDP-2380). All other locations use
     :class:`LocalArtifactStore`.
 
     :param location: Artifact storage location, e.g.
-        ``"./artifacts"`` for local or
-        ``"dbfs:/Volumes/cat/schema/vol"`` for UC Volumes.
+        ``"./artifacts"`` for local,
+        ``"dbfs:/Volumes/cat/schema/vol"`` for UC Volumes, or
+        ``"nats://host:4222/omnigent-artifacts"`` for JetStream.
     :returns: An :class:`ArtifactStore` instance.
     """
     if location.startswith("dbfs:/Volumes/"):
@@ -934,6 +936,13 @@ def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any] 
         )
 
         return DatabricksVolumesArtifactStore(location)
+
+    if location.startswith("nats://"):
+        from omnigent.stores.artifact_store.nats_object_store import (
+            NatsObjectStoreArtifactStore,
+        )
+
+        return NatsObjectStoreArtifactStore(location)
 
     from omnigent.stores.artifact_store.local import LocalArtifactStore
 
@@ -2929,8 +2938,6 @@ def server(
     # with "unable to open database file".
     _ensure_sqlite_parent_dir(db_uri)
 
-    from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
-
     # BDP-2327 (core-refactor spine, Phase 1): behind
     # OMNIGENT_USE_STORE_BOOTSTRAPPER (default OFF), build the stores via
     # the StoreBootstrapper factory — the same Sql* stores + the same
@@ -2939,6 +2946,7 @@ def server(
     # is unchanged. The bootstrapper also builds host_store, so the later
     # `host_store = HostStore(db_uri)` is skipped when this path runs.
     from omnigent.server.auth import env_var_is_truthy
+    from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
 
     _use_store_bootstrapper = env_var_is_truthy("OMNIGENT_USE_STORE_BOOTSTRAPPER")
     _bootstrapped_host_store = None

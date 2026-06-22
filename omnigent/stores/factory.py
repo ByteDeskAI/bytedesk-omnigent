@@ -28,18 +28,20 @@ if TYPE_CHECKING:
 def _artifact_scheme(location: str) -> str:
     """Map an artifact *location* to its registry key (URI scheme).
 
-    ``dbfs:/Volumes/...`` URIs select the Databricks backend; everything else
-    (local paths and unknown schemes) selects the ``"local"`` default — the same
-    two-way split the historical if/else made.
+    ``dbfs:/Volumes/...`` URIs select the Databricks backend; ``nats://`` URIs
+    select the durable JetStream Object Store backend (BDP-2380); everything
+    else (local paths and unknown schemes) selects the ``"local"`` default.
     """
     if location.startswith("dbfs:/Volumes/"):
         return "dbfs"
+    if location.startswith("nats://"):
+        return "nats"
     return "local"
 
 
 def _build_artifact_store_registry(
     location: str,
-) -> "PluggableRegistry[Any]":  # type: ignore[explicit-any]  # ArtifactStore protocol (optional deps)
+) -> PluggableRegistry[Any]:  # type: ignore[explicit-any]  # ArtifactStore protocol (optional deps)
     """Build the artifact-store seam registry, keyed by URI scheme.
 
     The two built-in backends are registered with deferred imports so the
@@ -64,10 +66,21 @@ def _build_artifact_store_registry(
 
         return DatabricksVolumesArtifactStore(location)
 
+    def _nats() -> Any:  # type: ignore[explicit-any]
+        # Durable, replica-shared bundle storage over JetStream Object Store
+        # (BDP-2380). Construction is lazy-connect, so it's safe to build here
+        # even before NATS is reachable; nats-py is only imported on first use.
+        from omnigent.stores.artifact_store.nats_object_store import (
+            NatsObjectStoreArtifactStore,
+        )
+
+        return NatsObjectStoreArtifactStore(location)
+
     registry: PluggableRegistry[Any] = PluggableRegistry(
         "artifact_store", default=("local", _local)
     )
     registry.register("dbfs", _databricks)
+    registry.register("nats", _nats)
     # Extension discovery deferred to server startup (Wave-2 composition root):
     # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
     # Hook: 'artifact_store_providers'.
@@ -206,4 +219,4 @@ class StoreBootstrapper:
         )
 
 
-__all__ = ["StoreBootstrapper", "BootstrappedStores"]
+__all__ = ["BootstrappedStores", "StoreBootstrapper"]
