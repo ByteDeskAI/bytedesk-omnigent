@@ -72,12 +72,20 @@ patches:
                 # the SPA bundle under static/web-ui. Harness subprocesses already
                 # hot-reload (fresh import per conversation); this closes the gap
                 # for the long-lived server (seeding, spec validation, catalog).
+                #
+                # Run the MOUNTED entrypoint (/build), not the baked image one
+                # (/app): source-mounted dev imports current modules via
+                # PYTHONPATH=/build, but the entrypoint is a script — running the
+                # image copy would silently ignore source entrypoint changes
+                # (e.g. the ARTIFACT_DIR→artifact-store factory routing that
+                # selects the NATS Object Store, BDP-2380). Running /build keeps
+                # the whole branch (entrypoint + modules) live in dev (BDP-2397).
                 command:
                   - sh
                   - -c
                   - |
                     pip install -q 'nats-py>=2.7' && \
-                    exec python /app/entrypoint.py
+                    exec python /build/deploy/docker/entrypoint.py
                 env:
                   # hostPath bind mounts don't always deliver inotify events into
                   # the container; polling is reliable across the mount boundary.
