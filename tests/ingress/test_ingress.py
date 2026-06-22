@@ -15,6 +15,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    SlackWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -31,6 +32,12 @@ def _hdrs(signature: str, event: str) -> dict[str, str]:
     """GitHub-style ingress headers (signature + event name) for the default
     adapter (BDP-2354)."""
     return {"x-omnigent-signature": signature, "x-omnigent-event": event}
+
+
+def _slack_sign(body: bytes, secret: str, timestamp: int) -> str:
+    base = b":".join((b"v0", str(timestamp).encode(), body))
+    digest = hmac.new(secret.encode(), base, hashlib.sha256).hexdigest()
+    return f"v0={digest}"
 
 
 def test_verify_hmac_signature_bare_and_prefixed() -> None:
@@ -180,6 +187,78 @@ def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
     """A source with no bespoke adapter falls back to the GitHub default (BDP-2354)."""
     assert isinstance(resolve_webhook_adapter("anything"), GitHubWebhookAdapter)
+
+
+def test_slack_adapter_verifies_signature_and_routes_payload_event(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Slack Events API payloads route to durable signals by body-derived event type."""
+    db = f"sqlite:///{tmp_path / 'slack.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "slack-signing-secret"
+    payload = {
+        "type": "event_callback",
+        "event_id": "Ev123",
+        "event": {"type": "app_mention", "text": "@omni triage this"},
+    }
+    body = json.dumps(payload, separators=(",", ":")).encode()
+    headers = {
+        "x-slack-request-timestamp": str(now),
+        "x-slack-signature": _slack_sign(body, secret, now),
+    }
+    monkeypatch.setattr(_ingress_mod.time, "time", lambda: now)
+
+    assert isinstance(resolve_webhook_adapter("slack"), SlackWebhookAdapter)
+    adapter = SlackWebhookAdapter()
+    assert adapter.verify(body, headers, secret) is True
+    assert adapter.match_key(headers, payload) == "event_callback:app_mention"
+
+    bus.register_wait(
+        signal_id="slack:app_mention",
+        session_id="sess-slack",
+        key="subscribe:slack",
+        kind="subscribe",
+        target="slack",
+        now=now,
+    )
+    store.register_binding(
+        source="slack",
+        match_key="event_callback:app_mention",
+        signal_id="slack:app_mention",
+        now=now,
+    )
+
+    result = process_inbound(
+        source="slack",
+        raw_body=body,
+        headers=headers,
+        secret=secret,
+        store=store,
+        bus=bus,
+        adapter=adapter,
+        payload=payload,
+        now=now + 1,
+    )
+
+    assert result.status is IngressStatus.DELIVERED
+    assert result.http_status == 202
+    assert result.signal_id == "slack:app_mention"
+
+
+def test_slack_adapter_rejects_stale_timestamp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Slack replay protection rejects requests outside the five-minute window."""
+    body = b'{"type":"url_verification"}'
+    secret = "slack-signing-secret"
+    request_ts = 1_700_000_000
+    monkeypatch.setattr(_ingress_mod.time, "time", lambda: request_ts + 301)
+    headers = {
+        "x-slack-request-timestamp": str(request_ts),
+        "x-slack-signature": _slack_sign(body, secret, request_ts),
+    }
+
+    assert SlackWebhookAdapter().verify(body, headers, secret) is False
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
