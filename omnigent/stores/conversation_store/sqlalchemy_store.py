@@ -100,6 +100,7 @@ def _to_conversation(
         runner_id=row.runner_id,
         host_id=row.host_id,
         tenant_id=row.tenant_id,
+        external_key=row.external_key,
         labels=labels if labels is not None else {},
         session_state=session_state,
         session_usage=session_usage,
@@ -133,6 +134,7 @@ def _new_session_conversation_row(
     root_conversation_id: str | None = None,
     runner_id: str | None = None,
     tenant_id: str | None = None,
+    external_key: str | None = None,
 ) -> SqlConversation:
     """
     Build the conversation row for atomic session creation.
@@ -179,6 +181,7 @@ def _new_session_conversation_row(
         agent_id=None,
         runner_id=runner_id,
         tenant_id=tenant_id,
+        external_key=external_key,
         reasoning_effort=reasoning_effort,
         terminal_launch_args=(
             json.dumps(terminal_launch_args) if terminal_launch_args is not None else None
@@ -550,6 +553,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         git_branch: str | None = None,
         terminal_launch_args: list[str] | None = None,
         tenant_id: str | None = None,
+        external_key: str | None = None,
     ) -> Conversation:
         """
         Create a new conversation in the database.
@@ -642,6 +646,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                     runner_id=runner_id,
                     host_id=host_id,
                     tenant_id=tenant_id,
+                    external_key=external_key,
                     sub_agent_name=sub_agent_name,
                     workspace=workspace,
                     git_branch=git_branch,
@@ -669,7 +674,14 @@ class SqlAlchemyConversationStore(ConversationStore):
             # way). This is narrower than a generic "unique"
             # check, which would misclassify any future unique
             # constraint added to the conversations table.
-            msg = str(exc).lower()
+            # Inspect ``exc.orig`` (the DB driver's message), NOT
+            # ``str(exc)`` — the latter echoes the full INSERT statement,
+            # whose column list always contains ``parent_conversation_id``
+            # and ``title``, so it misclassifies ANY unique violation on
+            # this table (e.g. the BDP-2390 ``external_key`` index) as a
+            # name collision. The driver message names only the violated
+            # constraint/columns.
+            msg = str(exc.orig).lower()
             is_partial_index_violation = "ix_conversations_parent_title_unique" in msg or (
                 "unique" in msg and "parent_conversation_id" in msg and "title" in msg
             )
@@ -702,6 +714,24 @@ class SqlAlchemyConversationStore(ConversationStore):
             if row is None:
                 return None
             return _to_conversation(row, _fetch_labels(session, conversation_id))
+
+    def get_conversation_by_external_key(self, external_key: str) -> Conversation | None:
+        """
+        Fetch the conversation bound to ``external_key`` (BDP-2390).
+
+        At most one row per non-NULL key (partial unique index
+        ``uq_conversations_external_key``), so ``first()`` is exact.
+
+        :param external_key: Caller-supplied correlation key.
+        :returns: The :class:`Conversation` if one exists, else ``None``.
+        """
+        with self._session() as session:
+            row = session.execute(
+                select(SqlConversation).where(SqlConversation.external_key == external_key)
+            ).scalar_one_or_none()
+            if row is None:
+                return None
+            return _to_conversation(row, _fetch_labels(session, row.id))
 
     def get_runner_ids(self, conversation_ids: list[str]) -> dict[str, str | None]:
         """
@@ -1985,6 +2015,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         parent_conversation_id: str | None = None,
         runner_id: str | None = None,
         tenant_id: str | None = None,
+        external_key: str | None = None,
     ) -> CreatedSession:
         """
         Atomically insert a conversation row and session-scoped agent.
@@ -2064,6 +2095,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                 root_conversation_id=root_conversation_id,
                 runner_id=runner_id,
                 tenant_id=tenant_id,
+                external_key=external_key,
             )
             session.add(conversation_row)
             session.flush()

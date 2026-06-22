@@ -1170,6 +1170,11 @@ class SessionCreateRequest(BaseModel):
     model_override: str | None = None
     cost_control_mode_override: str | None = None
     harness_override: str | None = None
+    # Bind-or-resume / idempotency correlation key (BDP-2390, ADR-0149).
+    # When set, a repeat create with the same key returns the existing
+    # session instead of creating a duplicate. May also be supplied via
+    # the ``Idempotency-Key`` request header. ``None`` = no correlation.
+    external_key: str | None = None
 
     @model_validator(mode="after")
     def _check_git_requires_host(self) -> SessionCreateRequest:
@@ -1616,6 +1621,7 @@ class SessionResponse(BaseModel):
     runner_id: str | None = None
     host_id: str | None = None
     tenant_id: str | None = None
+    external_key: str | None = None
     runner_online: bool | None = None
     host_online: bool | None = None
     reasoning_effort: str | None = None

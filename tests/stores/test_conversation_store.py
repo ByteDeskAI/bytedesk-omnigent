@@ -68,6 +68,29 @@ def test_create_session_with_agent_persists_tenant_id(
     assert fetched.tenant_id == "tenant-b"
 
 
+def test_external_key_lookup_round_trips(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """external_key (BDP-2390) persists and resolves via the idempotency lookup."""
+    a = conversation_store.create_conversation(external_key="ext-1")
+    assert a.external_key == "ext-1"
+    assert conversation_store.get_conversation_by_external_key("ext-1").id == a.id
+    assert conversation_store.get_conversation_by_external_key("missing") is None
+    # NULL external_key is the default and is not indexed/looked up.
+    assert conversation_store.create_conversation().external_key is None
+
+
+def test_external_key_is_unique(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """The partial unique index is the idempotency single-writer guard."""
+    from sqlalchemy.exc import IntegrityError
+
+    conversation_store.create_conversation(external_key="dup")
+    with pytest.raises(IntegrityError):
+        conversation_store.create_conversation(external_key="dup")
+
+
 def test_get_conversations_bulk(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:

@@ -2130,6 +2130,7 @@ def _build_session_response(
         runner_id=conv.runner_id,
         host_id=conv.host_id,
         tenant_id=conv.tenant_id,
+        external_key=conv.external_key,
         runner_online=runner_online,
         host_online=host_online,
         reasoning_effort=conv.reasoning_effort,
@@ -10284,6 +10285,7 @@ async def _create_session_from_existing_agent(
     permission_store: PermissionStore | None = None,
     liveness_lookup: Callable[[list[str]], dict[str, SessionLiveness]] | None = None,
     tenant_id: str | None = None,
+    external_key: str | None = None,
 ) -> SessionResponse:
     """
     Create a session bound to an already-registered agent.
@@ -10479,6 +10481,7 @@ async def _create_session_from_existing_agent(
             git_branch=git_branch,
             terminal_launch_args=validated_launch_args,
             tenant_id=tenant_id,
+            external_key=external_key,
         )
     except Exception:
         # Broad catch is intentional: ANY create_conversation failure
@@ -11877,18 +11880,58 @@ def create_sessions_router(
             # message survives in each entry's `msg`.
             raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
 
-        resp = await _create_session_from_existing_agent(
-            conversation_store,
-            agent_store,
-            runner_router,
-            body,
-            request,
-            agent_cache=agent_cache,
-            user_id=user_id,
-            permission_store=permission_store,
-            liveness_lookup=liveness_lookup,
-            tenant_id=tenant_id,
-        )
+        # Bind-or-resume / idempotency (BDP-2390, ADR-0149): a stable
+        # external_key (request body or Idempotency-Key header) returns the
+        # live session for a repeat create instead of a duplicate
+        # (EIP Idempotent Receiver + Correlation Identifier). SELECT-first
+        # handles the common retry; the partial unique index is the
+        # single-writer guard for the concurrent race (caught below).
+        external_key = body.external_key or request.headers.get("Idempotency-Key")
+
+        async def _existing_for_key() -> SessionResponse | None:
+            if not external_key:
+                return None
+            existing = await asyncio.to_thread(
+                conversation_store.get_conversation_by_external_key, external_key
+            )
+            if existing is None:
+                return None
+            level = await _get_permission_level(user_id, existing.id, permission_store)
+            return await _get_session_snapshot(
+                conversation_store,
+                existing.id,
+                permission_level=level,
+                agent_store=agent_store,
+                agent_cache=agent_cache,
+                conversation=existing,
+                liveness_lookup=liveness_lookup,
+            )
+
+        hit = await _existing_for_key()
+        if hit is not None:
+            return hit
+
+        try:
+            resp = await _create_session_from_existing_agent(
+                conversation_store,
+                agent_store,
+                runner_router,
+                body,
+                request,
+                agent_cache=agent_cache,
+                user_id=user_id,
+                permission_store=permission_store,
+                liveness_lookup=liveness_lookup,
+                tenant_id=tenant_id,
+                external_key=external_key,
+            )
+        except IntegrityError:
+            # A concurrent create won the external_key race; return its
+            # session (idempotent) instead of surfacing the constraint error.
+            race_hit = await _existing_for_key()
+            if race_hit is not None:
+                return race_hit
+            raise
         # Notify the runner about the new session so it can resolve
         # the spec and cache sub_agent_name before the first turn.
         # Without this, the runner doesn't know this session exists

@@ -177,6 +177,7 @@ class ConversationStore(ABC):
         git_branch: str | None = None,
         terminal_launch_args: list[str] | None = None,
         tenant_id: str | None = None,
+        external_key: str | None = None,
     ) -> Conversation:
         """
         Create a new conversation. Generates a unique
@@ -249,6 +250,23 @@ class ConversationStore(ABC):
             e.g. ``"conv_abc123"``.
         :returns: The :class:`Conversation` if found, otherwise
             ``None``.
+        """
+        ...
+
+    @abstractmethod
+    def get_conversation_by_external_key(self, external_key: str) -> Conversation | None:
+        """
+        Return the conversation bound to ``external_key``, or ``None``.
+
+        Powers the bind-or-resume / idempotency seam (BDP-2390): an
+        external consumer's repeat ``POST /v1/sessions`` with the same
+        ``external_key`` resolves the existing session instead of
+        creating a duplicate. At most one row per non-NULL key
+        (partial unique index), so the result is unambiguous.
+
+        :param external_key: The caller-supplied correlation key,
+            e.g. ``"office:conv_abc123"``.
+        :returns: The :class:`Conversation` if one exists, else ``None``.
         """
         ...
 
@@ -1000,6 +1018,7 @@ class ConversationStore(ABC):
         parent_conversation_id: str | None = None,
         runner_id: str | None = None,
         tenant_id: str | None = None,
+        external_key: str | None = None,
     ) -> CreatedSession:
         """
         Atomically create a session and its session-scoped agent.
