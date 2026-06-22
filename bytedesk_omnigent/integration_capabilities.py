@@ -53,6 +53,93 @@ class IntegrationCapability:
         return data
 
 
+@dataclass(frozen=True)
+class IntegrationMarketplaceListing:
+    """ByteDesk Platform marketplace package metadata for a catalog capability."""
+
+    capability_slug: str
+    name: str
+    package_type: Literal["integration_capability"]
+    summary: str
+    audience: list[str]
+    value_props: list[str]
+    install_requirements: list[str]
+    safety_notes: list[str]
+    tags: list[str]
+    business_case: str
+    future_unlocks: list[str]
+
+    def to_dict(self) -> dict:
+        data = asdict(self)
+        for key in (
+            "audience",
+            "value_props",
+            "install_requirements",
+            "safety_notes",
+            "tags",
+            "future_unlocks",
+        ):
+            data[key] = list(data[key])
+        return data
+
+@dataclass(frozen=True)
+class IntegrationStaffingPlan:
+    """Deterministic agent-team recommendation for one integration capability."""
+
+    capability_slug: str
+    capability_name: str
+    primary_agent_role: str
+    supporting_agent_roles: list[str]
+    coordination_channels: list[str]
+    escalation_policy: str
+    first_30_day_outcomes: list[str]
+    business_case: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+_STAFFING_DEFAULTS: dict[
+    CapabilityCategory, tuple[str, tuple[str, ...], tuple[str, ...]]
+] = {
+    "communication": (
+        "communication-intake-agent",
+        ("approval-coordinator-agent", "status-broadcast-agent"),
+        ("Slack threads", "Omnigent task comments"),
+    ),
+    "project_management": (
+        "work-intake-agent",
+        ("backlog-triage-agent", "delivery-coordinator-agent"),
+        ("External work item comments", "Omnigent task comments"),
+    ),
+    "knowledge": (
+        "knowledge-operator-agent",
+        ("retrieval-curator-agent", "documentation-maintainer-agent"),
+        ("Knowledge-base updates", "Omnigent task comments"),
+    ),
+    "developer": (
+        "engineering-copilot-agent",
+        ("ci-repair-agent", "review-coordinator-agent"),
+        ("Repository issue/PR comments", "Omnigent task comments"),
+    ),
+    "crm_support": (
+        "customer-operations-agent",
+        ("case-triage-agent", "revenue-handoff-agent"),
+        ("CRM/support activity timeline", "Omnigent task comments"),
+    ),
+    "commerce_billing": (
+        "revenue-operations-agent",
+        ("billing-risk-agent", "customer-retention-agent"),
+        ("Commerce/customer timeline", "Omnigent task comments"),
+    ),
+    "workflow_harness": (
+        "workflow-orchestrator-agent",
+        ("verification-gate-agent", "handoff-summarizer-agent"),
+        ("Workflow phase log", "Omnigent task comments"),
+    ),
+}
+
+
 _CAPABILITIES: tuple[IntegrationCapability, ...] = (
     IntegrationCapability(
         slug="slack-command-center",
@@ -81,6 +168,42 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         ),
         priority_score=98,
         references=("https://api.slack.com/authentication/oauth-v2",),
+    ),
+    IntegrationCapability(
+        slug="microsoft-teams-command-center",
+        name="Microsoft Teams command center",
+        category="communication",
+        status="candidate",
+        auth_model="Microsoft Graph OAuth 2.0 + bot framework",
+        agent_value=(
+            "Let agents participate in Teams channels and chats with thread-aware status updates, clarifying questions, and approval prompts.",
+            "Bridge Microsoft 365 collaboration context into Omnigent Tasks while keeping approvals visible to enterprise operators.",
+        ),
+        required_scopes=(
+            "ChannelMessage.Read.All",
+            "ChannelMessage.Send",
+            "Chat.ReadWrite",
+            "User.ReadBasic.All",
+        ),
+        implementation_description=(
+            "Extend the existing Teams webhook direction into a full command-center connector: Microsoft Graph subscriptions normalize "
+            "channel/chat events into Omnigent signals, bot-framework activities carry safe outbound replies, and mutating actions remain "
+            "behind policy-gated adaptive-card approvals."
+        ),
+        future_unlocks=(
+            "Enterprise rollout path for Microsoft 365-first customers.",
+            "ByteDesk Platform approval cards embedded directly in Teams workspaces.",
+            "Cross-channel incident rooms where Slack and Teams users can coordinate through shared Omnigent task state.",
+        ),
+        business_case=(
+            "Complements Slack coverage for enterprises standardized on Microsoft 365, widening Omnigent's reachable collaboration market "
+            "without requiring teams to abandon their existing chat and approval workflows."
+        ),
+        priority_score=93,
+        references=(
+            "https://learn.microsoft.com/en-us/graph/teams-concept-overview",
+            "https://learn.microsoft.com/en-us/microsoftteams/platform/bots/what-are-bots",
+        ),
     ),
     IntegrationCapability(
         slug="notion-knowledge-operator",
@@ -348,3 +471,84 @@ def integration_capability_categories() -> list[str]:
     """Return the stable category names currently represented in the catalog."""
 
     return sorted({entry.category for entry in _CAPABILITIES})
+
+
+def compile_integration_marketplace_listing(slug: str) -> IntegrationMarketplaceListing | None:
+    """Compile a catalog entry into deterministic ByteDesk marketplace copy."""
+
+    capability = get_integration_capability(slug)
+    if capability is None:
+        return None
+
+    scopes = ", ".join(capability.required_scopes) or "no external OAuth scopes"
+    return IntegrationMarketplaceListing(
+        capability_slug=capability.slug,
+        name=capability.name,
+        package_type="integration_capability",
+        summary=(
+            f"Connect {capability.name} to Omnigent so managed agents can coordinate "
+            f"through {capability.category.replace('_', ' ')} workflows."
+        ),
+        audience=list(_marketplace_audience(capability.category)),
+        value_props=list(capability.agent_value),
+        install_requirements=[
+            f"Configure {capability.auth_model}.",
+            f"Grant scopes: {scopes}.",
+            "Map the connected account to a ByteDesk tenant and Omnigent policy profile.",
+        ],
+        safety_notes=[
+            "Start in observe-only mode until tenant policy gates are configured.",
+            "Require approval for write or external-message actions before autonomous execution.",
+        ],
+        tags=[
+            capability.category,
+            capability.status,
+            f"priority:{capability.priority_score}",
+            "omnigent",
+            "bytedesk-platform",
+        ],
+        business_case=capability.business_case,
+        future_unlocks=list(capability.future_unlocks),
+    )
+
+
+def _marketplace_audience(category: CapabilityCategory) -> tuple[str, ...]:
+    audiences: dict[CapabilityCategory, tuple[str, ...]] = {
+        "communication": ("operations teams", "team leads", "agent operators"),
+        "project_management": ("delivery teams", "project managers", "agent operators"),
+        "knowledge": ("knowledge managers", "operations teams", "agent operators"),
+        "developer": ("engineering teams", "platform teams", "agent operators"),
+        "crm_support": ("support teams", "customer success teams", "agent operators"),
+        "commerce_billing": ("revenue teams", "finance operators", "agent operators"),
+        "workflow_harness": ("platform teams", "automation leads", "agent operators"),
+    }
+    return audiences[category]
+
+def compile_integration_staffing_plan(slug: str) -> IntegrationStaffingPlan | None:
+    """Compile a deterministic agent staffing recommendation for a capability."""
+
+    entry = get_integration_capability(slug)
+    if entry is None:
+        return None
+
+    primary_role, supporting_roles, coordination_channels = _STAFFING_DEFAULTS[
+        entry.category
+    ]
+    category_label = entry.category.replace("_", " ")
+    return IntegrationStaffingPlan(
+        capability_slug=entry.slug,
+        capability_name=entry.name,
+        primary_agent_role=primary_role,
+        supporting_agent_roles=list(supporting_roles),
+        coordination_channels=list(coordination_channels),
+        escalation_policy=(
+            "Require human approval before external writes, destructive actions, "
+            f"or broad {category_label} data access until tenant policy gates pass."
+        ),
+        first_30_day_outcomes=[
+            f"Route at least 10 low-risk {entry.name} work items through Omnigent tasks.",
+            "Capture approval, execution, and verification evidence on every agent action.",
+            "Promote one repeatable workflow into a reusable ByteDesk Platform template.",
+        ],
+        business_case=entry.business_case,
+    )

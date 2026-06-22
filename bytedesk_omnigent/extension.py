@@ -46,22 +46,42 @@ class BytedeskExtension:
 
     # ── routers ──────────────────────────────────────────────────────
     def routers(self, auth_provider: AuthProvider | None = None) -> list[APIRouter]:
-        from bytedesk_omnigent.routes.goals import create_goals_router
-        from bytedesk_omnigent.routes.governance import create_governance_router
-        from bytedesk_omnigent.routes.ingress import create_ingress_router
-        from bytedesk_omnigent.routes.integration_capabilities import (
-            create_integration_capabilities_router,
-        )
+        """Return all ByteDesk extension routers.
+
+        The autonomous integration loop adds many focused route modules. Discover
+        ``create_*_router`` factories additively so an aggregate test branch can
+        validate them together without hand-editing this registry on every
+        iteration merge.
+        """
+        import importlib
+        import inspect
+        import pkgutil
+
+        import bytedesk_omnigent.routes as route_pkg
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
-        return [
-            _health_router(),
-            create_governance_router(auth_provider=auth_provider),
-            create_ingress_router(),
-            create_goals_router(auth_provider=auth_provider),
-            create_integration_capabilities_router(auth_provider=auth_provider),
-            create_tasks_router(auth_provider=auth_provider),
-        ]
+        def build(factory: Callable[..., APIRouter]) -> APIRouter:
+            parameters = inspect.signature(factory).parameters
+            if "auth_provider" in parameters:
+                return factory(auth_provider=auth_provider)
+            return factory()
+
+        routers = [_health_router()]
+        route_modules = sorted(
+            pkgutil.iter_modules(route_pkg.__path__), key=lambda item: item.name
+        )
+        for module_info in route_modules:
+            if module_info.name.startswith("_"):
+                continue
+            module = importlib.import_module(f"{route_pkg.__name__}.{module_info.name}")
+            for attr_name in sorted(dir(module)):
+                if not attr_name.startswith("create_") or not attr_name.endswith("_router"):
+                    continue
+                factory = getattr(module, attr_name)
+                if callable(factory):
+                    routers.append(build(factory))
+        routers.append(create_tasks_router(auth_provider=auth_provider))
+        return routers
 
     # ── policy modules (scanned by the policy registry) ──────────────
     def policy_modules(self) -> list[str]:

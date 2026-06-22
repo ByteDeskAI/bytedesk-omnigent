@@ -18,10 +18,11 @@ from __future__ import annotations
 import json
 import uuid
 from abc import ABC, abstractmethod
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from bytedesk_omnigent.db_models import SqlTask
 from bytedesk_omnigent.lifecycle import (
@@ -106,6 +107,17 @@ class TaskStore(ABC):
         self, *, task_id: str, owner_agent_id: str, now: int | None = None
     ) -> bool:
         """Atomically assign an ``open`` task to an owner. True iff THIS caller won."""
+
+    @abstractmethod
+    def claim_task_for_capabilities(
+        self,
+        *,
+        task_id: str,
+        owner_agent_id: str,
+        capabilities: Iterable[str],
+        now: int | None = None,
+    ) -> bool:
+        """Claim only when the agent satisfies the task's capability requirement."""
 
     @abstractmethod
     def assign_task(
@@ -211,6 +223,41 @@ class SqlAlchemyTaskStore(TaskStore):
             result = session.execute(
                 update(SqlTask)
                 .where(SqlTask.id == task_id, SqlTask.status == "open")
+                .values(status="assigned", owner_agent_id=owner_agent_id, updated_at=now)
+            )
+            return result.rowcount == 1
+
+    def claim_task_for_capabilities(
+        self,
+        *,
+        task_id: str,
+        owner_agent_id: str,
+        capabilities: Iterable[str],
+        now: int | None = None,
+    ) -> bool:
+        """Atomically claim an ``open`` task if the agent has the required capability.
+
+        This is the capability-aware claim primitive for integration/workflow
+        specialists: unrestricted tasks (``required_capability`` NULL/blank) are
+        claimable by any agent, while integration-specific tasks stay in the open
+        backlog until an agent with the exact declared capability claims them.
+        """
+        now = now_epoch() if now is None else now
+        normalized = tuple({c.strip() for c in capabilities if c and c.strip()})
+        capability_gate = or_(
+            SqlTask.required_capability.is_(None),
+            SqlTask.required_capability == "",
+        )
+        if normalized:
+            capability_gate = or_(capability_gate, SqlTask.required_capability.in_(normalized))
+        with self._write_session() as session:
+            result = session.execute(
+                update(SqlTask)
+                .where(
+                    SqlTask.id == task_id,
+                    SqlTask.status == "open",
+                    capability_gate,
+                )
                 .values(status="assigned", owner_agent_id=owner_agent_id, updated_at=now)
             )
             return result.rowcount == 1
