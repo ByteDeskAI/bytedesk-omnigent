@@ -14,8 +14,7 @@ description: >-
 executor:
   type: omnigent
   config:
-    harness: codex-native        # coding worker — gpt-5.x via the Codex subscription
-    model: gpt-5.5
+    harness: claude-sdk          # Claude Code (headless Claude OAuth), like Maya; no model pin → Claude default
 
 # ByteDesk identity / correlation metadata (stock free-form `params`; readable by
 # skills, tools, the org-chart, and the Office bridge). Zero schema fork.
