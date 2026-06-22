@@ -31,6 +31,8 @@ from abc import ABC, abstractmethod
 
 from starlette.requests import HTTPConnection
 
+from omnigent.server.principal import Principal
+
 logger = logging.getLogger(__name__)
 
 # Opt-in multi-user switch. ``OMNIGENT_AUTH_ENABLED`` is the current
@@ -184,6 +186,74 @@ class AuthProvider(ABC):
     def get_user_id(self, request: HTTPConnection) -> str | None:
         """Return the authenticated user ID, or ``None``."""
         ...
+
+    def get_principal(self, request: HTTPConnection) -> Principal | None:
+        """Return the resolved :class:`Principal`, or ``None`` (Adapter).
+
+        Concrete default: adapt :meth:`get_user_id` into a ``Principal``
+        carrying only ``user_id``. Every existing provider gains
+        ``get_principal`` for free with behavior identical to ``get_user_id``
+        — ``None`` stays ``None``, the ``"local"`` fallback still wraps into
+        ``Principal(user_id="local")``. A resolver that can produce richer
+        identity (tenant/roles/claims) overrides this; nothing in this
+        increment does.
+
+        :param request: The incoming HTTP request or WebSocket handshake.
+        :returns: ``Principal(user_id=...)`` when ``get_user_id`` resolves an
+            identity; ``None`` otherwise.
+        """
+        uid = self.get_user_id(request)
+        return Principal(user_id=uid) if uid is not None else None
+
+
+class CompositeAuthProvider(AuthProvider):
+    """Chain-of-Responsibility over interchangeable identity resolvers.
+
+    Each contributed resolver is itself an :class:`AuthProvider` (Strategy):
+    on every request the composite tries the resolvers in order and returns the
+    first non-``None`` result, falling through to the configured base provider
+    last. ``get_principal`` and ``get_user_id`` both resolve through the same
+    chain so the two stay consistent.
+
+    Extension-contributed resolvers (from
+    :func:`omnigent.extensions.extension_principal_resolvers`) are placed
+    BEFORE the configured provider so an external consumer (e.g. the platform
+    supplying identity) can win when it has an answer, while an in-core deploy
+    with no resolvers is behavior-identical to the base provider alone.
+
+    :param base: The configured :class:`AuthProvider` consulted last. ``None``
+        is rejected — a composite always wraps a real base.
+    :param resolvers: Extra resolvers tried, in order, before ``base``.
+        Defaults to empty (zero behavior change).
+    """
+
+    def __init__(
+        self,
+        base: AuthProvider,
+        resolvers: list[AuthProvider] | None = None,
+    ) -> None:
+        if base is None:
+            raise ValueError("CompositeAuthProvider requires a base AuthProvider")
+        # Resolvers first, configured base last (fall-through terminus).
+        self._chain: tuple[AuthProvider, ...] = (*(resolvers or ()), base)
+        self._base = base
+
+    def get_principal(self, request: HTTPConnection) -> Principal | None:
+        """Return the first non-``None`` principal in the chain, else ``None``."""
+        for resolver in self._chain:
+            principal = resolver.get_principal(request)
+            if principal is not None:
+                return principal
+        return None
+
+    def get_user_id(self, request: HTTPConnection) -> str | None:
+        """Resolve identity through the chain, returning the principal's user id.
+
+        Defers to :meth:`get_principal` so the chain order governs both
+        accessors identically.
+        """
+        principal = self.get_principal(request)
+        return principal.user_id if principal is not None else None
 
 
 class UnifiedAuthProvider(AuthProvider):

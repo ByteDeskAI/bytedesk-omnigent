@@ -828,6 +828,19 @@ def create_app(
     if permission_store is not None and auth_provider is None:
         raise ValueError("auth_provider is required when permission_store is provided")
 
+    # Wrap the configured provider in the principal Chain of Responsibility so
+    # extension-contributed resolvers can supply identity ahead of it (BDP-2388).
+    # With no extension resolver the composite is behavior-identical to the base
+    # provider alone, so this is a zero-behavior-change seam. Skipped when auth is
+    # disabled (None) — there is nothing to resolve through.
+    if auth_provider is not None:
+        from omnigent.extensions import extension_principal_resolvers
+        from omnigent.server.auth import CompositeAuthProvider
+
+        _principal_resolvers = extension_principal_resolvers()
+        if _principal_resolvers:
+            auth_provider = CompositeAuthProvider(auth_provider, _principal_resolvers)
+
     # First-boot admin bootstrap for the accounts auth provider.
     # Runs before any route is mounted so the login page is never
     # served against an empty user table (avoids the Immich-style

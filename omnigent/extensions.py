@@ -78,6 +78,16 @@ class OmnigentExtension(Protocol):
         """Background-task factories the server lifespan starts and cancels."""
         ...
 
+    def principal_resolvers(self) -> list[object]:
+        """Identity resolvers contributed to the request principal chain.
+
+        Each is an :class:`omnigent.server.auth.AuthProvider`; the server wraps
+        the configured provider in a ``CompositeAuthProvider`` and tries these
+        BEFORE it (Chain of Responsibility). Defaults to ``[]`` via ``hasattr``
+        probing, so an extension that omits it is unaffected.
+        """
+        ...
+
 
 def _load_env_extensions() -> list[OmnigentExtension]:
     """Load extensions named in the ``OMNIGENT_EXTENSIONS`` env var (``module:factory``)."""
@@ -182,6 +192,21 @@ def extension_secret_backends() -> list:
         if hasattr(ext, "secret_backends"):
             backends.extend(ext.secret_backends())
     return backends
+
+
+def extension_principal_resolvers() -> list[object]:
+    """Identity resolvers contributed by extensions (``principal_resolvers()``).
+
+    Threaded into :class:`omnigent.server.auth.CompositeAuthProvider` so an
+    out-of-core package can supply the request principal (e.g. tenant + roles
+    from a gateway header) ahead of the configured provider, while staying
+    upstream-generic here. Empty when no extension contributes one.
+    """
+    resolvers: list[object] = []
+    for ext in discover_extensions():
+        if hasattr(ext, "principal_resolvers"):
+            resolvers.extend(ext.principal_resolvers())
+    return resolvers
 
 
 def extension_background_factories() -> list:
