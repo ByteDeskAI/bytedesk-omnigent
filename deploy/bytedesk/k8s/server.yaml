@@ -85,13 +85,8 @@ spec:
             # NatsObjectStoreArtifactStore. Replaces the per-pod emptyDir that
             # every roll wiped (durable Postgres row → vanished bundle →
             # "unable to load agent spec"). Bucket auto-creates on first use.
-            # Points at the DEDICATED artifact NATS (omnigent-nats-artifacts),
-            # NOT the coordination NATS (OMNIGENT_NATS_URL below) — bundle
-            # storage is isolated from coordination state on its own server+PVC
-            # so it can never starve coordination (see deploy/bytedesk/k8s/
-            # nats.yaml). The two connect by independent URLs.
             - name: ARTIFACT_DIR
-              value: nats://omnigent-nats-artifacts:4222/omnigent-artifacts
+              value: nats://omnigent-nats:4222/omnigent-artifacts
             - name: OMNIGENT_CONFIG
               value: /etc/omnigent/config.yaml
             # Phase 0: no login, single "local" user — fine for an internal,
