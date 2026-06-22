@@ -15,7 +15,7 @@ description: >-
 executor:
   type: omnigent
   config:
-    harness: openai-agents
+    harness: claude-sdk             # Claude Code (headless Claude OAuth), like Maya
 
 prompt: |
   You are the ByteDesk Orchestrator. You do NOT answer substantive questions

@@ -17,8 +17,7 @@ description: >-
 executor:
   type: omnigent
   config:
-    harness: codex-native           # same live-Codex-subscription path as Maya (gpt-5.x)
-  model: gpt-5.5
+    harness: claude-sdk             # Claude Code (headless Claude OAuth), like Maya; no model pin → Claude default
 
 # ── ByteDesk identity / org metadata (stock free-form params; read by the
 #    org-chart projection in FU3 — managers[].id forms the reporting edge). ──
