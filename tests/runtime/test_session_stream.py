@@ -40,8 +40,12 @@ def _clean_session_stream_registry() -> None:
     of every later test by retaining the leak's slot.
     """
     session_stream._subscribers.clear()
+    session_stream._replay.clear()
+    session_stream._seq.clear()
     yield
     session_stream._subscribers.clear()
+    session_stream._replay.clear()
+    session_stream._seq.clear()
 
 
 async def _collect(conv_id: str, expected: int) -> list[dict[str, Any]]:
@@ -673,3 +677,49 @@ async def test_inflight_replay_via_pre_ready_snapshot_does_not_duplicate_window_
     assert deltas.count("Hello world") == 1, (
         f"joined prefix should be replayed exactly once, got deltas={deltas!r}"
     )
+
+
+# ── Last-Event-ID resume (BDP-2391) ──────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_ids_replays_missed_suffix() -> None:
+    """A reconnecting subscriber gets the buffered events with seq > last_event_id.
+
+    Production breakage that fails this: the replay ring isn't populated by
+    publish, or subscribe_with_ids fails to replay the suffix before the live
+    tail — the core of Last-Event-ID resume.
+    """
+    # Publish with no subscriber: dropped live, but recorded in the replay ring.
+    session_stream.publish("conv_replay", {"type": "e", "i": 1})
+    session_stream.publish("conv_replay", {"type": "e", "i": 2})
+    session_stream.publish("conv_replay", {"type": "e", "i": 3})
+    gen = session_stream.subscribe_with_ids("conv_replay", last_event_id=1)
+    got: list[tuple[int | None, int]] = []
+    try:
+        for _ in range(2):
+            seq, event = await asyncio.wait_for(anext(gen), timeout=1.0)
+            got.append((seq, event["i"]))
+    finally:
+        await gen.aclose()
+    # i=2,3 replayed, each tagged with its monotonic seq; i=1 (<= cursor) skipped.
+    assert got == [(2, 2), (3, 3)]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_with_ids_fresh_connect_has_no_replay() -> None:
+    """Without last_event_id, no buffered events are replayed (live-tail only)."""
+    session_stream.publish("conv_fresh", {"type": "e", "i": 1})  # pre-subscribe (ring only)
+    gen = session_stream.subscribe_with_ids("conv_fresh")  # no cursor
+    try:
+        # Prime the first pull as a task so the generator body registers its
+        # slot BEFORE the live publish (else the live event is dropped).
+        fut = asyncio.ensure_future(anext(gen))
+        await asyncio.sleep(0)
+        session_stream.publish("conv_fresh", {"type": "e", "i": 2})  # live
+        seq, event = await asyncio.wait_for(fut, timeout=1.0)
+    finally:
+        await gen.aclose()
+    # The live event (i=2) is delivered with its seq; the pre-subscribe i=1 is
+    # NOT replayed (no cursor) — live-tail only, as before.
+    assert event["i"] == 2 and seq == 2

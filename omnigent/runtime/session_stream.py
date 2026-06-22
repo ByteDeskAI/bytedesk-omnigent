@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
+from collections import deque
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterable
 from typing import Any
 
@@ -39,14 +40,27 @@ _logger = logging.getLogger(__name__)
 _DONE = object()
 
 # Subscriber registry: conversation_id -> set of
-# (queue, event_loop) pairs. The event_loop reference is needed
-# so the sync producer thread can safely deliver items via
+# (queue, event_loop) pairs. Each queue carries ``(seq, event)`` tuples for
+# real published events (``seq`` is the per-conversation monotonic id used for
+# Last-Event-ID resume) or the ``_DONE`` sentinel. The event_loop reference is
+# needed so the sync producer thread can safely deliver items via
 # ``call_soon_threadsafe`` into the queue's owning loop.
 _subscribers: dict[
     str,
-    set[tuple[asyncio.Queue[dict[str, Any] | object], asyncio.AbstractEventLoop]],
+    set[tuple[asyncio.Queue[tuple[int, dict[str, Any]] | object], asyncio.AbstractEventLoop]],
 ] = {}
 _lock = threading.Lock()
+
+# Bounded per-conversation replay ring for Last-Event-ID resume (BDP-2391,
+# ADR-0149). Each entry is ``(seq, event)`` where ``seq`` is a per-conversation
+# monotonic counter. A reconnecting subscriber that passes its last seen seq
+# gets the buffered suffix replayed before the live tail (EIP Guaranteed
+# Delivery + Message Replay). Bounded so a long-lived session can't grow memory
+# without limit — a client more than ``_REPLAY_WINDOW`` events behind falls back
+# to the snapshot endpoint (the pre-2391 recovery path, still intact).
+_REPLAY_WINDOW = 256
+_replay: dict[str, deque[tuple[int, dict[str, Any]]]] = {}
+_seq: dict[str, int] = {}
 
 
 def publish(conversation_id: str, event: dict[str, Any]) -> None:
@@ -103,9 +117,18 @@ def publish(conversation_id: str, event: dict[str, Any]) -> None:
     if suppress_live:
         return
     with _lock:
+        # Assign the per-conversation monotonic seq and record the event in the
+        # bounded replay ring (BDP-2391) under the same lock as the fan-out, so
+        # the ring order and the delivery order can never diverge.
+        # ponytail: per-conversation ring is bounded; the _replay/_seq dicts
+        # grow with distinct conversation ids (no eviction) — add LRU if a
+        # process ever holds enough live conversations to matter.
+        seq = _seq.get(conversation_id, 0) + 1
+        _seq[conversation_id] = seq
+        _replay.setdefault(conversation_id, deque(maxlen=_REPLAY_WINDOW)).append((seq, event))
         subs = list(_subscribers.get(conversation_id, ()))
     for queue, loop in subs:
-        loop.call_soon_threadsafe(queue.put_nowait, event)
+        loop.call_soon_threadsafe(queue.put_nowait, (seq, event))
 
 
 def close(conversation_id: str) -> None:
@@ -134,7 +157,43 @@ async def subscribe(
     on_subscribed: Callable[[], Awaitable[Iterable[dict[str, Any]]]] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """
-    Subscribe to live events for a conversation.
+    Subscribe to live events for a conversation (event-only, the original
+    contract). For Last-Event-ID resume with per-event seq ids, use
+    :func:`subscribe_with_ids` — this wrapper drops the seq for the many
+    callers/tests that only want the event dicts.
+    """
+    inner = subscribe_with_ids(
+        conversation_id,
+        heartbeat_interval_s=heartbeat_interval_s,
+        ready_event=ready_event,
+        pre_ready_snapshot=pre_ready_snapshot,
+        on_subscribed=on_subscribed,
+    )
+    try:
+        async for _seq, event in inner:
+            yield event
+    finally:
+        # Propagate close to the inner generator so its slot-cleanup finally
+        # runs when this wrapper is aclose'd (Python 3.13 won't auto-close it).
+        await inner.aclose()
+
+
+async def subscribe_with_ids(
+    conversation_id: str,
+    *,
+    heartbeat_interval_s: float | None = None,
+    ready_event: dict[str, Any] | None = None,
+    pre_ready_snapshot: Callable[[], Iterable[dict[str, Any]]] | None = None,
+    on_subscribed: Callable[[], Awaitable[Iterable[dict[str, Any]]]] | None = None,
+    last_event_id: int | None = None,
+) -> AsyncIterator[tuple[int | None, dict[str, Any]]]:
+    """
+    Subscribe to live events for a conversation, yielding ``(seq, event)``.
+
+    ``seq`` is the per-conversation monotonic id for real published events
+    (``None`` for synthetic ready/snapshot/heartbeat frames). When
+    ``last_event_id`` is set, the buffered suffix the subscriber missed is
+    replayed before the live tail (BDP-2391, Last-Event-ID resume).
 
     Creates a fresh ephemeral queue for this subscriber, registers
     it under ``conversation_id``, and yields events as they arrive
@@ -197,6 +256,16 @@ async def subscribe(
     entry = (queue, loop)
     with _lock:
         _subscribers.setdefault(conversation_id, set()).add(entry)
+        # Capture the Last-Event-ID replay suffix under the SAME lock as
+        # registration (BDP-2391): events with a higher seq than the client's
+        # last-seen are replayed before the live tail, and because the queue is
+        # registered in this same critical section nothing can fall between the
+        # replay window and the live queue. Empty when not resuming.
+        replay_events: list[tuple[int, dict[str, Any]]] = []
+        if last_event_id is not None:
+            ring = _replay.get(conversation_id)
+            if ring is not None:
+                replay_events = [(s, e) for (s, e) in ring if s > last_event_id]
     # Read the pre-ready snapshot synchronously here — after slot
     # registration, before the ``yield`` below suspends. On the Omnigent event
     # loop (where the relay calls ``publish``) nothing runs in between, so
@@ -217,9 +286,15 @@ async def subscribe(
         pre_ready_events = []
     try:
         if ready_event is not None:
-            yield ready_event
+            yield (None, ready_event)
+        # Replay the missed suffix (BDP-2391) before snapshot/live so a resuming
+        # client receives exactly what it missed, each tagged with its seq for
+        # the next Last-Event-ID. Synthetic frames (ready/snapshot/heartbeat)
+        # carry seq=None and never advance the client's cursor.
+        for replay_seq, replay_event in replay_events:
+            yield (replay_seq, replay_event)
         for pre_ready_event in pre_ready_events:
-            yield pre_ready_event
+            yield (None, pre_ready_event)
         if on_subscribed is not None:
             # Gather the snapshot AFTER the slot is registered (above) so a
             # delta published during the gather lands on ``queue`` and is
@@ -236,7 +311,7 @@ async def subscribe(
                 )
                 snapshot_events = ()
             for snapshot_event in snapshot_events:
-                yield snapshot_event
+                yield (None, snapshot_event)
         while True:
             if heartbeat_interval_s is None:
                 item = await queue.get()
@@ -250,12 +325,13 @@ async def subscribe(
                     # the client's SSE read-timeout something to fire
                     # against if the socket has gone half-open (e.g.
                     # after a laptop sleep).
-                    yield {"type": "session.heartbeat"}
+                    yield (None, {"type": "session.heartbeat"})
                     continue
             if item is _DONE:
                 return
-            assert isinstance(item, dict)
-            yield item
+            # Live items are (seq, event) tuples assigned by publish.
+            live_seq, live_event = item  # type: ignore[misc]
+            yield (live_seq, live_event)
     finally:
         with _lock:
             subs = _subscribers.get(conversation_id)

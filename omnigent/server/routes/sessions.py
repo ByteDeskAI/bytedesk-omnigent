@@ -1506,16 +1506,43 @@ def _signal_harness_elicitation_resolved_by_id(
     parked.resolved_elsewhere.set()
 
 
-def _format_sse(event_type: str, data: dict[str, Any]) -> str:
+def _format_sse(event_type: str, data: dict[str, Any], event_id: int | None = None) -> str:
     """
     Format an SSE event string for the wire.
 
     :param event_type: SSE event name, e.g.
         ``"response.output_text.delta"``.
     :param data: The event payload dict.
+    :param event_id: Optional monotonic event id (BDP-2391). When set, an
+        ``id:`` line is emitted so the browser/EventSource records it and
+        resends it as ``Last-Event-ID`` on reconnect, driving server-side
+        replay. ``None`` (synthetic frames — heartbeat/snapshot) omits the
+        ``id:`` line so it never advances the client's cursor.
     :returns: A formatted SSE message string ending in two newlines.
     """
-    return f"event: {event_type}\ndata: {json.dumps(data)}\n\n"
+    id_line = f"id: {event_id}\n" if event_id is not None else ""
+    return f"{id_line}event: {event_type}\ndata: {json.dumps(data)}\n\n"
+
+
+def _parse_last_event_id(request: Request) -> int | None:
+    """
+    Read the SSE resume cursor (BDP-2391) from a stream request.
+
+    Prefers the standard ``Last-Event-ID`` header (sent automatically by a
+    browser ``EventSource`` on reconnect); falls back to a ``last_event_id``
+    query param for non-EventSource consumers. Returns ``None`` for a fresh
+    connect or a non-integer value (treated as no resume).
+
+    :param request: The FastAPI stream request.
+    :returns: The integer cursor, or ``None``.
+    """
+    raw = request.headers.get("Last-Event-ID") or request.query_params.get("last_event_id")
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
 
 
 def _permission_level_from_grants(
@@ -9675,6 +9702,7 @@ async def _stream_live_events(
     viewer_user_id: str | None = None,
     viewer_idle: bool = False,
     presence_root_id: str | None = None,
+    last_event_id: int | None = None,
 ) -> AsyncIterator[str]:
     """
     Yield SSE-formatted events from the conversation's live stream.
@@ -9750,7 +9778,7 @@ async def _stream_live_events(
             presence_root_id, session_id, viewer_user_id, viewer_idle
         )
     try:
-        async for event in session_stream.subscribe(
+        async for seq, event in session_stream.subscribe_with_ids(
             session_id,
             heartbeat_interval_s=_SESSION_STREAM_HEARTBEAT_INTERVAL_S,
             ready_event={"type": "session.heartbeat"},
@@ -9761,6 +9789,9 @@ async def _stream_live_events(
             # awaits and is not dedup-sensitive.
             pre_ready_snapshot=lambda: inflight_text.snapshot_for(session_id),
             on_subscribed=on_subscribed,
+            # Last-Event-ID resume (BDP-2391): replay the buffered suffix the
+            # client missed during a disconnect before the live tail.
+            last_event_id=last_event_id,
         ):
             if await request.is_disconnected():
                 break
@@ -9770,7 +9801,7 @@ async def _stream_live_events(
                     f"session stream event missing string ``type`` field: {event!r}",
                 )
             validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(event)
-            yield _format_sse(event_type, validated.model_dump())
+            yield _format_sse(event_type, validated.model_dump(), event_id=seq)
     finally:
         # The non-None checks besides presence_token's are type
         # narrowing only: a minted token implies both were set above.
@@ -16877,6 +16908,9 @@ def create_sessions_router(
                 # the CHILD conversation's stream, and per-conversation
                 # scoping would hide co-viewers on other agents.
                 presence_root_id=conv.root_conversation_id,
+                # Last-Event-ID resume (BDP-2391): a reconnecting EventSource
+                # resends the last id it saw; replay the buffered suffix.
+                last_event_id=_parse_last_event_id(request),
             ),
             media_type="text/event-stream",
             headers={
