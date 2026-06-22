@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from omnigent.server.lifespan_phases import (
+    CoordinationPhase,
     LifespanContext,
     LifespanCycleError,
     LifespanOrchestrator,
@@ -221,3 +222,39 @@ def test_default_phases_topo_sort_and_reverse_matches_finally_order() -> None:
         "accounts_auto_open",
     }
     assert [n for n in teardown_order if n not in no_teardown] == expected_finally
+
+
+@pytest.mark.asyncio
+async def test_coordination_phase_starts_and_stops_backplane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CoordinationPhase wires the same lifecycle helpers as monolithic _lifespan."""
+    calls: list[str] = []
+
+    async def _start() -> object:
+        calls.append("start")
+        return object()
+
+    async def _stop() -> None:
+        calls.append("stop")
+
+    monkeypatch.setattr(
+        "omnigent.coordination.lifecycle.start_coordination",
+        _start,
+    )
+    monkeypatch.setattr(
+        "omnigent.coordination.lifecycle.stop_coordination",
+        _stop,
+    )
+    phase = CoordinationPhase()
+    ctx = _ctx()
+    await phase.startup(ctx)
+    await phase.shutdown(ctx)
+    assert calls == ["start", "stop"]
+
+
+def test_default_phases_include_coordination_before_policy() -> None:
+    ordered = topological_order(build_default_lifespan_phases())
+    names = [p.name for p in ordered]
+    assert "coordination" in names
+    assert names.index("coordination") < names.index("policy_registry")

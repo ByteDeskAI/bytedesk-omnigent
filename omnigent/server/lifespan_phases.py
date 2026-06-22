@@ -448,10 +448,36 @@ class DefaultAgentsPhase(LifespanPhase):
         _ensure_default_agents(ctx.agent_store, ctx.artifact_store, ctx.agent_cache)
 
 
+class CoordinationPhase(LifespanPhase):
+    """Start/stop the cross-replica coordination backplane."""
+
+    name = "coordination"
+    depends_on = ("default_agents",)
+
+    async def startup(self, ctx: LifespanContext) -> None:
+        """Connect the coordination backplane and hydrate pending KV rows.
+
+        :param ctx: The shared lifespan context (unused).
+        """
+        from omnigent.coordination.lifecycle import start_coordination
+
+        await start_coordination()
+
+    async def shutdown(self, ctx: LifespanContext) -> None:
+        """Stop the fan-out listener and disconnect the backplane.
+
+        :param ctx: The shared lifespan context (unused).
+        """
+        from omnigent.coordination.lifecycle import stop_coordination
+
+        await stop_coordination()
+
+
 class PolicyRegistryPhase(LifespanPhase):
     """Populate the policy registry (builtins + configured modules)."""
 
     name = "policy_registry"
+    depends_on = ("coordination",)
 
     async def startup(self, ctx: LifespanContext) -> None:
         """Load the policy registry so GET /v1/policy-registry serves it.
@@ -682,6 +708,7 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
         MemoryMaintenancePhase(),
         MetricsPublishPhase(),
         DefaultAgentsPhase(),
+        CoordinationPhase(),
         PolicyRegistryPhase(),
         AccountsAutoOpenPhase(),
     ]
@@ -690,6 +717,7 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
 __all__ = [
     "AccountsAutoOpenPhase",
     "AnyioThreadLimiterPhase",
+    "CoordinationPhase",
     "DefaultAgentsPhase",
     "ExtensionBackgroundTasksPhase",
     "HarnessProcessManagerPhase",

@@ -49,12 +49,45 @@ def schedule_backplane(coro: Any) -> None:
     future.add_done_callback(_log_failure)
 
 
+async def hydrate_pending_index(backplane: CoordinationBackplane) -> int:
+    """Load durable pending rows from KV into the in-process index (cold start)."""
+    from omnigent.coordination.inprocess import InProcessBackplane
+    from omnigent.runtime import pending_elicitations as pe
+
+    if isinstance(backplane, InProcessBackplane):
+        return 0
+
+    entries = await backplane.index_list_prefix("pending", "")
+    loaded = 0
+    for key, value in entries.items():
+        if not isinstance(value, dict):
+            continue
+        parts = key.split("/", 1)
+        if len(parts) != 2:
+            continue
+        conversation_id, elicitation_id = parts[0], parts[1]
+        if not conversation_id or not elicitation_id:
+            continue
+        event = value.get("event")
+        if not isinstance(event, dict):
+            continue
+        pe.apply_remote_upsert(conversation_id, elicitation_id, event)
+        loaded += 1
+    if loaded:
+        _logger.info(
+            "hydrated %d pending elicitation(s) from coordination KV",
+            loaded,
+        )
+    return loaded
+
+
 async def start_coordination() -> CoordinationBackplane:
     """Connect the active backplane and start the fan-out listener."""
     global _backplane, _loop, _fanout_task
     _loop = asyncio.get_running_loop()
     _backplane = resolve_coordination_backplane()
     await _backplane.start()
+    await hydrate_pending_index(_backplane)
     _fanout_task = asyncio.create_task(_fanout_listener(_backplane))
     return _backplane
 
@@ -163,6 +196,7 @@ __all__ = [
     "fanout_pending_delete",
     "fanout_pending_upsert",
     "get_active_backplane",
+    "hydrate_pending_index",
     "reset_for_tests",
     "schedule_backplane",
     "start_coordination",

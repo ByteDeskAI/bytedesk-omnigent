@@ -287,6 +287,7 @@ timeout_method = "thread"
 # both relative paths here keeps the test suite self-contained.
 pythonpath = [".", "sdks/python-client", "sdks/ui"]
 markers = [
+    "integration: tests requiring optional external infrastructure (skipped without env)",
     "live: end-to-end tests requiring real LLM API key (run with --llm-api-key)",
     "live_app: end-to-end tests requiring a deployed Databricks App server",
     "model(name, ...): one arg pins this test to that model overriding the suite-wide --model CLI default; multiple args fan the test out across all listed models via indirect parametrize.",

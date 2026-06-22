@@ -56,6 +56,7 @@ from typing import Any
 
 from dependency_injector import containers, providers
 
+from omnigent.coordination.factory import resolve_coordination_backplane
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
@@ -110,6 +111,8 @@ class Core(containers.DeclarativeContainer):
     server_metrics_otel = providers.Singleton(ServerMetricsOtelPublisher)
 
     managed_launches = providers.Singleton(ManagedLaunchTracker)
+
+    coordination_backplane = providers.Singleton(resolve_coordination_backplane)
 
     # ── Scoped seam (request-bound) ─────────────────────────────────────
     # Deliberately empty stub. No request-lifetime dependency is constructed

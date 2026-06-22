@@ -76,3 +76,26 @@ async def test_fanout_listener_applies_peer_messages() -> None:
     with pytest.raises(asyncio.CancelledError):
         await listener
     await bp.stop()
+
+
+@pytest.mark.asyncio
+async def test_hydrate_path_applies_kv_rows_without_fanout() -> None:
+    """Hydrate loads durable KV rows on cold start (no fan-out message)."""
+
+    class _KvStub:
+        replica_id = "replica-sync"
+
+        async def index_list_prefix(self, bucket: str, prefix: str):
+            del bucket, prefix
+            return {
+                "conv_sync/elicit_sync": {
+                    "event": {
+                        "type": "response.elicitation_request",
+                        "elicitation_id": "elicit_sync",
+                        "params": {"message": "sync hydrate"},
+                    }
+                }
+            }
+
+    assert await coord_lifecycle.hydrate_pending_index(_KvStub()) == 1
+    assert len(pe.snapshot_for("conv_sync")) == 1

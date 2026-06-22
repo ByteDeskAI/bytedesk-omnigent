@@ -22,6 +22,7 @@ import pytest
 from dependency_injector import containers
 from fastapi import FastAPI
 
+from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runtime.agent_cache import AgentCache
@@ -168,3 +169,20 @@ def test_mcp_pool_and_exit_reports_resolve_on_both_paths(
     assert container.mcp_pool() is container.mcp_pool()
     assert isinstance(container.runner_exit_reports(), RunnerExitReports)
     assert container.runner_exit_reports() is container.runner_exit_reports()
+
+
+def test_di_container_exposes_coordination_backplane_factory(
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Flag ON: Core exposes a memoized coordination backplane factory."""
+    monkeypatch.delenv("OMNIGENT_NATS_URL", raising=False)
+    monkeypatch.delenv("OMNIGENT_USE_COORDINATION_BACKPLANE", raising=False)
+    monkeypatch.setenv("OMNIGENT_USE_DI_CONTAINER", "1")
+    app = _build_app(db_uri, tmp_path, "coord")
+    container = app.state.di_container
+    first = container.coordination_backplane()
+    second = container.coordination_backplane()
+    assert isinstance(first, InProcessBackplane)
+    assert first is second
