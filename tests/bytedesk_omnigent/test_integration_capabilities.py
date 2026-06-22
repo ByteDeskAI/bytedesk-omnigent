@@ -6,6 +6,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.integration_capabilities import (
+    compile_integration_staffing_plan,
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
@@ -55,6 +56,22 @@ def test_catalog_lookup_and_categories():
     assert get_integration_capability("missing") is None
 
 
+def test_compile_integration_staffing_plan_derives_agent_team_from_catalog():
+    plan = compile_integration_staffing_plan("slack-command-center")
+
+    assert plan.capability_slug == "slack-command-center"
+    assert plan.primary_agent_role == "communication-intake-agent"
+    assert "approval-coordinator-agent" in plan.supporting_agent_roles
+    assert plan.coordination_channels == ["Slack threads", "Omnigent task comments"]
+    assert plan.escalation_policy.startswith("Require human approval")
+    assert plan.first_30_day_outcomes[0].startswith("Route at least")
+    assert plan.to_dict()["business_case"]
+
+
+def test_compile_integration_staffing_plan_returns_none_for_unknown_slug():
+    assert compile_integration_staffing_plan("missing") is None
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")
@@ -72,6 +89,10 @@ def test_integration_capabilities_router_lists_and_reads_entries():
     assert detail.status_code == 200
     assert detail.json()["name"] == "Slack command center"
 
+    staffing = client.get("/v1/integration-capabilities/slack-command-center/staffing-plan")
+    assert staffing.status_code == 200
+    assert staffing.json()["primary_agent_role"] == "communication-intake-agent"
+
 
 def test_integration_capabilities_router_filters_and_404s():
     app = FastAPI()
@@ -86,3 +107,7 @@ def test_integration_capabilities_router_filters_and_404s():
     missing = client.get("/v1/integration-capabilities/not-real")
     assert missing.status_code == 404
     assert missing.json()["error"] == "not_found"
+
+    missing_staffing = client.get("/v1/integration-capabilities/not-real/staffing-plan")
+    assert missing_staffing.status_code == 404
+    assert missing_staffing.json()["error"] == "not_found"

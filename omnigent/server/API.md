@@ -68,6 +68,26 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Get Integration Capability Staffing Plan
+
+```
+GET /v1/integration-capabilities/{slug}/staffing-plan
+
+200 OK
+{
+  "capability_slug": "slack-command-center",
+  "capability_name": "Slack command center",
+  "primary_agent_role": "communication-intake-agent",
+  "supporting_agent_roles": ["approval-coordinator-agent", "status-broadcast-agent"],
+  "coordination_channels": ["Slack threads", "Omnigent task comments"],
+  "escalation_policy": "Require human approval before external writes...",
+  "first_30_day_outcomes": ["Route at least 10 low-risk Slack command center work items..."],
+  "business_case": "..."
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management

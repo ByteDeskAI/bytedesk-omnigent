@@ -53,6 +53,64 @@ class IntegrationCapability:
         return data
 
 
+@dataclass(frozen=True)
+class IntegrationStaffingPlan:
+    """Deterministic agent-team recommendation for one integration capability."""
+
+    capability_slug: str
+    capability_name: str
+    primary_agent_role: str
+    supporting_agent_roles: list[str]
+    coordination_channels: list[str]
+    escalation_policy: str
+    first_30_day_outcomes: list[str]
+    business_case: str
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+_STAFFING_DEFAULTS: dict[
+    CapabilityCategory, tuple[str, tuple[str, ...], tuple[str, ...]]
+] = {
+    "communication": (
+        "communication-intake-agent",
+        ("approval-coordinator-agent", "status-broadcast-agent"),
+        ("Slack threads", "Omnigent task comments"),
+    ),
+    "project_management": (
+        "work-intake-agent",
+        ("backlog-triage-agent", "delivery-coordinator-agent"),
+        ("External work item comments", "Omnigent task comments"),
+    ),
+    "knowledge": (
+        "knowledge-operator-agent",
+        ("retrieval-curator-agent", "documentation-maintainer-agent"),
+        ("Knowledge-base updates", "Omnigent task comments"),
+    ),
+    "developer": (
+        "engineering-copilot-agent",
+        ("ci-repair-agent", "review-coordinator-agent"),
+        ("Repository issue/PR comments", "Omnigent task comments"),
+    ),
+    "crm_support": (
+        "customer-operations-agent",
+        ("case-triage-agent", "revenue-handoff-agent"),
+        ("CRM/support activity timeline", "Omnigent task comments"),
+    ),
+    "commerce_billing": (
+        "revenue-operations-agent",
+        ("billing-risk-agent", "customer-retention-agent"),
+        ("Commerce/customer timeline", "Omnigent task comments"),
+    ),
+    "workflow_harness": (
+        "workflow-orchestrator-agent",
+        ("verification-gate-agent", "handoff-summarizer-agent"),
+        ("Workflow phase log", "Omnigent task comments"),
+    ),
+}
+
+
 _CAPABILITIES: tuple[IntegrationCapability, ...] = (
     IntegrationCapability(
         slug="slack-command-center",
@@ -342,6 +400,36 @@ def get_integration_capability(slug: str) -> IntegrationCapability | None:
         if entry.slug == slug:
             return entry
     return None
+
+
+def compile_integration_staffing_plan(slug: str) -> IntegrationStaffingPlan | None:
+    """Compile a deterministic agent staffing recommendation for a capability."""
+
+    entry = get_integration_capability(slug)
+    if entry is None:
+        return None
+
+    primary_role, supporting_roles, coordination_channels = _STAFFING_DEFAULTS[
+        entry.category
+    ]
+    category_label = entry.category.replace("_", " ")
+    return IntegrationStaffingPlan(
+        capability_slug=entry.slug,
+        capability_name=entry.name,
+        primary_agent_role=primary_role,
+        supporting_agent_roles=list(supporting_roles),
+        coordination_channels=list(coordination_channels),
+        escalation_policy=(
+            "Require human approval before external writes, destructive actions, "
+            f"or broad {category_label} data access until tenant policy gates pass."
+        ),
+        first_30_day_outcomes=[
+            f"Route at least 10 low-risk {entry.name} work items through Omnigent tasks.",
+            "Capture approval, execution, and verification evidence on every agent action.",
+            "Promote one repeatable workflow into a reusable ByteDesk Platform template.",
+        ],
+        business_case=entry.business_case,
+    )
 
 
 def integration_capability_categories() -> list[str]:
