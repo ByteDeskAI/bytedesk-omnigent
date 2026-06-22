@@ -114,6 +114,19 @@ spec:
                   name: omnigent-mcp-secrets
                   key: OMNIGENT_MCP_CLIENT_SECRET
                   optional: true
+            # BDP-2389 — shared HMAC secret for the signed X-Bytedesk-Principal
+            # seam. ByteDeskPrincipalResolver registers ONLY when this is set;
+            # must equal the platform Office bridge's Omnigent__PrincipalSecret.
+            # Infisical-operator-managed (omnigent-principal-secrets ← the
+            # dedicated `bytedesk-omnigent` project, path /). optional: true so a
+            # not-yet-hydrated secret degrades to the legacy header-mode auth
+            # (the resolver simply isn't registered) rather than blocking boot.
+            - name: OMNIGENT_BYTEDESK_PRINCIPAL_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: omnigent-principal-secrets
+                  key: OMNIGENT_BYTEDESK_PRINCIPAL_SECRET
+                  optional: true
             # Built-in agents the new-session picker (GET /v1/agents) seeds at
             # startup, ON TOP OF the packaged set (claude-native-ui, codex-native-ui,
             # polly). Each os.pathsep(:)-separated entry is ONE bundle dir — the

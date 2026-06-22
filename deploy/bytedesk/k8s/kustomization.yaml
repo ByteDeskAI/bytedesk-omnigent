@@ -49,6 +49,11 @@ resources:
   # omnigent-bridge-config-secrets (BYTEDESK_TENANT_ID) which server.yaml injects
   # as env for the realtime agent bridge (bytedesk_omnigent/realtime).
   - omnigent-bridge-config-secret.yaml
+  # Infisical-operator-managed signed-principal HMAC secret (BDP-2389). A CR
+  # pointing at the dedicated `bytedesk-omnigent` project, path / — the operator
+  # hydrates omnigent-principal-secrets (OMNIGENT_BYTEDESK_PRINCIPAL_SECRET)
+  # which server.yaml injects so ByteDeskPrincipalResolver activates.
+  - omnigent-principal-secret.yaml
   # secret.example.yaml is intentionally NOT listed — copy it to secret.yaml,
   # fill values, and `kubectl apply -f secret.yaml` (gitignored) for local.
   # In prod the secrets are Infisical/SOPS-reconciled (see README + fleet overlay).
