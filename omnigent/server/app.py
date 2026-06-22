@@ -321,7 +321,22 @@ def _ensure_builtin_agent(
             return
         new_loc = f"{existing.id}/{bundle_hash}"
         if existing.bundle_location == new_loc:
-            # Row current; evict so a lagging replica's stale cache reloads the bundle.
+            # Row current. Self-heal (BDP-2381, Idempotent Receiver): the DB
+            # row is durable but the artifact may have been lost (the old
+            # per-pod emptyDir was wiped on every roll → "unable to load agent
+            # spec"). Re-put ONLY when the blob is missing — a content-addressed
+            # key means the re-put is byte-identical, so this never clobbers a
+            # present (or concurrently-written) artifact.
+            if not artifact_store.exists(new_loc):
+                artifact_store.put(new_loc, bundle_bytes)
+                _logger.info(
+                    "Self-healed missing artifact for built-in %s agent %s "
+                    "(bundle %s)",
+                    name,
+                    existing.id,
+                    bundle_hash[:12],
+                )
+            # Evict so a lagging replica's stale cache reloads the bundle.
             agent_cache.evict(existing.id)
             return
         artifact_store.put(new_loc, bundle_bytes)

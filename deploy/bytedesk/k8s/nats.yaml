@@ -1,5 +1,9 @@
 # Omnigent coordination NATS — JetStream with durable PVC.
 # Enables omnigent-server replicas > 1 when OMNIGENT_NATS_URL is set.
+# Also backs the durable agent-bundle artifact store (BDP-2380, ADR-0148):
+# the `omnigent-artifacts` JetStream Object Store bucket persists to this same
+# file-backed PVC, so the 2Gi → 5Gi bump below leaves headroom for bundles
+# (small gzipped specs) alongside the coordination KV/streams.
 apiVersion: v1
 kind: Service
 metadata:
@@ -78,4 +82,4 @@ spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 2Gi
+            storage: 5Gi

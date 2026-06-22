@@ -62,6 +62,42 @@ def test_migrated_agent_survives_wheel_reseed(db_uri: str, tmp_path: Path) -> No
     assert after.bundle_location == edited_loc
 
 
+def test_missing_artifact_is_reseeded_when_db_row_current(
+    db_uri: str, tmp_path: Path
+) -> None:
+    """Self-heal (BDP-2381): a durable DB row + a wiped artifact re-puts.
+
+    Reproduces the durability bug: the agent row is durable in Postgres
+    but the bundle lived on an ephemeral emptyDir that a server roll
+    wiped. The matching-hash branch must verify the artifact exists and
+    re-put it when missing — otherwise the next load fails with
+    "unable to load agent spec".
+    """
+    agent_store, artifact_store, agent_cache = _stores(db_uri, tmp_path)
+    wheel = _bundle(tmp_path, "claude-sdk", "v1")
+
+    _ensure_builtin_agent(
+        agent_store, artifact_store, agent_cache, name="reseed-demo", bundle_bytes=wheel
+    )
+    agent = agent_store.get_by_name("reseed-demo")
+    assert agent is not None
+    loc = agent.bundle_location
+
+    # Simulate the ephemeral-volume wipe: the durable DB row survives a
+    # roll, but the artifact blob is gone.
+    artifact_store.delete(loc)
+    assert not artifact_store.exists(loc)
+
+    # A subsequent boot re-runs the wheel seed with the SAME (matching-hash)
+    # wheel. It must re-put the missing artifact, not just evict + return.
+    _ensure_builtin_agent(
+        agent_store, artifact_store, agent_cache, name="reseed-demo", bundle_bytes=wheel
+    )
+
+    assert artifact_store.exists(loc)
+    assert artifact_store.get(loc) == wheel
+
+
 def test_non_migrated_agent_is_refreshed_by_reseed(db_uri: str, tmp_path: Path) -> None:
     agent_store, artifact_store, agent_cache = _stores(db_uri, tmp_path)
     wheel_v1 = _bundle(tmp_path, "claude-sdk", "v1")

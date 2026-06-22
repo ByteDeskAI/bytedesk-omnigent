@@ -17,9 +17,12 @@ Configuration is via environment variables:
                         ``postgres://...``) and the explicit psycopg3
                         form (``postgresql+psycopg://...``) are accepted;
                         the prefix is normalized automatically.
-  ARTIFACT_DIR          Directory for the local artifact store.
-                        Defaults to ``/data/artifacts`` (the volume
-                        mount point used by docker-compose).
+  ARTIFACT_DIR          Artifact store location. A filesystem path uses
+                        the local store (default ``/data/artifacts``, the
+                        docker-compose volume mount); a ``nats://host:port/
+                        bucket`` URL uses the durable JetStream Object Store
+                        backend (BDP-2380) shared across replicas; a
+                        ``dbfs:/Volumes/...`` URI uses Databricks Volumes.
   HOST, PORT            Bind address. Default ``0.0.0.0:8000``.
 """
 
@@ -79,8 +82,22 @@ try:
     DATABASE_URL = normalize_database_url(DATABASE_URL)
 
     # App settings are config-first, env fallback, then the built-in default.
+    # The location may be a filesystem path (local store) or a scheme URL
+    # (nats:// JetStream Object Store — BDP-2380 — or dbfs:/Volumes Databricks).
+    ARTIFACT_LOCATION = (
+        cfg.get("artifact_location")
+        or os.environ.get("ARTIFACT_DIR")
+        or _DEFAULT_ARTIFACT_DIR
+    )
+    # Only a local filesystem store has a directory to create / cache under.
+    # A remote backend is selected by a recognized URI scheme (nats:// →
+    # JetStream Object Store, dbfs:/Volumes/ → Databricks); anything else is a
+    # filesystem path for the local store. Mirrors factory._artifact_scheme.
+    _ARTIFACT_IS_LOCAL = not ARTIFACT_LOCATION.startswith(("nats://", "dbfs:/Volumes/"))
+    # Local cookie-secret + agent-cache need a real on-disk dir; a remote
+    # artifact store keeps those under the container's local data dir.
     ARTIFACT_DIR = Path(
-        cfg.get("artifact_location") or os.environ.get("ARTIFACT_DIR") or _DEFAULT_ARTIFACT_DIR
+        ARTIFACT_LOCATION if _ARTIFACT_IS_LOCAL else _DEFAULT_ARTIFACT_DIR
     )
     # resolve_bind_host strips the bracketed IPv6 form some platforms inject
     # ("[::]") and coerces Railway's IPv6 wildcard to IPv4 (its edge is v4-only).
@@ -95,7 +112,7 @@ try:
         HOST,
         PORT,
         DATABASE_URL.split("@", 1)[-1] if "@" in DATABASE_URL else DATABASE_URL,
-        ARTIFACT_DIR,
+        ARTIFACT_LOCATION,
     )
 
     # Containerized / remote deploys default to authenticated auth.
@@ -171,7 +188,6 @@ try:
     from omnigent.runtime.caps import RuntimeCaps
     from omnigent.server.managed_hosts import parse_sandbox_config
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
-    from omnigent.stores.artifact_store.local import LocalArtifactStore
     from omnigent.stores.comment_store.sqlalchemy_store import (
         SqlAlchemyCommentStore,
     )
@@ -196,7 +212,13 @@ try:
     # typo should not surface as a runtime 502 on the first managed
     # session); the startup catch-all below logs it.
     sandbox_config = parse_sandbox_config(cfg.get("sandbox"))
-    artifact_store = LocalArtifactStore(str(ARTIFACT_DIR))
+    # Route by location scheme (local path / nats:// / dbfs:) through the
+    # pluggable artifact-store factory (ADR-0145) — a nats:// URL selects the
+    # durable JetStream Object Store backend (BDP-2380); a plain path stays
+    # the local filesystem store. Lazy-connect, so safe to build here.
+    from omnigent.stores.factory import _create_artifact_store
+
+    artifact_store = _create_artifact_store(ARTIFACT_LOCATION)
 
     agent_cache = AgentCache(
         artifact_store=artifact_store,

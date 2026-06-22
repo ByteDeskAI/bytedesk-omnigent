@@ -61,3 +61,18 @@ def test_create_artifact_store_databricks_branch_matches_cli() -> None:
     """
     assert not str(Path("./artifacts")).startswith("dbfs:/Volumes/")
     assert "dbfs:/Volumes/cat/schema/vol".startswith("dbfs:/Volumes/")
+
+
+def test_create_artifact_store_nats_branch() -> None:
+    """A nats:// location resolves to the NATS Object Store backend (BDP-2380).
+
+    Constructing the adapter must NOT eagerly connect — connection is lazy
+    (first use) — so this is safe with no live NATS server.
+    """
+    from omnigent.stores.artifact_store.nats_object_store import (
+        NatsObjectStoreArtifactStore,
+    )
+
+    store = _create_artifact_store("nats://omnigent-nats:4222/omnigent-artifacts")
+    assert isinstance(store, NatsObjectStoreArtifactStore)
+    assert store.bucket == "omnigent-artifacts"
