@@ -16552,6 +16552,91 @@ def create_sessions_router(
             response["pending_id"] = dispatch.pending_id
         return response
 
+    # ── POST /sessions/{session_id}/await ────────────────────────
+    @router.post(
+        "/sessions/{session_id}/await",
+        response_model=None,
+    )
+    async def await_session_message(
+        request: Request,
+        session_id: str,
+        body: SessionEventInput,
+        timeout_s: float = Query(120.0, ge=1.0, le=600.0),
+    ) -> dict[str, Any]:
+        """
+        Synchronous / await-completion (BDP-2392, ADR-0149).
+
+        Dispatch a message and return the assistant reply in ONE call —
+        the "ask and get the answer" idiom (EIP Request-Reply +
+        Correlation Identifier). This is an OPTIONAL convenience: the
+        async ``POST /events`` path is unchanged, and a consumer that
+        wants streaming/async still uses it.
+
+        The dispatch reuses the exact async path (so steering, policies,
+        and persistence behave identically); this handler then awaits the
+        new assistant message bound to THIS turn, bounded by ``timeout_s``.
+        A turn that does not complete in time returns 504 — the async
+        turn keeps running and its reply is still readable via
+        ``GET /sessions/{id}/items``.
+
+        :param body: A ``"message"`` :class:`SessionEventInput`, e.g.
+            ``{"type": "message", "data": {"role": "user",
+            "content": [{"type": "input_text", "text": "Hi"}]}}``.
+        :param timeout_s: Max seconds to await completion (1–600).
+        :returns: ``{"status": "completed", "item_id", "reply"}``.
+        :raises HTTPException: 422 for a non-message event; 504 on timeout.
+        """
+        if body.type != "message":
+            raise HTTPException(
+                status_code=422,
+                detail="await-completion only supports type='message'",
+            )
+        user_id = _require_user(request, auth_provider)
+        await _require_access_and_level(
+            user_id, session_id, LEVEL_EDIT, permission_store, conversation_store
+        )
+
+        def _assistant_message_ids() -> set[str]:
+            page = conversation_store.list_items(session_id, 200, None, None, "desc")
+            return {
+                it.id
+                for it in page.data
+                if it.type == "message" and getattr(it.data, "role", None) == "assistant"
+            }
+
+        # Correlation baseline: assistant items already present, so we
+        # return only the reply produced by THIS dispatch.
+        before = await asyncio.to_thread(_assistant_message_ids)
+
+        # Dispatch through the existing async path (same session id is the
+        # correlation key); 202-style ack is discarded — we wait for the reply.
+        await post_event(request, session_id, body)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout_s
+        while loop.time() < deadline:
+            await asyncio.sleep(1.5)
+            page = await asyncio.to_thread(
+                conversation_store.list_items, session_id, 200, None, None, "desc"
+            )
+            for it in page.data:
+                if (
+                    it.type == "message"
+                    and getattr(it.data, "role", None) == "assistant"
+                    and it.id not in before
+                ):
+                    text = "".join(
+                        block.get("text", "")
+                        for block in (it.data.content or [])
+                        if block.get("type") in ("output_text", "text")
+                    )
+                    if text.strip():
+                        return {"status": "completed", "item_id": it.id, "reply": text}
+        raise HTTPException(
+            status_code=504,
+            detail="turn did not complete within timeout_s; the async turn continues",
+        )
+
     # ── GET /sessions/{session_id}/stream ────────────────────────
 
     # Live-tail only. Clients reconnect via GET /v1/sessions/{id}
