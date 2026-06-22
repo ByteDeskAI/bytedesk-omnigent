@@ -11,17 +11,7 @@ metadata:
   name: omnigent-config
 data:
   config.yaml: |
-    # Durable agent-bundle storage on NATS JetStream Object Store (BDP-2380,
-    # ADR-0148): replica-shared + survives pod rolls. The entrypoint is
-    # config-first, so this (not the ARTIFACT_DIR env) is the authoritative
-    # source; a nats:// scheme selects the NATS Object Store backend via the
-    # pluggable artifact-store factory. Local cookie-secret/agent-cache dirs
-    # still fall back to the container's /data/artifacts.
-    # Points at the DEDICATED artifact NATS (omnigent-nats-artifacts), isolated
-    # from the coordination NATS (OMNIGENT_NATS_URL) on its own server+PVC so
-    # bundle growth can never starve coordination. MUST match ARTIFACT_DIR in
-    # server.yaml (config-first wins, so this is the value that takes effect).
-    artifact_location: nats://omnigent-nats-artifacts:4222/omnigent-artifacts
+    artifact_location: /data/artifacts
     # When auth is turned on (OIDC against Google Workspace fits ByteDesk), list
     # operator identities here; a listed identity is promoted to admin on login.
     # admins:
