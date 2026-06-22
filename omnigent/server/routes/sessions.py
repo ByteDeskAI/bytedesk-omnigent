@@ -115,6 +115,7 @@ from omnigent.runner.identity import (
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runtime import (
+    event_hub,
     get_agent_cache,
     get_caps,
     get_policy_store,
@@ -701,6 +702,15 @@ def _announce_session_added(user_id: str | None, session_id: str) -> None:
     """
     user_session_stream.publish(
         _discovery_key(user_id), {"type": "session_added", "session_id": session_id}
+    )
+    # Typed consumer event-subscription seam (BDP-2394, ADR-0149): mirror the
+    # discovery push as a typed Event Message on the per-user event hub, so a
+    # consumer watching GET /v1/events (optionally filtered by type) observes
+    # session lifecycle without hand-wiring a callback. Best-effort fan-out;
+    # no-op when nobody is subscribed.
+    event_hub.publish(
+        _discovery_key(user_id),
+        {"type": "session.created", "session_id": session_id},
     )
 
 
@@ -16882,6 +16892,45 @@ def create_sessions_router(
                 "Cache-Control": "no-cache",
                 "X-Accel-Buffering": "no",
             },
+        )
+
+    # ── GET /events ──────────────────────────────────────────────
+    @router.get("/events", response_model=None)
+    async def subscribe_events(
+        request: Request,
+        types: str | None = Query(default=None),
+    ) -> StreamingResponse:
+        """
+        Subscribe to typed lifecycle events for the caller (BDP-2394, ADR-0149).
+
+        A cross-cutting Publish-Subscribe channel (GoF Observer): the consumer
+        receives typed Event Messages — e.g. ``session.created`` — for sessions
+        accessible to it, instead of hand-wiring a callback per event type. Pass
+        ``?types=a,b`` to narrow to specific types (EIP Message Filter). SSE with
+        a 20s heartbeat; live-tail only (reconcile via the REST snapshots on
+        connect, like the per-session stream).
+
+        :param request: The FastAPI request, used to detect disconnect.
+        :param types: Optional comma-separated event-type allowlist, e.g.
+            ``"session.created"``. Empty/absent yields every type.
+        :returns: An SSE :class:`StreamingResponse` of typed events.
+        """
+        user_id = _get_user_id(request, auth_provider)
+        user_key = _discovery_key(user_id)
+        type_set = {t for t in (types or "").split(",") if t} or None
+
+        async def _gen() -> AsyncIterator[str]:
+            async for event in event_hub.subscribe(
+                user_key, types=type_set, heartbeat_interval_s=20.0
+            ):
+                yield _format_sse(event.get("type", "message"), event)
+                if await request.is_disconnected():
+                    break
+
+        return StreamingResponse(
+            _gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
     # ── DELETE /sessions/{session_id} ──────────────────────────────
