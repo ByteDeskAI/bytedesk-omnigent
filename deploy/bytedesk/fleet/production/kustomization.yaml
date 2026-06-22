@@ -46,11 +46,11 @@ patches:
               - name: server
                 imagePullPolicy: Always
   - target:
-      kind: Deployment
+      kind: StatefulSet
       name: omnigent-host
     patch: |
       apiVersion: apps/v1
-      kind: Deployment
+      kind: StatefulSet
       metadata:
         name: omnigent-host
       spec:

@@ -12,22 +12,50 @@
 # Connecting needs NO model creds and (with OMNIGENT_AUTH_ENABLED=0) NO token — the
 # host registers anonymously as the local user. Model creds are added only when we
 # run a real turn (envFrom omnigent-runner-secrets, optional, wired in Stage B).
-apiVersion: apps/v1
-kind: Deployment
+# Headless Service backing the StatefulSet (required for stable pod identity).
+# The host dials OUT to the server over the WS tunnel and is never addressed
+# inbound, so this Service exists only to satisfy the StatefulSet contract.
+apiVersion: v1
+kind: Service
 metadata:
   name: omnigent-host
   labels:
     app.kubernetes.io/name: omnigent-host
     app.kubernetes.io/part-of: bytedesk-omnigent
 spec:
-  # SCALABLE HOST POOL: each replica registers as its own host (host_id from its
-  # own config), so replicas=N gives N fungible hosts in the menu — scale with
-  # `kubectl -n bytedesk scale deploy/omnigent-host --replicas=N`. All replicas
-  # share ONE LLM-credential Secret (envFrom below), so every host runs agents
-  # with the same configured provider creds. Fungible workers → RollingUpdate.
-  replicas: 2
-  strategy:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: omnigent-host
+  ports:
+    - name: noop
+      port: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-host
+  labels:
+    app.kubernetes.io/name: omnigent-host
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  # SCALABLE HOST POOL with DETERMINISTIC identity (BDP-2398). A StatefulSet
+  # gives each replica a STABLE ordinal pod name (omnigent-host-0, -1, …) that
+  # survives restarts/rollouts — unlike a Deployment, whose random pod-name
+  # suffix changed every rollout and made each replica register as a NEW
+  # (owner, name) row, growing the host picker without bound.
+  #
+  # OMNIGENT_HOST_NAME/ID below are derived from that ordinal pod name, so:
+  #   - replicas=N  → exactly N hosts: omnigent-host-0 … omnigent-host-(N-1)
+  #   - a restart/rollout reuses the SAME ordinal names → no new rows
+  #   - scale with `kubectl -n bytedesk scale statefulset/omnigent-host --replicas=N`
+  # Scaling DOWN leaves the high-ordinal rows behind as offline (expected;
+  # scaling back up reclaims them). All replicas share ONE LLM-credential
+  # Secret (envFrom below). Fungible workers → Parallel management + RollingUpdate.
+  serviceName: omnigent-host
+  podManagementPolicy: Parallel
+  updateStrategy:
     type: RollingUpdate
+  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: omnigent-host
@@ -113,6 +141,23 @@ spec:
             # claude-sdk under root needs this; harmless for openai-agents.
             - name: IS_SANDBOX
               value: "1"
+            # Deterministic host identity (BDP-2398) derived from the StatefulSet's
+            # stable ordinal pod name (omnigent-host-0, -1, …). omni-home is an
+            # emptyDir, so config.yaml (which would persist host_id/name) is wiped
+            # every restart; without these the host falls through to host_{uuid4} +
+            # socket.gethostname() and registers a NEW (owner, name) row each time.
+            # The env-override path (omnigent/host/identity.py) returns this identity
+            # directly without touching config.yaml, so each ordinal reuses one row.
+            # Both vars must be set together. $(POD_NAME) expands from the env var
+            # defined just above (k8s dependent-env interpolation).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: OMNIGENT_HOST_NAME
+              value: $(POD_NAME)
+            - name: OMNIGENT_HOST_ID
+              value: host_$(POD_NAME)
             # Writable HOME so the host can persist ~/.omnigent/config.yaml (its identity).
             - name: HOME
               value: /var/omni-home

@@ -136,11 +136,11 @@ patches:
   # Same mount on every host replica. Harness subprocesses spawned per
   # conversation import from /build -> grok/bridge edits hot-load with no roll.
   - target:
-      kind: Deployment
+      kind: StatefulSet
       name: omnigent-host
     patch: |
       apiVersion: apps/v1
-      kind: Deployment
+      kind: StatefulSet
       metadata:
         name: omnigent-host
       spec:
