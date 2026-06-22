@@ -37,6 +37,37 @@ def test_get_nonexistent(conversation_store: SqlAlchemyConversationStore) -> Non
     assert conversation_store.get_conversation("conv_none") is None
 
 
+def test_create_conversation_persists_tenant_id(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """tenant_id (BDP-2388) round-trips through create_conversation; the
+    default is NULL → None so existing single-org callers are unchanged."""
+    scoped = conversation_store.create_conversation(tenant_id="tenant-a")
+    assert scoped.tenant_id == "tenant-a"
+    assert conversation_store.get_conversation(scoped.id).tenant_id == "tenant-a"
+
+    default = conversation_store.create_conversation()
+    assert default.tenant_id is None
+    assert conversation_store.get_conversation(default.id).tenant_id is None
+
+
+def test_create_session_with_agent_persists_tenant_id(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """tenant_id round-trips through the atomic session-create path too."""
+    created = conversation_store.create_session_with_agent(
+        agent_id="ag_tenant",
+        agent_name="scoped-agent",
+        agent_bundle_location="ag_tenant/bundle",
+        agent_description=None,
+        tenant_id="tenant-b",
+    )
+    assert created.conversation.tenant_id == "tenant-b"
+    fetched = conversation_store.get_conversation(created.conversation.id)
+    assert fetched is not None
+    assert fetched.tenant_id == "tenant-b"
+
+
 def test_get_conversations_bulk(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:

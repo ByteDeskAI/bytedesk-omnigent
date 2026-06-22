@@ -99,6 +99,7 @@ def _to_conversation(
         agent_id=row.agent_id,
         runner_id=row.runner_id,
         host_id=row.host_id,
+        tenant_id=row.tenant_id,
         labels=labels if labels is not None else {},
         session_state=session_state,
         session_usage=session_usage,
@@ -131,6 +132,7 @@ def _new_session_conversation_row(
     parent_conversation_id: str | None = None,
     root_conversation_id: str | None = None,
     runner_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> SqlConversation:
     """
     Build the conversation row for atomic session creation.
@@ -176,6 +178,7 @@ def _new_session_conversation_row(
         root_conversation_id=root_conversation_id or conversation_id,
         agent_id=None,
         runner_id=runner_id,
+        tenant_id=tenant_id,
         reasoning_effort=reasoning_effort,
         terminal_launch_args=(
             json.dumps(terminal_launch_args) if terminal_launch_args is not None else None
@@ -546,6 +549,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         workspace: str | None = None,
         git_branch: str | None = None,
         terminal_launch_args: list[str] | None = None,
+        tenant_id: str | None = None,
     ) -> Conversation:
         """
         Create a new conversation in the database.
@@ -637,6 +641,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                     agent_id=agent_id,
                     runner_id=runner_id,
                     host_id=host_id,
+                    tenant_id=tenant_id,
                     sub_agent_name=sub_agent_name,
                     workspace=workspace,
                     git_branch=git_branch,
@@ -1979,6 +1984,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         terminal_launch_args: list[str] | None = None,
         parent_conversation_id: str | None = None,
         runner_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> CreatedSession:
         """
         Atomically insert a conversation row and session-scoped agent.
@@ -2057,6 +2063,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                 parent_conversation_id=parent_conversation_id,
                 root_conversation_id=root_conversation_id,
                 runner_id=runner_id,
+                tenant_id=tenant_id,
             )
             session.add(conversation_row)
             session.flush()

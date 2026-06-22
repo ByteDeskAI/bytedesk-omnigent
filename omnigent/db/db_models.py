@@ -355,6 +355,13 @@ class SqlConversation(Base):
         ForeignKey("hosts.host_id", ondelete="SET NULL"),
         nullable=True,
     )
+    # Tenant the session belongs to, resolved from the request
+    # Principal at create time (BDP-2388, ADR-0149). NULL = today's
+    # single-org / local behavior; a value scopes the session to an
+    # external consumer's tenant. Low-cardinality and not yet a
+    # filter predicate, so no index — added with cross-tenant
+    # enforcement when the Office consumer lands (BDP-2395).
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     # Per-session reasoning-effort hint, e.g. "high". Nullable;
     # None means use the agent default.
     reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
