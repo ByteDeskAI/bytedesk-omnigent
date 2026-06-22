@@ -362,6 +362,13 @@ class SqlConversation(Base):
     # filter predicate, so no index — added with cross-tenant
     # enforcement when the Office consumer lands (BDP-2395).
     tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # External correlation key for the bind-or-resume / idempotency seam
+    # (BDP-2390, ADR-0149). An external consumer passes a stable key on
+    # create; a repeat key returns the existing session instead of a
+    # duplicate. NULL = no correlation (today's behavior). Uniqueness is
+    # enforced by a partial unique index (uq_conversations_external_key,
+    # WHERE external_key IS NOT NULL) so it is also the race guard.
+    external_key: Mapped[str | None] = mapped_column(String(128), nullable=True)
     # Per-session reasoning-effort hint, e.g. "high". Nullable;
     # None means use the agent default.
     reasoning_effort: Mapped[str | None] = mapped_column(String(32), nullable=True)
@@ -433,6 +440,16 @@ class SqlConversation(Base):
         # every host reconnect; index it to avoid a full scan.
         Index("ix_conversations_host_id", "host_id"),
         Index("ix_conversations_root_conversation_id", "root_conversation_id"),
+        # Idempotency / bind-or-resume single-writer guard (BDP-2390):
+        # at most one conversation per non-NULL external_key. NULL rows
+        # are exempt so ordinary sessions are unaffected.
+        Index(
+            "uq_conversations_external_key",
+            "external_key",
+            unique=True,
+            sqlite_where=text("external_key IS NOT NULL"),
+            postgresql_where=text("external_key IS NOT NULL"),
+        ),
         # Phase 4: partial unique index on (parent_conversation_id,
         # title) prevents two same-named children under the same
         # parent (G36 race protection at the DB layer). The

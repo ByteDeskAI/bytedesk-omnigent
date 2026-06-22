@@ -189,6 +189,7 @@ class Conversation:
     runner_id: str | None = None
     host_id: str | None = None
     tenant_id: str | None = None
+    external_key: str | None = None
     labels: dict[str, str] = field(default_factory=dict)
     session_state: dict[str, Any] = field(default_factory=dict)
     session_usage: dict[str, Any] = field(default_factory=dict)
