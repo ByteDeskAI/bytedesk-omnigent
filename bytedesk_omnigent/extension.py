@@ -129,15 +129,22 @@ class BytedeskExtension:
         return [InfisicalBackend()]
 
     def principal_resolvers(self) -> list:
-        """No request-principal resolver yet (BDP-2388 increment 1).
+        """The ByteDesk gateway-header principal resolver, flag-gated (BDP-2389).
 
-        The principal Chain-of-Responsibility seam exists in core; this
-        extension contributes no resolver yet (the ByteDesk gateway-header
-        resolver is a later increment). Returning ``[]`` keeps the empty,
-        zero-behavior-change default while satisfying the extended
-        ``OmnigentExtension`` Protocol.
+        Registers :class:`~bytedesk_omnigent.auth.principal_resolver.ByteDeskPrincipalResolver`
+        ONLY when the signing secret ``OMNIGENT_BYTEDESK_PRINCIPAL_SECRET`` is
+        set. With no secret it returns ``[]`` so a default deploy is zero
+        behavior change — core does not even construct the composite chain.
         """
-        return []
+        from bytedesk_omnigent.auth.principal_resolver import (
+            SECRET_ENV,
+            ByteDeskPrincipalResolver,
+        )
+
+        secret = os.environ.get(SECRET_ENV, "").strip()
+        if not secret:
+            return []
+        return [ByteDeskPrincipalResolver(secret)]
 
     # ── background lifespan tasks (started + cancelled by the server) ─
     def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
