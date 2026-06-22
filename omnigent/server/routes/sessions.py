@@ -2352,6 +2352,37 @@ def _resolve_llm_model(conv: Conversation | None) -> str | None:
         return None
 
 
+def _resolve_output_schema(conv: Conversation | None) -> dict[str, Any] | None:
+    """
+    Resolve the bound agent's declared ``output_schema`` (BDP-2393).
+
+    Mirrors :func:`_resolve_llm_model`: loads the bound agent's parsed
+    spec from the cache and returns its structured-output JSON Schema, or
+    ``None`` when the session has no agent binding, the spec can't be
+    loaded, or no ``output_schema`` was declared (free-text default).
+
+    :param conv: The conversation entity, or ``None``.
+    :returns: The JSON Schema mapping, or ``None``.
+    """
+    if conv is None or conv.agent_id is None:
+        return None
+    try:
+        from omnigent.runtime import get_agent_cache
+        from omnigent.runtime._globals import _agent_store
+
+        if _agent_store is None:
+            return None
+        agent = _agent_store.get(conv.agent_id)
+        if agent is None:
+            return None
+        loaded = get_agent_cache().load(
+            agent.id, agent.bundle_location, expand_env=agent.session_id is None
+        )
+        return loaded.spec.output_schema
+    except (KeyError, AttributeError, ValueError, ImportError, OSError):
+        return None
+
+
 def _resolve_harness(conv: Conversation | None) -> str | None:
     """
     Resolve the canonical harness for a conversation's bound agent.
@@ -16592,9 +16623,19 @@ def create_sessions_router(
                 detail="await-completion only supports type='message'",
             )
         user_id = _require_user(request, auth_provider)
-        await _require_access_and_level(
+        access = await _require_access_and_level(
             user_id, session_id, LEVEL_EDIT, permission_store, conversation_store
         )
+        # Structured-output contract (BDP-2393): if the bound agent declares
+        # an output_schema, the reply is validated against it and the parsed
+        # object is returned (Message Translator / Datatype Channel). None =
+        # free-text agent (today's default), so the reply is returned as-is.
+        # ``access.conversation`` may be unset depending on the access path,
+        # so fall back to an explicit read before resolving the schema.
+        conv = access.conversation
+        if conv is None:
+            conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        output_schema = await asyncio.to_thread(_resolve_output_schema, conv)
 
         def _assistant_message_ids() -> set[str]:
             page = conversation_store.list_items(session_id, 200, None, None, "desc")
@@ -16631,7 +16672,20 @@ def create_sessions_router(
                         if block.get("type") in ("output_text", "text")
                     )
                     if text.strip():
-                        return {"status": "completed", "item_id": it.id, "reply": text}
+                        result: dict[str, Any] = {
+                            "status": "completed",
+                            "item_id": it.id,
+                            "reply": text,
+                        }
+                        if output_schema is not None:
+                            from omnigent.spec.output_schema import validate_output
+
+                            verdict = validate_output(output_schema, text)
+                            result["output_valid"] = verdict.valid
+                            result["structured"] = verdict.value
+                            if verdict.errors:
+                                result["output_errors"] = list(verdict.errors)
+                        return result
         raise HTTPException(
             status_code=504,
             detail="turn did not complete within timeout_s; the async turn continues",

@@ -1,0 +1,41 @@
+# structured-output-demo — worked example of the BDP-2393 structured-output
+# seam (ADR-0149). Declares an `output_schema`; a consumer that calls
+# POST /v1/sessions/{id}/await gets the reply validated against it and the
+# parsed object returned (Message Translator / Datatype Channel).
+spec_version: 1
+name: structured-output-demo
+description: >-
+  Demo agent that always replies with a JSON object conforming to its
+  declared output_schema. Exercises the structured-output contract end to end.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk            # Claude Code (headless), like Maya — real turns
+
+# The structured-output contract (BDP-2393). The agent's final reply is
+# validated against this JSON Schema by consumers (e.g. /await).
+output_schema:
+  type: object
+  additionalProperties: false
+  required: [answer, confident]
+  properties:
+    answer:
+      type: string
+    confident:
+      type: boolean
+
+prompt: |
+  You are a structured-output demo agent. Reply with ONLY a single JSON object
+  and nothing else — no prose, no code fences. The object MUST match exactly:
+    {"answer": "<your one-line answer as a string>", "confident": <true|false>}
+  Do not add any other keys.
+
+async: true
+cancellable: true
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
