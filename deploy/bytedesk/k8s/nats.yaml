@@ -1,9 +1,21 @@
-# Omnigent coordination NATS — JetStream with durable PVC.
+# Omnigent NATS — two dedicated JetStream instances, each with its own PVC
+# (BDP-2380, ADR-0148). A single nats-server has ONE JetStream store directory
+# for ALL its streams (KV + Object Store + streams all live under `-sd`), so
+# isolating agent-bundle artifacts from coordination state requires a SECOND
+# server, not a second volume on the same pod. The artifact store and the
+# coordination backplane already connect by independent URLs (ARTIFACT_DIR vs
+# OMNIGENT_NATS_URL), so this split is wiring-only — no app code change.
+#
+#   • omnigent-nats            — coordination backplane: KV registry/pending/
+#                                presence + the coord-events stream. 2Gi.
+#   • omnigent-nats-artifacts  — the `omnigent-artifacts` Object Store bucket
+#                                (durable agent bundles). 5Gi PVC + a hard
+#                                max_file_store cap so runaway bundle
+#                                accumulation can NEVER starve coordination.
+#
 # Enables omnigent-server replicas > 1 when OMNIGENT_NATS_URL is set.
-# Also backs the durable agent-bundle artifact store (BDP-2380, ADR-0148):
-# the `omnigent-artifacts` JetStream Object Store bucket persists to this same
-# file-backed PVC, so the 2Gi → 5Gi bump below leaves headroom for bundles
-# (small gzipped specs) alongside the coordination KV/streams.
+
+# ── Coordination NATS ────────────────────────────────────────────────────
 apiVersion: v1
 kind: Service
 metadata:
@@ -40,7 +52,12 @@ spec:
     spec:
       containers:
         - name: nats
-          image: nats:2.10-alpine
+          # Pinned to the latest stable 2.x patch + explicit alpine base
+          # (BDP-2380). The former `nats:2.10-alpine` tag was rolled off Docker
+          # Hub, so a pod recreation would ImagePullBackOff. JetStream KV /
+          # Object Store / stream on-disk format and API are forward-compatible
+          # across the 2.x line, so this is an in-place upgrade.
+          image: nats:2.14.2-alpine3.22
           imagePullPolicy: IfNotPresent
           args:
             - "-js"
@@ -75,6 +92,113 @@ spec:
           volumeMounts:
             - name: jetstream-data
               mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: jetstream-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 2Gi
+---
+# ── Artifact NATS (dedicated agent-bundle Object Store) ──────────────────
+# JetStream file-store ceiling lives in a config file (not a CLI flag) — the
+# doc-confirmed form `jetstream { max_file_store: ... }`. 4GB under the 5Gi PVC
+# is the blast-radius guard: bundle accumulation fails new writes here instead
+# of filling the disk, and can never affect the coordination instance.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omnigent-nats-artifacts-config
+  labels:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+data:
+  nats.conf: |
+    server_name: omnigent-nats-artifacts
+    http: 0.0.0.0:8222
+    jetstream {
+      store_dir: /data
+      max_file_store: 4GB
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-nats-artifacts
+  labels:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+spec:
+  selector:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-nats-artifacts
+  labels:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+spec:
+  serviceName: omnigent-nats-artifacts
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-nats-artifacts
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-nats-artifacts
+      annotations:
+        # Roll the pod when the JetStream config (e.g. max_file_store) changes.
+        checksum/config: "max-file-store-4gb-v1"
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.14.2-alpine3.22
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-c"
+            - "/etc/nats/nats.conf"
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: jetstream-data
+              mountPath: /data
+            - name: config
+              mountPath: /etc/nats
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: omnigent-nats-artifacts-config
   volumeClaimTemplates:
     - metadata:
         name: jetstream-data
