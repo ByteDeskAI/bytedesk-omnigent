@@ -264,6 +264,10 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
     # (BDP-2334). Parsed into an immutable tuple of non-empty slugs;
     # absent => empty tuple. Consumed by the capability resolver.
     capabilities = _parse_capabilities(raw.get("capabilities"))
+    # Top-level ``output_schema:`` — structured-output contract (BDP-2393).
+    # A JSON Schema mapping; ignored unless it is a dict (free-text default).
+    raw_output_schema = raw.get("output_schema")
+    output_schema = raw_output_schema if isinstance(raw_output_schema, dict) else None
 
     # Honor ``prompt:`` as the legacy alias for ``instructions:`` (per
     # ``_OMNIGENT_SYSTEM_PROMPT_KEYS``); ``instructions:`` wins if both set.
@@ -301,6 +305,7 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
         timers=timers,
         spawn=spawn,
         capabilities=capabilities,
+        output_schema=output_schema,
     )
 
 

@@ -1552,3 +1552,9 @@ class AgentSpec:  # type: ignore[explicit-any]  # params: dict[str, Any] field (
     # absent. A tuple (not a list) so the declared surface is immutable —
     # downstream consumers read it, never mutate it.
     capabilities: tuple[str, ...] = ()
+    # Structured-output contract (BDP-2393, ADR-0149). A JSON Schema the
+    # agent's final reply is expected to conform to; consumers validate the
+    # reply against it (Strategy validator + Message Translator). Maps from
+    # the top-level YAML ``output_schema:`` mapping; ``None`` when the block
+    # is absent (today's free-text default — zero behavior change).
+    output_schema: dict[str, Any] | None = None
