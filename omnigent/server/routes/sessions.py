@@ -2069,6 +2069,31 @@ def _pending_elicitation_snapshot_for_session(
     return events
 
 
+def _enforce_tenant_scope(caller_tenant: str | None, conv: Conversation | None) -> None:
+    """
+    Cross-tenant isolation guard (BDP-2395, ADR-0149).
+
+    When the caller's resolved principal is scoped to a tenant and the target
+    session belongs to a *different* tenant, deny access — even if owner-scoping
+    would otherwise allow it (defence in depth on top of the per-owner ACL).
+    Raises ``NOT_FOUND`` (not ``FORBIDDEN``) so a cross-tenant probe cannot use
+    the error to confirm a session id exists. A ``None`` caller tenant (single-
+    org / local) or a ``None`` session tenant (legacy / local session) is exempt
+    — today's behavior is unchanged.
+
+    :param caller_tenant: The caller principal's ``tenant_id``, or ``None``.
+    :param conv: The target conversation, or ``None``.
+    :raises OmnigentError: 404 when the tenants are both set and differ.
+    """
+    if (
+        caller_tenant is not None
+        and conv is not None
+        and conv.tenant_id is not None
+        and conv.tenant_id != caller_tenant
+    ):
+        raise OmnigentError("Session not found", code=ErrorCode.NOT_FOUND)
+
+
 def _build_session_response(
     conv: Conversation,
     items: list[ConversationItem],
@@ -12346,6 +12371,12 @@ def create_sessions_router(
         access = await _require_access_and_level(
             user_id, session_id, LEVEL_READ, permission_store, conversation_store
         )
+        # Cross-tenant isolation (BDP-2395): a tenant-scoped principal cannot
+        # read another tenant's session even when owner-scoping would allow it.
+        _principal = auth_provider.get_principal(request) if auth_provider else None
+        _enforce_tenant_scope(
+            _principal.tenant_id if _principal else None, access.conversation
+        )
         return await _get_session_snapshot(
             conversation_store,
             session_id,
@@ -12495,6 +12526,14 @@ def create_sessions_router(
             search_query=normalized_query,
             include_archived=include_archived,
         )
+        # Cross-tenant isolation (BDP-2395): the owner ACL above filters by
+        # user; layer the tenant dimension on top so a tenant-scoped principal
+        # never sees another tenant's sessions in the list. ``None`` caller
+        # tenant (single-org / local) leaves the listing unchanged.
+        _principal = auth_provider.get_principal(request) if auth_provider else None
+        _caller_tenant = _principal.tenant_id if _principal else None
+        if _caller_tenant is not None:
+            page.data = [conv for conv in page.data if conv.tenant_id == _caller_tenant]
         # list_conversations may return rows with agent_id=None for
         # legacy conversations; skip them before building the batch IDs.
         conv_ids = [conv.id for conv in page.data if conv.agent_id is not None]
