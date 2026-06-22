@@ -1427,6 +1427,9 @@ class SessionResponse(BaseModel):
     :param host_id: Host that launched (or should launch) the
         runner for this session, e.g. ``"host_a1b2c3d4..."``.
         ``None`` for CLI-initiated sessions.
+    :param tenant_id: Tenant this session belongs to, resolved from
+        the request Principal at create time (ADR-0149, BDP-2388).
+        ``None`` for single-org / local sessions (today's default).
     :param runner_online: Strict runner liveness — ``True`` iff a
         runner tunnel is currently registered for this session.
         This is the sole reachability signal: ``True`` means the
@@ -1612,6 +1615,7 @@ class SessionResponse(BaseModel):
     labels: dict[str, str] = Field(default_factory=dict)
     runner_id: str | None = None
     host_id: str | None = None
+    tenant_id: str | None = None
     runner_online: bool | None = None
     host_online: bool | None = None
     reasoning_effort: str | None = None

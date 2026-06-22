@@ -2129,6 +2129,7 @@ def _build_session_response(
         labels=labels_with_closed_status(conv.labels, conv.title),
         runner_id=conv.runner_id,
         host_id=conv.host_id,
+        tenant_id=conv.tenant_id,
         runner_online=runner_online,
         host_online=host_online,
         reasoning_effort=conv.reasoning_effort,
@@ -10282,6 +10283,7 @@ async def _create_session_from_existing_agent(
     user_id: str | None = None,
     permission_store: PermissionStore | None = None,
     liveness_lookup: Callable[[list[str]], dict[str, SessionLiveness]] | None = None,
+    tenant_id: str | None = None,
 ) -> SessionResponse:
     """
     Create a session bound to an already-registered agent.
@@ -10476,6 +10478,7 @@ async def _create_session_from_existing_agent(
             workspace=canonical_workspace,
             git_branch=git_branch,
             terminal_launch_args=validated_launch_args,
+            tenant_id=tenant_id,
         )
     except Exception:
         # Broad catch is intentional: ANY create_conversation failure
@@ -10596,6 +10599,7 @@ def _create_session_from_bundle(
     metadata: SessionCreateMetadata,
     bundle_bytes: bytes,
     runner_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> CreatedSessionResponse:
     """
     Validate, store, and persist a bundled session request.
@@ -10657,6 +10661,7 @@ def _create_session_from_bundle(
         agent_bundle_location=agent_bundle_location,
         agent_description=spec.description,
         runner_id=runner_id,
+        tenant_id=tenant_id,
     )
 
 
@@ -10670,6 +10675,7 @@ def _persist_stored_session_bundle(
     agent_bundle_location: str,
     agent_description: str | None,
     runner_id: str | None = None,
+    tenant_id: str | None = None,
 ) -> CreatedSessionResponse:
     """
     Persist database rows for a bundle already written to artifacts.
@@ -10705,6 +10711,7 @@ def _persist_stored_session_bundle(
             terminal_launch_args=metadata.terminal_launch_args,
             parent_conversation_id=metadata.parent_session_id,
             runner_id=runner_id,
+            tenant_id=tenant_id,
         )
     except ConversationNotFoundError as exc:
         # Parent was authorized by the caller but vanished (deleted)
@@ -11827,9 +11834,16 @@ def create_sessions_router(
             database creation fails.
         """
         user_id = _require_user(request, auth_provider)
+        # Resolve the full principal (BDP-2388, ADR-0149): the tenant
+        # the caller belongs to is persisted on the new session so an
+        # external consumer's sessions are tenant-scoped. ``None`` for
+        # single-org / local callers (today's default) — zero behavior
+        # change. ``get_principal`` is the 2a Adapter over the auth chain.
+        _principal = auth_provider.get_principal(request)
+        tenant_id = _principal.tenant_id if _principal is not None else None
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type == "multipart/form-data":
-            result = await _create_bundled_session_from_multipart(request, user_id)
+            result = await _create_bundled_session_from_multipart(request, user_id, tenant_id)
             if permission_store is not None and user_id is not None:
                 await asyncio.to_thread(permission_store.ensure_user, user_id)
                 await asyncio.to_thread(
@@ -11873,6 +11887,7 @@ def create_sessions_router(
             user_id=user_id,
             permission_store=permission_store,
             liveness_lookup=liveness_lookup,
+            tenant_id=tenant_id,
         )
         # Notify the runner about the new session so it can resolve
         # the spec and cache sub_agent_name before the first turn.
@@ -12100,6 +12115,7 @@ def create_sessions_router(
     async def _create_bundled_session_from_multipart(
         request: Request,
         user_id: str | None,
+        tenant_id: str | None = None,
     ) -> CreatedSessionResponse:
         """
         Handle multipart ``POST /v1/sessions`` with inline agent upload.
@@ -12157,6 +12173,7 @@ def create_sessions_router(
             parsed_metadata,
             bundle_bytes,
             inherited_runner_id,
+            tenant_id,
         )
         # Top-level creates (no inherited runner) skip the notify —
         # their runner registers itself later.
