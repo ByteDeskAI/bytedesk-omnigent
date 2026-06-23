@@ -21,7 +21,14 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "@/lib/routing";
-import { KeyRoundIcon, LogOutIcon, ShieldCheckIcon, UserCogIcon, UsersIcon } from "lucide-react";
+import {
+  KeyRoundIcon,
+  LogOutIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+  UserCogIcon,
+  UsersIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -162,6 +169,11 @@ export function AccountMenu() {
               <DropdownMenuItem asChild>
                 <Link to="/policies" className="flex items-center gap-2">
                   <ShieldCheckIcon /> Policies
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
+                <Link to="/config" className="flex items-center gap-2">
+                  <SettingsIcon /> Configuration
                 </Link>
               </DropdownMenuItem>
             </>
