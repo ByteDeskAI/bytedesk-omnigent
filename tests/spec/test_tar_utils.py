@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from omnigent.spec.tar_utils import ExtractionError, extract_safe
+from omnigent.spec.tar_utils import ExtractionError, _check_member_safety, _open_tar, extract_safe
 
 
 def _create_tar(tmp_path: Path, members: dict[str, bytes | str]) -> Path:
@@ -188,6 +188,27 @@ def test_extract_from_bytes(tmp_path: Path, dest: Path) -> None:
     assert result == dest
     assert (dest / "config.yaml").exists()
     assert yaml.safe_load((dest / "config.yaml").read_text())["name"] == "bytes-agent"
+
+
+def test_open_tar_rejects_invalid_bytes() -> None:
+    with pytest.raises(ExtractionError, match="invalid tarball"):
+        _open_tar(b"not-a-tarball")
+
+
+def test_open_tar_rejects_invalid_path(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.tar.gz"
+    bad.write_bytes(b"not-a-tarball")
+    with pytest.raises(ExtractionError, match="invalid tarball"):
+        _open_tar(bad)
+
+
+def test_check_member_escapes_destination(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    dest = tmp_path / "dest"
+    dest.mkdir()
+    member = tarfile.TarInfo(name="innocent.txt")
+    monkeypatch.setattr(Path, "is_relative_to", lambda _self, _other: False)
+    with pytest.raises(ExtractionError, match="escapes destination"):
+        _check_member_safety(member, dest.resolve())
 
 
 def test_extract_from_bytes_rejects_traversal(dest: Path) -> None:
