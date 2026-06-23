@@ -123,3 +123,151 @@ def test_explicit_override_selects_local(file_home, monkeypatch):
     s.reset_backends()
     assert s.active_backend() == s.FILE_BACKEND
     assert s.load_secret("x") is None  # didn't consult infisical
+
+
+def test_config_home_defaults_under_user_omnigent(tmp_path, monkeypatch):
+    """Without ``OMNIGENT_CONFIG_HOME``, secrets land under ``~/.omnigent``."""
+    monkeypatch.delenv("OMNIGENT_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(s, "_extension_backends", lambda: [])
+    s.reset_backends()
+
+    s.store_secret("home-default", "value")
+    assert (tmp_path / ".omnigent" / "secrets.json").exists()
+    assert s.load_secret("home-default") == "value"
+
+
+def test_keyring_backend_roundtrip(monkeypatch):
+    """When keyring is enabled, reads/writes go through the OS keychain."""
+    store: dict[str, str] = {}
+
+    def _get(service: str, name: str) -> str | None:
+        return store.get(f"{service}:{name}")
+
+    def _set(service: str, name: str, value: str) -> None:
+        store[f"{service}:{name}"] = value
+
+    def _delete(service: str, name: str) -> None:
+        store.pop(f"{service}:{name}", None)
+
+    monkeypatch.delenv("OMNIGENT_DISABLE_KEYRING", raising=False)
+    monkeypatch.setattr(s, "_extension_backends", lambda: [])
+    monkeypatch.setattr("omnigent.onboarding.secrets.keyring.get_password", _get)
+    monkeypatch.setattr("omnigent.onboarding.secrets.keyring.set_password", _set)
+    monkeypatch.setattr("omnigent.onboarding.secrets.keyring.delete_password", _delete)
+    s.reset_backends()
+
+    assert s.active_backend() == s.KEYRING_BACKEND
+    s.store_secret("openai", "sk-test")
+    assert s.load_secret("openai") == "sk-test"
+    s.delete_secret("openai")
+    assert s.load_secret("openai") is None
+
+
+def test_keyring_errors_fall_back_to_file(tmp_path, monkeypatch):
+    """A locked keyring must not block the on-disk fallback."""
+    import keyring.errors
+
+    monkeypatch.delenv("OMNIGENT_CONFIG_HOME", raising=False)
+    monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
+    monkeypatch.delenv("OMNIGENT_DISABLE_KEYRING", raising=False)
+    monkeypatch.setattr(s, "_extension_backends", lambda: [])
+
+    def _boom(*_a: object, **_k: object) -> None:
+        raise keyring.errors.KeyringError("locked")
+
+    monkeypatch.setattr("omnigent.onboarding.secrets.keyring.get_password", _boom)
+    monkeypatch.setattr("omnigent.onboarding.secrets.keyring.set_password", _boom)
+    monkeypatch.setattr("omnigent.onboarding.secrets.keyring.delete_password", _boom)
+    s.reset_backends()
+
+    s.store_secret("fallback", "file-value")
+    assert s.load_secret("fallback") == "file-value"
+    s.delete_secret("fallback")
+    assert s.load_secret("fallback") is None
+
+
+def test_extension_backends_call_error_returns_empty(monkeypatch) -> None:
+    """A broken extension contributor must not break secret resolution."""
+    monkeypatch.setattr(
+        "omnigent.extensions.extension_secret_backends",
+        lambda: (_ for _ in ()).throw(RuntimeError("extension seam unavailable")),
+    )
+    assert s._extension_backends() == []
+
+
+def test_extension_backends_import_failure_is_ignored(tmp_path, monkeypatch):
+    """A broken extension seam must not break local secret resolution."""
+    monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
+    monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "omnigent.extensions.extension_secret_backends",
+        lambda: (_ for _ in ()).throw(RuntimeError("extension seam unavailable")),
+    )
+    s.reset_backends()
+    s.store_secret("local", "ok")
+    assert s.load_secret("local") == "ok"
+    s.reset_backends()
+
+
+def test_unavailable_extension_reports_false_when_availability_raises(
+    file_home, monkeypatch
+):
+    """Backends that crash ``available()`` are skipped."""
+
+    class _CrashingBackend:
+        name = "crashing"
+
+        def available(self) -> bool:
+            raise RuntimeError("cannot probe")
+
+        def load(self, name: str) -> str | None:
+            return None
+
+        def store(self, name: str, value: str) -> None:
+            pass
+
+        def delete(self, name: str) -> None:
+            pass
+
+    monkeypatch.setattr(s, "_extension_backends", lambda: [_CrashingBackend()])
+    s.reset_backends()
+    assert s.active_backend() == s.FILE_BACKEND
+
+
+def test_explicit_override_selects_extension_backend(file_home, monkeypatch):
+    """``OMNIGENT_SECRET_BACKEND=infisical`` pins the named extension backend."""
+    fake = _FakeBackend("infisical", store={"pinned": "remote"})
+    monkeypatch.setattr(s, "_extension_backends", lambda: [fake])
+    monkeypatch.setenv("OMNIGENT_SECRET_BACKEND", "infisical")
+    s.reset_backends()
+    assert s.active_backend() == "infisical"
+    assert s.load_secret("pinned") == "remote"
+
+
+def test_explicit_override_unknown_falls_back_to_local(file_home, monkeypatch):
+    fake = _FakeBackend("infisical", store={})
+    monkeypatch.setattr(s, "_extension_backends", lambda: [fake])
+    monkeypatch.setenv("OMNIGENT_SECRET_BACKEND", "nonexistent")
+    s.reset_backends()
+    assert s.active_backend() == s.FILE_BACKEND
+
+
+def test_load_skips_flaky_backend_and_falls_through(file_home, monkeypatch):
+    """A backend that raises on ``load`` must not block later backends."""
+
+    class _FlakyBackend(_FakeBackend):
+        def load(self, name: str) -> str | None:
+            raise OSError("network down")
+
+    flaky = _FlakyBackend("infisical", store={"k": "remote"})
+    monkeypatch.setattr(s, "_extension_backends", lambda: [flaky])
+    s.reset_backends()
+    (file_home / "secrets.json").write_text('{"k": "local-copy"}')
+    assert s.load_secret("k") == "local-copy"
+
+
+def test_local_backend_available_is_always_true(file_home):
+    """``LocalBackend.available`` is the unconditional local fallback hook."""
+    assert s.LocalBackend().available() is True

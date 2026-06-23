@@ -165,6 +165,37 @@ def test_default_is_async_false() -> None:
     assert tool.is_async(arguments='{"key": "value"}') is False
 
 
+@pytest.mark.asyncio
+async def test_dispatch_async_raises_when_async_not_overridden() -> None:
+    """Async tools must override dispatch_async or the base raises."""
+
+    class AsyncWithoutDispatch(Tool):
+        @classmethod
+        def name(cls) -> str:
+            return "async_no_dispatch"
+
+        @classmethod
+        def description(cls) -> str:
+            return "Async but incomplete."
+
+        def get_schema(self) -> dict[str, Any]:
+            return {}
+
+        def is_async(self, arguments: str = "") -> bool:  # noqa: ARG002
+            return True
+
+    tool = AsyncWithoutDispatch()
+    with pytest.raises(NotImplementedError, match="dispatch_async"):
+        await tool.dispatch_async(
+            parent_task_id="parent",
+            parent_conversation_id="conv",
+            agent_id="agent",
+            agent_name="async_no_dispatch",
+            arguments="{}",
+            workspace_path=None,
+        )
+
+
 def test_cancel_is_noop() -> None:
     """cancel() is a no-op by default (does not raise)."""
 

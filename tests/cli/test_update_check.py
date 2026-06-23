@@ -353,8 +353,8 @@ def test_fresh_cache_shows_notice(
     with patch("omnigent.update_check._find_repo_root", return_value=tmp_path):
         maybe_show_update_notice()
 
-    err = capsys.readouterr().err
-    assert "3 commit(s) ahead" in err
+    err = _strip_rich_panel(capsys.readouterr().err)
+    assert "origin/main is 3 commit(s) ahead" in err
     assert "git pull" in err
 
 
@@ -448,8 +448,8 @@ def test_stale_cache_triggers_check(
     ):
         maybe_show_update_notice()
 
-    err = capsys.readouterr().err
-    assert "4 commit(s) ahead" in err
+    err = _strip_rich_panel(capsys.readouterr().err)
+    assert "origin/main is 4 commit(s) ahead" in err
 
     # Verify the cache was updated.
     refreshed = _read_cache()
@@ -501,6 +501,7 @@ from omnigent.update_check import (  # noqa: E402
     _read_build_info,
     _read_installed_wheel_info,
     _run_installed_wheel_check,
+    _spawn_background_refresh as _real_spawn_background_refresh,
     _unredact_ssh_userinfo,
 )
 
@@ -580,7 +581,8 @@ def _strip_rich_panel(text: str) -> str:
     """
     import re
 
-    no_box = re.sub(r"[╭╮╯╰─│]", "", text)
+    no_ansi = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    no_box = re.sub(r"[╭╮╯╰─│]", "", no_ansi)
     return re.sub(r"\s+", " ", no_box).strip()
 
 
@@ -1897,6 +1899,400 @@ def test_run_upgrade_command_returns_minus_one_when_binary_missing(
     assert "Upgrade failed to start" in err
     # The OS error text must be surfaced so the user can act on it.
     assert "No such file or directory" in err
+
+
+# ------------------------------------------------------------------
+# Coverage gaps — drive remaining branches to 100%
+# ------------------------------------------------------------------
+
+
+def test_run_dev_clone_check_swallows_read_cache_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any I/O/git error inside the clone check must not propagate."""
+    from omnigent.update_check import _run_dev_clone_check
+
+    monkeypatch.setattr(
+        "omnigent.update_check._read_cache",
+        lambda: (_ for _ in ()).throw(OSError("disk")),
+    )
+    _run_dev_clone_check(tmp_path)  # must not raise
+
+
+def test_run_installed_wheel_check_swallows_metadata_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Corrupt distribution metadata is fail-open for the wheel nag."""
+    monkeypatch.setattr(
+        "omnigent.update_check._read_installed_wheel_info",
+        lambda: (_ for _ in ()).throw(ValueError("bad metadata")),
+    )
+    _run_installed_wheel_check()  # must not raise
+
+
+def test_index_from_pip_config_reads_pip_config_file_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``$PIP_CONFIG_FILE`` is the highest-precedence pip.conf source."""
+    from omnigent.update_check import _index_from_pip_config
+
+    pip_conf = tmp_path / "custom-pip.conf"
+    pip_conf.write_text("[install]\nindex-url = https://envfile.example/simple/\n")
+    monkeypatch.setenv("PIP_CONFIG_FILE", str(pip_conf))
+    monkeypatch.setattr("omnigent.update_check._user_config_base", lambda: tmp_path / "unused")
+
+    assert _index_from_pip_config() == "https://envfile.example/simple"
+
+
+def test_index_from_pip_config_skips_unreadable_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unreadable pip.conf candidates are skipped without raising."""
+    from omnigent.update_check import _index_from_pip_config
+
+    monkeypatch.delenv("PIP_CONFIG_FILE", raising=False)
+    monkeypatch.setattr("omnigent.update_check._user_config_base", lambda: tmp_path)
+    broken = tmp_path / "pip" / "pip.conf"
+    broken.parent.mkdir(parents=True)
+    broken.write_bytes(b"\xff\xfe not utf-8")
+
+    assert _index_from_pip_config() == ""
+
+
+def test_parse_simple_versions_handles_malformed_json_body() -> None:
+    """Invalid JSON in a PEP 691 response yields no versions."""
+    import httpx
+
+    from omnigent.update_check import _parse_simple_versions
+
+    resp = httpx.Response(200, headers={"content-type": "application/json"}, content=b"{")
+    assert _parse_simple_versions(resp) == []
+
+    resp2 = httpx.Response(200, headers={"content-type": "application/json"}, content=b"[]")
+    assert _parse_simple_versions(resp2) == []
+
+    resp3 = httpx.Response(200, headers={"content-type": "application/json"}, content=b"{}")
+    assert _parse_simple_versions(resp3) == []
+
+
+def test_versions_from_filenames_skips_unparseable_names() -> None:
+    """Garbage wheel/sdist names are dropped instead of aborting the parse."""
+    from omnigent.update_check import _versions_from_filenames
+
+    versions = _versions_from_filenames(
+        ["not-a-wheel.txt", "omnigent-0.2.0-py3-none-any.whl", "bad-sdist.tar.gz"]
+    )
+    assert [str(v) for v in versions] == ["0.2.0"]
+
+
+def test_safe_version_returns_none_for_invalid_pep440() -> None:
+    from omnigent.update_check import _safe_version
+
+    assert _safe_version("not-a-version") is None
+
+
+def test_refresh_update_cache_respects_skip_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``OMNIGENT_NO_UPDATE_CHECK`` short-circuits the background refresh."""
+    from omnigent.update_check import refresh_update_cache
+
+    monkeypatch.setenv("OMNIGENT_NO_UPDATE_CHECK", "1")
+    _point_cache_at(tmp_path, monkeypatch)
+    monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
+    monkeypatch.setattr(
+        "omnigent.update_check.fetch_latest_version",
+        lambda: (_ for _ in ()).throw(AssertionError("should not fetch")),
+    )
+    refresh_update_cache()
+
+
+def test_refresh_update_cache_skips_editable_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.update_check import _InstalledWheelInfo, refresh_update_cache
+
+    monkeypatch.delenv("OMNIGENT_NO_UPDATE_CHECK", raising=False)
+    _point_cache_at(tmp_path, monkeypatch)
+    monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
+    monkeypatch.setattr(
+        "omnigent.update_check._read_installed_wheel_info",
+        lambda: _InstalledWheelInfo(
+            install_time_epoch=time.time(),
+            installer="pip",
+            vcs_url=None,
+            commit_sha=None,
+            is_editable=True,
+            package_version="0.1.0",
+            detected_installer="pip",
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.update_check.fetch_latest_version",
+        lambda: (_ for _ in ()).throw(AssertionError("should not fetch")),
+    )
+    refresh_update_cache()
+
+
+def test_refresh_update_cache_noop_when_index_lookup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.update_check import refresh_update_cache
+
+    monkeypatch.delenv("OMNIGENT_NO_UPDATE_CHECK", raising=False)
+    _point_cache_at(tmp_path, monkeypatch)
+    dist = _write_fake_dist_info(tmp_path, installer="uv")
+    monkeypatch.setattr("omnigent.update_check._get_distribution", lambda: dist)
+    monkeypatch.setattr("omnigent.update_check._find_repo_root", lambda: None)
+    monkeypatch.setattr("omnigent.update_check.fetch_latest_version", lambda: None)
+
+    refresh_update_cache()
+    assert _read_cache() is None
+
+
+def test_spawn_background_refresh_swallows_popen_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: object, **_k: object) -> None:
+        raise OSError("no spawn")
+
+    monkeypatch.setattr(
+        "omnigent.update_check._spawn_background_refresh",
+        _real_spawn_background_refresh,
+    )
+    monkeypatch.setattr("omnigent.update_check.subprocess.Popen", _boom)
+    _real_spawn_background_refresh()  # must not raise
+
+
+def test_spawn_background_refresh_launches_detached_refresh_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Successful spawn must fire a detached ``python -c`` refresh child."""
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def _capture(cmd: list[str], **kwargs: object) -> object:
+        calls.append((cmd, kwargs))
+        return object()
+
+    monkeypatch.setattr(
+        "omnigent.update_check._spawn_background_refresh",
+        _real_spawn_background_refresh,
+    )
+    monkeypatch.setattr("omnigent.update_check.subprocess.Popen", _capture)
+    _real_spawn_background_refresh()
+
+    assert len(calls) == 1
+    cmd, kwargs = calls[0]
+    assert cmd[0] == sys.executable
+    assert "refresh_update_cache" in cmd[2]
+    assert kwargs["stdin"] == subprocess.DEVNULL
+    assert kwargs["stdout"] == subprocess.DEVNULL
+    assert kwargs["stderr"] == subprocess.DEVNULL
+    assert kwargs["start_new_session"] is True
+    assert kwargs["close_fds"] is True
+
+
+def test_write_cache_cleans_up_on_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failed atomic write must not leave a stale temp file behind."""
+    monkeypatch.setattr("omnigent.update_check._CACHE_DIR", tmp_path)
+    monkeypatch.setattr("omnigent.update_check._CACHE_FILE", tmp_path / ".update_check.json")
+
+    with patch("omnigent.update_check.os.write", side_effect=OSError("disk full")):
+        _write_cache(_CacheEntry(last_check_epoch=time.time(), commits_behind=0))
+
+    temps = list(tmp_path.glob("*.tmp"))
+    assert temps == []
+
+
+def test_get_head_sha_returns_none_on_git_failure(tmp_path: Path) -> None:
+    from omnigent.update_check import _get_head_sha
+
+    assert _get_head_sha(tmp_path) is None
+
+
+def test_local_rev_list_count_falls_back_to_master(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.update_check import _local_rev_list_count
+
+    calls: list[str] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        branch = cmd[-2].split("/")[-1]
+        calls.append(branch)
+        if branch == "main":
+            raise subprocess.CalledProcessError(1, cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="5\n")
+
+    monkeypatch.setattr("omnigent.update_check.subprocess.run", fake_run)
+    assert _local_rev_list_count(tmp_path) == 5
+    assert calls == ["main", "master"]
+
+
+def test_local_rev_list_count_returns_none_when_both_branches_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.update_check import _local_rev_list_count
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
+        raise subprocess.CalledProcessError(1, cmd)
+
+    monkeypatch.setattr("omnigent.update_check.subprocess.run", fake_run)
+    assert _local_rev_list_count(tmp_path) is None
+
+
+def test_get_distribution_returns_none_when_package_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import importlib.metadata
+
+    from omnigent.update_check import _get_distribution
+
+    def _missing(_name: str) -> importlib.metadata.Distribution:
+        raise importlib.metadata.PackageNotFoundError("omnigent")
+
+    monkeypatch.setattr(importlib.metadata, "distribution", _missing)
+    assert _get_distribution() is None
+
+
+def test_read_wheel_info_tolerates_corrupt_uv_cache_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_time = time.time() - 3600
+    dist = _write_fake_dist_info(
+        tmp_path,
+        installer="uv",
+        uv_cache={"timestamp": "not-a-dict"},
+        dir_mtime_epoch=install_time,
+    )
+    (dist._path / "uv_cache.json").write_text("{not json")  # type: ignore[attr-defined]
+    monkeypatch.setattr("omnigent.update_check._get_distribution", lambda: dist)
+
+    info = _read_installed_wheel_info()
+    assert info is not None
+    assert abs(info.install_time_epoch - install_time) < 1.0
+
+
+def test_read_wheel_info_returns_none_when_no_install_time_signal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dist_info = tmp_path / "omnigent-0.1.0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: omnigent\nVersion: 0.1.0\n")
+    dist = importlib.metadata.PathDistribution(dist_info)
+    monkeypatch.setattr("omnigent.update_check._get_distribution", lambda: dist)
+    monkeypatch.setattr("omnigent.update_check._read_build_info", lambda: None)
+    monkeypatch.setattr("omnigent.update_check._dist_info_dir", lambda _d: None)
+
+    assert _read_installed_wheel_info() is None
+
+
+def test_read_wheel_info_returns_none_when_dist_info_stat_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unreadable dist-info mtime must not crash metadata parsing."""
+    dist = _write_fake_dist_info(tmp_path, installer="pip", uv_cache=None)
+    monkeypatch.setattr("omnigent.update_check._get_distribution", lambda: dist)
+    monkeypatch.setattr("omnigent.update_check._read_build_info", lambda: None)
+
+    fake_dir = tmp_path / "blocked.dist-info"
+    fake_dir.mkdir()
+
+    def _stat_boom(self: Path) -> object:
+        if self == fake_dir:
+            raise OSError("permission denied")
+        return Path.stat(self)
+
+    monkeypatch.setattr("omnigent.update_check._dist_info_dir", lambda _d: fake_dir)
+    monkeypatch.setattr(Path, "stat", _stat_boom)
+
+    assert _read_installed_wheel_info() is None
+
+
+def test_read_wheel_info_detects_pipx_via_sys_prefix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    install_time = time.time() - 86400
+    dist = _write_fake_dist_info(tmp_path, installer="pip", dir_mtime_epoch=install_time)
+    monkeypatch.setattr("omnigent.update_check._get_distribution", lambda: dist)
+    monkeypatch.setattr(
+        sys,
+        "prefix",
+        str(tmp_path / ".local" / "pipx" / "venvs" / "omnigent"),
+    )
+
+    info = _read_installed_wheel_info()
+    assert info is not None
+    assert info.detected_installer == "pipx"
+
+
+def test_read_installer_returns_none_for_blank_installer_file(
+    tmp_path: Path,
+) -> None:
+    from omnigent.update_check import _read_installer
+
+    dist_info = tmp_path / "omnigent-0.1.0.dist-info"
+    dist_info.mkdir()
+    (dist_info / "INSTALLER").write_text("   \n")
+    dist = importlib.metadata.PathDistribution(dist_info)
+    assert _read_installer(dist) is None
+
+
+def test_safe_read_dist_file_returns_none_on_os_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.update_check import _safe_read_dist_file
+
+    dist = _write_fake_dist_info(tmp_path, installer="uv")
+
+    def _boom(_name: str) -> str:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(dist, "read_text", _boom)
+    assert _safe_read_dist_file(dist, "INSTALLER") is None
+
+
+def test_dist_info_dir_accepts_string_like_path(tmp_path: Path) -> None:
+    from omnigent.update_check import _dist_info_dir
+
+    dist_info = tmp_path / "omnigent-0.1.0.dist-info"
+    dist_info.mkdir()
+    dist = importlib.metadata.PathDistribution(dist_info)
+    object.__setattr__(dist, "_path", str(dist_info))
+    assert _dist_info_dir(dist) == dist_info
+
+
+def test_dist_info_dir_returns_none_when_string_path_is_not_directory(
+    tmp_path: Path,
+) -> None:
+    """Non-directory ``_path`` strings are rejected instead of raising."""
+    from omnigent.update_check import _dist_info_dir
+
+    dist_info = tmp_path / "omnigent-0.1.0.dist-info"
+    dist_info.mkdir()
+    not_a_dir = tmp_path / "single-file.txt"
+    not_a_dir.write_text("not a directory")
+    dist = importlib.metadata.PathDistribution(dist_info)
+    object.__setattr__(dist, "_path", str(not_a_dir))
+    assert _dist_info_dir(dist) is None
+
+
+def test_build_upgrade_suggestion_poetry_vcs_install() -> None:
+    info = _InstalledWheelInfo(
+        install_time_epoch=time.time(),
+        installer="poetry",
+        vcs_url=_FAKE_GIT_URL,
+        commit_sha=_FAKE_COMMIT,
+        is_editable=False,
+        package_version="0.1.0",
+        detected_installer="poetry",
+    )
+    suggestion = _build_upgrade_suggestion(info)
+    assert suggestion is not None
+    assert suggestion.command == f"poetry add --force {_FAKE_GIT_URL}"
+    assert suggestion.runnable is True
 
 
 # ------------------------------------------------------------------

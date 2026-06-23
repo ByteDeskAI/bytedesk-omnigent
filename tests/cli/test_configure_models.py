@@ -36,6 +36,7 @@ load-bearing behavior — it has dedicated coverage below.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 import tomllib
@@ -60,6 +61,12 @@ from omnigent.onboarding.provider_config import (
 )
 
 
+def _normalize_rich_output(text: str) -> str:
+    """Strip ANSI styling so substring asserts survive Rich rendering."""
+    no_ansi = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return re.sub(r"\s+", " ", no_ansi).strip()
+
+
 @pytest.fixture()
 def isolated_config(tmp_path, monkeypatch):
     """Isolate config + secrets to a tmp dir with the file secret backend.
@@ -75,6 +82,9 @@ def isolated_config(tmp_path, monkeypatch):
     """
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
+    # Pin the local file backend so a developer's Infisical creds never
+    # hijack store_secret/load_secret during isolated CLI flows.
+    monkeypatch.setenv("OMNIGENT_SECRET_BACKEND", "local")
     for var in (
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
@@ -83,11 +93,18 @@ def isolated_config(tmp_path, monkeypatch):
         "OPENROUTER_API_KEY",
         "DATABRICKS_TOKEN",
         "CURSOR_API_KEY",
+        "INFISICAL_HOST_URL",
+        "INFISICAL_UNIVERSAL_AUTH_CLIENT_ID",
+        "INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET",
+        "INFISICAL_CLIENT_SECRET",
+        "OMNIGENT_INFISICAL_PROJECT_SLUG",
+        "OMNIGENT_INFISICAL_ENV",
     ):
         monkeypatch.delenv(var, raising=False)
     # Redirect CLI-detected credential homes so a developer's real
     # ~/.claude / ~/.codex logins don't leak into ambient detection.
     monkeypatch.setenv("HOME", str(tmp_path))
+    secrets.reset_backends()
     return tmp_path
 
 
@@ -934,8 +951,9 @@ def test_render_listing_excludes_configured_subscription_clis(
     # …and its wrapped CLI is NOT offered under "Detected (not configured)"…
     assert "claude CLI login" not in out
     # …while an unrelated ambient detection still surfaces as a hint.
-    assert "Detected (not configured)" in out
-    assert "gemini" in out
+    plain = _normalize_rich_output(out)
+    assert "Detected (not configured)" in plain
+    assert "gemini" in plain
 
 
 def _seed_config(config_home, providers: dict[str, object]) -> None:
@@ -2213,7 +2231,7 @@ def test_antigravity_overview_surfaces_install_command_when_sdk_missing(
     """
     result = CliRunner().invoke(cli, ["setup", "--no-internal-beta"], input="q\n")
     assert result.exit_code == 0, result.output
-    out = result.output
+    out = _normalize_rich_output(result.output)
     assert "not installed — open to install" in out
     # The literal command (brackets included) reaches the rendered output.
     assert 'pip install "omnigent[antigravity]"' in out
