@@ -1181,6 +1181,12 @@ def create_app(
     # and WSTunnelTransport to the same session registry.
     app.state.tunnel_registry = tunnel_registry
     app.state.runner_router = runner_router
+    # BDP-2424 P2: signer for the internal ``X-Omnigent-Acting-Identity`` carrier
+    # the MCP proxy attaches on runner dispatch (mirrors the runner's
+    # ``app.state.assertion_verifier``). Unset secret ⇒ no token ⇒ unchanged.
+    from omnigent.identity.signer import HmacAssertionSigner
+
+    app.state.assertion_signer = HmacAssertionSigner.from_env()
     app.state.host_registry = host_registry
     app.state.host_store = host_store
     app.state.sandbox_config = sandbox_config
