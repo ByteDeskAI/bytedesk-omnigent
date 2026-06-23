@@ -334,6 +334,45 @@ async def _grant_permission(
     )
 
 
+async def test_grant_permission_if_match_optimistic_concurrency(
+    auth_client: httpx.AsyncClient,
+) -> None:
+    """If-Match guards the grant update through the real route (BDP-2412)."""
+    session = await _create_session_as(auth_client, "ignored", "bryan@test")
+    sid = session["id"]
+
+    # First grant to alice → version 1, ETag header + body.
+    first = await _grant_permission(
+        auth_client, sid, granter="bryan@test", target_user="alice@test", level=1
+    )
+    assert first.status_code == 200, first.text
+    assert first.headers["etag"] == '"1"'
+    assert first.json()["version"] == 1
+
+    # Conditional update with the matching ETag → 200, version 2.
+    ok = await auth_client.put(
+        f"/v1/sessions/{sid}/permissions",
+        json={"user_id": "alice@test", "level": 2},
+        headers={"X-Forwarded-Email": "bryan@test", "If-Match": '"1"'},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["version"] == 2
+
+    # Stale ETag → 412 Precondition Failed (no clobber).
+    stale = await auth_client.put(
+        f"/v1/sessions/{sid}/permissions",
+        json={"user_id": "alice@test", "level": 3},
+        headers={"X-Forwarded-Email": "bryan@test", "If-Match": '"1"'},
+    )
+    assert stale.status_code == 412, stale.text
+
+    # No If-Match → unconditional (back-compat).
+    uncond = await _grant_permission(
+        auth_client, sid, granter="bryan@test", target_user="alice@test", level=2
+    )
+    assert uncond.status_code == 200, uncond.text
+
+
 async def _revoke_permission(
     client: httpx.AsyncClient,
     session_id: str,
