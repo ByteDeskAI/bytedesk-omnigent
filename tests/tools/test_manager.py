@@ -26,6 +26,23 @@ from omnigent.tools.mcp import clear_discovery_cache
 
 _TEST_CTX = ToolContext(task_id="task_test", agent_id="agent_test")
 
+
+@pytest.fixture(autouse=True)
+def _no_host_skill_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Keep ToolManager tests independent of the developer machine's
+    ``~/.claude/skills`` / ``.agents/skills`` trees.
+
+    Without this stub, ``LoadSkillTool`` discovers host-scope skills
+    with bundled ``references/`` assets and registers ``read_skill_file``,
+    breaking assertions that only bundled skills matter.
+    """
+    monkeypatch.setattr(
+        "omnigent.spec.parser.discover_host_skills",
+        lambda *_args, **_kwargs: [],
+    )
+
+
 # Tools that ToolManager registers unconditionally on every
 # spec these tests construct: the lifecycle ``sys_cancel_task``
 # plus the async-inbox trio (``sys_call_async``,
