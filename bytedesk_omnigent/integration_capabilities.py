@@ -58,7 +58,7 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         slug="slack-command-center",
         name="Slack command center",
         category="communication",
-        status="candidate",
+        status="prototype",
         auth_model="OAuth 2.0 bot + user tokens",
         agent_value=(
             "Let agents observe channel context, ask clarifying questions, and post status updates where teams already work.",
@@ -66,9 +66,11 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         ),
         required_scopes=("channels:history", "chat:write", "commands", "users:read"),
         implementation_description=(
-            "Add a Slack OAuth connector, event adapter, and MCP/tool facade that maps channel messages, slash commands, "
-            "thread replies, and approval buttons into Omnigent signals and Tasks. Start read-only + post-message, then "
-            "gate destructive actions behind the existing policy and two-key approval surfaces."
+            "Native ``bytedesk_slack`` agent tool (BDP-2405) over the Slack Web API: post a message (optionally threaded), "
+            "list channels, read channel history, read a thread, list users, read a user, and add an emoji reaction. Read + "
+            "post only (no delete/admin), Bearer-token auth via SLACK_BOT_TOKEN with an optional SLACK_DEFAULT_CHANNEL. Slack's "
+            "200 + ``ok:false`` envelope is passed through as the canonical error; only transport-level failures become "
+            "structured errors instead of crashing the turn."
         ),
         future_unlocks=(
             "Team-agent triage inside customer Slack Connect channels.",

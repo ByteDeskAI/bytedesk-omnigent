@@ -104,6 +104,7 @@ class BytedeskExtension:
             SignalCheckTool,
             SignalDeliverTool,
         )
+        from bytedesk_omnigent.tools.slack_tools import BytedeskSlackTool
 
         return {
             "peer_send": lambda _c: PeerSendTool(),
@@ -122,6 +123,7 @@ class BytedeskExtension:
             "bytedesk_jira": lambda _c: BytedeskJiraTool(),
             "bytedesk_confluence": lambda _c: BytedeskConfluenceTool(),
             "bytedesk_github": lambda _c: BytedeskGitHubTool(),
+            "bytedesk_slack": lambda _c: BytedeskSlackTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),
