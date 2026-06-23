@@ -17,15 +17,34 @@ import time
 from collections.abc import Mapping
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 from starlette.requests import HTTPConnection
 
 from bytedesk_omnigent.auth.principal_resolver import (
     HEADER_NAME,
+    RSA_PUBLIC_KEY_ENV,
     SECRET_ENV,
     ByteDeskPrincipalResolver,
     map_capabilities_to_roles,
 )
 from bytedesk_omnigent.extension import BytedeskExtension
+from omnigent.identity.verifiers import RsaAssertionVerifier
+
+_RSA_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+_RSA_PUB_PEM = (
+    _RSA_KEY.public_key()
+    .public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
+    .decode("ascii")
+)
+
+
+def _rsa_mint(payload: Mapping[str, object]) -> str:
+    """Mint an RSA-signed header (what the Office private key will produce)."""
+    payload_bytes = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = _RSA_KEY.sign(payload_bytes, padding.PKCS1v15(), hashes.SHA256())
+    return f"{_b64url(payload_bytes)}.{_b64url(sig)}"
+
 
 _SECRET = "test-principal-secret"
 
@@ -228,12 +247,14 @@ def test_principal_resolvers_empty_when_secret_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv(SECRET_ENV, raising=False)
+    monkeypatch.delenv(RSA_PUBLIC_KEY_ENV, raising=False)
     assert BytedeskExtension().principal_resolvers() == []
 
 
 def test_principal_resolvers_registers_when_secret_set(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv(RSA_PUBLIC_KEY_ENV, raising=False)
     monkeypatch.setenv(SECRET_ENV, _SECRET)
     resolvers = BytedeskExtension().principal_resolvers()
     assert len(resolvers) == 1
@@ -241,4 +262,35 @@ def test_principal_resolvers_registers_when_secret_set(
     # And it actually verifies with the configured secret.
     principal = resolvers[0].get_principal(_conn({HEADER_NAME: _mint(_valid_payload())}))
     assert principal is not None
+
+
+# ── asymmetric (RSA) verification (BDP-2424) ──────────────────────────
+
+
+def test_resolver_with_rsa_verifier_resolves_principal() -> None:
+    resolver = ByteDeskPrincipalResolver(RsaAssertionVerifier.from_pem(_RSA_PUB_PEM))
+    principal = resolver.get_principal(_conn({HEADER_NAME: _rsa_mint(_valid_payload())}))
+    assert principal is not None
     assert principal.user_id == "alice@example.com"
+
+
+def test_resolver_rsa_rejects_hmac_signed_token() -> None:
+    # The asymmetric hardening: a token a symmetric-secret holder could forge
+    # (HMAC-signed) is NOT accepted by the RSA verifier.
+    resolver = ByteDeskPrincipalResolver(RsaAssertionVerifier.from_pem(_RSA_PUB_PEM))
+    assert resolver.get_principal(_conn({HEADER_NAME: _mint(_valid_payload())})) is None
+
+
+def test_principal_resolvers_prefers_rsa_when_pubkey_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Both configured ⇒ RSA wins (the secure one): verifies an RSA-signed header
+    # and rejects an HMAC-signed one.
+    monkeypatch.setenv(RSA_PUBLIC_KEY_ENV, _RSA_PUB_PEM)
+    monkeypatch.setenv(SECRET_ENV, _SECRET)
+    resolvers = BytedeskExtension().principal_resolvers()
+    assert len(resolvers) == 1
+    assert (
+        resolvers[0].get_principal(_conn({HEADER_NAME: _rsa_mint(_valid_payload())})) is not None
+    )
+    assert resolvers[0].get_principal(_conn({HEADER_NAME: _mint(_valid_payload())})) is None
