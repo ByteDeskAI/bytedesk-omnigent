@@ -66,3 +66,34 @@ def test_write_tier1_floor_accepts_valid() -> None:
     cur = reg.read(_CEILING)
     new = svc.write(_CEILING, 25.0, if_match=cur.etag)
     assert new.value == 25.0
+
+
+def test_write_emits_metadata_only_change() -> None:
+    """A successful write publishes a config.changed carrying NO value (BDP-2418)."""
+    reg = build_registry()
+    seen: list[object] = []
+    svc = RegistryConfigService(reg, on_change=seen.append)
+    cur = reg.read(_MODEL)
+    new = svc.write(_MODEL, "claude-opus-4-8", if_match=cur.etag)
+
+    assert len(seen) == 1
+    change = seen[0]
+    assert change.key == _MODEL
+    assert change.scope == "system"
+    assert change.etag == new.etag
+    assert change.tier == 2
+    assert change.effect_timing in ("live", "requires_restart")
+    # The change is metadata only — it must not carry the value.
+    assert not hasattr(change, "value")
+
+
+def test_failed_write_emits_no_change() -> None:
+    """A rejected write (stale ETag) does not emit a change."""
+    reg = build_registry()
+    seen: list[object] = []
+    svc = RegistryConfigService(reg, on_change=seen.append)
+    cur = reg.read(_MODEL)
+    svc.write(_MODEL, "m1", if_match=cur.etag)  # 1 emit
+    with pytest.raises(ConfigConflictError):
+        svc.write(_MODEL, "m2", if_match=cur.etag)  # stale → raises, no emit
+    assert len(seen) == 1

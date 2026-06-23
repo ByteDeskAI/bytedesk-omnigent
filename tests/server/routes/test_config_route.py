@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
+
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.routes.config import create_config_router
+from omnigent.config import ConfigChange, config_change_bus
 from omnigent.errors import OmnigentError
 
 
@@ -144,3 +149,82 @@ def test_put_unknown_404() -> None:
 def test_put_requires_auth() -> None:
     client = TestClient(_app(_NoIdentityAuth()), raise_server_exceptions=False)
     assert client.put(_MODEL, json={"value": "x"}).status_code == 401
+
+
+# ── realtime SSE (BDP-2418) ───────────────────────────────────────────────────
+
+
+async def test_sse_streams_config_changed_metadata_only() -> None:
+    """GET /config/events emits config.changed carrying metadata only, no value.
+
+    Driven at the ASGI protocol level (one event loop, controlled receive/send)
+    so the infinite stream terminates deterministically instead of buffering —
+    httpx ASGITransport collects the whole body, which would hang on a stream.
+    """
+    app = _app(None)
+    start: dict[str, object] = {}
+    body_chunks: list[bytes] = []
+    headers_sent = asyncio.Event()
+    disconnect = asyncio.Event()
+
+    async def receive() -> dict[str, object]:
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        if message["type"] == "http.response.start":
+            start.update(message)
+            headers_sent.set()
+        elif message["type"] == "http.response.body":
+            chunk = message.get("body", b"") or b""
+            if chunk:
+                body_chunks.append(chunk)
+                disconnect.set()  # one real chunk is enough — let the loop exit
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "path": "/v1/config/events",
+        "raw_path": b"/v1/config/events",
+        "headers": [],
+        "query_string": b"",
+        "client": ("test", 0),
+        "server": ("test", 80),
+    }
+    task = asyncio.create_task(app(scope, receive, send))
+    await asyncio.wait_for(headers_sent.wait(), timeout=5)  # endpoint subscribed
+    assert start["status"] == 200
+    content_type = dict(start["headers"])[b"content-type"]  # type: ignore[arg-type]
+    assert b"text/event-stream" in content_type
+
+    config_change_bus().publish(
+        ConfigChange(
+            key="system.default_ad_hoc_model",
+            scope="system",
+            etag="7",
+            tier=2,
+            effect_timing="live",
+        )
+    )
+    await asyncio.wait_for(task, timeout=5)
+
+    body = b"".join(body_chunks).decode()
+    assert "event: config.changed" in body
+    payload = json.loads(body.split("data:", 1)[1].split("\n\n", 1)[0].strip())
+    assert payload == {
+        "key": "system.default_ad_hoc_model",
+        "scope": "system",
+        "etag": "7",
+        "tier": 2,
+        "effect_timing": "live",
+    }
+    assert "value" not in payload
+
+
+async def test_sse_requires_auth() -> None:
+    app = _app(_NoIdentityAuth())
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        resp = await client.get("/v1/config/events")
+        assert resp.status_code == 401
