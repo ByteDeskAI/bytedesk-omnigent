@@ -64,6 +64,8 @@ class WebhookBinding:
     match_key: str
     signal_id: str
     enabled: bool
+    # Monotonic optimistic-concurrency ETag (BDP-2412) — If-Match on re-register.
+    version: int = 1
 
 
 def verify_hmac_signature(raw_body: bytes, secret: str, provided: str) -> bool:
@@ -211,6 +213,7 @@ def _to_binding(row: SqlWebhookBinding) -> WebhookBinding:
         match_key=row.match_key,
         signal_id=row.signal_id,
         enabled=row.enabled,
+        version=row.version,
     )
 
 
@@ -227,9 +230,25 @@ class IngressBindingStore:
         return self._engine
 
     def register_binding(
-        self, *, source: str, match_key: str, signal_id: str, now: int | None = None
+        self,
+        *,
+        source: str,
+        match_key: str,
+        signal_id: str,
+        now: int | None = None,
+        expected_version: int | None = None,
     ) -> WebhookBinding:
-        """Register (idempotently by ``(source, match_key)``) a webhook binding."""
+        """Register (idempotently by ``(source, match_key)``) a webhook binding.
+
+        Optimistic concurrency (BDP-2412): when *expected_version* is given AND
+        the binding already exists, the in-place update is a guarded
+        compare-and-swap on ``version`` (raises ``StaleWriteError`` on a stale
+        ETag); it is ignored on first registration (an INSERT has no prior
+        version). Omitted keeps the unconditional upsert; an in-place update
+        bumps ``version`` either way.
+        """
+        from sqlalchemy import update as sql_update
+
         now = now_epoch() if now is None else now
         with self._write_session() as session:
             existing = session.execute(
@@ -239,10 +258,33 @@ class IngressBindingStore:
                 )
             ).scalar_one_or_none()
             if existing is not None:
-                existing.signal_id = signal_id
-                existing.enabled = True
-                session.flush()
-                return _to_binding(existing)
+                if expected_version is None:
+                    existing.signal_id = signal_id
+                    existing.enabled = True
+                    existing.version = existing.version + 1
+                    session.flush()
+                    return _to_binding(existing)
+                from omnigent.errors import StaleWriteError
+
+                result = session.execute(
+                    sql_update(SqlWebhookBinding)
+                    .where(
+                        SqlWebhookBinding.id == existing.id,
+                        SqlWebhookBinding.version == expected_version,
+                    )
+                    .values(
+                        signal_id=signal_id,
+                        enabled=True,
+                        version=SqlWebhookBinding.version + 1,
+                    )
+                )
+                if result.rowcount == 1:
+                    session.expire_all()
+                    return _to_binding(session.get(SqlWebhookBinding, existing.id))
+                raise StaleWriteError(
+                    f"webhook binding {existing.id!r} was modified concurrently "
+                    f"(If-Match version {expected_version} is stale)"
+                )
             row = SqlWebhookBinding(
                 id=f"wh_{uuid.uuid4().hex}",
                 source=source,
@@ -250,6 +292,7 @@ class IngressBindingStore:
                 signal_id=signal_id,
                 enabled=True,
                 created_at=now,
+                version=1,
             )
             session.add(row)
             session.flush()
