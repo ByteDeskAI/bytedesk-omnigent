@@ -11,7 +11,7 @@ capability (the admin lives in omnigent, ADR-0150).
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from omnigent.server.auth import AuthProvider
@@ -99,6 +99,66 @@ def create_config_router(auth_provider: AuthProvider | None = None) -> APIRouter
                 "source": value.source,
                 "writable": value.writable,
                 "read_only_reason": value.read_only_reason,
+            }
+        )
+
+    @router.put("/config/values/{key}")
+    async def put_value(
+        request: Request,
+        response: Response,
+        key: str,
+        agent: str | None = Query(None),
+        session: str | None = Query(None),
+    ) -> JSONResponse:
+        """Write a config value through the enforcement port (BDP-2417).
+
+        Body ``{"value": ...}``; optional ``If-Match`` ETag for a guarded
+        compare-and-swap. Tier-0 → 409, floor/schema violation → 400, stale
+        If-Match → 412 — all enforced server-side at the RegistryConfigService
+        choke point (a raw-API caller is governed identically to the UI).
+        """
+        require_user(request, auth_provider)
+        from omnigent.config import (
+            ConfigConflictError,
+            ConfigCtx,
+            ConfigFloorError,
+            ConfigNotFoundError,
+            ConfigReadOnlyError,
+            ConfigSchemaError,
+            RegistryConfigService,
+            build_registry,
+        )
+        from omnigent.errors import ErrorCode, OmnigentError
+        from omnigent.server.etag import parse_if_match
+
+        body = await request.json()
+        if not isinstance(body, dict) or "value" not in body:
+            raise OmnigentError(
+                'body must be a JSON object {"value": ...}',
+                code=ErrorCode.INVALID_INPUT,
+            )
+        if_match = parse_if_match(request.headers.get("if-match"))
+        service = RegistryConfigService(build_registry())
+        ctx = ConfigCtx(agent_id=agent, session_id=session)
+        try:
+            value = service.write(key, body["value"], if_match=if_match, ctx=ctx)
+        except ConfigNotFoundError as exc:
+            raise OmnigentError(str(exc), code=ErrorCode.NOT_FOUND) from exc
+        except ConfigReadOnlyError as exc:
+            raise OmnigentError(str(exc), code=ErrorCode.CONFLICT) from exc
+        except (ConfigFloorError, ConfigSchemaError) as exc:
+            raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+        except ConfigConflictError as exc:
+            raise OmnigentError(str(exc), code=ErrorCode.PRECONDITION_FAILED) from exc
+        if value.etag is not None:
+            response.headers["ETag"] = f'"{value.etag}"'
+        return JSONResponse(
+            {
+                "key": value.key,
+                "value": value.value,
+                "etag": value.etag,
+                "source": value.source,
+                "writable": value.writable,
             }
         )
 

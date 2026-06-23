@@ -9,7 +9,13 @@ each store's reader/writer (the write port is BDP-2414/2417).
 
 from __future__ import annotations
 
-from omnigent.config import ConfigCtx, ConfigDescriptor, EnvConfigStore
+from omnigent.config import (
+    ConfigCtx,
+    ConfigDescriptor,
+    ConfigFloorError,
+    EnvConfigStore,
+    runtime_store,
+)
 
 _STR = {"type": "string"}
 
@@ -21,6 +27,28 @@ def bytedesk_config_descriptors() -> list[ConfigDescriptor]:
         from omnigent.extensions import discover_extensions
 
         return sorted(ext.name for ext in discover_extensions())
+
+    # Live-tunable runtime descriptors (BDP-2414/2417): version = ETag,
+    # write = If-Match compare-and-swap on the process runtime store.
+    rt = runtime_store()
+
+    def _rt_reader(key: str, default: object):
+        return lambda _ctx: rt.get(key, default)
+
+    def _rt_writer(key: str):
+        def _write(value: object, if_match: str | None, _ctx: ConfigCtx) -> None:
+            rt.set(key, value, if_match=if_match)
+
+        return _write
+
+    def _rt_etag(key: str):
+        return lambda _ctx: str(rt.version(key))
+
+    def _positive_cost(value: object) -> float:
+        # Tier-1 floor: a non-positive / non-numeric ceiling can never trip.
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            raise ConfigFloorError("cost ceiling must be a positive number")
+        return float(value)
 
     return [
         ConfigDescriptor(
@@ -82,5 +110,32 @@ def bytedesk_config_descriptors() -> list[ConfigDescriptor]:
             storage_source="memory",
             reader=_loaded_extensions,
             read_only_reason="derived from entry-points/OMNIGENT_EXTENSIONS at boot",
+        ),
+        # ── writable (BDP-2414/2417) ──────────────────────────────────────────
+        ConfigDescriptor(
+            key="system.default_ad_hoc_model",
+            scope="system",
+            what="Default model for ad-hoc (no-agent) runs; live-tunable.",
+            json_schema=_STR,
+            tier=2,
+            storage_source="memory",
+            reader=_rt_reader("system.default_ad_hoc_model", "gpt-5.5"),
+            writer=_rt_writer("system.default_ad_hoc_model"),
+            etag_reader=_rt_etag("system.default_ad_hoc_model"),
+            change_event="config.changed:system.default_ad_hoc_model",
+        ),
+        ConfigDescriptor(
+            key="policies.cost_hard_stop.default_ceiling_usd",
+            scope="policy",
+            what="Default hard cost ceiling (USD) seeded into new cost_hard_stop policies.",
+            json_schema={"type": "number"},
+            tier=1,
+            storage_source="memory",
+            reader=_rt_reader("policies.cost_hard_stop.default_ceiling_usd", 50.0),
+            writer=_rt_writer("policies.cost_hard_stop.default_ceiling_usd"),
+            etag_reader=_rt_etag("policies.cost_hard_stop.default_ceiling_usd"),
+            floor=">0 (a non-positive ceiling can never trip the breaker)",
+            floor_check=_positive_cost,
+            change_event="config.changed:policies.cost_hard_stop.default_ceiling_usd",
         ),
     ]
