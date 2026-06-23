@@ -14,7 +14,7 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.entities import Policy
@@ -275,6 +275,7 @@ def create_session_policies_router(
     @router.patch("/sessions/{session_id}/policies/{policy_id}")
     async def update_policy(
         request: Request,
+        response: Response,
         session_id: str,
         policy_id: str,
         body: UpdateSessionPolicyRequest,
@@ -328,15 +329,20 @@ def create_session_policies_router(
                         f"must add custom handlers via the 'policy_modules' config.",
                         code=ErrorCode.INVALID_INPUT,
                     )
+        from omnigent.server.etag import parse_if_match
+
+        expected_version = parse_if_match(request.headers.get("if-match"))
         policy = store.update(
             policy_id,
             session_id,
             name=body.name,
             handler=body.handler,
             enabled=body.enabled,
+            expected_version=expected_version,
         )
         if policy is None:
             raise OmnigentError("Policy not found", code=ErrorCode.NOT_FOUND)
+        response.headers["ETag"] = f'"{policy.version}"'
         return _entity_to_response(policy)
 
     @router.delete("/sessions/{session_id}/policies/{policy_id}")

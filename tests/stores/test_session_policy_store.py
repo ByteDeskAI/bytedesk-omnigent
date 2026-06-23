@@ -83,6 +83,78 @@ def test_create_returns_policy_with_correct_fields(
     assert policy.updated_at is None
 
 
+# ── If-Match / optimistic concurrency (BDP-2412, ADR-0150) ────────────────────
+
+
+def test_update_matching_version_succeeds_and_bumps(
+    store: SqlAlchemyPolicyStore, session_id: str
+) -> None:
+    p = store.create(
+        policy_id="pol_etag", session_id=session_id, name="n", type="python", handler="h"
+    )
+    assert p.version == 1
+    updated = store.update(p.id, session_id, enabled=False, expected_version=1)
+    assert updated is not None
+    assert updated.enabled is False and updated.version == 2
+
+
+def test_update_stale_version_raises_no_clobber(
+    store: SqlAlchemyPolicyStore, session_id: str
+) -> None:
+    from omnigent.errors import StaleWriteError
+
+    p = store.create(
+        policy_id="pol_etag", session_id=session_id, name="n", type="python", handler="h"
+    )
+    store.update(p.id, session_id, enabled=False, expected_version=1)  # -> v2
+    with pytest.raises(StaleWriteError):
+        store.update(p.id, session_id, name="renamed", expected_version=1)  # stale
+    assert store.get(p.id, session_id).name == "n"  # not clobbered
+
+
+def test_update_without_version_is_unconditional_and_bumps(
+    store: SqlAlchemyPolicyStore, session_id: str
+) -> None:
+    p = store.create(
+        policy_id="pol_etag", session_id=session_id, name="n", type="python", handler="h"
+    )
+    updated = store.update(p.id, session_id, enabled=False)  # back-compat
+    assert updated.version == 2
+
+
+def test_update_no_op_change_does_not_bump(
+    store: SqlAlchemyPolicyStore, session_id: str
+) -> None:
+    p = store.create(
+        policy_id="pol_etag", session_id=session_id, name="n", type="python", handler="h"
+    )
+    # same value under a precondition: nothing changes, version stays
+    same = store.update(p.id, session_id, enabled=True, expected_version=1)
+    assert same.version == 1
+
+
+def test_update_wrong_session_is_none_not_conflict(
+    store: SqlAlchemyPolicyStore, session_id: str, other_session_id: str
+) -> None:
+    p = store.create(
+        policy_id="pol_etag", session_id=session_id, name="n", type="python", handler="h"
+    )
+    assert store.update(p.id, other_session_id, enabled=False, expected_version=1) is None
+
+
+def test_update_default_matching_and_stale(store: SqlAlchemyPolicyStore) -> None:
+    from omnigent.errors import StaleWriteError
+
+    d = store.create_default(
+        policy_id="pol_def", name="dn", type="python", handler="h"
+    )
+    assert d.version == 1
+    bumped = store.update_default(d.id, enabled=False, expected_version=1)
+    assert bumped.enabled is False and bumped.version == 2
+    with pytest.raises(StaleWriteError):
+        store.update_default(d.id, name="x", expected_version=1)  # stale
+
+
 def test_create_url_type(
     store: SqlAlchemyPolicyStore,
     session_id: str,

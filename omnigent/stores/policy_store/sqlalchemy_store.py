@@ -36,6 +36,7 @@ def _to_entity(row: SqlPolicy) -> Policy:
         enabled=bool(row.enabled),
         updated_at=row.updated_at,
         created_by=row.created_by,
+        version=row.version,
     )
 
 
@@ -121,29 +122,65 @@ class SqlAlchemyPolicyStore(PolicyStore):
         name: str | None = None,
         handler: str | None = None,
         enabled: bool | None = None,
+        expected_version: int | None = None,
     ) -> Policy | None:
         """
         Update mutable fields. Returns ``None`` if not found or
         wrong session.
+
+        Optimistic concurrency (BDP-2412): when *expected_version* is
+        given the write is a guarded compare-and-swap on ``version``
+        (raises ``StaleWriteError`` if the row moved); omitted keeps the
+        unconditional update. A real change bumps ``version`` either way.
         """
+        from sqlalchemy import update as sql_update
+
+        from omnigent.errors import StaleWriteError
+
         with self._session() as session:
             row = session.get(SqlPolicy, policy_id)
             if row is None or row.session_id != session_id:
                 return None
-            changed = False
+            if expected_version is None:
+                changed = False
+                if name is not None and row.name != name:
+                    row.name = name
+                    changed = True
+                if handler is not None and row.handler != handler:
+                    row.handler = handler
+                    changed = True
+                if enabled is not None and bool(row.enabled) != enabled:
+                    row.enabled = enabled
+                    changed = True
+                if changed:
+                    row.version = row.version + 1
+                    row.updated_at = now_epoch()
+                session.flush()
+                return _to_entity(row)
+            # Guarded compare-and-swap on version (ownership already checked).
+            values: dict[str, Any] = {}
             if name is not None and row.name != name:
-                row.name = name
-                changed = True
+                values["name"] = name
             if handler is not None and row.handler != handler:
-                row.handler = handler
-                changed = True
+                values["handler"] = handler
             if enabled is not None and bool(row.enabled) != enabled:
-                row.enabled = enabled
-                changed = True
-            if changed:
-                row.updated_at = now_epoch()
-            session.flush()
-            return _to_entity(row)
+                values["enabled"] = enabled
+            if not values:
+                return _to_entity(row)  # no-op: nothing to change, no bump
+            values["version"] = SqlPolicy.version + 1
+            values["updated_at"] = now_epoch()
+            result = session.execute(
+                sql_update(SqlPolicy)
+                .where(SqlPolicy.id == policy_id, SqlPolicy.version == expected_version)
+                .values(**values)
+            )
+            if result.rowcount == 1:
+                session.expire_all()
+                return _to_entity(session.get(SqlPolicy, policy_id))
+            raise StaleWriteError(
+                f"policy {policy_id!r} was modified concurrently "
+                f"(If-Match version {expected_version} is stale)"
+            )
 
     def delete(self, policy_id: str, session_id: str) -> bool:
         """Delete a policy. Idempotent: returns ``False`` if not found."""
@@ -237,48 +274,88 @@ class SqlAlchemyPolicyStore(PolicyStore):
         name: str | None = None,
         handler: str | None = None,
         enabled: bool | None = None,
+        expected_version: int | None = None,
     ) -> Policy | None:
         """
         Update mutable fields of a default policy. Returns ``None``
         if not found or not a default policy.
+
+        Optimistic concurrency (BDP-2412): when *expected_version* is
+        given the write is a guarded compare-and-swap on ``version``
+        (raises ``StaleWriteError`` on a stale ETag); the name-uniqueness
+        check runs BEFORE the guarded UPDATE. Omitted keeps the
+        unconditional update; a real change bumps ``version`` either way.
         """
+        from sqlalchemy import update as sql_update
+
+        from omnigent.errors import StaleWriteError
+
+        def _check_name_unique(session: Any, new_name: str) -> None:
+            # SQLite treats NULLs as distinct, so the composite constraint
+            # won't catch (NULL, name) collisions — check explicitly.
+            conflict = (
+                session.execute(
+                    select(SqlPolicy)
+                    .where(SqlPolicy.session_id.is_(None))
+                    .where(SqlPolicy.name == new_name)
+                    .where(SqlPolicy.id != policy_id)
+                )
+                .scalars()
+                .first()
+            )
+            if conflict is not None:
+                raise IntegrityError(
+                    "Duplicate default policy name",
+                    params={"name": new_name},
+                    orig=Exception(f"UNIQUE constraint: name={new_name!r}"),
+                )
+
         with self._session() as session:
             row = session.get(SqlPolicy, policy_id)
             if row is None or row.session_id is not None:
                 return None
-            changed = False
+            if expected_version is None:
+                changed = False
+                if name is not None and row.name != name:
+                    _check_name_unique(session, name)
+                    row.name = name
+                    changed = True
+                if handler is not None and row.handler != handler:
+                    row.handler = handler
+                    changed = True
+                if enabled is not None and bool(row.enabled) != enabled:
+                    row.enabled = enabled
+                    changed = True
+                if changed:
+                    row.version = row.version + 1
+                    row.updated_at = now_epoch()
+                session.flush()
+                return _to_entity(row)
+            # Guarded path: uniqueness FIRST, then compare-and-swap on version.
+            values: dict[str, Any] = {}
             if name is not None and row.name != name:
-                # Explicit uniqueness check: SQLite treats NULLs
-                # as distinct, so the composite constraint won't
-                # catch (NULL, name) collisions.
-                conflict = (
-                    session.execute(
-                        select(SqlPolicy)
-                        .where(SqlPolicy.session_id.is_(None))
-                        .where(SqlPolicy.name == name)
-                        .where(SqlPolicy.id != policy_id)
-                    )
-                    .scalars()
-                    .first()
-                )
-                if conflict is not None:
-                    raise IntegrityError(
-                        "Duplicate default policy name",
-                        params={"name": name},
-                        orig=Exception(f"UNIQUE constraint: name={name!r}"),
-                    )
-                row.name = name
-                changed = True
+                _check_name_unique(session, name)
+                values["name"] = name
             if handler is not None and row.handler != handler:
-                row.handler = handler
-                changed = True
+                values["handler"] = handler
             if enabled is not None and bool(row.enabled) != enabled:
-                row.enabled = enabled
-                changed = True
-            if changed:
-                row.updated_at = now_epoch()
-            session.flush()
-            return _to_entity(row)
+                values["enabled"] = enabled
+            if not values:
+                return _to_entity(row)
+            values["version"] = SqlPolicy.version + 1
+            values["updated_at"] = now_epoch()
+            result = session.execute(
+                sql_update(SqlPolicy)
+                .where(SqlPolicy.id == policy_id, SqlPolicy.version == expected_version)
+                .values(**values)
+            )
+            if result.rowcount == 1:
+                session.expire_all()
+                return _to_entity(session.get(SqlPolicy, policy_id))
+            raise StaleWriteError(
+                f"default policy {policy_id!r} was modified concurrently "
+                f"(If-Match version {expected_version} is stale)"
+            )
 
     def delete_default(self, policy_id: str) -> bool:
         """Delete a default policy. Idempotent."""
