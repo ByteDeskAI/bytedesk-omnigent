@@ -155,3 +155,86 @@ async def test_put_image_idempotent_second_put_is_noop(
     second = await client.put(f"/v1/agents/{agent_id}/image", json={"config": cfg})
     assert first.status_code == 200 and second.status_code == 200
     assert second.json()["version"] == first.json()["version"]
+
+
+# ── integration: If-Match / ETag optimistic concurrency (BDP-2412) ─────
+# These exercise the real GET/PUT route through the ASGI app, doubling as the
+# in-process smoke for the feature (GET ETag → conditional PUT → stale 412).
+
+
+async def test_get_image_emits_version_etag_header(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(f"/v1/agents/{agent_id}/image")
+    assert resp.status_code == 200, resp.text
+    # ETag is the strong-validated agent version; the seed is version 1.
+    assert resp.headers["etag"] == '"1"'
+    assert resp.json()["version"] == 1
+
+
+async def test_put_with_matching_if_match_succeeds(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.put(
+        f"/v1/agents/{agent_id}/image",
+        json={"config": _config(harness="openai-agents")},
+        headers={"If-Match": '"1"'},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["version"] == 2
+
+
+async def test_put_with_stale_if_match_returns_412(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    # advance to version 2 with no precondition
+    bump = await client.put(
+        f"/v1/agents/{agent_id}/image",
+        json={"config": _config(harness="openai-agents")},
+    )
+    assert bump.json()["version"] == 2
+    # If-Match "1" is now stale; a divergent edit must be REJECTED, not clobber
+    stale = await client.put(
+        f"/v1/agents/{agent_id}/image",
+        json={"instructions": "stale writer.\n"},
+        headers={"If-Match": '"1"'},
+    )
+    assert stale.status_code == 412, stale.text
+
+
+async def test_put_without_if_match_is_unconditional(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    # back-compat: the current editor sends no If-Match and still works
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.put(
+        f"/v1/agents/{agent_id}/image",
+        json={"config": _config(harness="openai-agents")},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["version"] == 2
+
+
+async def test_concurrent_image_writes_no_clobber(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    # the named AgentImageUpdate clobber, end-to-end: two divergent edits from
+    # base version 1 — exactly one wins (200), the other is rejected (412).
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    writer_a = await client.put(
+        f"/v1/agents/{agent_id}/image",
+        json={"instructions": "writer A.\n"},
+        headers={"If-Match": '"1"'},
+    )
+    writer_b = await client.put(
+        f"/v1/agents/{agent_id}/image",
+        json={"instructions": "writer B.\n"},
+        headers={"If-Match": '"1"'},
+    )
+    assert writer_a.status_code == 200, writer_a.text
+    assert writer_b.status_code == 412, writer_b.text
+    got = await client.get(f"/v1/agents/{agent_id}/image")
+    assert got.json()["instructions"] == "writer A.\n"  # A won; B did not clobber

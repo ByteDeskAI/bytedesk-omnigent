@@ -60,6 +60,9 @@ class ErrorCode:
     # Keep the string equal to frames.HARNESS_NOT_CONFIGURED_ERROR_CODE —
     # the host's wire error code passes through as the API error code.
     HARNESS_NOT_CONFIGURED = "harness_not_configured"
+    # Optimistic-concurrency precondition failed: the caller's If-Match ETag
+    # did not match the row's current version (BDP-2412 / ADR-0150). HTTP 412.
+    PRECONDITION_FAILED = "precondition_failed"
 
 
 # Single source of truth for error code → HTTP status.
@@ -81,6 +84,9 @@ _CODE_TO_HTTP_STATUS: dict[str, int] = {
     # can't satisfy it until the user runs `omnigent setup` there —
     # neither a 400 (input is fine) nor a 503 (a retry won't help).
     ErrorCode.HARNESS_NOT_CONFIGURED: 412,
+    # 412 Precondition Failed: the optimistic-concurrency If-Match ETag was
+    # stale — a concurrent write moved the row's version (RFC 7232 §4.2).
+    ErrorCode.PRECONDITION_FAILED: 412,
 }
 
 
@@ -113,3 +119,18 @@ class OmnigentError(Exception):
             Defaults to 500 for unknown codes.
         """
         return _CODE_TO_HTTP_STATUS.get(self.code, 500)
+
+
+class StaleWriteError(OmnigentError):
+    """An optimistic-concurrency write lost the race (BDP-2412, ADR-0150).
+
+    Raised by a store's guarded update when the caller's ``If-Match`` ETag
+    (the row's expected ``version``) no longer matches — a concurrent write
+    moved the row. Maps to HTTP 412 Precondition Failed so the caller re-reads
+    and retries instead of silently clobbering the other write. A thin typed
+    subclass so callers/tests can ``except StaleWriteError`` without matching on
+    the error code string.
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code=ErrorCode.PRECONDITION_FAILED)

@@ -183,26 +183,64 @@ class SqlAlchemyAgentStore(AgentStore):
         self,
         agent_id: str,
         bundle_location: str,
+        *,
+        expected_version: int | None = None,
     ) -> Agent | None:
         """
         Update an agent's bundle location, bump version, and set
         ``updated_at``.
 
+        Unconditional when *expected_version* is ``None`` (back-compat);
+        otherwise a guarded compare-and-swap on ``version`` that raises
+        :class:`~omnigent.errors.StaleWriteError` if the row moved
+        (optimistic concurrency, BDP-2412 / ADR-0150).
+
         :param agent_id: Unique agent identifier,
             e.g. ``"agent_abc123"``.
         :param bundle_location: New artifact store key for the
             bundle, e.g. ``"ag_abc123/a1b2c3d4e5f6..."``.
+        :param expected_version: Expected current version (the
+            ``If-Match`` ETag); ``None`` skips the precondition.
         :returns: The updated :class:`Agent`, or ``None`` if not
             found.
+        :raises StaleWriteError: If *expected_version* is stale.
         """
+        from sqlalchemy import update as sql_update
+
+        from omnigent.errors import StaleWriteError
+
         with self._session() as session:
-            row = session.get(SqlAgent, agent_id)
-            if not row:
+            if expected_version is None:
+                row = session.get(SqlAgent, agent_id)
+                if not row:
+                    return None
+                row.bundle_location = bundle_location
+                row.version = row.version + 1
+                row.updated_at = now_epoch()
+                return sql_agent_to_entity(row)
+            # Guarded compare-and-swap: the UPDATE only matches a row still at
+            # ``expected_version``; concurrent writers racing the same base
+            # version are serialized by the DB — exactly one's rowcount is 1.
+            result = session.execute(
+                sql_update(SqlAgent)
+                .where(SqlAgent.id == agent_id, SqlAgent.version == expected_version)
+                .values(
+                    bundle_location=bundle_location,
+                    version=SqlAgent.version + 1,
+                    updated_at=now_epoch(),
+                )
+            )
+            if result.rowcount == 1:
+                session.expire_all()
+                return sql_agent_to_entity(session.get(SqlAgent, agent_id))
+            # rowcount 0 → the agent is gone (NOT_FOUND → None, matching the
+            # unconditional contract) or its version moved (a concurrent write).
+            if session.get(SqlAgent, agent_id) is None:
                 return None
-            row.bundle_location = bundle_location
-            row.version = row.version + 1
-            row.updated_at = now_epoch()
-            return sql_agent_to_entity(row)
+            raise StaleWriteError(
+                f"agent {agent_id!r} was modified concurrently "
+                f"(If-Match version {expected_version} is stale)"
+            )
 
     def set_sot_tier(self, agent_id: str, tier: str | None) -> bool:
         """Set the per-agent migration tier marker (FU5 cutover, ADR-0133/0136).
