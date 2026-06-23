@@ -16,6 +16,10 @@ and other phases pass through.
 from __future__ import annotations
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import (
+    SPAWN_BREADTH_SANITY,
+    require_int_in_range,
+)
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -48,7 +52,15 @@ def spawn_breadth_governor(
         many spawns exist for that task — reusing the breadth-cap mechanism.
         ``None`` (default) keeps the legacy breadth-only behavior.
     :returns: A policy callable that DENYs a spawn over the limit.
+    :raises PolicyFloorError: if a cap is negative or effectively-infinite (an
+        unbounded cap defeats the runaway-fan-out backstop). ``0`` is allowed —
+        it disables spawning, the restrictive (safe) direction.
     """
+    max_spawns = require_int_in_range("max_spawns", max_spawns, 0, SPAWN_BREADTH_SANITY)
+    if per_task_max_spawns is not None:
+        per_task_max_spawns = require_int_in_range(
+            "per_task_max_spawns", per_task_max_spawns, 0, SPAWN_BREADTH_SANITY
+        )
 
     def evaluate(event: PolicyEvent) -> PolicyResponse:
         if event.get("type") != "tool_call":

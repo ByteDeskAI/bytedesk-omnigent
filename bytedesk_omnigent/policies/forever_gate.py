@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import PolicyFloorError
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -29,8 +30,20 @@ def forever_denied(patterns: list[str]) -> PolicyCallable:
         never permitted, e.g.
         ``["promote\\.production", "deploy\\.run", "billing\\.(refund|charge)"]``.
     :returns: A policy callable that DENYs a matching tool call.
+    :raises PolicyFloorError: if any pattern is not a valid regex — a deny-list
+        rule that cannot compile would silently never match (fail-open), so the
+        gate fails closed at construction instead.
     """
-    compiled = [re.compile(p) for p in patterns]
+    # NOTE (BDP-2411): the "baseline patterns un-removable / removal requires
+    # two-key" floor is enforced on the config write path (BDP-2414), which knows
+    # baseline-vs-operator provenance; the factory only fails closed on a bad regex.
+    try:
+        compiled = [re.compile(p) for p in patterns]
+    except re.error as exc:
+        raise PolicyFloorError(
+            f"forever_denied pattern does not compile ({exc}) — refusing to attach "
+            "a deny-list rule that can never match"
+        ) from exc
 
     def evaluate(event: PolicyEvent) -> PolicyResponse:
         if event.get("type") != "tool_call":

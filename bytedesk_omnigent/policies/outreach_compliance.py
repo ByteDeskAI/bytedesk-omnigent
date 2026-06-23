@@ -16,6 +16,7 @@ import re
 from collections.abc import Callable
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import require_true
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -46,7 +47,10 @@ def outreach_compliance(
         callable can't be serialized there) it self-resolves to the durable
         suppression store, so the do-not-contact gate is always live.
     :returns: A policy callable enforcing the outreach compliance floor.
+    :raises PolicyFloorError: if ``require_unsubscribe`` is not ``True`` — the
+        CAN-SPAM/GDPR unsubscribe requirement is a legal floor, not optional.
     """
+    require_true("require_unsubscribe", require_unsubscribe)
     compiled = [re.compile(p) for p in patterns]
 
     # Resolve the suppression checker. A missing checker previously made the whole

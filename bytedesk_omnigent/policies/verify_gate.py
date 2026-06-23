@@ -21,6 +21,7 @@ import logging
 from typing import Any
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import require_non_empty
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _log = logging.getLogger(__name__)
@@ -77,8 +78,10 @@ def verify_as_gate(
     :param verified_field: The result field that, when truthy, marks the outcome
         as machine-verified. Defaults to ``"verified"``.
     :returns: An async policy callable that denies unverified gated outcomes.
+    :raises PolicyFloorError: if ``gated_tools`` is empty — an empty gated set
+        verifies nothing, silently turning the fail-closed gate into a no-op.
     """
-    gated = frozenset(gated_tools)
+    gated = frozenset(require_non_empty("gated_tools", gated_tools))
 
     async def evaluate(event: PolicyEvent) -> PolicyResponse | None:
         """Deny a gated tool's unverified success outcome.
