@@ -84,6 +84,16 @@ def test_github_engineering_copilot_is_prototype():
     assert github.category == "developer"
 
 
+def test_slack_command_center_is_prototype():
+    # BDP-2405: the native ``bytedesk_slack`` tool implements this blueprint, so it
+    # graduates from candidate to prototype.
+    slack = get_integration_capability("slack-command-center")
+
+    assert slack is not None
+    assert slack.status == "prototype"
+    assert slack.category == "communication"
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")
