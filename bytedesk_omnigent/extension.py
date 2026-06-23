@@ -85,6 +85,7 @@ class BytedeskExtension:
             DeliberationPositionTool,
             DeliberationStartTool,
         )
+        from bytedesk_omnigent.tools.github_tools import BytedeskGitHubTool
         from bytedesk_omnigent.tools.goal_tools import (
             GoalAdvanceTool,
             GoalClaimTool,
@@ -120,6 +121,7 @@ class BytedeskExtension:
             "resolve_assignee": lambda _c: ResolveAssigneeTool(),
             "bytedesk_jira": lambda _c: BytedeskJiraTool(),
             "bytedesk_confluence": lambda _c: BytedeskConfluenceTool(),
+            "bytedesk_github": lambda _c: BytedeskGitHubTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),
