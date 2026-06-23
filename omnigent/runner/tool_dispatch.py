@@ -32,6 +32,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TypedDict, cast
 
 if TYPE_CHECKING:
+    from omnigent.identity.identity import ActingIdentity
     from omnigent.runner.mcp_manager import McpManager
     from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runtime.filesystem_registry import FilesystemRegistry
@@ -555,6 +556,7 @@ async def _execute_local_python_tool(
     task_id: str | None,
     agent_id: str | None,
     runner_workspace: Path | None,
+    acting_identity: ActingIdentity | None = None,
 ) -> str:
     if agent_spec is None:
         return f"Error: {tool_name} not in local dispatch table (no agent spec)"
@@ -573,6 +575,7 @@ async def _execute_local_python_tool(
             agent_id=agent_id or getattr(agent_spec, "name", "runner-agent") or "runner-agent",
             workspace=workspace,
             conversation_id=conversation_id,
+            acting_identity=acting_identity,
         )
         return await asyncio.to_thread(manager.call_tool, tool_name, args, ctx)
     except Exception as exc:
@@ -3641,6 +3644,7 @@ async def execute_tool(
     harness_client: httpx.AsyncClient | None = None,
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
     filesystem_registry: FilesystemRegistry | None = None,
+    acting_identity: ActingIdentity | None = None,
     _from_context: bool = False,
 ) -> str:
     """
@@ -3789,6 +3793,7 @@ async def execute_tool(
             output = await _execute_terminal_tool(
                 tool_name,
                 args,
+                acting_identity=acting_identity,
                 terminal_registry=terminal_registry,
                 resource_registry=resource_registry,
                 agent_spec=agent_spec,
@@ -3881,6 +3886,7 @@ async def execute_tool(
             output = _execute_skill_tool(
                 tool_name,
                 args,
+                acting_identity=acting_identity,
                 agent_spec=agent_spec,
                 runner_workspace=runner_workspace,
             )
@@ -3911,6 +3917,7 @@ async def execute_tool(
             output = await _execute_local_python_tool(
                 tool_name,
                 arguments,
+                acting_identity=acting_identity,
                 agent_spec=agent_spec,
                 conversation_id=conversation_id,
                 task_id=task_id,
@@ -4550,6 +4557,7 @@ async def _execute_terminal_tool(
     runner_workspace: Path | None = None,
     session_inbox: asyncio.Queue[dict[str, Any]] | None = None,
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
+    acting_identity: ActingIdentity | None = None,
 ) -> str:
     """Execute a terminal tool using the runner's TerminalRegistry.
 
@@ -4585,6 +4593,7 @@ async def _execute_terminal_tool(
         agent_id=agent_id or "unknown",
         workspace=runner_workspace,
         conversation_id=conversation_id,
+        acting_identity=acting_identity,
     )
 
     del session_inbox
@@ -5649,6 +5658,7 @@ def _execute_skill_tool(
     *,
     agent_spec: AgentSpecLike | None,
     runner_workspace: Path | None,
+    acting_identity: ActingIdentity | None = None,
 ) -> str:
     """
     Runner-local handler for ``load_skill`` and ``read_skill_file``.
@@ -5687,5 +5697,5 @@ def _execute_skill_tool(
     arguments_json = json.dumps(args)
     from omnigent.tools.base import ToolContext
 
-    ctx = ToolContext(task_id="", conversation_id="", agent_id="")
+    ctx = ToolContext(task_id="", conversation_id="", agent_id="", acting_identity=acting_identity)
     return tool.invoke(arguments_json, ctx)
