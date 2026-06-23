@@ -13021,6 +13021,7 @@ def create_sessions_router(
     )
     async def update_session(
         request: Request,
+        response: Response,
         session_id: str,
         body: UpdateSessionRequest,
     ) -> SessionResponse:
@@ -13233,6 +13234,9 @@ def create_sessions_router(
                     code=ErrorCode.NOT_FOUND,
                 )
 
+        from omnigent.server.etag import parse_if_match
+
+        expected_version = parse_if_match(request.headers.get("if-match"))
         updated = await asyncio.to_thread(
             conversation_store.update_conversation,
             session_id,
@@ -13245,12 +13249,14 @@ def create_sessions_router(
             _unset_cost_control_mode_override=clear_cost_control,
             terminal_launch_args=terminal_launch_args,
             archived=body.archived,
+            expected_version=expected_version,
         )
         if updated is None:
             raise OmnigentError(
                 "Session not found",
                 code=ErrorCode.NOT_FOUND,
             )
+        response.headers["ETag"] = f'"{updated.version}"'
         # Notify the runner of effort / model changes so harnesses
         # that can't re-read these from store at turn boundaries
         # (today: claude-native, whose ``claude`` binary has

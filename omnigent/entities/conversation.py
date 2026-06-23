@@ -203,6 +203,9 @@ class Conversation:
     workspace: str | None = None
     git_branch: str | None = None
     archived: bool = False
+    # Monotonic optimistic-concurrency ETag (BDP-2412) — send back as
+    # If-Match on the next update_conversation / PATCH.
+    version: int = 1
 
 
 # ── Conversation item data types ───────────────────────

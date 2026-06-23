@@ -37,6 +37,58 @@ def test_get_nonexistent(conversation_store: SqlAlchemyConversationStore) -> Non
     assert conversation_store.get_conversation("conv_none") is None
 
 
+# ── If-Match / optimistic concurrency (BDP-2412, ADR-0150) ────────────────────
+
+
+def test_update_conversation_matching_version_bumps(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    assert conv.version == 1
+    updated = conversation_store.update_conversation(conv.id, title="t2", expected_version=1)
+    assert updated is not None
+    assert updated.title == "t2" and updated.version == 2
+
+
+def test_update_conversation_stale_version_raises_no_clobber(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    from omnigent.errors import StaleWriteError
+
+    conv = conversation_store.create_conversation()
+    conversation_store.update_conversation(conv.id, title="t2", expected_version=1)  # v2
+    with pytest.raises(StaleWriteError):
+        conversation_store.update_conversation(conv.id, title="t3", expected_version=1)
+    assert conversation_store.get_conversation(conv.id).title == "t2"  # not clobbered
+
+
+def test_update_conversation_without_version_is_unconditional(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    updated = conversation_store.update_conversation(conv.id, title="t2")  # back-compat
+    assert updated.version == 2
+
+
+def test_update_conversation_no_op_does_not_bump(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    conv = conversation_store.create_conversation()
+    same = conversation_store.update_conversation(conv.id, expected_version=1)  # no fields
+    assert same.version == 1
+
+
+def test_update_conversation_missing_is_none(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    assert (
+        conversation_store.update_conversation(
+            "conv_missing", title="x", expected_version=1
+        )
+        is None
+    )
+
+
 def test_create_conversation_persists_tenant_id(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:
