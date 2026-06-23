@@ -36,12 +36,19 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Mapping
+from typing import TYPE_CHECKING
 
 from starlette.requests import HTTPConnection
 
-from omnigent.identity.verifiers import HmacAssertionVerifier
+from omnigent.identity.verifiers import (
+    DEFAULT_RSA_PUBLIC_KEY_ENV,
+    HmacAssertionVerifier,
+)
 from omnigent.server.auth import AuthProvider
 from omnigent.server.principal import Principal
+
+if TYPE_CHECKING:
+    from omnigent.identity.ports import AssertionVerifier
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +57,12 @@ HEADER_NAME = "X-Bytedesk-Principal"
 
 #: Env var holding the shared HMAC signing secret (mirrors the platform gateway).
 SECRET_ENV = "OMNIGENT_BYTEDESK_PRINCIPAL_SECRET"
+
+#: Env var holding the PEM public key for the asymmetric (RSA) principal scheme
+#: (BDP-2424). When set it takes precedence over the HMAC secret: Office signs
+#: with the private key omnigent never holds, so omnigent can verify but not
+#: forge — closing the symmetric-HMAC forgeability for the inbound principal.
+RSA_PUBLIC_KEY_ENV = DEFAULT_RSA_PUBLIC_KEY_ENV
 
 #: Clock-skew tolerance (seconds) applied to the ``exp`` check.
 _CLOCK_SKEW_S = 60
@@ -91,17 +104,21 @@ def _str_list(value: object) -> list[str]:
 class ByteDeskPrincipalResolver(AuthProvider):
     """Resolve a verified gateway header into a :class:`Principal` (fail-closed).
 
-    :param secret: The shared HMAC signing secret. The same secret the platform
-        gateway mints with; sourced from :data:`SECRET_ENV` at registration.
-        Verification is delegated to an
-        :class:`~omnigent.identity.verifiers.HmacAssertionVerifier` (require-``exp``),
-        so the trust mechanism is a replaceable subpart.
+    :param verifier_or_secret: Either an
+        :class:`~omnigent.identity.ports.AssertionVerifier` (e.g. the asymmetric
+        :class:`~omnigent.identity.verifiers.RsaAssertionVerifier`, used as-is) or
+        a ``str``/``bytes`` HMAC secret (back-compat, the BDP-2389 path: wrapped
+        in an :class:`~omnigent.identity.verifiers.HmacAssertionVerifier`). The
+        trust mechanism is thus a swappable subpart.
     """
 
-    def __init__(self, secret: str) -> None:
-        self._verifier = HmacAssertionVerifier(
-            secret, clock_skew_s=float(_CLOCK_SKEW_S), require_exp=True
-        )
+    def __init__(self, verifier_or_secret: AssertionVerifier | str | bytes) -> None:
+        if isinstance(verifier_or_secret, (str, bytes)):
+            self._verifier: AssertionVerifier = HmacAssertionVerifier(
+                verifier_or_secret, clock_skew_s=float(_CLOCK_SKEW_S), require_exp=True
+            )
+        else:
+            self._verifier = verifier_or_secret
 
     def get_user_id(self, request: HTTPConnection) -> str | None:
         """Derive the user id from :meth:`get_principal` (``None`` falls through)."""

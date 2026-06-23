@@ -139,22 +139,29 @@ class BytedeskExtension:
         return [InfisicalBackend()]
 
     def principal_resolvers(self) -> list:
-        """The ByteDesk gateway-header principal resolver, flag-gated (BDP-2389).
+        """The ByteDesk gateway-header principal resolver, flag-gated.
 
-        Registers :class:`~bytedesk_omnigent.auth.principal_resolver.ByteDeskPrincipalResolver`
-        ONLY when the signing secret ``OMNIGENT_BYTEDESK_PRINCIPAL_SECRET`` is
-        set. With no secret it returns ``[]`` so a default deploy is zero
-        behavior change — core does not even construct the composite chain.
+        Prefers the **asymmetric** RSA verifier when ``OMNIGENT_ASSERTION_RSA_PUBLIC_KEY``
+        is set (BDP-2424 — Office signs with the private key omnigent never holds,
+        so omnigent verifies but cannot forge). Falls back to the HMAC secret
+        ``OMNIGENT_BYTEDESK_PRINCIPAL_SECRET`` (BDP-2389). Returns ``[]`` when
+        neither is configured, so a default deploy is zero behavior change — core
+        does not even construct the composite chain.
         """
         from bytedesk_omnigent.auth.principal_resolver import (
+            RSA_PUBLIC_KEY_ENV,
             SECRET_ENV,
             ByteDeskPrincipalResolver,
         )
+        from omnigent.identity.verifiers import RsaAssertionVerifier
 
+        rsa_pem = os.environ.get(RSA_PUBLIC_KEY_ENV, "").strip()
+        if rsa_pem:
+            return [ByteDeskPrincipalResolver(RsaAssertionVerifier.from_env(RSA_PUBLIC_KEY_ENV))]
         secret = os.environ.get(SECRET_ENV, "").strip()
-        if not secret:
-            return []
-        return [ByteDeskPrincipalResolver(secret)]
+        if secret:
+            return [ByteDeskPrincipalResolver(secret)]
+        return []
 
     # ── identity ports (adr-omnigent-pluggable-identity) ──────────────
     # ByteDesk contributes no identity provider yet: the inbound trust uses the
