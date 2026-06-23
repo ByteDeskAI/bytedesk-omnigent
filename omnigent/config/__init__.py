@@ -63,6 +63,18 @@ class ConfigNotFoundError(ConfigError):
     """No descriptor registered for the key."""
 
 
+class ConfigFloorError(ConfigError):
+    """A Tier-1 value violates its safety floor — rejected at the port (HTTP 422)."""
+
+
+class ConfigSchemaError(ConfigError):
+    """The value does not match the descriptor's JSON-Schema (HTTP 422)."""
+
+
+class ConfigConflictError(ConfigError):
+    """If-Match precondition failed — a concurrent write moved the value (HTTP 412)."""
+
+
 # ── descriptor ────────────────────────────────────────────────────────────────
 
 
@@ -88,6 +100,8 @@ class ConfigDescriptor:
     floor: str | None = None  # human description of the Tier-1 clamp
     change_event: str | None = None
     writer: Callable[..., Any] | None = None
+    floor_check: Callable[[Any], Any] | None = None  # Tier-1: validate/clamp or raise
+    etag_reader: Callable[[ConfigCtx], str | None] | None = None
     read_only_reason: str | None = None
 
     @property
@@ -212,10 +226,11 @@ class ConfigRegistry:
             }
         else:
             value = raw
+        etag = descriptor.etag_reader(ctx) if descriptor.etag_reader else None
         return ConfigValue(
             key=key,
             value=value,
-            etag=None,
+            etag=etag,
             source=descriptor.storage_source,
             writable=descriptor.writable,
             read_only_reason=descriptor.read_only_reason,
@@ -230,3 +245,114 @@ def build_registry() -> ConfigRegistry:
     for descriptor in extension_config_descriptors():
         registry.register(descriptor)
     return registry
+
+
+# ── write port (BDP-2414) ─────────────────────────────────────────────────────
+
+
+def _json_type_ok(value: Any, json_type: str) -> bool:
+    if json_type == "string":
+        return isinstance(value, str)
+    if json_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if json_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if json_type == "boolean":
+        return isinstance(value, bool)
+    if json_type == "array":
+        return isinstance(value, list)
+    if json_type == "object":
+        return isinstance(value, dict)
+    return True  # unknown type → don't block
+
+
+def _validate_schema(key: str, value: Any, schema: dict[str, Any]) -> None:
+    """Minimal JSON-Schema check (type + enum) — no third-party dep (ADR-0150)."""
+    json_type = schema.get("type")
+    if json_type and not _json_type_ok(value, json_type):
+        raise ConfigSchemaError(
+            f"{key}: expected {json_type}, got {type(value).__name__}"
+        )
+    enum = schema.get("enum")
+    if enum is not None and value not in enum:
+        raise ConfigSchemaError(f"{key}: {value!r} is not one of {enum}")
+
+
+class RegistryConfigService:
+    """The single write choke point — tier/floor/schema/If-Match enforced here.
+
+    Every config write funnels through :meth:`write`: Tier-0 (or no writer) →
+    ``ConfigReadOnlyError``; Tier-1 → the descriptor's ``floor_check`` (clamp or
+    ``ConfigFloorError``); Tier-2/3 → JSON-Schema validation; then the
+    descriptor's ``writer`` (the storage compare-and-swap, raising
+    ``ConfigConflictError`` on a stale If-Match). The REST layer (BDP-2417) is a
+    thin shell over this so a raw-API caller is governed identically to the UI.
+    """
+
+    def __init__(self, registry: ConfigRegistry) -> None:
+        self._registry = registry
+
+    def write(
+        self,
+        key: str,
+        value: Any,
+        *,
+        if_match: str | None = None,
+        ctx: ConfigCtx | None = None,
+    ) -> ConfigValue:
+        descriptor = self._registry.get(key)
+        if descriptor is None:
+            raise ConfigNotFoundError(f"no config descriptor for {key!r}")
+        if not descriptor.writable:
+            raise ConfigReadOnlyError(
+                descriptor.read_only_reason
+                or f"{key!r} is read-only (Tier {descriptor.tier})"
+            )
+        if descriptor.tier == 1 and descriptor.floor_check is not None:
+            value = descriptor.floor_check(value)  # clamp, or raise ConfigFloorError
+        _validate_schema(key, value, descriptor.json_schema)
+        ctx = ctx or ConfigCtx()
+        # The writer performs the storage write + If-Match CAS (raises
+        # ConfigConflictError on a stale ETag).
+        descriptor.writer(value, if_match, ctx)  # type: ignore[misc]
+        return self._registry.read(key, ctx)
+
+
+# ── runtime in-memory store for live-tunable descriptors (BDP-2417) ───────────
+
+
+class RuntimeConfigStore:
+    """A process-global, versioned in-memory store for live-tunable config.
+
+    Each key carries a monotonic integer version as its ETag; a write is an
+    If-Match compare-and-swap. Process-local: a multi-pod deploy propagates a
+    change via the ``config.changed`` event (BDP-2418), not shared memory.
+    """
+
+    def __init__(self) -> None:
+        self._values: dict[str, Any] = {}
+        self._versions: dict[str, int] = {}
+
+    def get(self, key: str, default: Any = None) -> Any:
+        return self._values.get(key, default)
+
+    def version(self, key: str) -> int:
+        return self._versions.get(key, 1)
+
+    def set(self, key: str, value: Any, *, if_match: str | None = None) -> int:
+        current = self._versions.get(key, 1)
+        if if_match is not None and str(if_match) != str(current):
+            raise ConfigConflictError(
+                f"{key}: If-Match {if_match!r} is stale (current {current})"
+            )
+        self._values[key] = value
+        self._versions[key] = current + 1
+        return self._versions[key]
+
+
+_RUNTIME_STORE = RuntimeConfigStore()
+
+
+def runtime_store() -> RuntimeConfigStore:
+    """The process-global runtime config store."""
+    return _RUNTIME_STORE
