@@ -143,6 +143,16 @@ def test_exp_within_skew_tolerance_accepted() -> None:
     assert resolver.get_principal(_conn({HEADER_NAME: header})) is not None
 
 
+def test_missing_exp_returns_none() -> None:
+    # Secure default (adr-omnigent-pluggable-identity): a token with no exp is
+    # rejected — the prior inline check skipped expiry when exp was absent, a
+    # never-expiring assertion.
+    resolver = ByteDeskPrincipalResolver(_SECRET)
+    payload = _valid_payload()
+    del payload["exp"]
+    assert resolver.get_principal(_conn({HEADER_NAME: _mint(payload)})) is None
+
+
 def test_missing_user_id_returns_none() -> None:
     resolver = ByteDeskPrincipalResolver(_SECRET)
     payload = _valid_payload()
@@ -168,9 +178,7 @@ def test_non_json_payload_returns_none() -> None:
 
 
 def test_map_capabilities_known() -> None:
-    roles = map_capabilities_to_roles(
-        ["office.workflows.administer", "office.agents.administer"]
-    )
+    roles = map_capabilities_to_roles(["office.workflows.administer", "office.agents.administer"])
     assert "workflow-admin" in roles
     assert "agent-admin" in roles
 
@@ -196,7 +204,9 @@ def test_map_capabilities_deduplicates() -> None:
 
 
 def test_uses_constant_time_compare(monkeypatch: pytest.MonkeyPatch) -> None:
-    import bytedesk_omnigent.auth.principal_resolver as mod
+    # Verification is delegated to the core HmacAssertionVerifier, so the
+    # constant-time compare now lives there.
+    import omnigent.identity.verifiers as vmod
 
     calls: list[bool] = []
     real = hmac.compare_digest
@@ -205,7 +215,7 @@ def test_uses_constant_time_compare(monkeypatch: pytest.MonkeyPatch) -> None:
         calls.append(True)
         return real(a, b)  # type: ignore[arg-type]
 
-    monkeypatch.setattr(mod.hmac, "compare_digest", _spy)
+    monkeypatch.setattr(vmod.hmac, "compare_digest", _spy)
     resolver = ByteDeskPrincipalResolver(_SECRET)
     resolver.get_principal(_conn({HEADER_NAME: _mint(_valid_payload())}))
     assert calls, "verification must use hmac.compare_digest"

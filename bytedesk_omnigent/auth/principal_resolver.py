@@ -6,7 +6,7 @@ and forwards that identity to omnigent as a compact, HMAC-signed
 boundary: it VERIFIES that header fail-CLOSED and adapts the verified payload
 into a core :class:`~omnigent.server.principal.Principal`.
 
-Design (per ``CLAUDE.md`` §5 / ADR-0008):
+Design (per ``CLAUDE.md`` §5 / ADR-0008, ``adr-omnigent-pluggable-identity``):
 
 - **Strategy** — it is an :class:`~omnigent.server.auth.AuthProvider`, so the
   core :class:`~omnigent.server.auth.CompositeAuthProvider` can chain it ahead
@@ -14,6 +14,10 @@ Design (per ``CLAUDE.md`` §5 / ADR-0008):
 - **Adapter** — it translates the external platform identity wire format (a
   signed token carrying platform *capabilities*) into omnigent's internal
   identity vocabulary (a :class:`Principal` with *roles*).
+- **The trust mechanism is a pluggable subpart** — verification is delegated to a
+  core :class:`~omnigent.identity.verifiers.HmacAssertionVerifier`, so the
+  shared-HMAC scheme can be swapped for JWKS/OIDC without rewriting this
+  resolver's header parsing or capability→role adaptation.
 
 Header format (a tiny JWS-like form, mirroring
 :func:`bytedesk_omnigent.ingress.verify_hmac_signature`'s HMAC-SHA256 scheme)::
@@ -21,26 +25,21 @@ Header format (a tiny JWS-like form, mirroring
     base64url(payload_json) "." base64url(hmac_sha256(secret, payload_bytes))
 
 where ``payload_json`` is ``{user_id, tenant_id, roles, capabilities, iat, exp}``.
-Verification requires a constant-time HMAC match, a non-expired ``exp`` (with a
-~60s clock-skew tolerance), and a present ``user_id``. ANY failure returns
-``None`` so the request falls through the chain to the configured base provider
-— this resolver never raises into the request path and never grants identity it
-could not verify.
+Verification requires a constant-time HMAC match, a **present numeric** ``exp``
+that is not expired (with a ~60s clock-skew tolerance), and a present
+``user_id``. ANY failure returns ``None`` so the request falls through the chain
+to the configured base provider — this resolver never raises into the request
+path and never grants identity it could not verify.
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
-import hashlib
-import hmac
-import json
 import logging
-import time
 from collections.abc import Iterable, Mapping
 
 from starlette.requests import HTTPConnection
 
+from omnigent.identity.verifiers import HmacAssertionVerifier
 from omnigent.server.auth import AuthProvider
 from omnigent.server.principal import Principal
 
@@ -89,21 +88,20 @@ def _str_list(value: object) -> list[str]:
     return [item for item in value if isinstance(item, str)]
 
 
-def _b64url_decode(value: str) -> bytes:
-    """Decode a base64url string without padding; raises on malformed input."""
-    padding = "=" * (-len(value) % 4)
-    return base64.urlsafe_b64decode(value + padding)
-
-
 class ByteDeskPrincipalResolver(AuthProvider):
     """Resolve a verified gateway header into a :class:`Principal` (fail-closed).
 
     :param secret: The shared HMAC signing secret. The same secret the platform
         gateway mints with; sourced from :data:`SECRET_ENV` at registration.
+        Verification is delegated to an
+        :class:`~omnigent.identity.verifiers.HmacAssertionVerifier` (require-``exp``),
+        so the trust mechanism is a replaceable subpart.
     """
 
     def __init__(self, secret: str) -> None:
-        self._secret = secret.encode("utf-8")
+        self._verifier = HmacAssertionVerifier(
+            secret, clock_skew_s=float(_CLOCK_SKEW_S), require_exp=True
+        )
 
     def get_user_id(self, request: HTTPConnection) -> str | None:
         """Derive the user id from :meth:`get_principal` (``None`` falls through)."""
@@ -121,7 +119,7 @@ class ByteDeskPrincipalResolver(AuthProvider):
         if not header:
             return None  # absent → fall through (not an error)
 
-        payload = self._verify(header)
+        payload = self._verifier.verify(header)
         if payload is None:
             return None  # any verification failure → fail closed
 
@@ -144,42 +142,3 @@ class ByteDeskPrincipalResolver(AuthProvider):
             roles=roles,
             claims={"capabilities": raw_caps},
         )
-
-    def _verify(self, header: str) -> dict[str, object] | None:
-        """Verify the signed token and return its payload dict, or ``None``.
-
-        Fail-closed on: malformed shape, bad base64, signature mismatch
-        (constant-time), non-object/non-JSON payload, or expired ``exp``.
-        """
-        payload_b64, sep, sig_b64 = header.partition(".")
-        if not sep or not payload_b64 or not sig_b64:
-            logger.warning("rejected %s: malformed token shape", HEADER_NAME)
-            return None
-
-        try:
-            payload_bytes = _b64url_decode(payload_b64)
-            provided_sig = _b64url_decode(sig_b64)
-        except (binascii.Error, ValueError):
-            logger.warning("rejected %s: undecodable token", HEADER_NAME)
-            return None
-
-        expected_sig = hmac.new(self._secret, payload_bytes, hashlib.sha256).digest()
-        if not hmac.compare_digest(expected_sig, provided_sig):
-            logger.warning("rejected %s: signature mismatch", HEADER_NAME)
-            return None
-
-        try:
-            payload = json.loads(payload_bytes)
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            logger.warning("rejected %s: payload not valid JSON", HEADER_NAME)
-            return None
-        if not isinstance(payload, dict):
-            logger.warning("rejected %s: payload not an object", HEADER_NAME)
-            return None
-
-        exp = payload.get("exp")
-        if isinstance(exp, (int, float)) and time.time() > exp + _CLOCK_SKEW_S:
-            logger.warning("rejected %s: token expired", HEADER_NAME)
-            return None
-
-        return payload
