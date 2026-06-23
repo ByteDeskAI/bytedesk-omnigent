@@ -25,6 +25,7 @@ from omnigent.tools.base import ToolContext
 from omnigent.tools.builtins.timer import (
     SysTimerCancelTool,
     SysTimerSetTool,
+    _spawn_timer_workflow,
 )
 from omnigent.tools.manager import ToolManager
 
@@ -151,6 +152,52 @@ def test_set_malformed_json_returns_parse_error() -> None:
     assert "invalid arguments" in result["error"]
 
 
+def test_set_schedules_timer_when_workflow_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Valid args return a timer_id when the runner workflow hook succeeds."""
+    captured: dict[str, object] = {}
+
+    def _fake_spawn(**kwargs: object) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "omnigent.tools.builtins.timer._spawn_timer_workflow",
+        _fake_spawn,
+    )
+
+    result_json = SysTimerSetTool().invoke(
+        '{"seconds": 5, "repeat": true, "note": "ping"}',
+        _STUB_CTX,
+    )
+    result = json.loads(result_json)
+
+    assert result["status"] == "scheduled"
+    assert result["seconds"] == 5.0
+    assert result["repeat"] is True
+    assert result["note"] == "ping"
+    assert result["timer_id"].startswith("timer_")
+    assert captured == {
+        "timer_id": result["timer_id"],
+        "conversation_id": "conv_x",
+        "seconds": 5.0,
+        "repeat": True,
+        "note": "ping",
+    }
+
+
+def test_spawn_timer_workflow_raises_not_implemented() -> None:
+    """Runner stub fails loud until a sessions-native timer exists."""
+    with pytest.raises(NotImplementedError, match="sessions-native path"):
+        _spawn_timer_workflow(
+            timer_id="timer_abc",
+            conversation_id="conv_x",
+            seconds=1.0,
+            repeat=False,
+            note=None,
+        )
+
+
 def test_set_missing_conversation_id_returns_error() -> None:
     """
     Valid args + ``ctx.conversation_id is None`` returns a structured
@@ -200,6 +247,16 @@ def test_cancel_empty_string_timer_id_returns_error() -> None:
     result_json = SysTimerCancelTool().invoke('{"timer_id": ""}', _STUB_CTX)
     result = json.loads(result_json)
     assert result == {"error": "timer_id is required"}
+
+
+def test_cancel_known_timer_id_returns_not_found() -> None:
+    """Sessions-native path has no active timers, so cancel is always not_found."""
+    result_json = SysTimerCancelTool().invoke(
+        '{"timer_id": "timer_deadbeef"}',
+        _STUB_CTX,
+    )
+    result = json.loads(result_json)
+    assert result == {"timer_id": "timer_deadbeef", "status": "not_found"}
 
 
 def test_cancel_malformed_json_returns_parse_error() -> None:

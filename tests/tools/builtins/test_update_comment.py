@@ -320,6 +320,12 @@ def test_no_store_configured(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "comment store" in result["error"]
 
 
+def test_malformed_json_arguments(tool: UpdateCommentTool) -> None:
+    """Malformed JSON must not reach the comment store."""
+    result = json.loads(tool.invoke("{not-json", _ctx()))
+    assert result == {"error": "malformed JSON arguments"}
+
+
 def test_missing_comment_id(tool: UpdateCommentTool) -> None:
     """
     Returns an error when ``comment_id`` is absent from arguments.

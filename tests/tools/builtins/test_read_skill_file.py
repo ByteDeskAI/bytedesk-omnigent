@@ -48,6 +48,28 @@ def skill_no_resources() -> SkillSpec:
     )
 
 
+def test_read_skill_file_name() -> None:
+    """Tool name is stable for harness dispatch and schema registration."""
+    assert ReadSkillFileTool.name() == "read_skill_file"
+
+
+def test_read_skill_file_description_mentions_skill_directory() -> None:
+    """Class-level description documents the skill-relative path contract."""
+    desc = ReadSkillFileTool.description()
+    assert "skill's directory" in desc
+    assert "relative" in desc
+
+
+def test_read_skill_file_schema_requires_skill_name_and_path(
+    skill_with_resources: SkillSpec,
+) -> None:
+    """Schema exposes both skill_name and path as required parameters."""
+    schema = ReadSkillFileTool([skill_with_resources]).get_schema()
+    assert schema["function"]["name"] == "read_skill_file"
+    params = schema["function"]["parameters"]
+    assert set(params["required"]) == {"skill_name", "path"}
+
+
 def test_read_skill_file_returns_content(
     skill_with_resources: SkillSpec,
     tool_ctx: ToolContext,
