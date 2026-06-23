@@ -22,6 +22,9 @@ const SetupPage = lazy(() => import("@/pages/SetupPage").then((m) => ({ default:
 const PoliciesPage = lazy(() =>
   import("@/pages/PoliciesPage").then((m) => ({ default: m.PoliciesPage })),
 );
+const ConfigPage = lazy(() =>
+  import("@/pages/ConfigPage").then((m) => ({ default: m.ConfigPage })),
+);
 const ApprovePage = lazy(() =>
   import("@/pages/ApprovePage").then((m) => ({ default: m.ApprovePage })),
 );
@@ -124,6 +127,7 @@ function App({ basename }: AppProps = {}) {
             <>
               <Route path={`${prefix}/members`} element={<MembersPage />} />
               <Route path={`${prefix}/policies`} element={<PoliciesPage />} />
+              <Route path={`${prefix}/config`} element={<ConfigPage />} />
             </>
           )}
           <Route path={basename ? `${prefix}/*` : "*"} element={<NotFoundPage />} />
