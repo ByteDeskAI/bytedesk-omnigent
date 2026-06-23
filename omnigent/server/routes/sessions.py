@@ -11451,6 +11451,36 @@ async def _handle_mcp_tools_list(
     return _mcp_ok_response(rpc_id, {"tools": tools})
 
 
+def _mint_acting_identity_header(
+    request: Request | None,
+    auth_provider: AuthProvider | None,
+    agent_id: str | None,
+) -> dict[str, str] | None:
+    """BDP-2424 P2 — mint the signed ``X-Omnigent-Acting-Identity`` header for a
+    runner dispatch, or ``None`` (⇒ no header ⇒ today's behaviour).
+
+    Degrades to ``None`` when there is no request, no auth provider, no inbound
+    principal, or no configured signer — the same degrade-to-default rule the
+    runner-side decode (Path A) relies on. ``get_principal`` is the canonical
+    auth-chain Adapter (BDP-2388 / ADR-0149).
+    """
+    if request is None or auth_provider is None:
+        return None
+    principal = auth_provider.get_principal(request)
+    if principal is None:
+        return None
+    signer = getattr(request.app.state, "assertion_signer", None)
+    if signer is None:
+        return None
+    from omnigent.identity.identity import ActingIdentity
+    from omnigent.identity.signer import HEADER_NAME, encode_acting_identity
+
+    token = encode_acting_identity(
+        ActingIdentity(principal=principal, agent_id=agent_id), signer
+    )
+    return {HEADER_NAME: token} if token else None
+
+
 async def _handle_mcp_tools_call(
     rpc_id: int | str | None,
     session_id: str,
@@ -11461,6 +11491,7 @@ async def _handle_mcp_tools_call(
     *,
     actor: dict[str, str] | None = None,
     request: Request | None = None,
+    auth_provider: AuthProvider | None = None,
 ) -> Response:
     """
     Handle a ``tools/call`` JSON-RPC request for the MCP proxy endpoint.
@@ -11536,6 +11567,10 @@ async def _handle_mcp_tools_call(
     spec = await asyncio.to_thread(_load_agent_spec_for_session, conv, agent_store)
     if spec is None:
         return _mcp_error_response(rpc_id, -32000, f"Agent not found: {conv.agent_id!r}")
+
+    # BDP-2424 P2: mint the per-agent acting-identity carrier once (degrades to
+    # ``None`` ⇒ unchanged) and attach it on every runner dispatch below.
+    acting_headers = _mint_acting_identity_header(request, auth_provider, conv.agent_id)
 
     # Build the policy engine once — used for both TOOL_CALL (first call
     # only) and TOOL_RESULT (both paths). Engine construction reads
@@ -11724,6 +11759,7 @@ async def _handle_mcp_tools_call(
                 "method": "tools/call",
                 "params": {"name": namespaced_name, "arguments": arguments},
             },
+            headers=acting_headers,
             # ``sys_session_send`` returns a launch handle immediately; this
             # timeout now protects ordinary runner proxy hangs.
             timeout=MCP_PROXY_FORWARD_TIMEOUT_S,
@@ -11791,6 +11827,7 @@ async def _handle_mcp_tools_call(
                         "requestState": mcp_request_state,
                     },
                 },
+                headers=acting_headers,
                 timeout=MCP_PROXY_FORWARD_TIMEOUT_S,
             )
             retry_resp.raise_for_status()
@@ -17826,6 +17863,7 @@ def create_sessions_router(
                 runner_router,
                 actor=_build_actor(user_id),
                 request=request,
+                auth_provider=auth_provider,
             )
 
         return _mcp_error_response(rpc_id, -32601, f"Method not found: {method!r}")
