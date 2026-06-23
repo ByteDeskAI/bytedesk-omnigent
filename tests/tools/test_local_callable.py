@@ -76,6 +76,25 @@ def _info(
     )
 
 
+def test_description_classmethod() -> None:
+    """``LocalCallableTool.description()`` is the generic class-level string."""
+    assert (
+        LocalCallableTool.description()
+        == "User-declared function tool from an omnigent-style YAML."
+    )
+
+
+def test_ensure_resolved_is_idempotent(callable_module: str) -> None:
+    """Second schema build reuses the cached callable (no re-import)."""
+    tool = LocalCallableTool(_info("describe", f"{callable_module}.describe"))
+    first_schema = tool.get_schema()
+    assert tool._callable is not None
+    cached = tool._callable
+    second_schema = tool.get_schema()
+    assert tool._callable is cached
+    assert second_schema == first_schema
+
+
 def test_name_dotted_path_and_schema_use_info_and_docstring(
     callable_module: str,
 ) -> None:

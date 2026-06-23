@@ -206,6 +206,11 @@ def test_name_property(weather_spec: ClientSideToolSpec) -> None:
     assert tool.name() == "get_weather"
 
 
+def test_description_classmethod() -> None:
+    """``ClientSideTool.description()`` is available without instantiation."""
+    assert ClientSideTool.description() == "Client-side tool executed by the frontend."
+
+
 # ── ClientSideTool.invoke ─────────────────────────────────
 
 
