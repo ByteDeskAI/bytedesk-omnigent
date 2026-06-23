@@ -43,6 +43,8 @@ class CronTrigger:
     next_fire_at: int
     enabled: bool
     payload: dict | None
+    # Monotonic optimistic-concurrency ETag (BDP-2412) — If-Match on re-register.
+    version: int = 1
 
 
 # ── Schedule-kind Strategy registry (BDP-2349 #13) ──────────────────────────
@@ -127,6 +129,7 @@ def _to_trigger(row: SqlCronTrigger) -> CronTrigger:
         next_fire_at=row.next_fire_at,
         enabled=row.enabled,
         payload=json.loads(row.payload) if row.payload is not None else None,
+        version=row.version,
     )
 
 
@@ -160,12 +163,20 @@ class SqlAlchemyCronScheduler:
         next_fire_at: int | None = None,
         payload: dict | None = None,
         now: int | None = None,
+        expected_version: int | None = None,
     ) -> CronTrigger:
         """Register (idempotently, by ``(agent_id, key)``) a scheduled trigger.
 
         Re-registering an existing ``(agent_id, key)`` updates its schedule +
         ``next_fire_at`` in place (so a redeploy reconciles a bundle's cadence
         without creating duplicates).
+
+        Optimistic concurrency (BDP-2412): when *expected_version* is given AND
+        the trigger already exists, the in-place update is a guarded
+        compare-and-swap on ``version`` (raises ``StaleWriteError`` on a stale
+        ETag). It is ignored on first registration (an INSERT has no prior
+        version). Omitted keeps the unconditional re-register; either way an
+        in-place update bumps ``version``.
         """
         now = now_epoch() if now is None else now
         if next_fire_at is None:
@@ -179,13 +190,39 @@ class SqlAlchemyCronScheduler:
                 )
             ).scalar_one_or_none()
             if existing is not None:
-                existing.schedule_kind = schedule_kind
-                existing.schedule_expr = schedule_expr
-                existing.next_fire_at = next_fire_at
-                existing.payload = payload_json
-                existing.enabled = True
-                session.flush()
-                return _to_trigger(existing)
+                if expected_version is None:
+                    existing.schedule_kind = schedule_kind
+                    existing.schedule_expr = schedule_expr
+                    existing.next_fire_at = next_fire_at
+                    existing.payload = payload_json
+                    existing.enabled = True
+                    existing.version = existing.version + 1
+                    session.flush()
+                    return _to_trigger(existing)
+                from omnigent.errors import StaleWriteError
+
+                result = session.execute(
+                    update(SqlCronTrigger)
+                    .where(
+                        SqlCronTrigger.id == existing.id,
+                        SqlCronTrigger.version == expected_version,
+                    )
+                    .values(
+                        schedule_kind=schedule_kind,
+                        schedule_expr=schedule_expr,
+                        next_fire_at=next_fire_at,
+                        payload=payload_json,
+                        enabled=True,
+                        version=SqlCronTrigger.version + 1,
+                    )
+                )
+                if result.rowcount == 1:
+                    session.expire_all()
+                    return _to_trigger(session.get(SqlCronTrigger, existing.id))
+                raise StaleWriteError(
+                    f"cron trigger {existing.id!r} was modified concurrently "
+                    f"(If-Match version {expected_version} is stale)"
+                )
             row = SqlCronTrigger(
                 id=f"cron_{uuid.uuid4().hex}",
                 agent_id=agent_id,
@@ -196,6 +233,7 @@ class SqlAlchemyCronScheduler:
                 enabled=True,
                 payload=payload_json,
                 created_at=now,
+                version=1,
             )
             session.add(row)
             session.flush()

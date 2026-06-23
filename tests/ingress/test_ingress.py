@@ -33,6 +33,36 @@ def _hdrs(signature: str, event: str) -> dict[str, str]:
     return {"x-omnigent-signature": signature, "x-omnigent-event": event}
 
 
+def test_register_binding_if_match_optimistic_concurrency(tmp_path) -> None:
+    """If-Match guards the in-place binding re-register (BDP-2412)."""
+    from omnigent.errors import StaleWriteError
+
+    store = IngressBindingStore(f"sqlite:///{tmp_path / 'etag.db'}")
+    first = store.register_binding(source="gh", match_key="*", signal_id="s1")
+    assert first.version == 1
+
+    # Matching ETag → version bumps + signal updates.
+    upd = store.register_binding(
+        source="gh", match_key="*", signal_id="s2", expected_version=1
+    )
+    assert upd.version == 2 and upd.signal_id == "s2"
+
+    # Stale ETag → StaleWriteError (no clobber).
+    with pytest.raises(StaleWriteError):
+        store.register_binding(source="gh", match_key="*", signal_id="s3", expected_version=1)
+    assert store.resolve_binding(source="gh", match_key="*").signal_id == "s2"
+
+    # No expected_version → unconditional re-register (back-compat), still bumps.
+    uncond = store.register_binding(source="gh", match_key="*", signal_id="s4")
+    assert uncond.version == 3
+
+    # A precondition on a not-yet-existing (source, match_key) is ignored (INSERT).
+    new = store.register_binding(
+        source="gh", match_key="push", signal_id="s5", expected_version=9
+    )
+    assert new.version == 1
+
+
 def test_verify_hmac_signature_bare_and_prefixed() -> None:
     body = b'{"x":1}'
     secret = "s3cr3t"
