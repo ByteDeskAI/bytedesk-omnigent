@@ -46,6 +46,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -17206,6 +17207,7 @@ def create_sessions_router(
     )
     async def grant_permission(
         request: Request,
+        response: Response,
         session_id: str,
         body: GrantPermissionRequest,
     ) -> PermissionObject:
@@ -17249,16 +17251,27 @@ def create_sessions_router(
                 code=ErrorCode.FORBIDDEN,
             )
         await asyncio.to_thread(permission_store.ensure_user, body.user_id)
+        # If-Match optimistic concurrency (BDP-2412): when the caller sends the
+        # grant version they read, the store does a guarded compare-and-swap.
+        from omnigent.server.etag import parse_if_match
+
+        expected_version = parse_if_match(request.headers.get("if-match"))
         perm = await asyncio.to_thread(
-            permission_store.grant, body.user_id, session_id, body.level
+            permission_store.grant,
+            body.user_id,
+            session_id,
+            body.level,
+            expected_version=expected_version,
         )
         # Push the now-shared session to the GRANTEE's open tabs so it
         # appears in their sidebar without a list poll.
         _announce_session_added(body.user_id, session_id)
+        response.headers["ETag"] = f'"{perm.version}"'
         return PermissionObject(
             user_id=perm.user_id,
             conversation_id=perm.conversation_id,
             level=perm.level,
+            version=perm.version,
         )
 
     @router.delete(

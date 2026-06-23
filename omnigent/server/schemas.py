@@ -1927,11 +1927,14 @@ class PermissionObject(BaseModel):
         ``"conv_abc123"``.
     :param level: Numeric permission level (1=read, 2=edit,
         3=manage).
+    :param version: Optimistic-concurrency ETag — send back as
+        ``If-Match`` on the next grant update (BDP-2412).
     """
 
     user_id: str
     conversation_id: str
     level: int
+    version: int = 1
 
 
 # ─────────────────────────────────────────────────────────────────────
