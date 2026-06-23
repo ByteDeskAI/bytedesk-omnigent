@@ -64,6 +64,16 @@ def test_jira_work_intake_is_prototype():
     assert jira.status == "prototype"
 
 
+def test_confluence_knowledge_operator_is_prototype():
+    # BDP-2403: the native ``bytedesk_confluence`` tool implements this blueprint,
+    # so it ships as a prototype, not a candidate.
+    confluence = get_integration_capability("confluence-knowledge-operator")
+
+    assert confluence is not None
+    assert confluence.status == "prototype"
+    assert confluence.category == "knowledge"
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")

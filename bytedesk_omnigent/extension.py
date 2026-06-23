@@ -78,6 +78,7 @@ class BytedeskExtension:
 
     # ── builtin tool factories (merged into core _BUILTIN_REGISTRY) ───
     def tool_factories(self) -> dict[str, Callable[[object], Tool]]:
+        from bytedesk_omnigent.tools.confluence_tools import BytedeskConfluenceTool
         from bytedesk_omnigent.tools.deliberation_tools import (
             DeliberationDecideTool,
             DeliberationFindTool,
@@ -118,6 +119,7 @@ class BytedeskExtension:
             "find_specialist": lambda _c: FindSpecialistTool(),
             "resolve_assignee": lambda _c: ResolveAssigneeTool(),
             "bytedesk_jira": lambda _c: BytedeskJiraTool(),
+            "bytedesk_confluence": lambda _c: BytedeskConfluenceTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),
