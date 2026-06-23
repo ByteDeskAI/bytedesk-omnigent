@@ -89,6 +89,71 @@ def test_grant_creates_permission(store: SqlAlchemyPermissionStore, db_uri: str)
     )
 
 
+# ── If-Match / optimistic concurrency (BDP-2412, ADR-0150) ────────────────────
+
+
+def test_grant_bumps_version_each_write(store: SqlAlchemyPermissionStore, db_uri: str) -> None:
+    _ensure_user(store, "alice@test.com")
+    conv_id = _create_conversation(db_uri)
+    first = store.grant("alice@test.com", conv_id, level=1)
+    assert first.version == 1
+    second = store.grant("alice@test.com", conv_id, level=2)
+    assert second.version == 2  # unconditional upsert still advances the ETag
+
+
+def test_grant_with_matching_expected_version_succeeds(
+    store: SqlAlchemyPermissionStore, db_uri: str
+) -> None:
+    _ensure_user(store, "alice@test.com")
+    conv_id = _create_conversation(db_uri)
+    store.grant("alice@test.com", conv_id, level=1)  # version 1
+    updated = store.grant("alice@test.com", conv_id, level=3, expected_version=1)
+    assert updated.level == 3 and updated.version == 2
+
+
+def test_grant_with_stale_expected_version_raises_no_clobber(
+    store: SqlAlchemyPermissionStore, db_uri: str
+) -> None:
+    from omnigent.errors import StaleWriteError
+
+    _ensure_user(store, "alice@test.com")
+    conv_id = _create_conversation(db_uri)
+    store.grant("alice@test.com", conv_id, level=1)  # v1
+    store.grant("alice@test.com", conv_id, level=2, expected_version=1)  # v2
+    with pytest.raises(StaleWriteError):
+        store.grant("alice@test.com", conv_id, level=3, expected_version=1)  # stale
+    assert store.get("alice@test.com", conv_id).level == 2  # not clobbered
+
+
+def test_guarded_grant_on_missing_row_is_not_found_not_conflict(
+    store: SqlAlchemyPermissionStore, db_uri: str
+) -> None:
+    from omnigent.errors import ErrorCode, OmnigentError, StaleWriteError
+
+    _ensure_user(store, "alice@test.com")
+    conv_id = _create_conversation(db_uri)
+    # a CAS cannot create a row — a missing grant is NOT_FOUND, never a stale write
+    with pytest.raises(OmnigentError) as exc_info:
+        store.grant("alice@test.com", conv_id, level=2, expected_version=1)
+    assert exc_info.value.code == ErrorCode.NOT_FOUND
+    assert not isinstance(exc_info.value, StaleWriteError)
+
+
+def test_concurrent_grant_clobber_is_closed(
+    store: SqlAlchemyPermissionStore, db_uri: str
+) -> None:
+    from omnigent.errors import StaleWriteError
+
+    _ensure_user(store, "alice@test.com")
+    conv_id = _create_conversation(db_uri)
+    store.grant("alice@test.com", conv_id, level=1)  # v1
+    winner = store.grant("alice@test.com", conv_id, level=2, expected_version=1)
+    assert winner.level == 2 and winner.version == 2
+    with pytest.raises(StaleWriteError):
+        store.grant("alice@test.com", conv_id, level=3, expected_version=1)
+    assert store.get("alice@test.com", conv_id).level == 2
+
+
 def test_grant_is_persisted_and_retrievable(store: SqlAlchemyPermissionStore, db_uri: str) -> None:
     """A grant created by ``grant`` is immediately visible via ``get``.
 

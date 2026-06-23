@@ -32,6 +32,8 @@ class PermissionStore(ABC):
         user_id: str,
         conversation_id: str,
         level: int,
+        *,
+        expected_version: int | None = None,
     ) -> SessionPermission:
         """Upsert a permission grant.
 
@@ -40,13 +42,25 @@ class PermissionStore(ABC):
         responsible for authorization checks (only managers may
         grant).
 
+        Optimistic concurrency (BDP-2412, ADR-0150): when
+        *expected_version* is given, the existing grant is updated via a
+        guarded compare-and-swap on ``version`` — it cannot create a row
+        (a missing grant raises ``NOT_FOUND``; a moved version raises
+        ``StaleWriteError``). When omitted (``None``) the grant is an
+        unconditional upsert, so every existing caller is unchanged; the
+        version still bumps on each accepted write so the ETag advances.
+
         :param user_id: The grantee, e.g. ``"alice@example.com"``
             or ``"__public__"`` for public access.
         :param conversation_id: The session to grant access to,
             e.g. ``"conv_abc123"``.
         :param level: Numeric permission level (1=read, 2=edit,
             3=manage).
+        :param expected_version: The grant version the caller last read
+            (the ``If-Match`` ETag); ``None`` skips the precondition.
         :returns: The resulting :class:`SessionPermission`.
+        :raises StaleWriteError: If *expected_version* is given but the
+            grant's version has since moved (concurrent write).
         """
         ...
 

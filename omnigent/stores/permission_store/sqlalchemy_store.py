@@ -23,6 +23,7 @@ def _to_entity(row: SqlSessionPermission) -> SessionPermission:
         user_id=row.user_id,
         conversation_id=row.conversation_id,
         level=row.level,
+        version=row.version,
     )
 
 
@@ -50,39 +51,64 @@ class SqlAlchemyPermissionStore(PermissionStore):
         user_id: str,
         conversation_id: str,
         level: int,
+        *,
+        expected_version: int | None = None,
     ) -> SessionPermission:
         """Upsert a permission grant. See base class for contract."""
+        from omnigent.errors import ErrorCode, OmnigentError, StaleWriteError
+
         with self._session() as session:
+            if expected_version is not None:
+                # Guarded compare-and-swap on an EXISTING grant (composite PK +
+                # version). A CAS cannot create a row, so a missing grant is
+                # NOT_FOUND; a present row whose version moved is a stale write.
+                result = session.execute(
+                    update(SqlSessionPermission)
+                    .where(
+                        SqlSessionPermission.user_id == user_id,
+                        SqlSessionPermission.conversation_id == conversation_id,
+                        SqlSessionPermission.version == expected_version,
+                    )
+                    .values(level=level, version=SqlSessionPermission.version + 1)
+                )
+                if result.rowcount == 1:
+                    session.expire_all()
+                    return _to_entity(
+                        session.get(SqlSessionPermission, (user_id, conversation_id))
+                    )
+                if session.get(SqlSessionPermission, (user_id, conversation_id)) is None:
+                    raise OmnigentError(
+                        f"no grant for ({user_id!r}, {conversation_id!r})",
+                        code=ErrorCode.NOT_FOUND,
+                    )
+                raise StaleWriteError(
+                    f"grant ({user_id!r}, {conversation_id!r}) was modified "
+                    f"concurrently (If-Match version {expected_version} is stale)"
+                )
+
+            # Unconditional upsert (back-compat). Bump version on conflict so the
+            # ETag advances on every accepted write; a fresh insert starts at 1.
             is_sqlite = self._engine.dialect.name == "sqlite"
             values = {
                 "user_id": user_id,
                 "conversation_id": conversation_id,
                 "level": level,
             }
-            if is_sqlite:
-                stmt = (
-                    sqlite_insert(SqlSessionPermission)
-                    .values(**values)
-                    .on_conflict_do_update(
-                        index_elements=["user_id", "conversation_id"],
-                        set_={"level": level},
-                    )
+            set_ = {"level": level, "version": SqlSessionPermission.version + 1}
+            insert = sqlite_insert if is_sqlite else pg_insert
+            stmt = (
+                insert(SqlSessionPermission)
+                .values(**values)
+                .on_conflict_do_update(
+                    index_elements=["user_id", "conversation_id"],
+                    set_=set_,
                 )
-            else:
-                stmt = (
-                    pg_insert(SqlSessionPermission)
-                    .values(**values)
-                    .on_conflict_do_update(
-                        index_elements=["user_id", "conversation_id"],
-                        set_={"level": level},
-                    )
-                )
+            )
             session.execute(stmt)
             session.flush()
-            return SessionPermission(
-                user_id=user_id,
-                conversation_id=conversation_id,
-                level=level,
+            session.expire_all()
+            return _to_entity(
+                session.get(SqlSessionPermission, (user_id, conversation_id))
             )
 
     def revoke(self, user_id: str, conversation_id: str) -> bool:
