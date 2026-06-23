@@ -373,6 +373,39 @@ async def test_grant_permission_if_match_optimistic_concurrency(
     assert uncond.status_code == 200, uncond.text
 
 
+async def test_update_session_if_match_optimistic_concurrency(
+    auth_client: httpx.AsyncClient,
+) -> None:
+    """If-Match guards PATCH /v1/sessions/{id} through the real route (BDP-2412)."""
+    session = await _create_session_as(auth_client, "ignored", "bryan@test")
+    sid = session["id"]
+
+    # Matching ETag (a fresh session is version 1) → 200, version bumps to 2.
+    ok = await auth_client.patch(
+        f"/v1/sessions/{sid}",
+        json={"title": "t2"},
+        headers={"X-Forwarded-Email": "bryan@test", "If-Match": '"1"'},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.headers["etag"] == '"2"'
+
+    # Stale ETag → 412 Precondition Failed (no clobber).
+    stale = await auth_client.patch(
+        f"/v1/sessions/{sid}",
+        json={"title": "t3"},
+        headers={"X-Forwarded-Email": "bryan@test", "If-Match": '"1"'},
+    )
+    assert stale.status_code == 412, stale.text
+
+    # No If-Match → unconditional (back-compat).
+    uncond_patch = await auth_client.patch(
+        f"/v1/sessions/{sid}",
+        json={"title": "t4"},
+        headers={"X-Forwarded-Email": "bryan@test"},
+    )
+    assert uncond_patch.status_code == 200, uncond_patch.text
+
+
 async def _revoke_permission(
     client: httpx.AsyncClient,
     session_id: str,

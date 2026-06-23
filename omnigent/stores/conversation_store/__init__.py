@@ -571,9 +571,15 @@ class ConversationStore(ABC):
         harness_override: str | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
+        expected_version: int | None = None,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
+
+        Optimistic concurrency (BDP-2412): when *expected_version* is
+        given, the write is a guarded compare-and-swap on ``version``
+        (raises ``StaleWriteError`` on a stale ETag); omitted keeps the
+        unconditional update. A real change bumps ``version`` either way.
 
         For ``reasoning_effort``, ``model_override``, and
         ``cost_control_mode_override``, ``None`` means "leave

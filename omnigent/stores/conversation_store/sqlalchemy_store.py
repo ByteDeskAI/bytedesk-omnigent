@@ -120,6 +120,7 @@ def _to_conversation(
         workspace=row.workspace,
         git_branch=row.git_branch,
         archived=row.archived,
+        version=row.version,
     )
 
 
@@ -655,6 +656,9 @@ class SqlAlchemyConversationStore(ConversationStore):
                         if terminal_launch_args is not None
                         else None
                     ),
+                    # Explicit so the returned entity carries it (create does
+                    # not flush, so column defaults aren't populated in-memory).
+                    version=1,
                 )
                 session.add(row)
                 # Convert inside the session so the entity is
@@ -1694,6 +1698,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         harness_override: str | None = None,
         terminal_launch_args: list[str] | None = None,
         archived: bool | None = None,
+        expected_version: int | None = None,
     ) -> Conversation | None:
         """
         Update mutable fields on a conversation.
@@ -1727,44 +1732,96 @@ class SqlAlchemyConversationStore(ConversationStore):
         :returns: The updated :class:`Conversation`, or ``None``
             if the conversation does not exist.
         """
+        from sqlalchemy import update as sql_update
+
+        from omnigent.errors import StaleWriteError
+
         with self._session() as session:
             row = session.get(SqlConversation, conversation_id)
             if not row:
                 return None
-            changed = False
+            if expected_version is None:
+                changed = False
+                if title is not None:
+                    row.title = title
+                    changed = True
+                if archived is not None:
+                    row.archived = archived
+                    changed = True
+                if _unset_reasoning_effort:
+                    row.reasoning_effort = None
+                    changed = True
+                elif reasoning_effort is not None:
+                    row.reasoning_effort = reasoning_effort
+                    changed = True
+                if _unset_model_override:
+                    row.model_override = None
+                    changed = True
+                elif model_override is not None:
+                    row.model_override = model_override
+                    changed = True
+                if _unset_cost_control_mode_override:
+                    row.cost_control_mode_override = None
+                    changed = True
+                elif cost_control_mode_override is not None:
+                    row.cost_control_mode_override = cost_control_mode_override
+                    changed = True
+                if harness_override is not None:
+                    row.harness_override = harness_override
+                    changed = True
+                if terminal_launch_args is not None:
+                    row.terminal_launch_args = json.dumps(terminal_launch_args)
+                    changed = True
+                if changed:
+                    row.version = row.version + 1
+                    row.updated_at = now_epoch()
+                return _to_conversation(row, _fetch_labels(session, conversation_id))
+            # Guarded compare-and-swap on version (race-safe single UPDATE,
+            # mirroring set_runner_id; the read-modify-write above is only safe
+            # under SERIALIZABLE, so the conditional path uses one statement).
+            values: dict[str, Any] = {}
             if title is not None:
-                row.title = title
-                changed = True
+                values["title"] = title
             if archived is not None:
-                row.archived = archived
-                changed = True
+                values["archived"] = archived
             if _unset_reasoning_effort:
-                row.reasoning_effort = None
-                changed = True
+                values["reasoning_effort"] = None
             elif reasoning_effort is not None:
-                row.reasoning_effort = reasoning_effort
-                changed = True
+                values["reasoning_effort"] = reasoning_effort
             if _unset_model_override:
-                row.model_override = None
-                changed = True
+                values["model_override"] = None
             elif model_override is not None:
-                row.model_override = model_override
-                changed = True
+                values["model_override"] = model_override
             if _unset_cost_control_mode_override:
-                row.cost_control_mode_override = None
-                changed = True
+                values["cost_control_mode_override"] = None
             elif cost_control_mode_override is not None:
-                row.cost_control_mode_override = cost_control_mode_override
-                changed = True
+                values["cost_control_mode_override"] = cost_control_mode_override
             if harness_override is not None:
-                row.harness_override = harness_override
-                changed = True
+                values["harness_override"] = harness_override
             if terminal_launch_args is not None:
-                row.terminal_launch_args = json.dumps(terminal_launch_args)
-                changed = True
-            if changed:
-                row.updated_at = now_epoch()
-            return _to_conversation(row, _fetch_labels(session, conversation_id))
+                values["terminal_launch_args"] = json.dumps(terminal_launch_args)
+            if not values:
+                return _to_conversation(row, _fetch_labels(session, conversation_id))
+            values["version"] = SqlConversation.version + 1
+            values["updated_at"] = now_epoch()
+            result = session.execute(
+                sql_update(SqlConversation)
+                .where(
+                    SqlConversation.id == conversation_id,
+                    SqlConversation.version == expected_version,
+                )
+                .values(**values)
+            )
+            if result.rowcount == 1:
+                session.expire_all()
+                fresh = session.get(SqlConversation, conversation_id)
+                return _to_conversation(
+                    fresh, _fetch_labels(session, conversation_id)
+                )
+            raise StaleWriteError(
+                f"conversation {conversation_id!r} was modified concurrently "
+                f"(If-Match version {expected_version} is stale)"
+            )
 
     def set_runner_id(self, conversation_id: str, runner_id: str) -> bool:
         """
