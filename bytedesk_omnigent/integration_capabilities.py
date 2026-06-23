@@ -163,7 +163,7 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         slug="github-engineering-copilot",
         name="GitHub engineering copilot",
         category="developer",
-        status="candidate",
+        status="prototype",
         auth_model="GitHub App installation + OAuth web flow",
         agent_value=(
             "Let coding agents reason over issues, PRs, reviews, checks, and repository events with least-privilege installation tokens.",
@@ -171,8 +171,10 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         ),
         required_scopes=("contents:read", "issues:write", "pull_requests:write", "checks:read"),
         implementation_description=(
-            "Prefer a GitHub App over user PATs. Convert webhook events into signed ingress signals, expose repository tools through MCP, "
-            "and bind PR/CI state to Task lifecycle transitions."
+            "Native ``bytedesk_github`` agent tool (BDP-2404) over the GitHub REST v3 API: read repo, list/read pull requests, read PR "
+            "files and aggregated CI check status, read/list/search issues, list commits, read a file (base64-decoded), and add an "
+            "issue/PR comment. Read + comment only (no merge/push/PR creation), Bearer-token auth via GITHUB_TOKEN, returns structured "
+            "errors instead of crashing the turn. Future: prefer a GitHub App over PATs and bind webhook events to Task lifecycle."
         ),
         future_unlocks=(
             "Autonomous PR repair loops.",

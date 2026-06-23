@@ -74,6 +74,16 @@ def test_confluence_knowledge_operator_is_prototype():
     assert confluence.category == "knowledge"
 
 
+def test_github_engineering_copilot_is_prototype():
+    # BDP-2404: the native ``bytedesk_github`` tool implements this blueprint, so
+    # it graduates from candidate to prototype.
+    github = get_integration_capability("github-engineering-copilot")
+
+    assert github is not None
+    assert github.status == "prototype"
+    assert github.category == "developer"
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")
