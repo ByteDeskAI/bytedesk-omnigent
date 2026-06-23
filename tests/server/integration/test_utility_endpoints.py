@@ -102,6 +102,11 @@ _EXPECTED_SEAM_DEFAULTS: dict[str, str | None] = {
     "memory_embedder": "fastembed",
     "agent_memory": "composed",
     "spec_source": "filesystem",
+    "coordination_backplane": "inprocess",
+    # Identity seams (adr-omnigent-pluggable-identity / BDP-2409).
+    "assertion_verifier": "hmac",
+    "outbound_credential": "static_secret",
+    "authorizer": "owner_allow",
 }
 
 
