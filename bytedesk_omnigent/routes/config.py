@@ -11,8 +11,11 @@ capability (the admin lives in omnigent, ADR-0150).
 
 from __future__ import annotations
 
+import asyncio
+import json
+
 from fastapi import APIRouter, Query, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
@@ -161,5 +164,44 @@ def create_config_router(auth_provider: AuthProvider | None = None) -> APIRouter
                 "writable": value.writable,
             }
         )
+
+    @router.get("/config/events")
+    async def config_events(request: Request) -> StreamingResponse:
+        """SSE stream of ``config.changed`` events — metadata only (BDP-2418).
+
+        Integrators and the ap-web admin subscribe to keep their config views
+        live; a subscriber that needs the new value re-GETs ``/config/values/{key}``
+        (still secret-redacted), so the stream can't leak a secret.
+        """
+        require_user(request, auth_provider)
+        from omnigent.config import config_change_bus
+
+        bus = config_change_bus()
+        queue = bus.subscribe()
+
+        async def _stream():
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    try:
+                        change = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield ": heartbeat\n\n"  # keep the connection alive
+                        continue
+                    payload = json.dumps(
+                        {
+                            "key": change.key,
+                            "scope": change.scope,
+                            "etag": change.etag,
+                            "tier": change.tier,
+                            "effect_timing": change.effect_timing,
+                        }
+                    )
+                    yield f"event: config.changed\ndata: {payload}\n\n"
+            finally:
+                bus.unsubscribe(queue)
+
+        return StreamingResponse(_stream(), media_type="text/event-stream")
 
     return router

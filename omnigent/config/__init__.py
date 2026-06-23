@@ -19,6 +19,7 @@ mutating half on the same seam.
 
 from __future__ import annotations
 
+import asyncio
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -289,8 +290,15 @@ class RegistryConfigService:
     thin shell over this so a raw-API caller is governed identically to the UI.
     """
 
-    def __init__(self, registry: ConfigRegistry) -> None:
+    def __init__(
+        self,
+        registry: ConfigRegistry,
+        *,
+        on_change: Callable[[ConfigChange], None] | None = None,
+    ) -> None:
         self._registry = registry
+        # Default to the process change bus; injectable for tests (BDP-2418).
+        self._on_change = on_change or config_change_bus().publish
 
     def write(
         self,
@@ -315,7 +323,19 @@ class RegistryConfigService:
         # The writer performs the storage write + If-Match CAS (raises
         # ConfigConflictError on a stale ETag).
         descriptor.writer(value, if_match, ctx)  # type: ignore[misc]
-        return self._registry.read(key, ctx)
+        result = self._registry.read(key, ctx)
+        # Emit config.changed — METADATA ONLY (never the value), so the change
+        # stream can't become a secret side-channel (BDP-2418 / ADR-0150).
+        self._on_change(
+            ConfigChange(
+                key=key,
+                scope=descriptor.scope,
+                etag=result.etag,
+                tier=descriptor.tier,
+                effect_timing=descriptor.effect_timing,
+            )
+        )
+        return result
 
 
 # ── runtime in-memory store for live-tunable descriptors (BDP-2417) ───────────
@@ -356,3 +376,56 @@ _RUNTIME_STORE = RuntimeConfigStore()
 def runtime_store() -> RuntimeConfigStore:
     """The process-global runtime config store."""
     return _RUNTIME_STORE
+
+
+# ── config-change bus (realtime, BDP-2418) ────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ConfigChange:
+    """A ``config.changed`` event — METADATA ONLY (never the value).
+
+    A subscriber that needs the new value re-reads ``GET /v1/config/values/{key}``
+    (which still redacts secrets), so the change stream can never become a
+    secret-exfiltration side-channel (ADR-0150).
+    """
+
+    key: str
+    scope: str
+    etag: str | None
+    tier: int
+    effect_timing: str
+
+
+class ConfigChangeBus:
+    """In-process pub-sub for ``config.changed`` (the ADR-0149 event seam).
+
+    Each subscriber gets an async queue; a write publishes the metadata-only
+    change to every subscriber (the SSE endpoint, in-process cache
+    invalidators). A multi-pod deploy fans out cross-pod by swapping
+    :meth:`publish` onto the NATS signal bus — the in-process bus matches
+    today's process-local runtime store.
+    """
+
+    def __init__(self) -> None:
+        self._subscribers: set[asyncio.Queue[ConfigChange]] = set()
+
+    def subscribe(self) -> asyncio.Queue[ConfigChange]:
+        queue: asyncio.Queue[ConfigChange] = asyncio.Queue()
+        self._subscribers.add(queue)
+        return queue
+
+    def unsubscribe(self, queue: asyncio.Queue[ConfigChange]) -> None:
+        self._subscribers.discard(queue)
+
+    def publish(self, change: ConfigChange) -> None:
+        for queue in list(self._subscribers):
+            queue.put_nowait(change)
+
+
+_CHANGE_BUS = ConfigChangeBus()
+
+
+def config_change_bus() -> ConfigChangeBus:
+    """The process-global config-change bus."""
+    return _CHANGE_BUS
