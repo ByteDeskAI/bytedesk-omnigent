@@ -15,11 +15,14 @@ class SessionPermission:
         e.g. ``"conv_abc123"``.
     :param level: Numeric permission level: ``1`` = read,
         ``2`` = edit, ``3`` = manage. Comparison is ``>=``.
+    :param version: Monotonic optimistic-concurrency ETag (BDP-2412);
+        the value to send back as ``If-Match`` on a guarded grant update.
     """
 
     user_id: str
     conversation_id: str
     level: int
+    version: int = 1
 
 
 @dataclasses.dataclass(frozen=True)
