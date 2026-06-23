@@ -10,7 +10,10 @@ from typing import Any
 import pytest
 
 from omnigent.tools.base import ToolContext
-from omnigent.tools.builtins.download_file import DownloadFileTool
+from omnigent.tools.builtins.download_file import (
+    DownloadFileTool,
+    _resolve_destination,
+)
 from omnigent.tools.builtins.list_files import ListFilesTool
 
 # ── Stubs ─────────────────────────────────────────────────
@@ -146,6 +149,33 @@ def tool_ctx(tmp_path: Path) -> ToolContext:
     )
 
 
+# ── Identity / schema ────────────────────────────────────
+
+
+def test_list_files_name_description_and_schema() -> None:
+    """Registration helpers expose stable tool metadata."""
+    assert ListFilesTool.name() == "list_files"
+    assert "download_file" in ListFilesTool.description().lower()
+    schema = ListFilesTool().get_schema()
+    assert schema["function"]["name"] == "list_files"
+    assert schema["function"]["parameters"]["required"] == []
+
+
+def test_download_file_name_description_and_schema() -> None:
+    """Registration helpers expose stable tool metadata."""
+    assert DownloadFileTool.name() == "download_file"
+    assert "file_id" in DownloadFileTool.description().lower()
+    schema = DownloadFileTool().get_schema()
+    assert schema["function"]["name"] == "download_file"
+    assert schema["function"]["parameters"]["required"] == ["file_id"]
+
+
+def test_resolve_destination_uses_cwd_when_workspace_missing() -> None:
+    """Downloads without a workspace root land in the process cwd."""
+    dest = _resolve_destination("notes.txt", None)
+    assert dest == Path.cwd() / "notes.txt"
+
+
 # ── list_files tests ─────────────────────────────────────
 
 
@@ -225,6 +255,46 @@ def test_list_files_respects_limit(
     assert len(result["files"]) == 5
 
 
+def test_list_files_reports_pagination_cursor(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_ctx: ToolContext,
+) -> None:
+    """When the store has more pages, list_files surfaces has_more + last_id."""
+    files = [
+        _FakeFile("file_1", "a.txt", 10, "text/plain", 1, session_id="conv_alice"),
+    ]
+
+    class _PagingStore(_FakeFileStore):
+        def list(self, *args: object, **kwargs: object) -> _FakePage:
+            return _FakePage(
+                data=files,
+                has_more=True,
+                last_id="file_1",
+            )
+
+    monkeypatch.setattr(
+        "omnigent.runtime.get_file_store",
+        lambda: _PagingStore(files),
+    )
+
+    tool = ListFilesTool()
+    result = json.loads(tool.invoke("{}", tool_ctx))
+
+    assert result["has_more"] is True
+    assert result["last_id"] == "file_1"
+
+
+def test_list_files_requires_file_store(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_ctx: ToolContext,
+) -> None:
+    """Deployments without a file store must fail closed."""
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: None)
+    tool = ListFilesTool()
+    result = json.loads(tool.invoke("{}", tool_ctx))
+    assert result == {"error": "File store not configured."}
+
+
 def test_list_files_excludes_other_sessions(
     monkeypatch: pytest.MonkeyPatch,
     tool_ctx: ToolContext,
@@ -260,6 +330,27 @@ def test_list_files_excludes_other_sessions(
 
 
 # ── download_file tests ──────────────────────────────────
+
+
+def test_download_file_missing_file_id(
+    tool_ctx: ToolContext,
+) -> None:
+    """Empty file_id is rejected before touching the store."""
+    tool = DownloadFileTool()
+    result = json.loads(tool.invoke("{}", tool_ctx))
+    assert result == {"error": "missing required 'file_id'"}
+
+
+def test_download_file_requires_file_store(
+    monkeypatch: pytest.MonkeyPatch,
+    tool_ctx: ToolContext,
+) -> None:
+    """Deployments without file/artifact stores must fail closed."""
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: None)
+    monkeypatch.setattr("omnigent.runtime.get_artifact_store", lambda: None)
+    tool = DownloadFileTool()
+    result = json.loads(tool.invoke('{"file_id": "file_abc"}', tool_ctx))
+    assert result == {"error": "File store not configured."}
 
 
 def test_download_file_saves_to_workspace(

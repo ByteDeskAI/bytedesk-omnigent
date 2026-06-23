@@ -163,6 +163,12 @@ def test_builtin_names_size_matches_registry() -> None:
                 "deliberation_find",
                 # BDP-2276 E2: self-learning routing over the outcome scoreboard.
                 "find_specialist",
+                # ByteDesk extension tools (ADR-0143 / BDP-2300 seam).
+                "bytedesk_confluence",
+                "bytedesk_github",
+                "bytedesk_jira",
+                "bytedesk_slack",
+                "resolve_assignee",
             }
         )
         == BUILTIN_NAMES

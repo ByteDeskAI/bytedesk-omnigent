@@ -20,6 +20,13 @@ def test_get_builtin_tool_returns_web_search() -> None:
     assert isinstance(tool, WebSearchTool), f"Expected WebSearchTool, got {type(tool).__name__}."
 
 
+def test_web_search_description_mentions_web_fetch() -> None:
+    """Description steers the LLM toward web_fetch for full-page reads."""
+    description = WebSearchTool.description().lower()
+    assert "web_fetch" in description
+    assert "search" in description
+
+
 def test_get_builtin_tool_unknown_returns_none() -> None:
     """``get_builtin_tool`` returns ``None`` for unregistered names."""
     assert get_builtin_tool("nonexistent") is None
