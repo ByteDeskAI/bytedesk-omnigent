@@ -9,7 +9,7 @@ import pytest
 
 from omnigent.spec.types import SkillSpec
 from omnigent.tools.base import ToolContext
-from omnigent.tools.builtins import LoadSkillTool
+from omnigent.tools.builtins import LoadSkillTool, any_skill_has_resources
 from omnigent.tools.builtins.load_skill import (
     find_skill_by_name,
     format_skill_meta_text,
@@ -51,6 +51,15 @@ def skill_no_resources() -> SkillSpec:
         description="Summarizes text.",
         content="Summarize the input concisely.",
     )
+
+
+def test_any_skill_has_resources_detects_bundled_files(
+    skill_with_resources: SkillSpec,
+    skill_no_resources: SkillSpec,
+) -> None:
+    """ToolManager uses this helper to decide whether to register read_skill_file."""
+    assert any_skill_has_resources([skill_with_resources]) is True
+    assert any_skill_has_resources([skill_no_resources]) is False
 
 
 def test_load_skill_name_and_description() -> None:

@@ -16,6 +16,8 @@ from __future__ import annotations
 import importlib
 import pkgutil
 
+import pytest
+
 import omnigent.tools.builtins as _builtins_pkg
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins import (
@@ -90,6 +92,23 @@ def test_get_builtin_tool_returns_none_for_unknown_name() -> None:
     distinguish "unknown" from "framework-owned" must check
     `name in BUILTIN_NAMES` first."""
     assert get_builtin_tool("definitely_not_a_tool") is None
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "upload_file",
+        "list_files",
+        "download_file",
+        "search_conversations",
+        "export_agent",
+    ],
+)
+def test_get_builtin_tool_lazy_factories(name: str) -> None:
+    """Lazy factory builtins instantiate without import cycles."""
+    tool = get_builtin_tool(name)
+    assert tool is not None
+    assert tool.name() == name
 
 
 def test_get_builtin_tool_instantiates_known_tools() -> None:
