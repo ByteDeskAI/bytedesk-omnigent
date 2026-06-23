@@ -450,3 +450,41 @@ def test_session_created_event_payload_shape() -> None:
     assert parsed.conversation_id == "conv_parent"
     assert parsed.child_session_id == "conv_child"
     assert parsed.agent_id == "agent_xyz"
+
+
+# ── BDP-2399: stream resilience — never crash, never hide an error ────
+
+
+def test_resilient_stream_payload_forwards_malformed_event_without_crashing(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A malformed event must NOT crash the stream nor be skipped (BDP-2399).
+
+    The canonical offender — a runner ``response.failed`` that omits the
+    schema-required ``response`` field (a ``status: 204`` turn failure) — used
+    to raise ``ValidationError`` out of ``_stream_live_events`` and kill the
+    whole session SSE TaskGroup, silently hiding every error. It must instead be
+    forwarded raw (exposed to the consumer) and logged (exposed to the producer).
+    """
+    from omnigent.server.routes.sessions import _resilient_stream_payload
+
+    bad = {"type": "response.failed", "error": {"status": 204}}
+    # Precondition: this is exactly the shape that crashed strict validation.
+    with pytest.raises(ValidationError):
+        _ADAPTER.validate_python(bad)
+
+    with caplog.at_level("ERROR"):
+        out = _resilient_stream_payload(bad, "conv_x")
+
+    # Forwarded verbatim to the consumer — never dropped/swallowed.
+    assert out == bad
+    # Exposed on the producer side too — logged loudly, not hidden.
+    assert any("exposed" in r.message or "response.failed" in r.message for r in caplog.records)
+
+
+def test_resilient_stream_payload_normalizes_valid_event() -> None:
+    """A well-formed event still validates + normalizes (happy path intact)."""
+    from omnigent.server.routes.sessions import _resilient_stream_payload
+
+    out = _resilient_stream_payload({"type": "session.heartbeat"}, "conv_x")
+    assert out["type"] == "session.heartbeat"
