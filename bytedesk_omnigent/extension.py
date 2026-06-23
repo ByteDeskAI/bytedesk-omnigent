@@ -90,6 +90,7 @@ class BytedeskExtension:
             GoalCreateTool,
             GoalListTool,
         )
+        from bytedesk_omnigent.tools.jira_tools import BytedeskJiraTool
         from bytedesk_omnigent.tools.outcome_tools import OutcomeRecordTool
         from bytedesk_omnigent.tools.peer_tools import PeerInboxTool, PeerSendTool
         from bytedesk_omnigent.tools.routing_tools import (
@@ -116,6 +117,7 @@ class BytedeskExtension:
             "outcome_record": lambda _c: OutcomeRecordTool(),
             "find_specialist": lambda _c: FindSpecialistTool(),
             "resolve_assignee": lambda _c: ResolveAssigneeTool(),
+            "bytedesk_jira": lambda _c: BytedeskJiraTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),
