@@ -4261,6 +4261,14 @@ def create_runner_app(
 
     app = FastAPI(title="omnigent-runner")
 
+    from omnigent.identity.verifiers import HmacAssertionVerifier
+
+    # Acting-identity verifier (BDP-2422): decodes the signed
+    # X-Omnigent-Acting-Identity carrier on inbound tool dispatch. from_env() is a
+    # no-secret (fail-closed) verifier when unconfigured, so an absent secret simply
+    # leaves acting_identity None (today's behaviour). Tests may override it.
+    app.state.assertion_verifier = HmacAssertionVerifier.from_env()
+
     # Runner-side auth middleware.
     if auth_token is not None:
         _expected_token = auth_token
@@ -10372,7 +10380,11 @@ def create_runner_app(
                 content=session_resource_view_to_dict(terminal_view),
             )
 
-        if body.get("ensure_native_terminal") and terminal_name == "grok" and session_key == "main":
+        if (
+            body.get("ensure_native_terminal")
+            and terminal_name == "grok"
+            and session_key == "main"
+        ):
             grok_terminal_id = terminal_resource_id("grok", "main")
             ensure_lock = _grok_terminal_ensure_locks.setdefault(session_id, asyncio.Lock())
             async with ensure_lock:
@@ -12014,7 +12026,14 @@ def create_runner_app(
             # etc.) dispatched via execute_tool.
             import json as _json
 
+            from omnigent.identity.signer import HEADER_NAME, decode_acting_identity
             from omnigent.runner.tool_dispatch import execute_tool
+
+            # BDP-2422 Path A: the originating principal rides a signed header the
+            # server attached; absent/invalid ⇒ None ⇒ today's behaviour.
+            _acting_identity = decode_acting_identity(
+                request.headers.get(HEADER_NAME), request.app.state.assertion_verifier
+            )
 
             tool_name: str = params.get("name") or ""
             arguments: dict[str, Any] = params.get("arguments") or {}
@@ -12152,6 +12171,7 @@ def create_runner_app(
                         harness_client=None,
                         publish_event=_publish_event,
                         filesystem_registry=filesystem_registry,
+                        acting_identity=_acting_identity,
                     )
                 except Exception as exc:  # noqa: BLE001
                     return JSONResponse(
