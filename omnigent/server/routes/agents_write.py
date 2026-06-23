@@ -29,7 +29,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from pydantic import BaseModel
 
 from omnigent.errors import ErrorCode, OmnigentError
@@ -37,6 +37,7 @@ from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.agent_write import apply_bundle_update
 from omnigent.server.auth import AuthProvider, local_single_user_enabled
 from omnigent.server.bundles import validate_agent_bundle
+from omnigent.server.etag import parse_if_match
 from omnigent.server.routes._auth_helpers import require_user as _require_user
 from omnigent.server.routes.builtin_agents import _to_agent_object
 from omnigent.server.schemas import AgentObject
@@ -185,10 +186,17 @@ def create_agents_write_router(
     router = APIRouter()
 
     @router.get("/agents/{agent_id}/image")
-    async def get_agent_image(request: Request, agent_id: str) -> AgentImage:
+    async def get_agent_image(
+        request: Request, response: Response, agent_id: str
+    ) -> AgentImage:
         """Return the editable image of a template agent.
 
+        Emits the agent ``version`` as a strong ``ETag`` header so an
+        editor can round-trip it as ``If-Match`` on the PUT for optimistic
+        concurrency (BDP-2412 / ADR-0150); the version is also in the body.
+
         :param request: Incoming request (for auth).
+        :param response: Response (to set the ``ETag`` header).
         :param agent_id: Template agent id, e.g. ``"ag_abc123"``.
         :returns: The :class:`AgentImage` editable surface.
         :raises OmnigentError: If the agent is missing or session-scoped.
@@ -196,6 +204,7 @@ def create_agents_write_router(
         _require_user(request, auth_provider)
         agent = await asyncio.to_thread(agent_store.get, agent_id)
         _require_template(agent, agent_id)
+        response.headers["ETag"] = f'"{agent.version}"'
 
         # expand_env=False: we read the raw config.yaml / AGENTS.md files
         # off the extracted workdir, so ${VAR} references come back
@@ -239,6 +248,10 @@ def create_agents_write_router(
         _require_user(request, auth_provider)
         agent = await asyncio.to_thread(agent_store.get, agent_id)
         _require_template(agent, agent_id)
+        # If-Match optimistic concurrency (BDP-2412): the agent version the
+        # editor last read, threaded into the row write as a compare-and-swap
+        # so two concurrent edits can't silently clobber each other.
+        expected_version = parse_if_match(request.headers.get("if-match"))
 
         loaded = await asyncio.to_thread(
             agent_cache.load, agent.id, agent.bundle_location, expand_env=False
@@ -295,6 +308,7 @@ def create_agents_write_router(
             agent_store=agent_store,
             agent_cache=agent_cache,
             expand_env=True,
+            expected_version=expected_version,
         )
         # Mark omnigent as config SoT so the boot re-seed leaves it
         # alone (idempotent; safe on a content no-op too).

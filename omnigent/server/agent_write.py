@@ -26,6 +26,7 @@ def apply_bundle_update(
     agent_store: AgentStore,
     agent_cache: AgentCache | None,
     expand_env: bool,
+    expected_version: int | None = None,
 ) -> Agent:
     """
     Persist a new bundle for *agent* and warm-swap the cache.
@@ -51,10 +52,19 @@ def apply_bundle_update(
         spec against the server env. MUST be ``agent.session_id is None``
         — only operator-authored template agents expand server-side; a
         tenant session-scoped bundle must not (W7-3 secret-leak guard).
+    :param expected_version: Optional ``If-Match`` ETag (the agent
+        ``version`` the caller last read). When given, the row write is a
+        guarded compare-and-swap that fails closed on a concurrent edit
+        (BDP-2412 / ADR-0150); ``None`` keeps the unconditional write.
+        Only consulted when a write is actually required — a
+        content-identical no-op short-circuits before the precondition,
+        which is safe (no write = no clobber).
     :returns: The updated :class:`Agent`, or *agent* unchanged on a
         content-identical no-op.
     :raises OmnigentError: If a write is required but *artifact_store*
         is ``None``, or the agent row vanished mid-update.
+    :raises StaleWriteError: If *expected_version* is given but the agent
+        was modified concurrently (HTTP 412).
     """
     new_loc = bundle_location(agent.id, bundle_bytes)
 
@@ -68,7 +78,7 @@ def apply_bundle_update(
             code=ErrorCode.INTERNAL_ERROR,
         )
     artifact_store.put(new_loc, bundle_bytes)
-    updated = agent_store.update(agent.id, new_loc)
+    updated = agent_store.update(agent.id, new_loc, expected_version=expected_version)
     if updated is None:
         raise OmnigentError(
             f"Agent not found: {agent.id!r}",

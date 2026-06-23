@@ -23,7 +23,13 @@ class _FakeAgentStore:
         self._agent = agent
         self.updates: list[tuple[str, str]] = []
 
-    def update(self, agent_id: str, bundle_location: str) -> Agent | None:
+    def update(
+        self,
+        agent_id: str,
+        bundle_location: str,
+        *,
+        expected_version: int | None = None,
+    ) -> Agent | None:
         self.updates.append((agent_id, bundle_location))
         self._agent.bundle_location = bundle_location
         self._agent.version += 1

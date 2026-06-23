@@ -120,18 +120,31 @@ class AgentStore(ABC):
         self,
         agent_id: str,
         bundle_location: str,
+        *,
+        expected_version: int | None = None,
     ) -> Agent | None:
         """
         Update an agent's bundle location, bump its version, and
         set ``updated_at``. Returns the updated agent, or ``None``
         if no agent with the given ID exists.
 
+        Optimistic concurrency (BDP-2412, ADR-0150): when
+        *expected_version* is given, the update is a guarded
+        compare-and-swap on ``version`` — it only succeeds if the row
+        is still at *expected_version*, closing the last-writer-wins
+        clobber on concurrent edits. When omitted (``None``) the update
+        is unconditional, so every existing caller is unchanged.
+
         :param agent_id: Unique agent identifier,
             e.g. ``"agent_abc123"``.
         :param bundle_location: New artifact store key for the
             bundle, e.g. ``"ag_abc123/a1b2c3d4e5f6..."``.
+        :param expected_version: The version the caller last read (the
+            ``If-Match`` ETag). ``None`` skips the precondition.
         :returns: The updated :class:`Agent`, or ``None`` if not
             found.
+        :raises StaleWriteError: If *expected_version* is given but the
+            row's version has since moved (concurrent write).
         """
         ...
 
