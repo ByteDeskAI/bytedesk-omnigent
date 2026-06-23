@@ -6,7 +6,12 @@ import abc
 import re
 from dataclasses import dataclass
 from pathlib import Path  # used by ToolContext.workspace type hint
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # Annotation-only: keeps the runner hot path free of the identity import
+    # (the field is a string annotation under `from __future__ import annotations`).
+    from omnigent.identity.identity import ActingIdentity
 
 # Tool name constraint: alphanumeric plus ``_`` and ``-``, up to
 # 256 characters. OpenAI enforces 1–64 but other providers allow
@@ -53,12 +58,21 @@ class ToolContext:
         addressing). ``None`` when not available (older workflow
         paths, unit tests) — tools that require it should fail
         loud.
+    :param acting_identity: The :class:`~omnigent.identity.identity.ActingIdentity`
+        the tool acts *as* / *on behalf of* — the pluggable-identity seam
+        (``adr-omnigent-pluggable-identity``). A tool that needs an outbound
+        credential reads this and consults the ``OutboundCredentialProvider``.
+        ``None`` (the additive default) means "no resolved identity" — standalone
+        / today's behaviour, so existing constructions and agent→subagent spawn
+        are unchanged. Populating it across the runner boundary with the inbound
+        principal is the next increment; the field is the contract tools target.
     """
 
     task_id: str
     agent_id: str
     workspace: Path | None = None
     conversation_id: str | None = None
+    acting_identity: ActingIdentity | None = None
 
 
 class Tool(abc.ABC):

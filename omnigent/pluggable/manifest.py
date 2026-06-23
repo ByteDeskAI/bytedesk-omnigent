@@ -81,6 +81,31 @@ def _coordination_backplane_registry() -> PluggableRegistry[Any]:
     return get_coordination_registry()
 
 
+def _assertion_verifier_registry() -> PluggableRegistry[Any]:
+    # Identity seam: how an inbound assertion is trusted (HMAC default; swap for
+    # JWKS/OIDC). The identity package is light (no FastAPI), so this is a cheap,
+    # per-call build for describe/discover.
+    from omnigent.identity.registry import build_assertion_verifier_registry
+
+    return build_assertion_verifier_registry()
+
+
+def _outbound_credential_registry() -> PluggableRegistry[Any]:
+    # Identity seam: how a tool "acts as" an identity (static-secret default over
+    # the three live egress strategies; swap for token-exchange/OBO).
+    from omnigent.identity.registry import build_outbound_credential_registry
+
+    return build_outbound_credential_registry()
+
+
+def _authorizer_registry() -> PluggableRegistry[Any]:
+    # Identity seam: whether an action is allowed (owner-allow default; swap for a
+    # capability-enforcing authorizer).
+    from omnigent.identity.registry import build_authorizer_registry
+
+    return build_authorizer_registry()
+
+
 # (seam_name, registry_accessor, extension_hook) — the one declaration that drives
 # both startup discovery and the capability manifest. Adding a seam = one row here.
 SEAMS: tuple[tuple[str, Callable[[], PluggableRegistry[Any]], str], ...] = (
@@ -90,7 +115,14 @@ SEAMS: tuple[tuple[str, Callable[[], PluggableRegistry[Any]], str], ...] = (
     ("memory_embedder", _memory_embedder_registry, "memory_embedder_providers"),
     ("agent_memory", _agent_memory_registry, "agent_memory_providers"),
     ("spec_source", _spec_source_registry, "spec_source_providers"),
-    ("coordination_backplane", _coordination_backplane_registry, "coordination_backplane_providers"),
+    (
+        "coordination_backplane",
+        _coordination_backplane_registry,
+        "coordination_backplane_providers",
+    ),
+    ("assertion_verifier", _assertion_verifier_registry, "assertion_verifiers"),
+    ("outbound_credential", _outbound_credential_registry, "outbound_credential_providers"),
+    ("authorizer", _authorizer_registry, "authorization_providers"),
 )
 
 

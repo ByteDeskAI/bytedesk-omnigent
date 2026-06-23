@@ -88,6 +88,24 @@ class OmnigentExtension(Protocol):
         """
         ...
 
+    # ── identity ports (omnigent/identity/, ADR adr-omnigent-pluggable-identity) ──
+    # Each returns ``{name: factory}`` and is discovered via the matching
+    # PluggableRegistry seam (omnigent/pluggable/manifest.py SEAMS), so a consumer
+    # swaps the trust mechanism / outbound credential / authorization without a
+    # core edit. Probed by ``hasattr`` in PluggableRegistry.discover_extensions —
+    # an extension that omits any is simply skipped.
+    def assertion_verifiers(self) -> dict[str, Callable[[], object]]:
+        """Inbound-assertion verifiers ({name: factory}) — the trust subpart."""
+        ...
+
+    def outbound_credential_providers(self) -> dict[str, Callable[[], object]]:
+        """Outbound credential providers ({name: factory}) — the act-as subpart."""
+        ...
+
+    def authorization_providers(self) -> dict[str, Callable[[], object]]:
+        """Authorization providers ({name: factory}) — the allow/deny subpart."""
+        ...
+
 
 def _load_env_extensions() -> list[OmnigentExtension]:
     """Load extensions named in the ``OMNIGENT_EXTENSIONS`` env var (``module:factory``)."""

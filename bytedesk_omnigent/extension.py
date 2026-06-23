@@ -154,6 +154,22 @@ class BytedeskExtension:
             return []
         return [ByteDeskPrincipalResolver(secret)]
 
+    # ── identity ports (adr-omnigent-pluggable-identity) ──────────────
+    # ByteDesk contributes no identity provider yet: the inbound trust uses the
+    # core HMAC verifier (via ByteDeskPrincipalResolver) and outbound/authz keep
+    # the core defaults. The Office-backed JWKS verifier / token-exchange (OBO)
+    # credential provider / capability authorizer are the deferred consumer layer.
+    # These return ``{}`` so the extension satisfies the full OmnigentExtension
+    # Protocol while contributing nothing — the seams stay swappable.
+    def assertion_verifiers(self) -> dict[str, Callable[[], object]]:
+        return {}
+
+    def outbound_credential_providers(self) -> dict[str, Callable[[], object]]:
+        return {}
+
+    def authorization_providers(self) -> dict[str, Callable[[], object]]:
+        return {}
+
     # ── background lifespan tasks (started + cancelled by the server) ─
     def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
         """The org background loops + the boot-time tool-step resume sweep. The
@@ -178,9 +194,7 @@ class BytedeskExtension:
         same post-dictConfig lifespan window, so mirror core here — honouring the
         same OMNIGENT_LOG_LEVEL. One-shot: set the level and return."""
         level_name = os.environ.get("OMNIGENT_LOG_LEVEL", "INFO").upper()
-        logging.getLogger("bytedesk_omnigent").setLevel(
-            getattr(logging, level_name, logging.INFO)
-        )
+        logging.getLogger("bytedesk_omnigent").setLevel(getattr(logging, level_name, logging.INFO))
 
     async def _realtime_bridge(self) -> None:
         """Install the office:agents roster bridge (BDP-2301). One-shot: wraps the
@@ -265,8 +279,6 @@ class BytedeskExtension:
                 if acquired:
                     reclaimed = await asyncio.to_thread(store.resume_stale)
                     if reclaimed:
-                        logger.info(
-                            "tool-step resume: reclaimed %d orphaned step(s)", reclaimed
-                        )
+                        logger.info("tool-step resume: reclaimed %d orphaned step(s)", reclaimed)
         except Exception as exc:  # noqa: BLE001 — boot sweep is best-effort
             logger.warning("tool-step resume sweep failed: %s", exc, exc_info=True)

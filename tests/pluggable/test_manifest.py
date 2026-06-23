@@ -21,6 +21,10 @@ _EXPECTED_SEAMS: dict[str, tuple[str, str | None]] = {
     "agent_memory": ("OMNIGENT_USE_AGENT_MEMORY", "composed"),
     "spec_source": ("OMNIGENT_USE_SPEC_SOURCE", "filesystem"),
     "coordination_backplane": ("OMNIGENT_USE_COORDINATION_BACKPLANE", "inprocess"),
+    # Identity seams (adr-omnigent-pluggable-identity).
+    "assertion_verifier": ("OMNIGENT_USE_ASSERTION_VERIFIER", "hmac"),
+    "outbound_credential": ("OMNIGENT_USE_OUTBOUND_CREDENTIAL", "static_secret"),
+    "authorizer": ("OMNIGENT_USE_AUTHORIZER", "owner_allow"),
 }
 
 

@@ -3,6 +3,7 @@
 Inject fakes so the install logic is proven without installed entry-point metadata
 (the entry-point wiring itself is verified live against the rolled gateway).
 """
+
 from __future__ import annotations
 
 from fastapi import APIRouter, FastAPI
@@ -107,14 +108,16 @@ def test_bytedesk_extension_satisfies_full_protocol() -> None:
     assert isinstance(ext.policy_modules(), list)
     assert isinstance(ext.secret_backends(), list)
     assert isinstance(ext.background_tasks(), list)
+    # Identity port hooks (adr-omnigent-pluggable-identity) — {name: factory}.
+    assert isinstance(ext.assertion_verifiers(), dict)
+    assert isinstance(ext.outbound_credential_providers(), dict)
+    assert isinstance(ext.authorization_providers(), dict)
 
 
 def test_aggregators_skip_extension_missing_optional_methods(monkeypatch) -> None:
     """An extension that omits an optional method is skipped by the matching
     aggregator (hasattr branch), never probed with getattr defaults (BDP-2352)."""
-    monkeypatch.setattr(
-        "omnigent.extensions.discover_extensions", lambda: [_MinimalExt()]
-    )
+    monkeypatch.setattr("omnigent.extensions.discover_extensions", lambda: [_MinimalExt()])
     assert extension_tool_factories() == {}
     assert extension_policy_modules() == []
     assert extension_secret_backends() == []
