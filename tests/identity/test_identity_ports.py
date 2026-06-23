@@ -13,6 +13,8 @@ import base64
 import hashlib
 import hmac
 import json
+import subprocess
+import sys
 import time
 
 import pytest
@@ -29,12 +31,19 @@ from omnigent.identity.mint import (
     PassThroughMintStrategy,
     StaticMintStrategy,
 )
+from omnigent.identity.ports import (
+    AssertionVerifier,
+    AuthorizationProvider,
+    MintStrategy,
+    OutboundCredentialProvider,
+)
 from omnigent.identity.registry import (
     build_assertion_verifier_registry,
     build_authorizer_registry,
     build_outbound_credential_registry,
 )
 from omnigent.identity.verifiers import HmacAssertionVerifier
+from omnigent.pluggable.errors import ProviderNotRegistered
 from omnigent.server.principal import Principal
 
 _SECRET = "test-shared-secret"
@@ -270,3 +279,113 @@ def test_tool_context_acting_identity_seam():
     ctx2 = ToolContext(task_id="t", agent_id="ag", acting_identity=ident)
     assert ctx2.acting_identity is ident
     assert ctx2.acting_identity.principal.user_id == "alice"
+
+
+# ── every subpart replaceable: swap proven for ALL THREE seams ────────────────
+
+
+def test_strangler_env_swaps_assertion_and_outbound(monkeypatch):
+    # The authorizer swap is covered above; complete the contract for the other
+    # two seams so "any piece replaceable" is proven for all three.
+    class FakeVerifier:
+        name = "fake_verifier"
+
+        def verify(self, header):
+            return None
+
+    av = build_assertion_verifier_registry()
+    av.register("fake_verifier", FakeVerifier)
+    monkeypatch.setenv("OMNIGENT_USE_ASSERTION_VERIFIER", "fake_verifier")
+    assert av.resolve_default().name == "fake_verifier"
+
+    class FakeProvider:
+        name = "fake_outbound"
+
+        def mint(self, *, identity, integration, config=None):
+            return None
+
+    oc = build_outbound_credential_registry()
+    oc.register("fake_outbound", FakeProvider)
+    monkeypatch.setenv("OMNIGENT_USE_OUTBOUND_CREDENTIAL", "fake_outbound")
+    assert oc.resolve_default().name == "fake_outbound"
+
+
+def test_extension_hook_contributes_outbound_and_authorizer(monkeypatch):
+    # Mirror the verifier-hook test for the other two seams: the per-seam hook
+    # name wiring in the SEAMS table (historically fragile) is correct for each.
+    class FakeProvider:
+        name = "fake_provider"
+
+        def mint(self, *, identity, integration, config=None):
+            return None
+
+    class FakeAuthorizer:
+        name = "fake_authorizer"
+
+        def decide(self, *, identity, action, resource):
+            return Decision(allowed=False, reason="fake")
+
+    class FakeExt:
+        name = "fake"
+
+        def outbound_credential_providers(self):
+            return {"fake_provider": FakeProvider}
+
+        def authorization_providers(self):
+            return {"fake_authorizer": FakeAuthorizer}
+
+    monkeypatch.setattr("omnigent.pluggable.registry.discover_extensions", lambda: [FakeExt()])
+
+    out = build_outbound_credential_registry()
+    out.discover_extensions(hook="outbound_credential_providers")
+    assert "fake_provider" in out.names()
+
+    authz = build_authorizer_registry()
+    authz.discover_extensions(hook="authorization_providers")
+    assert "fake_authorizer" in authz.names()
+
+
+# ── duck-typed Protocol conformance + error path ──────────────────────────────
+
+
+def test_ports_are_runtime_checkable_conformant():
+    # The whole pluggability premise is structural (runtime_checkable) duck typing.
+    assert isinstance(HmacAssertionVerifier(None), AssertionVerifier)
+    assert isinstance(StaticSecretProvider(), OutboundCredentialProvider)
+    assert isinstance(OwnerAllowAuthorizer(), AuthorizationProvider)
+    assert isinstance(StaticMintStrategy(), MintStrategy)
+
+
+def test_static_secret_provider_unknown_strategy_raises():
+    with pytest.raises(ProviderNotRegistered):
+        StaticSecretProvider().mint(
+            identity=None, integration="x", config={"strategy": "nope", "secret_ref": "r"}
+        )
+
+
+# ── load-bearing design claim: safe on the runner hot path ────────────────────
+
+
+def test_identity_package_import_is_runner_light():
+    # The identity package must NOT drag the FastAPI/server-app graph onto the
+    # runner hot path. Import it in a fresh subprocess (cwd = the worktree, so it
+    # resolves to the branch under test) and assert no heavy module loaded.
+    import pathlib
+
+    repo_root = pathlib.Path(__file__).resolve().parents[2]
+    code = (
+        "import omnigent.identity.mint, omnigent.identity.registry, "
+        "omnigent.identity.verifiers, omnigent.identity.defaults, sys; "
+        "bad=[m for m in ('fastapi','starlette','omnigent.server.app') if m in sys.modules]; "
+        "print(','.join(bad)); sys.exit(1 if bad else 0)"
+    )
+    proc = subprocess.run(
+        [sys.executable, "-c", code],
+        cwd=str(repo_root),
+        capture_output=True,
+        text=True,
+    )
+    assert proc.returncode == 0, (
+        f"identity import pulled heavy modules onto the runner path: "
+        f"{proc.stdout.strip()!r} / {proc.stderr.strip()!r}"
+    )
