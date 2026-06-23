@@ -20,6 +20,10 @@ what it cannot price).
 from __future__ import annotations
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import (
+    COST_CEILING_SANITY_USD,
+    require_positive_finite,
+)
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -48,7 +52,12 @@ def cost_hard_stop(max_cost_usd: float) -> PolicyCallable:
 
     :param max_cost_usd: The hard USD ceiling for cumulative session spend.
     :returns: A policy callable that DENYs at/above the ceiling.
+    :raises PolicyFloorError: if *max_cost_usd* is not a finite, positive,
+        non-absurd number — a breaker with no usable ceiling can never trip.
     """
+    max_cost_usd = require_positive_finite(
+        "max_cost_usd", max_cost_usd, COST_CEILING_SANITY_USD
+    )
 
     def evaluate(event: PolicyEvent) -> PolicyResponse:
         if event.get("type") not in _BUDGETED_PHASES:

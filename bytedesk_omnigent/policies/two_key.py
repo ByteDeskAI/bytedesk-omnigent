@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import MIN_APPROVERS_FLOOR, require_int_at_least
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -35,7 +36,12 @@ def two_key_required(patterns: list[str], min_approvers: int = 2) -> PolicyCalla
     :param min_approvers: Distinct approvers required before ALLOW. Default 2.
     :returns: A policy callable that ALLOWs once enough distinct approvers are
         recorded, else ASKs.
+    :raises PolicyFloorError: if ``min_approvers < 2`` — one approver is not a
+        two-person rule (the floor cannot be configured away).
     """
+    min_approvers = require_int_at_least(
+        "min_approvers", min_approvers, MIN_APPROVERS_FLOOR
+    )
     compiled = [re.compile(p) for p in patterns]
 
     def evaluate(event: PolicyEvent) -> PolicyResponse:

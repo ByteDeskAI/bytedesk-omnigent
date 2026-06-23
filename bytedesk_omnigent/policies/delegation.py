@@ -14,6 +14,7 @@ governed by the spawn-breadth governor (C5) + the forever-gated registry (F7).
 from __future__ import annotations
 
 from bytedesk_omnigent.policies import PolicyRegistryRaw
+from bytedesk_omnigent.policies._floors import reject_wildcard
 from omnigent.policies.schema import PolicyCallable, PolicyEvent, PolicyResponse
 
 _ALLOW: PolicyResponse = {"result": "ALLOW"}
@@ -33,8 +34,10 @@ def delegation_authority(allowed_targets: list[str]) -> PolicyCallable:
     :returns: A policy callable that DENYs a ``sys_session_create`` whose
         ``agent_id`` is outside ``allowed_targets``, and any ``config_path`` spawn
         (which would bypass the org chart).
+    :raises PolicyFloorError: if ``allowed_targets`` contains a wildcard ('*') —
+        delegation authority must be enumerated, never blanket-granted.
     """
-    allowed = {t for t in allowed_targets if t}
+    allowed = {t for t in reject_wildcard("allowed_targets", allowed_targets) if t}
 
     def evaluate(event: PolicyEvent) -> PolicyResponse:
         if event.get("type") != "tool_call":
