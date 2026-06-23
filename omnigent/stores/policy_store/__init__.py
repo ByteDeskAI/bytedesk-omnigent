@@ -105,6 +105,7 @@ class PolicyStore(ABC):
         name: str | None = None,
         handler: str | None = None,
         enabled: bool | None = None,
+        expected_version: int | None = None,
     ) -> Policy | None:
         """
         Update mutable fields of a policy. ``type`` is immutable.
@@ -116,6 +117,10 @@ class PolicyStore(ABC):
         :param name: New name.
         :param handler: New handler path or URL.
         :param enabled: New enabled flag.
+        :param expected_version: Optimistic-concurrency ``If-Match`` ETag
+            (BDP-2412); when given, a guarded compare-and-swap raises
+            ``StaleWriteError`` on a stale version. ``None`` =
+            unconditional update (back-compat).
         :returns: The updated :class:`Policy`, or ``None``.
         """
         ...
@@ -199,6 +204,7 @@ class PolicyStore(ABC):
         name: str | None = None,
         handler: str | None = None,
         enabled: bool | None = None,
+        expected_version: int | None = None,
     ) -> Policy | None:
         """
         Update mutable fields of a default policy. ``type`` is
@@ -208,6 +214,10 @@ class PolicyStore(ABC):
         :param name: New name.
         :param handler: New handler path or URL.
         :param enabled: New enabled flag.
+        :param expected_version: Optimistic-concurrency ``If-Match`` ETag
+            (BDP-2412); when given, a guarded compare-and-swap raises
+            ``StaleWriteError`` on a stale version. ``None`` =
+            unconditional update (back-compat).
         :returns: The updated :class:`Policy`, or ``None``.
         """
         ...

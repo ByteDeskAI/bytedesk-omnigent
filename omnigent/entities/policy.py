@@ -47,6 +47,8 @@ class Policy:
     :param created_by: User ID of the admin who created this
         policy, e.g. ``"alice@example.com"``. ``None`` in
         single-user mode or for session-scoped policies.
+    :param version: Monotonic optimistic-concurrency ETag (BDP-2412) —
+        send back as ``If-Match`` on the next update.
     """
 
     id: str
@@ -59,3 +61,4 @@ class Policy:
     enabled: bool = True
     updated_at: int | None = None
     created_by: str | None = None
+    version: int = 1

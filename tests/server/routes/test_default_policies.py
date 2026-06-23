@@ -66,6 +66,39 @@ def _policy_payload(**overrides: object) -> dict:
     return base
 
 
+# ── If-Match / optimistic concurrency (BDP-2412) ──────────────────────
+
+
+async def test_update_default_policy_if_match(policy_client: httpx.AsyncClient) -> None:
+    """If-Match guards the default-policy PATCH through the real route."""
+    created = await policy_client.post("/v1/policies", json=_policy_payload(name="etag_pol"))
+    assert created.status_code in (200, 201), created.text
+    policy_id = created.json()["id"]
+
+    # Matching ETag → 200, version bumps to 2.
+    ok = await policy_client.patch(
+        f"/v1/policies/{policy_id}",
+        json={"enabled": False},
+        headers={"If-Match": '"1"'},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.headers["etag"] == '"2"'
+
+    # Stale ETag → 412 (no clobber).
+    stale = await policy_client.patch(
+        f"/v1/policies/{policy_id}",
+        json={"enabled": True},
+        headers={"If-Match": '"1"'},
+    )
+    assert stale.status_code == 412, stale.text
+
+    # No If-Match → unconditional (back-compat).
+    uncond = await policy_client.patch(
+        f"/v1/policies/{policy_id}", json={"enabled": True}
+    )
+    assert uncond.status_code == 200, uncond.text
+
+
 # ── POST /v1/policies ────────────────────────────────────────────────
 
 

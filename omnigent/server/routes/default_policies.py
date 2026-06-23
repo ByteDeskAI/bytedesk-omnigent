@@ -19,7 +19,7 @@ import re
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.entities import Policy
@@ -234,6 +234,7 @@ def create_default_policies_router(
     @router.patch("/policies/{policy_id}")
     async def update_policy(
         request: Request,
+        response: Response,
         policy_id: str,
         body: UpdateDefaultPolicyRequest,
     ) -> dict[str, Any]:
@@ -277,12 +278,16 @@ def create_default_policies_router(
                         f"config so it appears in the policy registry.",
                         code=ErrorCode.INVALID_INPUT,
                     )
+        from omnigent.server.etag import parse_if_match
+
+        expected_version = parse_if_match(request.headers.get("if-match"))
         try:
             policy = store.update_default(
                 policy_id,
                 name=body.name,
                 handler=body.handler,
                 enabled=body.enabled,
+                expected_version=expected_version,
             )
         except IntegrityError as exc:
             raise OmnigentError(
@@ -291,6 +296,7 @@ def create_default_policies_router(
             ) from exc
         if policy is None:
             raise OmnigentError("Policy not found", code=ErrorCode.NOT_FOUND)
+        response.headers["ETag"] = f'"{policy.version}"'
         return _entity_to_response(policy)
 
     @router.delete("/policies/{policy_id}")
