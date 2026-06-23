@@ -129,6 +129,10 @@ class SqlCronTrigger(Base):
     )
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1", default=1
+    )
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (
@@ -246,6 +250,10 @@ class SqlWebhookBinding(Base):
         Boolean, nullable=False, server_default=true()
     )
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
+    version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1", default=1
+    )
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (
