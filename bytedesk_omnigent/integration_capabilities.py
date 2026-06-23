@@ -109,6 +109,33 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         references=("https://developers.notion.com/docs/authorization",),
     ),
     IntegrationCapability(
+        slug="confluence-knowledge-operator",
+        name="Confluence knowledge operator",
+        category="knowledge",
+        status="prototype",
+        auth_model="Atlassian Basic (email + API token) / shared Jira account",
+        agent_value=(
+            "Let agents read, create, and update Confluence pages — runbooks, plans, meeting notes, and status — directly in the team knowledge base.",
+            "Keep autonomous execution context durable: agents write progress to wiki pages and leave comments instead of trapping it in chat.",
+        ),
+        required_scopes=("read:confluence-content.all", "write:confluence-content"),
+        implementation_description=(
+            "Native ``bytedesk_confluence`` agent tool (BDP-2403) over the Confluence Cloud REST API: v1 CQL search plus v2 page "
+            "get/create/update and footer comments, wrapping plain text into storage-format XHTML. Reuses the shared Atlassian "
+            "account credentials (no new secrets) and returns structured errors instead of crashing the turn."
+        ),
+        future_unlocks=(
+            "Self-maintaining team runbooks updated as part of task completion.",
+            "Agent-authored implementation plans with live status sections.",
+            "Knowledge-gap detection feeding wiki page creation.",
+        ),
+        business_case=(
+            "Turns agent work into reusable organizational memory in the wiki teams already use, lowering repeated-context cost."
+        ),
+        priority_score=89,
+        references=("https://developer.atlassian.com/cloud/confluence/rest/v2/intro/",),
+    ),
+    IntegrationCapability(
         slug="trello-task-bridge",
         name="Trello task bridge",
         category="project_management",
