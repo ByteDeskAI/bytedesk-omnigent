@@ -55,6 +55,15 @@ def test_catalog_lookup_and_categories():
     assert get_integration_capability("missing") is None
 
 
+def test_jira_work_intake_is_prototype():
+    # BDP-2402: the native ``bytedesk_jira`` tool implements this blueprint, so it
+    # graduates from candidate to prototype.
+    jira = get_integration_capability("linear-jira-work-intake")
+
+    assert jira is not None
+    assert jira.status == "prototype"
+
+
 def test_integration_capabilities_router_lists_and_reads_entries():
     app = FastAPI()
     app.include_router(create_integration_capabilities_router(), prefix="/v1")

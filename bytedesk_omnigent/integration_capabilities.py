@@ -160,7 +160,7 @@ _CAPABILITIES: tuple[IntegrationCapability, ...] = (
         slug="linear-jira-work-intake",
         name="Linear/Jira work intake",
         category="project_management",
-        status="candidate",
+        status="prototype",
         auth_model="OAuth 2.0 / Atlassian 3LO",
         agent_value=(
             "Synchronize issues, priorities, comments, and status transitions into Omnigent Tasks.",
