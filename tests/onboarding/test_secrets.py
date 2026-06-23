@@ -11,6 +11,9 @@ import pytest
 
 from omnigent.onboarding import secrets as s
 
+# Captured before onboarding/conftest autouse stubs _extension_backends.
+_REAL_EXTENSION_BACKENDS = s._extension_backends
+
 
 @pytest.fixture
 def file_home(tmp_path, monkeypatch):
@@ -188,8 +191,20 @@ def test_keyring_errors_fall_back_to_file(tmp_path, monkeypatch):
     assert s.load_secret("fallback") is None
 
 
+def test_extension_backends_returns_contributed_backends(monkeypatch) -> None:
+    """A healthy extension seam contributes backends to the chain."""
+    fake = _FakeBackend("contrib", store={"token": "remote"})
+    monkeypatch.setattr(s, "_extension_backends", _REAL_EXTENSION_BACKENDS)
+    monkeypatch.setattr(
+        "omnigent.extensions.extension_secret_backends",
+        lambda: [fake],
+    )
+    assert s._extension_backends() == [fake]
+
+
 def test_extension_backends_call_error_returns_empty(monkeypatch) -> None:
     """A broken extension contributor must not break secret resolution."""
+    monkeypatch.setattr(s, "_extension_backends", _REAL_EXTENSION_BACKENDS)
     monkeypatch.setattr(
         "omnigent.extensions.extension_secret_backends",
         lambda: (_ for _ in ()).throw(RuntimeError("extension seam unavailable")),
