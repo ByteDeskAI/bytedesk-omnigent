@@ -192,6 +192,39 @@ def test_read_inbox_dispatch_async_raises_not_implemented(
         )
 
 
+# ── SysCancelTaskTool (generic cancel) ────────────────────
+
+
+@pytest.fixture()
+def cancel_task_tool() -> SysCancelTaskTool:
+    """Single :class:`SysCancelTaskTool` instance — stateless, reusable."""
+    return SysCancelTaskTool()
+
+
+def test_sys_cancel_task_invoke_returns_task_not_found(
+    cancel_task_tool: SysCancelTaskTool,
+) -> None:
+    """
+    The builtin ``invoke`` path always reports ``task_not_found`` on
+    the sessions-native stack (no server-persisted tasks table).
+    """
+    result = json.loads(
+        cancel_task_tool.invoke('{"task_id": "task_abc123"}', ctx=None),
+    )
+    assert result["error"] == "task_not_found"
+    assert result["task_id"] == "task_abc123"
+    assert "tasks table has been removed" in result["hint"]
+
+
+def test_sys_cancel_task_invoke_tolerates_malformed_json(
+    cancel_task_tool: SysCancelTaskTool,
+) -> None:
+    """Malformed JSON falls back to an empty task_id instead of crashing."""
+    result = json.loads(cancel_task_tool.invoke("{not json", ctx=None))
+    assert result["error"] == "task_not_found"
+    assert result["task_id"] == ""
+
+
 # ── SysCancelAsyncTool ────────────────────────────────────
 
 
