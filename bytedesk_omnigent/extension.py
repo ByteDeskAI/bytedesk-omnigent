@@ -46,6 +46,7 @@ class BytedeskExtension:
 
     # ── routers ──────────────────────────────────────────────────────
     def routers(self, auth_provider: AuthProvider | None = None) -> list[APIRouter]:
+        from bytedesk_omnigent.routes.config import create_config_router
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
@@ -61,6 +62,7 @@ class BytedeskExtension:
             create_goals_router(auth_provider=auth_provider),
             create_integration_capabilities_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
+            create_config_router(auth_provider=auth_provider),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
@@ -169,6 +171,13 @@ class BytedeskExtension:
 
     def authorization_providers(self) -> dict[str, Callable[[], object]]:
         return {}
+
+    # ── config-control-plane descriptors (Settings Registry, ADR-0150) ─
+    def config_descriptors(self) -> list:
+        """ByteDesk's configurable properties for the ``/v1/config`` surface (BDP-2413)."""
+        from bytedesk_omnigent.config import bytedesk_config_descriptors
+
+        return bytedesk_config_descriptors()
 
     # ── background lifespan tasks (started + cancelled by the server) ─
     def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
