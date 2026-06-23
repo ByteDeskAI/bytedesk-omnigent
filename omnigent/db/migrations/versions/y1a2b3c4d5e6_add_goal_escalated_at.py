@@ -24,8 +24,12 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("goals", sa.Column("escalated_at", sa.Integer(), nullable=True))
+    # SQLite-safe via batch mode (ALTER TABLE ... DROP COLUMN is rejected on
+    # SQLite < 3.35; wrap both directions for consistency with the chain).
+    with op.batch_alter_table("goals") as batch_op:
+        batch_op.add_column(sa.Column("escalated_at", sa.Integer(), nullable=True))
 
 
 def downgrade() -> None:
-    op.drop_column("goals", "escalated_at")
+    with op.batch_alter_table("goals") as batch_op:
+        batch_op.drop_column("escalated_at")
