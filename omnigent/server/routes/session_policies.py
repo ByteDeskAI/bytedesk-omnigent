@@ -22,6 +22,7 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.policies.registry import (
     get_entry,
     is_registered_handler,
+    validate_factory_construction,
     validate_factory_params,
 )
 from omnigent.runtime import get_caps
@@ -190,6 +191,12 @@ def create_session_policies_router(
             validation_error = validate_factory_params(body.handler, body.factory_params)
             if validation_error:
                 raise OmnigentError(validation_error, code=ErrorCode.INVALID_INPUT)
+            # Reject params that violate a safety floor up front (BDP-2411):
+            # schema-valid but unsafe values would otherwise persist and only
+            # fail-closed later at agent load.
+            floor_error = validate_factory_construction(body.handler, body.factory_params)
+            if floor_error:
+                raise OmnigentError(floor_error, code=ErrorCode.INVALID_INPUT)
         policy_id = _generate_policy_id()
         try:
             policy = store.create(

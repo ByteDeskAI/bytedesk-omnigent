@@ -290,6 +290,52 @@ def validate_factory_params(
     return None
 
 
+def validate_factory_construction(
+    handler: str,
+    factory_params: dict[str, Any] | None,
+) -> str | None:
+    """Dry-run the factory to surface construction-time validation (BDP-2411).
+
+    :func:`validate_factory_params` only checks params against the JSON schema;
+    it does NOT run the factory. A value that is schema-valid but violates a
+    safety floor (e.g. ``two_key`` ``min_approvers=1``) is therefore accepted
+    and only fails later when the policy is loaded for an agent. This builds the
+    factory with the given params and returns the message of any ``ValueError``
+    it raises — the floor guards raise ``PolicyFloorError`` (a ``ValueError``) —
+    so the create boundary rejects an unsafe policy up front (HTTP 400) instead
+    of letting it persist and break agent load.
+
+    Purely **additive**: only a ``ValueError`` blocks; any other construction
+    issue (e.g. a factory needing runtime context) is ignored, so no
+    previously-accepted policy is newly rejected. Non-factory / unregistered
+    handlers are skipped (already gated by ``is_registered_handler`` +
+    ``validate_factory_params``).
+
+    :param handler: Full dotted import path of the factory.
+    :param factory_params: The params to build the factory with.
+    :returns: The floor/validation error message, or ``None`` if it builds
+        cleanly (or is not a registered factory).
+    """
+    entry = _registry_by_handler.get(handler)
+    if entry is None or entry.kind != "factory":
+        return None
+    module_path, _, attr = handler.rpartition(".")
+    try:
+        factory = getattr(importlib.import_module(module_path), attr)
+    except (ImportError, AttributeError, ValueError):
+        return None
+    try:
+        factory(**(factory_params or {}))
+    except ValueError as exc:
+        return str(exc)
+    except Exception:  # noqa: BLE001
+        # Additive guard: never newly block on a non-ValueError construction
+        # issue (e.g. a factory that needs runtime context). Preserve prior
+        # behavior — only the safety-floor ValueErrors are surfaced here.
+        return None
+    return None
+
+
 def _type_matches(value: Any, json_type: str) -> bool:
     """Check if a Python value matches a JSON Schema type.
 

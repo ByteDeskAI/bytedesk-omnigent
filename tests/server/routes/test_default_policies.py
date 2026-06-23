@@ -115,6 +115,30 @@ async def test_create_default_policy(policy_client: httpx.AsyncClient) -> None:
     assert body["id"].startswith("pol_")
 
 
+async def test_create_policy_rejects_below_floor_param(
+    policy_client: httpx.AsyncClient,
+) -> None:
+    """A schema-valid but below-floor two_key policy is rejected at the create
+    boundary, not persisted to fail-closed later at agent load (BDP-2411)."""
+    from omnigent.policies.registry import load_registry
+
+    load_registry()  # ensure the bytedesk floor handlers are registered
+    payload = {
+        "name": "two_key_floor",
+        "type": "python",
+        "handler": "bytedesk_omnigent.policies.two_key.two_key_required",
+        "factory_params": {"patterns": ["billing\\.refund"], "min_approvers": 1},
+    }
+    resp = await policy_client.post("/v1/policies", json=payload)
+    assert resp.status_code == 400, resp.text
+    assert "min_approvers" in resp.text
+
+    # The same policy with a safe floor value (>= 2) is accepted.
+    payload["factory_params"]["min_approvers"] = 2
+    ok = await policy_client.post("/v1/policies", json=payload)
+    assert ok.status_code == 200, ok.text
+
+
 async def test_create_duplicate_policy_name(policy_client: httpx.AsyncClient) -> None:
     """Creating two default policies with the same name returns 409."""
     await policy_client.post("/v1/policies", json=_policy_payload(name="dup"))

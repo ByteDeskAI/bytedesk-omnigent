@@ -13,8 +13,30 @@ from omnigent.policies.registry import (
     get_registry,
     is_registered_handler,
     load_registry,
+    validate_factory_construction,
     validate_factory_params,
 )
+
+
+def test_validate_factory_construction_rejects_floor_violation() -> None:
+    """A schema-valid but below-floor param is rejected at construction (BDP-2411)."""
+    load_registry()
+    handler = "bytedesk_omnigent.policies.two_key.two_key_required"
+    err = validate_factory_construction(
+        handler, {"patterns": ["x"], "min_approvers": 1}
+    )
+    assert err is not None and "min_approvers" in err
+    # A safe value builds cleanly.
+    assert (
+        validate_factory_construction(handler, {"patterns": ["x"], "min_approvers": 2})
+        is None
+    )
+
+
+def test_validate_factory_construction_skips_unregistered() -> None:
+    """An unregistered handler is skipped (gated elsewhere), never a 500."""
+    load_registry()
+    assert validate_factory_construction("not.a.real.handler", {"x": 1}) is None
 
 # ── load_registry + get_registry ────────────────────────────────────────────
 
