@@ -1524,6 +1524,43 @@ def _format_sse(event_type: str, data: dict[str, Any], event_id: int | None = No
     return f"{id_line}event: {event_type}\ndata: {json.dumps(data)}\n\n"
 
 
+def _resilient_stream_payload(event: dict[str, Any], session_id: str) -> dict[str, Any]:
+    """
+    Validate a session-stream event for the wire, resiliently (BDP-2399).
+
+    A single malformed event must NEVER crash the whole session SSE stream.
+    The canonical offender is a runner ``response.failed`` that omits the
+    schema-required ``response`` field (e.g. a turn that failed with
+    ``status: 204``): strict validation raises ``ValidationError`` which, left
+    to propagate out of :func:`_stream_live_events`'s async generator, kills the
+    entire stream's TaskGroup — silently hiding the error and every subsequent
+    event for that session.
+
+    Instead we **expose the error on both sides and never skip it**: log it
+    loudly here (the producer side) and return the *raw* event so the client
+    still receives it (the consumer side, which renders ``response.failed`` as a
+    real error banner). Validation never swallows an event — a valid event is
+    returned model-normalized, a malformed one is forwarded verbatim.
+
+    :param event: The raw stream event dict (already known to carry a string
+        ``type``).
+    :param session_id: Owning session id, for the diagnostic log line.
+    :returns: The validated+normalized payload, or the raw event on a schema
+        mismatch.
+    """
+    try:
+        return _SERVER_STREAM_EVENT_ADAPTER.validate_python(event).model_dump()
+    except ValidationError as exc:
+        _logger.error(
+            "session %s stream: %s event failed schema validation; forwarding raw "
+            "so the error is exposed, not hidden: %s",
+            session_id,
+            event.get("type"),
+            exc,
+        )
+        return event
+
+
 def _parse_last_event_id(request: Request) -> int | None:
     """
     Read the SSE resume cursor (BDP-2391) from a stream request.
@@ -9825,8 +9862,9 @@ async def _stream_live_events(
                 raise ValueError(
                     f"session stream event missing string ``type`` field: {event!r}",
                 )
-            validated = _SERVER_STREAM_EVENT_ADAPTER.validate_python(event)
-            yield _format_sse(event_type, validated.model_dump(), event_id=seq)
+            yield _format_sse(
+                event_type, _resilient_stream_payload(event, session_id), event_id=seq
+            )
     finally:
         # The non-None checks besides presence_token's are type
         # narrowing only: a minted token implies both were set above.
