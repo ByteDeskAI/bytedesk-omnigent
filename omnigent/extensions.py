@@ -78,6 +78,17 @@ class OmnigentExtension(Protocol):
         """Background-task factories the server lifespan starts and cancels."""
         ...
 
+    def config_descriptors(self) -> list[object]:
+        """Configuration-Control-Plane descriptors (ADR-0150, BDP-2413).
+
+        Each is a :class:`omnigent.config.ConfigDescriptor` registered into the
+        Settings Registry, so an extension's configurable properties are
+        auto-exposed through the uniform ``/v1/config`` REST surface. Defaults
+        to ``[]`` via ``hasattr`` probing — an extension that omits it adds no
+        config keys.
+        """
+        ...
+
     def principal_resolvers(self) -> list[object]:
         """Identity resolvers contributed to the request principal chain.
 
@@ -237,3 +248,17 @@ def extension_background_factories() -> list:
         if hasattr(ext, "background_tasks"):
             factories.extend(ext.background_tasks())
     return factories
+
+
+def extension_config_descriptors() -> list:
+    """Config-Control-Plane descriptors contributed by extensions (ADR-0150).
+
+    The aggregate of every extension's ``config_descriptors()`` IS the Settings
+    Registry (:class:`omnigent.config.ConfigRegistry`), served by the
+    ``/v1/config`` REST surface. Empty when no extension contributes one.
+    """
+    descriptors: list = []
+    for ext in discover_extensions():
+        if hasattr(ext, "config_descriptors"):
+            descriptors.extend(ext.config_descriptors())
+    return descriptors
