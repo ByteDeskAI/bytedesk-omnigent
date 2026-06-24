@@ -81,6 +81,11 @@ def verify_hmac_signature(raw_body: bytes, secret: str, provided: str) -> bool:
 SecretResolver = Callable[[str], "str | None"]
 
 
+def secret_env_name(source: str) -> str:
+    """Return the conventional env var that carries *source*'s webhook secret."""
+    return f"OMNIGENT_INGRESS_SECRET_{source.upper().replace('-', '_')}"
+
+
 def default_secret_resolver(source: str) -> str | None:
     """Resolve a source's webhook secret from the environment.
 
@@ -88,7 +93,7 @@ def default_secret_resolver(source: str) -> str | None:
     ``None`` when the source has no configured secret (the route 404s — an
     unconfigured source is not a valid ingress target).
     """
-    env_key = f"OMNIGENT_INGRESS_SECRET_{source.upper().replace('-', '_')}"
+    env_key = secret_env_name(source)
     return os.environ.get(env_key)
 
 
@@ -132,6 +137,41 @@ class WebhookSourceAdapter(Protocol):
     def match_key(self, headers: Mapping[str, str]) -> str:
         """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
         ...
+
+
+@dataclass(frozen=True)
+class WebhookAdapterDescriptor:
+    """Setup-safe metadata for a webhook adapter's external contract."""
+
+    source: str
+    signature_headers: tuple[str, ...]
+    event_headers: tuple[str, ...]
+    auth_scheme: str
+    match_key_fallback: str = "*"
+    secret_env: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.secret_env is None:
+            object.__setattr__(self, "secret_env", secret_env_name(self.source))
+
+    def as_dict(self) -> dict[str, object]:
+        """Return JSON-serializable metadata safe for platform display."""
+        return {
+            "source": self.source,
+            "signature_headers": list(self.signature_headers),
+            "event_headers": list(self.event_headers),
+            "auth_scheme": self.auth_scheme,
+            "match_key_fallback": self.match_key_fallback,
+            "secret_env": self.secret_env,
+        }
+
+
+_DEFAULT_WEBHOOK_DESCRIPTOR = WebhookAdapterDescriptor(
+    source="github",
+    signature_headers=("x-omnigent-signature", "x-hub-signature-256"),
+    event_headers=("x-omnigent-event",),
+    auth_scheme="hmac_sha256",
+)
 
 
 class GitHubWebhookAdapter:
@@ -184,16 +224,28 @@ def _build_webhook_adapter_registry():
 
 # Lazily-built singleton so a deployment can register adapters once at import.
 _webhook_adapter_registry = None
+_webhook_adapter_descriptors: dict[str, WebhookAdapterDescriptor] = {
+    "github": _DEFAULT_WEBHOOK_DESCRIPTOR
+}
 
 
 def register_webhook_adapter(
-    source: str, factory: Callable[[], WebhookSourceAdapter]
+    source: str,
+    factory: Callable[[], WebhookSourceAdapter],
+    *,
+    descriptor: WebhookAdapterDescriptor | None = None,
 ) -> None:
     """Register a per-source webhook adapter *factory* (BDP-2354)."""
     global _webhook_adapter_registry
     if _webhook_adapter_registry is None:
         _webhook_adapter_registry = _build_webhook_adapter_registry()
     _webhook_adapter_registry.register(source, factory)
+    if descriptor is not None:
+        if descriptor.source != source:
+            raise ValueError(
+                f"descriptor source {descriptor.source!r} does not match adapter {source!r}"
+            )
+        _webhook_adapter_descriptors[source] = descriptor
 
 
 def resolve_webhook_adapter(source: str) -> WebhookSourceAdapter:
@@ -204,6 +256,30 @@ def resolve_webhook_adapter(source: str) -> WebhookSourceAdapter:
     if source in _webhook_adapter_registry.names():
         return _webhook_adapter_registry.get(source)
     return _webhook_adapter_registry.resolve_default()
+
+
+def describe_webhook_adapters() -> list[dict[str, object]]:
+    """Return setup-safe metadata for registered webhook adapters.
+
+    This intentionally omits secret values and returns only the headers,
+    match-key fallback, and conventional env var ByteDesk Platform needs to guide
+    an operator through connecting a third-party webhook source.
+    """
+    global _webhook_adapter_registry
+    if _webhook_adapter_registry is None:
+        _webhook_adapter_registry = _build_webhook_adapter_registry()
+    descriptors: list[WebhookAdapterDescriptor] = []
+    for source in sorted(_webhook_adapter_registry.names()):
+        descriptors.append(
+            _webhook_adapter_descriptors.get(source)
+            or WebhookAdapterDescriptor(
+                source=source,
+                signature_headers=(),
+                event_headers=(),
+                auth_scheme="custom",
+            )
+        )
+    return [descriptor.as_dict() for descriptor in descriptors]
 
 
 def _to_binding(row: SqlWebhookBinding) -> WebhookBinding:
