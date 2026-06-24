@@ -125,6 +125,23 @@ def bytedesk_config_descriptors() -> list[ConfigDescriptor]:
             change_event="config.changed:system.default_ad_hoc_model",
         ),
         ConfigDescriptor(
+            key="system.host.visibility_scope",
+            scope="system",
+            what=(
+                "Who can see/use connected hosts: 'org-shared' (any authenticated "
+                "member sees + uses all external hosts) or 'private' (per-owner "
+                "isolation). Managed sandbox hosts stay owner-scoped in every "
+                "mode (ADR-0151)."
+            ),
+            json_schema={"type": "string", "enum": ["org-shared", "private"]},
+            tier=2,
+            storage_source="memory",
+            reader=_rt_reader("system.host.visibility_scope", "org-shared"),
+            writer=_rt_writer("system.host.visibility_scope"),
+            etag_reader=_rt_etag("system.host.visibility_scope"),
+            change_event="config.changed:system.host.visibility_scope",
+        ),
+        ConfigDescriptor(
             key="policies.cost_hard_stop.default_ceiling_usd",
             scope="policy",
             what="Default hard cost ceiling (USD) seeded into new cost_hard_stop policies.",

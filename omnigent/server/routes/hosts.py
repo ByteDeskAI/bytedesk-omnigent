@@ -36,7 +36,9 @@ from omnigent.host.frames import (
 )
 from omnigent.runner.identity import token_bound_runner_id
 from omnigent.runtime.agent_cache import AgentCache
+from omnigent.server import host_access
 from omnigent.server.auth import AuthProvider
+from omnigent.server.host_access import can_access_host
 from omnigent.server.host_registry import HostConnection, HostRegistry
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._host_launch import resolve_host_launch
@@ -255,7 +257,15 @@ def create_hosts_router(
         if user_id is None:
             hosts = await asyncio.to_thread(host_store.list_hosts, "local")
         else:
-            hosts = await asyncio.to_thread(host_store.list_hosts, user_id)
+            # Visibility scope (ADR-0151): org-shared returns the whole pool
+            # filtered by can_access_host (all external hosts + the caller's own
+            # managed hosts); private keeps the owner-only query.
+            scope = host_access.host_visibility_scope()
+            if scope == "org-shared":
+                all_hosts = await asyncio.to_thread(host_store.list_all_hosts)
+                hosts = [h for h in all_hosts if can_access_host(h, user_id, scope=scope)]
+            else:
+                hosts = await asyncio.to_thread(host_store.list_hosts, user_id)
 
         # One clock for the whole batch so every host is classified
         # against a consistent "now" (host_is_live's documented idiom).
@@ -307,7 +317,9 @@ def create_hosts_router(
         host = await asyncio.to_thread(host_store.get_host, host_id)
         if host is None:
             raise HTTPException(status_code=404, detail="host not found")
-        if user_id is not None and host.owner != user_id:
+        # Visibility scope (ADR-0151): external hosts are reachable under
+        # org-shared; managed hosts stay owner-only.
+        if not can_access_host(host, user_id):
             raise HTTPException(status_code=403, detail="not your host")
 
         # Status comes from the DB so the answer is consistent across
@@ -704,13 +716,15 @@ def create_hosts_router(
         # past the owner check below as None (see get_host above).
         user_id = require_user(request, auth_provider)
 
-        # Owner check: load the host record, fail with 404 if it
-        # doesn't exist (don't leak existence to non-owners), fail
-        # with 403 only when an authenticated caller doesn't own it.
+        # Access check: load the host record, fail with 404 if it
+        # doesn't exist (don't leak existence), fail with 403 when the
+        # caller can't access it under the visibility scope (ADR-0151) —
+        # external hosts are reachable under org-shared; managed hosts
+        # stay owner-only.
         host = await asyncio.to_thread(host_store.get_host, host_id)
         if host is None:
             raise HTTPException(status_code=404, detail="host not found")
-        if user_id is not None and host.owner != user_id:
+        if not can_access_host(host, user_id):
             raise HTTPException(status_code=403, detail="not your host")
 
         if "\x00" in path:

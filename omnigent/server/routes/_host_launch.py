@@ -53,28 +53,32 @@ def resolve_host_owner(
     host_store: HostStore,
 ) -> Host:
     """
-    Authorize that the caller owns a known host.
+    Authorize that the caller may reach a known host.
 
     Every route that reaches a host on the caller's behalf must pass
-    this first so the owner check can't drift between them: the runner
+    this first so the access check can't drift between them: the runner
     launch (via :func:`resolve_host_launch`) AND the session-create
     workspace probe, which sends a ``host.stat`` to the host. The
     original bug had that probe contacting another user's host before
-    any ownership check. When ``user_id`` is ``None`` (auth disabled)
+    any access check. Access follows the visibility scope (ADR-0151):
+    external hosts are reachable under ``org-shared``; managed/sandbox
+    hosts stay owner-only. When ``user_id`` is ``None`` (auth disabled)
     the check is skipped, consistent with single-user/local behavior.
 
     :param user_id: Authenticated caller, e.g. ``"alice@example.com"``,
         or ``None`` when auth is disabled.
     :param host_id: Target host id, e.g. ``"host_a1b2c3d4..."``.
     :param host_store: Persistent host registrations.
-    :returns: The host record owned by the caller.
-    :raises HTTPException: 404 if the host is unknown; 403 if it is
-        owned by a different user.
+    :returns: The host record the caller may reach.
+    :raises HTTPException: 404 if the host is unknown; 403 if the caller
+        may not reach it under the visibility scope.
     """
+    from omnigent.server.host_access import can_access_host
+
     host = host_store.get_host(host_id)
     if host is None:
         raise HTTPException(status_code=404, detail="host not found")
-    if user_id is not None and host.owner != user_id:
+    if not can_access_host(host, user_id):
         raise HTTPException(status_code=403, detail="not your host")
     return host
 
