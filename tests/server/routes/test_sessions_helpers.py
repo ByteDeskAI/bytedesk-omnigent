@@ -8,7 +8,9 @@ unit tests lift coverage without standing up the full sessions router.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock
@@ -30,7 +32,7 @@ from omnigent.entities.conversation import (
 )
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import SessionPermission
-from omnigent.server.schemas import SessionEventInput
+from omnigent.server.schemas import ElicitationRequestParams, ElicitationResult, SessionEventInput
 from omnigent.spec.types import AgentSpec, ExecutorSpec
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.policies.types import Phase
@@ -130,6 +132,8 @@ from omnigent.server.routes.sessions import (
     _latest_assistant_text_from_store,
     _parse_external_assistant_message,
     _parse_session_create_metadata,
+    _poll_request_disconnect,
+    _publish_and_wait_for_harness_elicitation,
     _publish_elicitation_resolved,
     _publish_elicitation_resolved_to_ancestors,
     _schedule_deferred_elicitation_clear,
@@ -2878,3 +2882,278 @@ def test_signal_harness_elicitation_resolved_by_id_sets_parked_event() -> None:
         assert elicitation_id not in sessions_mod._harness_pre_resolved_elicitations
     finally:
         sessions_mod._harness_parked_elicitations.clear()
+
+
+# ── batch 50: harness elicitation long-poll + disconnect poller ─────────────
+
+
+def _clear_harness_elicitation_state() -> None:
+    sessions_mod._harness_elicitation_registry.clear()
+    sessions_mod._harness_elicitation_owners.clear()
+    sessions_mod._harness_parked_elicitations.clear()
+    sessions_mod._harness_pre_resolved_elicitations.clear()
+    sessions_mod._deferred_elicitation_clear_tasks.clear()
+
+
+@pytest.mark.asyncio
+async def test_poll_request_disconnect_exits_on_http_disconnect() -> None:
+    """``_poll_request_disconnect`` returns when the ASGI stack signals disconnect."""
+
+    async def _receive() -> dict[str, str]:
+        return {"type": "http.disconnect"}
+
+    request = MagicMock()
+    request.receive = _receive
+    await _poll_request_disconnect(request)
+
+
+@pytest.mark.asyncio
+async def test_publish_and_wait_consumes_pre_resolved_tombstone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tombstone from a gap re-park returns the verdict without re-publishing."""
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    elicitation_id = "elicit_batch50_tombstone1234567890abcdef12"
+    verdict = ElicitationResult(action="decline")
+    _clear_harness_elicitation_state()
+    sessions_mod._harness_pre_resolved_elicitations[elicitation_id] = (
+        _PreResolvedHarnessElicitation(
+            session_id="conv_tomb",
+            created_at=time.time(),
+            result=verdict,
+        )
+    )
+    try:
+        result = await _publish_and_wait_for_harness_elicitation(
+            MagicMock(),
+            session_id="conv_tomb",
+            params=ElicitationRequestParams(message="Allow rm?"),
+            timeout_s=1.0,
+            elicitation_id=elicitation_id,
+        )
+        assert result == verdict
+        assert published == []
+    finally:
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_publish_and_wait_returns_web_verdict_and_publishes_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Web ``approval`` verdict completes the parked future and clears the card."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    async def _block_disconnect(_request: object) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(sessions_mod, "_poll_request_disconnect", _block_disconnect)
+
+    elicitation_id = "elicit_batch50_webverdict1234567890abcdef"
+    verdict = ElicitationResult(action="accept")
+    _clear_harness_elicitation_state()
+
+    async def _deliver_verdict() -> None:
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            future = sessions_mod._harness_elicitation_registry.get(elicitation_id)
+            if future is not None and not future.done():
+                future.set_result(verdict)
+                return
+        raise AssertionError("elicitation future never registered")
+
+    deliver_task = asyncio.create_task(_deliver_verdict())
+    try:
+        result = await _publish_and_wait_for_harness_elicitation(
+            MagicMock(),
+            session_id="conv_web",
+            params=ElicitationRequestParams(message="Run tests?"),
+            timeout_s=5.0,
+            elicitation_id=elicitation_id,
+            tool_name="Bash",
+            tool_input={"command": "pytest"},
+        )
+        await deliver_task
+        assert result == verdict
+        event_types = [p["type"] for p in published]
+        assert event_types == [
+            "response.elicitation_request",
+            "response.elicitation_resolved",
+        ]
+        assert published[0]["elicitation_id"] == elicitation_id
+    finally:
+        deliver_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await deliver_task
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_publish_and_wait_returns_none_when_terminal_resolves_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Terminal-side resolution ends the wait with ``None`` but still clears the card."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    async def _block_disconnect(_request: object) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(sessions_mod, "_poll_request_disconnect", _block_disconnect)
+
+    elicitation_id = "elicit_batch50_terminal1234567890abcdef12"
+    _clear_harness_elicitation_state()
+
+    async def _resolve_in_terminal() -> None:
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            parked = sessions_mod._harness_parked_elicitations.get(elicitation_id)
+            if parked is not None:
+                parked.resolved_elsewhere.set()
+                return
+        raise AssertionError("parked elicitation never registered")
+
+    resolve_task = asyncio.create_task(_resolve_in_terminal())
+    try:
+        result = await _publish_and_wait_for_harness_elicitation(
+            MagicMock(),
+            session_id="conv_term",
+            params=ElicitationRequestParams(message="Edit file?"),
+            timeout_s=5.0,
+            elicitation_id=elicitation_id,
+            tool_name="Edit",
+            tool_input={"path": "a.py"},
+        )
+        await resolve_task
+        assert result is None
+        assert [p["type"] for p in published] == [
+            "response.elicitation_request",
+            "response.elicitation_resolved",
+        ]
+    finally:
+        resolve_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await resolve_task
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_publish_and_wait_schedules_deferred_clear_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A severed wait without an answer defers the resolved event until the grace elapses."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    async def _block_disconnect(_request: object) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(sessions_mod, "_poll_request_disconnect", _block_disconnect)
+
+    async def _instant_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod.asyncio, "sleep", _instant_sleep)
+    monkeypatch.setattr(sessions_mod, "_HARNESS_ELICITATION_REPARK_GRACE_S", 0.0)
+
+    elicitation_id = "elicit_batch50_timeout1234567890abcdef12"
+    _clear_harness_elicitation_state()
+    try:
+        result = await _publish_and_wait_for_harness_elicitation(
+            MagicMock(),
+            session_id="conv_timeout",
+            params=ElicitationRequestParams(message="Timed out?"),
+            timeout_s=0.01,
+            elicitation_id=elicitation_id,
+        )
+        assert result is None
+        assert len(published) == 1
+        assert published[0]["type"] == "response.elicitation_request"
+        assert published[0]["elicitation_id"] == elicitation_id
+        pending = list(sessions_mod._deferred_elicitation_clear_tasks)
+        if pending:
+            await asyncio.gather(*pending)
+        assert published[-1] == {
+            "type": "response.elicitation_resolved",
+            "elicitation_id": elicitation_id,
+        }
+    finally:
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_publish_and_wait_mirrors_request_to_ancestors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a store is supplied, ancestor streams receive the elicitation request."""
+    mirrored: list[tuple[str, dict[str, object]]] = []
+
+    def _mirror(
+        store: object,
+        session_id: str,
+        payload: dict[str, object],
+    ) -> None:
+        mirrored.append((session_id, payload))
+
+    monkeypatch.setattr(
+        sessions_mod,
+        "_publish_elicitation_request_to_ancestors",
+        _mirror,
+    )
+
+    async def _block_disconnect(_request: object) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(sessions_mod, "_poll_request_disconnect", _block_disconnect)
+
+    elicitation_id = "elicit_batch50_ancestor1234567890abcdef1"
+    verdict = ElicitationResult(action="accept")
+    store = MagicMock()
+    _clear_harness_elicitation_state()
+
+    async def _deliver_verdict() -> None:
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            future = sessions_mod._harness_elicitation_registry.get(elicitation_id)
+            if future is not None and not future.done():
+                future.set_result(verdict)
+                return
+        raise AssertionError("elicitation future never registered")
+
+    deliver_task = asyncio.create_task(_deliver_verdict())
+    try:
+        await _publish_and_wait_for_harness_elicitation(
+            MagicMock(),
+            session_id="conv_child",
+            params=ElicitationRequestParams(message="Child prompt"),
+            timeout_s=5.0,
+            conversation_store=store,  # type: ignore[arg-type]
+            elicitation_id=elicitation_id,
+        )
+        await deliver_task
+        assert len(mirrored) == 1
+        assert mirrored[0][0] == "conv_child"
+        assert mirrored[0][1]["type"] == "response.elicitation_request"
+    finally:
+        deliver_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await deliver_task
+        _clear_harness_elicitation_state()
