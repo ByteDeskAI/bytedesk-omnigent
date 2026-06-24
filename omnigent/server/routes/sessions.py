@@ -1637,6 +1637,26 @@ def _owner_from_grants(grants: list[SessionPermission]) -> str | None:
     return next((g.user_id for g in grants if g.level >= LEVEL_OWNER), None)
 
 
+def _session_list_accessible_by(user_id: str | None, *, is_admin: bool) -> str | None:
+    """The owner-ACL filter (``accessible_by``) for the session list (BDP-2438).
+
+    A non-admin is scoped to sessions they own (``user_id``). An **admin** gets
+    the per-owner ACL relaxed (``None`` = no owner filter) so they see every
+    session — Office-driven sessions are owned by the ``local``/synthetic
+    principal Office sends, not the logged-in admin, so without this an operator
+    never sees them in the UI even though the agent replies arrive. The caller
+    still layers the BDP-2395 tenant filter on top, so a tenant-scoped admin
+    sees only their own tenant; a tenant-less (single-org / local) admin sees
+    all. ``user_id`` of ``None`` (auth disabled) already means "no filter" and
+    is returned unchanged.
+
+    :param user_id: The authenticated caller, or ``None`` when auth is disabled.
+    :param is_admin: Whether the caller is an admin.
+    :returns: The value to pass as ``accessible_by`` to ``list_conversations``.
+    """
+    return None if is_admin else user_id
+
+
 def _session_status_from_cache(conversation_id: str) -> Literal["idle", "running", "failed"]:
     """
     Map the relay-fed status cache value to a list-item status.
@@ -12629,6 +12649,15 @@ def create_sessions_router(
         # with 401 instead (user_id stays None only when auth is
         # disabled entirely — no auth_provider).
         user_id = _require_user(request, auth_provider)
+        # BDP-2438: admins get the per-owner ACL relaxed so they see every
+        # session (the BDP-2395 tenant filter below still scopes them to their
+        # tenant). ``is_admin`` is resolved here — it was already computed below
+        # for the per-row permission badge; reused now, not recomputed.
+        user_is_admin = (
+            await asyncio.to_thread(permission_store.is_admin, user_id)
+            if (permission_store is not None and user_id is not None)
+            else False
+        )
         normalized_query = search_query if search_query else None
         page = await asyncio.to_thread(
             conversation_store.list_conversations,
@@ -12637,7 +12666,7 @@ def create_sessions_router(
             before=before,
             agent_id=agent_id,
             agent_name=agent_name,
-            accessible_by=user_id,
+            accessible_by=_session_list_accessible_by(user_id, is_admin=user_is_admin),
             has_agent_id=True,
             # The store treats ``None`` as "no kind filter"; the API
             # spells that ``kind=any`` to keep the param required-ish
@@ -12679,11 +12708,6 @@ def create_sessions_router(
                     conv_ids,
                 ),
             )
-            user_is_admin = (
-                await asyncio.to_thread(permission_store.is_admin, user_id)
-                if user_id is not None
-                else False
-            )
         else:
             agent_names_by_id, child_ids_by_parent = await asyncio.gather(
                 asyncio.to_thread(agent_store.get_names, unique_agent_ids),
@@ -12693,7 +12717,6 @@ def create_sessions_router(
                 ),
             )
             perms_by_conv: dict[str, list[SessionPermission]] = {}
-            user_is_admin = False
         # In-memory lookup — no I/O, so batching avoids re-acquiring
         # the index's lock per row but otherwise has no DB cost.
         pending_counts = pending_elicitations.counts_for(conv_ids)
