@@ -5354,3 +5354,75 @@ def test_publish_status_updates_cache_and_streams_event(
     assert sessions_mod._session_status_cache["conv_running"] == "failed"
     assert published[-1][1]["status"] == "failed"
     assert published[-1][1]["error"]["code"] == "runner_error"
+
+
+# ── batch 60: assistant scan edges + output cap + error-label swallow ─────────
+
+
+class _EmptyAssistantTextStore:
+    def list_items(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        order: str,
+        type: str,
+    ) -> PagedList[ConversationItem]:
+        del session_id, limit, order, type
+        return PagedList(data=[], first_id=None, last_id=None, has_more=False)
+
+
+def test_latest_assistant_text_from_store_returns_none_when_empty() -> None:
+    store = _EmptyAssistantTextStore()
+    assert _latest_assistant_text_from_store(store, "conv_empty") is None  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_enrich_idle_status_leaves_data_unchanged_without_assistant_text() -> None:
+    store = _EmptyAssistantTextStore()
+    unchanged = await _enrich_idle_status_with_subagent_output(
+        {"status": "idle"},
+        "idle",
+        "conv_child",
+        store,  # type: ignore[arg-type]
+    )
+    assert unchanged == {"status": "idle"}
+    assert "output" not in unchanged
+
+
+def test_parse_external_conversation_item_caps_large_function_call_output() -> None:
+    from omnigent.runtime.tool_output import MAX_TOOL_OUTPUT_BYTES
+
+    huge = "x" * (MAX_TOOL_OUTPUT_BYTES + 500)
+    body = SessionEventInput(
+        type="external_conversation_item",
+        data={
+            "item_type": "function_call_output",
+            "item_data": {
+                "call_id": "call_big",
+                "output": huge,
+            },
+            "response_id": "resp_cap",
+        },
+    )
+    parsed = _parse_external_conversation_item(body)
+    assert parsed.type == "function_call_output"
+    assert isinstance(parsed.data, FunctionCallOutputData)
+    assert len(parsed.data.output.encode("utf-8")) <= MAX_TOOL_OUTPUT_BYTES + 200
+    assert "truncated by omnigent" in parsed.data.output
+
+
+@pytest.mark.asyncio
+async def test_persist_session_status_error_labels_swallows_store_failures() -> None:
+    from omnigent.server.schemas import ErrorDetail
+
+    class _FailingLabelStore:
+        def set_labels(self, _session_id: str, _labels: dict[str, str]) -> None:
+            raise RuntimeError("store offline")
+
+    store = _FailingLabelStore()
+    await _persist_session_status_error_labels(
+        "conv_fail",
+        ErrorDetail(code="runner_error", message="boom"),
+        store,  # type: ignore[arg-type]
+    )
