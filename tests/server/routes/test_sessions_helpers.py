@@ -17,6 +17,7 @@ from omnigent.entities import Conversation, StoredFile
 from omnigent.entities.permission import SessionPermission
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.routes import sessions as sessions_mod
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.routes.sessions import (
     _CLAUDE_NATIVE_WRAPPER_LABEL_KEY,
     _CODEX_NATIVE_SUBAGENT_DISPLAY_FALLBACK,
@@ -29,6 +30,7 @@ from omnigent.server.routes.sessions import (
     _add_model_usage_delta,
     _allow_all_edits_eligible,
     _attachment_disposition,
+    _client_supplied_hook_elicitation_id,
     _codex_subagent_display_tool,
     _discovery_key,
     _format_sse,
@@ -41,6 +43,7 @@ from omnigent.server.routes.sessions import (
     _permission_level_from_grants,
     _priced_cost_for_display,
     _record_daily_cost,
+    _resolve_harness,
     _session_status_from_cache,
     _session_status_with_child_rollup,
     _stored_file_to_resource,
@@ -466,6 +469,52 @@ def test_codex_subagent_display_tool_precedence() -> None:
         {_CODEX_NATIVE_SUBAGENT_ROLE_LABEL_KEY: "reviewer"}
     ) == "reviewer"
     assert _codex_subagent_display_tool({}) == _CODEX_NATIVE_SUBAGENT_DISPLAY_FALLBACK
+
+
+def test_resolve_harness_returns_persisted_override() -> None:
+    """Per-session harness_override wins without loading the agent spec."""
+    conv = Conversation(
+        id="conv_x",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_x",
+        harness_override="pi",
+    )
+    assert _resolve_harness(conv) == "pi"
+    assert _resolve_harness(None) is None
+
+
+def test_client_supplied_hook_elicitation_id_validates_namespace() -> None:
+    """Hook re-attach ids must match the claude-hook namespace."""
+    valid = "elicit_claude_" + "a" * 32
+    assert _client_supplied_hook_elicitation_id({}, "conv_a") is None
+    assert (
+        _client_supplied_hook_elicitation_id(
+            {"_omnigent_elicitation_id": valid}, "conv_a"
+        )
+        == valid
+    )
+
+    with pytest.raises(OmnigentError) as bad:
+        _client_supplied_hook_elicitation_id(
+            {"_omnigent_elicitation_id": "elicit_codex_nope"}, "conv_a"
+        )
+    assert bad.value.code == ErrorCode.INVALID_INPUT
+
+
+def test_client_supplied_hook_elicitation_id_rejects_cross_session_owner() -> None:
+    """A parked id owned by another session is rejected."""
+    elicitation_id = "elicit_claude_" + "b" * 32
+    sessions_mod._harness_elicitation_owners[elicitation_id] = "conv_owner"
+    try:
+        with pytest.raises(OmnigentError) as exc:
+            _client_supplied_hook_elicitation_id(
+                {"_omnigent_elicitation_id": elicitation_id},
+                "conv_other",
+            )
+        assert exc.value.code == ErrorCode.INVALID_INPUT
+    finally:
+        sessions_mod._harness_elicitation_owners.pop(elicitation_id, None)
 
 
 def test_is_codex_native_subagent_requires_wrapper_label() -> None:
