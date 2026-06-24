@@ -24,6 +24,7 @@ Three layers:
 from __future__ import annotations
 
 import io
+import re
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
@@ -326,11 +327,12 @@ def test_pick_conversation_renders_initial_highlight_marker() -> None:
 
     pick_conversation(_convs(2), agent_name="resume_test", out=out, in_=in_)
     rendered = out.getvalue()
-    highlighted_lines = [line for line in rendered.splitlines() if "chat-1" in line]
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", rendered)
+    highlighted_lines = [line for line in plain.splitlines() if "chat-1" in line]
     assert highlighted_lines and highlighted_lines[0].lstrip().startswith(">"), (
         f"Expected the first row to be marked as highlighted. Output:\n{rendered!r}"
     )
-    unhighlighted_lines = [line for line in rendered.splitlines() if "chat-2" in line]
+    unhighlighted_lines = [line for line in plain.splitlines() if "chat-2" in line]
     assert unhighlighted_lines and not unhighlighted_lines[0].lstrip().startswith(">"), (
         f"Expected only the first row to be marked as highlighted. Output:\n{rendered!r}"
     )
