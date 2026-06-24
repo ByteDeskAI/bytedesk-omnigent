@@ -3345,13 +3345,25 @@ def _inject_mcp_schemas(
     is empty. See ``designs/RUNNER_MCP.md`` §Schema injection.
 
     Skips schemas already present by name: the per-session tool cache
-    also folds in MCP schemas, and codex rejects duplicate tool names.
+    also folds in MCP schemas, and Codex rejects duplicate dynamic tool
+    names after the executor normalizes both flat and nested schemas.
     """
     if not mcp_schemas:
         return
     existing = event_body.get("tools") or []
-    existing_names = {t.get("name") for t in existing if t.get("name")}
-    new_schemas = [s for s in mcp_schemas if s.get("name") not in existing_names]
+    seen_names = {
+        name
+        for t in existing
+        if isinstance(t, dict) and (name := _schema_tool_name(t)) is not None
+    }
+    new_schemas: list[dict[str, Any]] = []
+    for schema in mcp_schemas:
+        name = _schema_tool_name(schema)
+        if name is not None:
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+        new_schemas.append(schema)
     event_body["tools"] = list(existing) + new_schemas
 
 
@@ -3383,17 +3395,22 @@ def _spec_builtin_tool_schemas(spec: Any, workdir: Any) -> list[dict[str, Any]]:
 
 def _schema_tool_name(schema: dict[str, Any]) -> str | None:
     """
-    Extract a tool's function name from its OpenAI-format schema.
+    Extract a tool's function name from a tool schema.
 
     :param schema: A tool schema dict in nested OpenAI format, e.g.
-        ``{"type": "function", "function": {"name": "Read", ...}}``.
+        ``{"type": "function", "function": {"name": "Read", ...}}``, or
+        the flattened harness format, e.g. ``{"type": "function",
+        "name": "Read", ...}``.
     :returns: The tool name (e.g. ``"Read"``), or ``None`` when the
-        schema is malformed / missing the ``function.name`` field.
+        schema is malformed / missing a string name field.
     """
     function = schema.get("function")
     if isinstance(function, dict):
         name = function.get("name")
         return name if isinstance(name, str) else None
+    name = schema.get("name")
+    if isinstance(name, str):
+        return name
     return None
 
 
