@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, PropertyMock
 
 import httpx
 import pytest
 
-from omnigent.llms.errors import LLMErrorDetail, PermanentLLMError, RetryableLLMError
+from omnigent.llms.errors import (
+    ContextWindowExceededError,
+    LLMErrorDetail,
+    PermanentLLMError,
+    RetryableLLMError,
+)
 from omnigent.runtime.llm_retry import (
     classify_llm_error,
     compute_backoff_delay,
@@ -130,6 +136,31 @@ def test_classify_unknown_exception(
     # Failure would mean unknown errors are retried indefinitely.
     assert isinstance(result, PermanentLLMError)
     assert result.code == "unknown_error"
+
+
+def test_classify_http_400_overflow_is_context_window_exceeded(
+    retryable_status_codes: list[int],
+) -> None:
+    """HTTP 400 with a known overflow body must surface ContextWindowExceededError."""
+    body = json.dumps(
+        {
+            "error": {
+                "code": "context_length_exceeded",
+                "message": (
+                    "This model's maximum context length is 128000 tokens. "
+                    "However, you requested 142000 tokens."
+                ),
+            }
+        }
+    )
+    exc = _make_http_status_error(400, body=body)
+
+    result = classify_llm_error(exc, retryable_status_codes)
+
+    assert isinstance(result, ContextWindowExceededError)
+    assert result.code == "context_length_exceeded"
+    assert result.max_context_tokens == 128000
+    assert result.actual_tokens == 142000
 
 
 def test_classify_connection_error_is_retryable(
@@ -261,6 +292,72 @@ def test_execute_with_retry_permanent_error_no_retry(
     # on_retry must never fire for permanent errors.
     # Failure would mean false retry events are emitted to clients.
     assert on_retry.call_count == 0
+
+
+def test_execute_with_retry_retries_preclassified_retryable_error(
+    retry_config_fast: RetryPolicy,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Pre-classified RetryableLLMError must retry without re-classification."""
+    monkeypatch.setattr("omnigent.runtime.llm_retry.time.sleep", lambda _: None)
+
+    first = RetryableLLMError("transient", code="rate_limit", detail=LLMErrorDetail())
+    call_fn = MagicMock(side_effect=[first, "ok"])
+    on_retry = MagicMock()
+
+    result = execute_with_retry(call_fn, retry_config_fast, on_retry)
+
+    assert result == "ok"
+    assert call_fn.call_count == 2
+    assert on_retry.call_count == 1
+
+
+def test_execute_with_retry_reraises_permanent_llm_error(
+    retry_config_fast: RetryPolicy,
+) -> None:
+    """PermanentLLMError raised by call_fn must propagate without retry."""
+    call_fn = MagicMock(
+        side_effect=PermanentLLMError("nope", code="401", detail=LLMErrorDetail(status_code=401))
+    )
+    on_retry = MagicMock()
+
+    with pytest.raises(PermanentLLMError) as exc_info:
+        execute_with_retry(call_fn, retry_config_fast, on_retry)
+
+    assert exc_info.value.code == "401"
+    assert call_fn.call_count == 1
+    assert on_retry.call_count == 0
+
+
+def test_safe_response_text_handles_unreadable_body(
+    retryable_status_codes: list[int],
+) -> None:
+    """Unreadable response bodies degrade to a placeholder string."""
+    request = httpx.Request("POST", "http://test")
+    response = MagicMock(spec=httpx.Response)
+    response.status_code = 500
+    type(response).text = PropertyMock(side_effect=RuntimeError("decode failed"))
+    exc = httpx.HTTPStatusError("error", request=request, response=response)
+
+    result = classify_llm_error(exc, retryable_status_codes)
+
+    assert isinstance(result, RetryableLLMError)
+    assert result.detail.response_body == "<unreadable response body>"
+
+
+def test_safe_response_text_truncates_long_body(
+    retryable_status_codes: list[int],
+) -> None:
+    """Very long response bodies are truncated before classification."""
+    long_body = "x" * 1500
+    exc = _make_http_status_error(500, body=long_body)
+
+    result = classify_llm_error(exc, retryable_status_codes)
+
+    assert isinstance(result, RetryableLLMError)
+    assert result.detail.response_body is not None
+    assert len(result.detail.response_body) == 1003
+    assert result.detail.response_body.endswith("...")
 
 
 def test_execute_with_retry_exhausted_raises(

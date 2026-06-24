@@ -23,6 +23,7 @@ module in isolation.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -301,6 +302,74 @@ def test_record_publish_clears_index_on_elicitation_resolved_event() -> None:
     # ignored the resolved event and the badge would stay stuck
     # after every runner-side timeout / cancellation.
     assert pending_elicitations.count_for("conv_a") == 0
+
+
+@pytest.mark.parametrize("bad_id", [None, "", 42])
+def test_record_publish_ignores_invalid_elicitation_id_on_resolved(bad_id: Any) -> None:
+    """Malformed ids on resolved events are dropped without touching the index."""
+    pending_elicitations.record_publish("conv_a", _elicit_event("elicit_1"))
+    pending_elicitations.record_publish(
+        "conv_a",
+        {"type": "response.elicitation_resolved", "elicitation_id": bad_id},
+    )
+    assert pending_elicitations.count_for("conv_a") == 1
+
+
+def test_apply_remote_upsert_tracks_event() -> None:
+    """Peer fan-out upserts land in the local index without re-publishing."""
+    event = _elicit_event("elicit_remote")
+    pending_elicitations.apply_remote_upsert("conv_a", "elicit_remote", event)
+    assert pending_elicitations.count_for("conv_a") == 1
+    assert pending_elicitations.lookup("elicit_remote") == ("conv_a", event)
+
+
+def test_apply_remote_delete_removes_tracked_id() -> None:
+    """Peer fan-out deletes remove the matching outstanding id."""
+    pending_elicitations.apply_remote_upsert("conv_a", "elicit_remote", _elicit_event("elicit_remote"))
+    pending_elicitations.apply_remote_delete("conv_a", "elicit_remote")
+    assert pending_elicitations.count_for("conv_a") == 0
+
+
+def test_apply_remote_delete_is_noop_for_unknown_conversation() -> None:
+    """Deletes for conversations the replica never tracked are silent no-ops."""
+    pending_elicitations.apply_remote_delete("conv_missing", "elicit_x")
+    assert pending_elicitations.count_for("conv_missing") == 0
+
+
+def test_record_publish_syncs_to_active_backplane() -> None:
+    """Local publishes mirror into the coordination backplane when one is active."""
+    backplane = MagicMock()
+    backplane.index_put = AsyncMock(return_value=None)
+    event = _elicit_event("elicit_bp")
+
+    with patch(
+        "omnigent.coordination.lifecycle.get_active_backplane",
+        return_value=backplane,
+    ):
+        with patch("omnigent.coordination.lifecycle.schedule_backplane") as schedule:
+            with patch("omnigent.coordination.lifecycle.fanout_pending_upsert") as fanout:
+                pending_elicitations.record_publish("conv_a", event)
+
+    schedule.assert_called_once()
+    fanout.assert_called_once_with("conv_a", "elicit_bp", event)
+
+
+def test_resolve_syncs_delete_to_active_backplane() -> None:
+    """Local resolves mirror deletes into the coordination backplane when active."""
+    backplane = MagicMock()
+    backplane.index_delete = AsyncMock(return_value=None)
+    pending_elicitations.record_publish("conv_a", _elicit_event("elicit_bp"))
+
+    with patch(
+        "omnigent.coordination.lifecycle.get_active_backplane",
+        return_value=backplane,
+    ):
+        with patch("omnigent.coordination.lifecycle.schedule_backplane") as schedule:
+            with patch("omnigent.coordination.lifecycle.fanout_pending_delete") as fanout:
+                pending_elicitations.resolve("conv_a", "elicit_bp")
+
+    schedule.assert_called_once()
+    fanout.assert_called_once_with("conv_a", "elicit_bp")
 
 
 def test_record_publish_handles_resolved_event_for_unknown_id() -> None:
