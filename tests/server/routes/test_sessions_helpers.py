@@ -5128,3 +5128,229 @@ async def test_persist_external_conversation_item_seeds_title_for_untitled_sessi
     )
     assert conv.title is not None
     assert "kafka" in conv.title.lower() or "sqs" in conv.title.lower()
+
+
+# ── batch 59: subagent validation edges + _publish_status + terminal JSON ─────
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_rejects_missing_agent_type() -> None:
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    store = _SubagentPersistStore()
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_subagent_start(
+            "conv_parent",
+            parent,
+            _claude_subagent_start_body(agent_type=""),
+            store,  # type: ignore[arg-type]
+        )
+    assert "agent_type" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_rejects_non_string_description() -> None:
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    store = _SubagentPersistStore()
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_subagent_start(
+            "conv_parent",
+            parent,
+            _claude_subagent_start_body(description=123),
+            store,  # type: ignore[arg-type]
+        )
+    assert "description" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_rejects_missing_tool_use_id() -> None:
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    store = _SubagentPersistStore()
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_subagent_start(
+            "conv_parent",
+            parent,
+            _claude_subagent_start_body(tool_use_id=""),
+            store,  # type: ignore[arg-type]
+        )
+    assert "tool_use_id" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_reraises_unrecoverable_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """NameAlreadyExistsError with no adoptable row propagates to the caller."""
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    store = _SubagentPersistStore()
+
+    def _always_collide(**_kwargs: object) -> Conversation:
+        raise NameAlreadyExistsError("duplicate title")
+
+    monkeypatch.setattr(store, "create_conversation", _always_collide)
+    with pytest.raises(NameAlreadyExistsError):
+        await _persist_external_subagent_start(
+            "conv_parent",
+            parent,
+            _claude_subagent_start_body(),
+            store,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_persist_external_codex_subagent_start_rejects_parent_without_agent_id() -> None:
+    parent = Conversation(
+        id="conv_codex_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_codex_parent",
+        agent_id=None,
+    )
+    store = _SubagentPersistStore()
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_codex_subagent_start(
+            "conv_codex_parent",
+            parent,
+            _codex_subagent_start_body(),
+            store,  # type: ignore[arg-type]
+        )
+    assert "no agent_id" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_codex_subagent_start_recovers_orphan_after_title_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    orphan = Conversation(
+        id="conv_codex_orphan",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        title="codex-native-ui-subagent:thread_child_99",
+        agent_id="ag_codex",
+        labels={},
+    )
+    store = _SubagentPersistStore({"conv_parent": [orphan]})
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_codex",
+    )
+    child_id = await _persist_external_codex_subagent_start(
+        "conv_parent",
+        parent,
+        _codex_subagent_start_body(),
+        store,  # type: ignore[arg-type]
+    )
+    assert child_id == "conv_codex_orphan"
+    labels = store.labels_written["conv_codex_orphan"]
+    assert labels[sessions_mod._CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY] == "thread_child_99"
+    assert store.created == []
+    assert published[0][1]["child_session_id"] == "conv_codex_orphan"
+
+
+def test_drive_terminal_resolved_elicitation_tolerates_malformed_arguments_json() -> None:
+    sessions_mod._recent_mirrored_tool_calls.clear()
+    try:
+        call_item = ConversationItem(
+            id="fc_bad",
+            type="function_call",
+            status="completed",
+            response_id="resp_fc",
+            created_at=0,
+            data=FunctionCallData(
+                agent="native",
+                name="Bash",
+                arguments="{not json",
+                call_id="call_bad",
+            ),
+        )
+        _drive_terminal_resolved_elicitation("conv_term", call_item)
+        mirrored = sessions_mod._recent_mirrored_tool_calls["call_bad"]
+        assert mirrored.tool_name == "Bash"
+        assert mirrored.tool_input == {}
+    finally:
+        sessions_mod._recent_mirrored_tool_calls.clear()
+
+
+def test_publish_status_skips_idle_when_cached_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    sessions_mod._session_status_cache["conv_sticky_fail"] = "failed"
+    sessions_mod._publish_status("conv_sticky_fail", "idle")
+    assert sessions_mod._session_status_cache["conv_sticky_fail"] == "failed"
+    assert published == []
+
+
+def test_publish_status_updates_cache_and_streams_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.server.schemas import ErrorDetail
+
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    sessions_mod._session_status_cache.pop("conv_running", None)
+    sessions_mod._publish_status(
+        "conv_running",
+        "running",
+        response_id="resp_status_1",
+    )
+    assert sessions_mod._session_status_cache["conv_running"] == "running"
+    assert len(published) == 1
+    sid, payload = published[0]
+    assert sid == "conv_running"
+    assert payload["type"] == "session.status"
+    assert payload["status"] == "running"
+    assert payload["response_id"] == "resp_status_1"
+
+    sessions_mod._publish_status(
+        "conv_running",
+        "failed",
+        error=ErrorDetail(code="runner_error", message="boom"),
+    )
+    assert sessions_mod._session_status_cache["conv_running"] == "failed"
+    assert published[-1][1]["status"] == "failed"
+    assert published[-1][1]["error"]["code"] == "runner_error"
