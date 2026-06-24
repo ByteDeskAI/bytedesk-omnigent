@@ -128,6 +128,7 @@ from omnigent.server.routes.sessions import (
     _native_terminal_runtime,
     _RunnerForwardResult,
     _drive_terminal_resolved_elicitation,
+    _forward_approval_to_runner,
     _enrich_idle_status_with_subagent_output,
     _latest_assistant_text_from_store,
     _parse_external_assistant_message,
@@ -158,6 +159,7 @@ from omnigent.server.routes.sessions import (
     _permission_level_from_grants,
     _priced_cost_for_display,
     _record_daily_cost,
+    _resolve_elicitation,
     _resolve_harness,
     _session_status_from_cache,
     _session_status_with_child_rollup,
@@ -4027,3 +4029,290 @@ async def test_persist_model_change_note_records_reset_to_default(
     item = store.appended[0][1][0]
     assert isinstance(item.data, MessageData)
     assert "model reset to the agent default" in item.data.content[0]["text"]
+
+
+# ── batch 55: approval forward + resolve_elicitation + usage_by_model ─────────
+
+
+class _CaptureRunnerClient:
+    """Records runner POSTs for approval-forward tests."""
+
+    def __init__(self, captured: dict[str, object], *, fail: bool = False) -> None:
+        self._captured = captured
+        self._fail = fail
+
+    async def post(self, path: str, *, json: dict[str, object], **_: Any) -> object:
+        if self._fail:
+            import httpx
+
+            raise httpx.HTTPError("runner down")
+        self._captured["path"] = path
+        self._captured["body"] = json
+
+        class _Resp:
+            status_code = 202
+            headers: dict[str, str] = {}
+            text = ""
+
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_forward_approval_to_runner_noops_without_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _no_client(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_client)
+    await _forward_approval_to_runner(
+        "conv_fwd",
+        {"elicitation_id": "elicit_x", "action": "accept"},
+        MagicMock(),
+    )
+
+
+@pytest.mark.asyncio
+async def test_forward_approval_to_runner_posts_canonical_approval_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _client(*_args: object, **_kwargs: object) -> _CaptureRunnerClient:
+        return _CaptureRunnerClient(captured)
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _client)
+    payload = {"elicitation_id": "elicit_fwd", "action": "accept", "content": {"ok": True}}
+    await _forward_approval_to_runner("conv_fwd", payload, MagicMock())
+    assert captured["path"] == "/v1/sessions/conv_fwd/events"
+    body = captured["body"]
+    assert isinstance(body, dict)
+    assert body["type"] == "approval"
+    assert body["data"] == payload
+
+
+@pytest.mark.asyncio
+async def test_forward_approval_to_runner_swallows_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    async def _failing_client(*_args: object, **_kwargs: object) -> _CaptureRunnerClient:
+        return _CaptureRunnerClient(captured, fail=True)
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _failing_client)
+    await _forward_approval_to_runner(
+        "conv_fwd",
+        {"elicitation_id": "elicit_fail", "action": "decline"},
+        MagicMock(),
+    )
+    assert captured == {}
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_sets_owned_harness_future(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    _clear_harness_elicitation_state()
+    elicitation_id = "elicit_resolve_owned1234567890abcdef12"
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    sessions_mod._harness_elicitation_registry[elicitation_id] = future
+    sessions_mod._harness_elicitation_owners[elicitation_id] = "conv_resolve"
+    try:
+        await _resolve_elicitation(
+            "conv_resolve",
+            {"elicitation_id": elicitation_id, "action": "accept"},
+            None,
+        )
+        assert future.done()
+        assert future.result().action == "accept"
+        assert published[-1]["type"] == "response.elicitation_resolved"
+        assert published[-1]["elicitation_id"] == elicitation_id
+    finally:
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_skips_future_on_owner_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    _clear_harness_elicitation_state()
+    elicitation_id = "elicit_resolve_mismatch1234567890abcdef"
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    sessions_mod._harness_elicitation_registry[elicitation_id] = future
+    sessions_mod._harness_elicitation_owners[elicitation_id] = "conv_owner"
+    try:
+        await _resolve_elicitation(
+            "conv_intruder",
+            {"elicitation_id": elicitation_id, "action": "accept"},
+            None,
+        )
+        assert not future.done()
+        assert published[-1]["elicitation_id"] == elicitation_id
+    finally:
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_tombstones_unparked_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    _clear_harness_elicitation_state()
+    elicitation_id = "elicit_resolve_tomb1234567890abcdef1234"
+    try:
+        await _resolve_elicitation(
+            "conv_tomb",
+            {"elicitation_id": elicitation_id, "action": "decline"},
+            None,
+        )
+        tombstone = sessions_mod._harness_pre_resolved_elicitations[elicitation_id]
+        assert tombstone.session_id == "conv_tomb"
+        assert tombstone.result.action == "decline"
+    finally:
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_ignores_invalid_payload_for_future(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    _clear_harness_elicitation_state()
+    elicitation_id = "elicit_resolve_bad1234567890abcdef12345"
+    loop = asyncio.get_running_loop()
+    future = loop.create_future()
+    sessions_mod._harness_elicitation_registry[elicitation_id] = future
+    sessions_mod._harness_elicitation_owners[elicitation_id] = "conv_bad"
+    try:
+        await _resolve_elicitation(
+            "conv_bad",
+            {"elicitation_id": elicitation_id, "action": "not_a_real_action"},
+            None,
+        )
+        assert not future.done()
+        assert elicitation_id not in sessions_mod._harness_pre_resolved_elicitations
+    finally:
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_mirrors_resolved_to_ancestors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mirrored: list[tuple[str, str]] = []
+
+    def _mirror(
+        store: object,
+        session_id: str,
+        elicitation_id: str,
+    ) -> None:
+        mirrored.append((session_id, elicitation_id))
+
+    monkeypatch.setattr(
+        sessions_mod,
+        "_publish_elicitation_resolved_to_ancestors",
+        _mirror,
+    )
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    store = MagicMock()
+    await _resolve_elicitation(
+        "conv_child",
+        {"elicitation_id": "elicit_anc", "action": "accept"},
+        None,
+        conversation_store=store,
+    )
+    assert mirrored == [("conv_child", "elicit_anc")]
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_empty_id_skips_resolved_publish(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    await _resolve_elicitation("conv_empty", {"action": "accept"}, None)
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_persist_external_session_usage_includes_usage_by_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Subtree per-model tokens appear on the broadcast when flat cost is absent."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_by_model",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_by_model",
+        agent_id="ag_bm",
+        session_usage={
+            "by_model": {
+                "claude-sonnet-4-6": {"input_tokens": 200, "output_tokens": 50},
+            },
+        },
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(
+        type="external_session_usage",
+        data={"policy_cost_usd": 0.75},
+    )
+    await _persist_external_session_usage("conv_by_model", body, store)  # type: ignore[arg-type]
+    assert len(published) == 1
+    assert published[0]["type"] == "session.usage"
+    assert "total_cost_usd" not in published[0]
+    assert "usage_by_model" in published[0]
+    by_model = published[0]["usage_by_model"]
+    assert isinstance(by_model, dict)
+    assert "claude-sonnet-4-6" in by_model
