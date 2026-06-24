@@ -13,7 +13,14 @@ import json
 
 import pytest
 
-from omnigent.spec.types import ExecutorSpec, RetryPolicy
+from omnigent.policies.types import EvaluationContext
+from omnigent.spec.types import (
+    ExecutorSpec,
+    MCPServerConfig,
+    Phase,
+    PhaseSelector,
+    RetryPolicy,
+)
 
 
 @pytest.mark.parametrize(
@@ -192,3 +199,84 @@ def test_retry_policy_from_json_rejects_non_list_status_codes() -> None:
     )
     with pytest.raises(ValueError, match="retryable_status_codes must be a list"):
         RetryPolicy.from_json(payload)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "match"),
+    [
+        ({"backoff_base_s": 0.0}, r"backoff_base_s must be > 0"),
+        ({"backoff_max_s": 0.0}, r"backoff_max_s must be > 0"),
+        ({"timeout_per_request_s": 0.0}, r"timeout_per_request_s must be > 0 or None"),
+    ],
+)
+def test_retry_policy_rejects_invalid_timing_fields(
+    kwargs: dict[str, float], match: str
+) -> None:
+    with pytest.raises(ValueError, match=match):
+        RetryPolicy(**kwargs)
+
+
+def test_retry_policy_adapters_include_timeout_when_configured() -> None:
+    policy = RetryPolicy(max_retries=3, timeout_per_request_s=42.5)
+    assert policy.openai.kwargs() == {"max_retries": 3, "timeout": 42.5}
+    assert policy.anthropic.kwargs() == {"max_retries": 3, "timeout": 42.5}
+    assert policy.claude_cli.env() == {
+        "ANTHROPIC_MAX_RETRIES": "3",
+        "ANTHROPIC_REQUEST_TIMEOUT_SECONDS": "42",
+    }
+    assert policy.codex_cli.env() == {
+        "OPENAI_MAX_RETRIES": "3",
+        "OPENAI_TIMEOUT": "42",
+    }
+    assert policy.pi.settings() == {
+        "retry": {
+            "enabled": True,
+            "maxRetries": 3,
+            "baseDelayMs": 2000,
+            "maxDelayMs": 60000,
+        }
+    }
+
+
+def test_retry_policy_adapters_omit_timeout_when_unset() -> None:
+    policy = RetryPolicy(max_retries=2, timeout_per_request_s=None)
+    assert policy.openai.kwargs() == {"max_retries": 2}
+    assert policy.anthropic.kwargs() == {"max_retries": 2}
+    assert policy.claude_cli.env() == {"ANTHROPIC_MAX_RETRIES": "2"}
+    assert policy.codex_cli.env() == {"OPENAI_MAX_RETRIES": "2"}
+
+
+def test_retry_policy_compute_backoff_delay_delegates_to_runtime() -> None:
+    policy = RetryPolicy(backoff_base_s=0.01, backoff_max_s=1.0, jitter=False)
+    delay = policy.compute_backoff_delay(2, retry_after_s=0.5)
+    assert 0.01 <= delay <= 1.0
+
+
+def test_mcp_server_config_repr_redacts_secret_fields() -> None:
+    cfg = MCPServerConfig(
+        name="srv",
+        transport="http",
+        url="https://example.com/mcp",
+        headers={"Authorization": "Bearer secret"},
+        env={"API_KEY": "sekret"},
+    )
+    rendered = repr(cfg)
+    assert "secret" not in rendered
+    assert "sekret" not in rendered
+    assert "[REDACTED]" in rendered
+    assert "Authorization" in rendered
+    assert "API_KEY" in rendered
+
+
+def test_phase_selector_matches_phase_and_optional_tool_name() -> None:
+    wildcard = PhaseSelector(phase=Phase.TOOL_CALL)
+    narrowed = PhaseSelector(phase=Phase.TOOL_CALL, tool_name="grep")
+    ctx_match = EvaluationContext(phase=Phase.TOOL_CALL, tool_name="grep", content={})
+    ctx_other_tool = EvaluationContext(phase=Phase.TOOL_CALL, tool_name="read", content={})
+    ctx_wrong_phase = EvaluationContext(phase=Phase.REQUEST, tool_name="grep", content="hi")
+
+    assert wildcard.matches(ctx_match)
+    assert wildcard.matches(ctx_other_tool)
+    assert narrowed.matches(ctx_match)
+    assert not narrowed.matches(ctx_other_tool)
+    assert not narrowed.matches(ctx_wrong_phase)

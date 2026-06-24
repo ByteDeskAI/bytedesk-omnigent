@@ -15,11 +15,18 @@ parsing surfaces here.
 from __future__ import annotations
 
 import io
+import re
 import sys
 
 import pytest
 
 from omnigent.onboarding import interactive
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def _strip_ansi(text: str) -> str:
+    return _ANSI_RE.sub("", text)
 
 
 @pytest.fixture()
@@ -88,7 +95,7 @@ def test_select_fallback_returns_chosen_index(
     # off-by-one fallback parsing regressed.
     assert result == 1
     # The numbered list rendered every option so the user could choose.
-    out = capsys.readouterr().out
+    out = _strip_ansi(capsys.readouterr().out)
     assert "1. alpha" in out
     assert "2. beta" in out
 
@@ -161,7 +168,7 @@ def test_select_fallback_skips_header_rows_in_numbering(
     # 2nd selectable row = "  claude-sub" at original index 2. If headers
     # were numbered, "2" would have hit "Claude"/index 0 region instead.
     assert result == 2
-    out = capsys.readouterr().out
+    out = _strip_ansi(capsys.readouterr().out)
     # Headers print as plain labels (no leading "N."); providers are numbered.
     assert "1.   anthropic" in out
     assert "2.   claude-sub" in out
@@ -290,7 +297,7 @@ def test_prompt_text_fallback_hidden_value_confirms_without_echoing_secret(
     result = interactive.prompt_text("openai API key", hide_input=True)
 
     assert result == secret
-    out = capsys.readouterr().out
+    out = _strip_ansi(capsys.readouterr().out)
     assert "input hidden" in out
     assert f"received ({len(secret)} characters)" in out
     assert secret not in out

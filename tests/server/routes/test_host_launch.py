@@ -23,6 +23,7 @@ class _FakeHost:
     host_id: str = "host_1"
     name: str = "test-host"
     owner: str = "alice"
+    sandbox_provider: str | None = None
 
 
 @dataclass
@@ -59,9 +60,13 @@ class TestResolveHostOwner:
             resolve_host_owner(user_id="alice", host_id="host_x", host_store=store)
         assert exc_info.value.status_code == 404
 
-    def test_wrong_owner_403(self) -> None:
+    def test_wrong_owner_403(self, monkeypatch: pytest.MonkeyPatch) -> None:
         host = _FakeHost(host_id="host_1", owner="bob")
         store = _FakeHostStore(hosts={"host_1": host})
+        monkeypatch.setattr(
+            "omnigent.server.host_access.host_visibility_scope",
+            lambda: "private",
+        )
         with pytest.raises(HTTPException) as exc_info:
             resolve_host_owner(user_id="alice", host_id="host_1", host_store=store)
         assert exc_info.value.status_code == 403
@@ -142,3 +147,36 @@ class TestResolveHostLaunch:
         )
         assert result.host.host_id == "host_1"
         assert result.conv.id == "s1"
+
+    def test_session_not_owned_returns_404(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        host = _FakeHost(host_id="host_1", owner="alice")
+        conn = object()
+        conv = Conversation(
+            id="s1",
+            created_at=1,
+            updated_at=1,
+            root_conversation_id="s1",
+            agent_id="ag_1",
+        )
+        store = _FakeHostStore(hosts={"host_1": host})
+        registry = _FakeHostRegistry(conns={"host_1": conn})
+        conv_store = _FakeConversationStore(convs={"s1": conv})
+        perm_store = object()
+        monkeypatch.setattr(
+            "omnigent.server.routes._host_launch.check_session_access",
+            lambda *_args, **_kwargs: False,
+        )
+        with pytest.raises(HTTPException) as exc_info:
+            resolve_host_launch(
+                user_id="alice",
+                host_id="host_1",
+                session_id="s1",
+                host_store=store,
+                host_registry=registry,
+                conversation_store=conv_store,
+                permission_store=perm_store,  # type: ignore[arg-type]
+            )
+        assert exc_info.value.status_code == 404
+        assert exc_info.value.detail == "session not found"

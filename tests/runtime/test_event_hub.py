@@ -16,6 +16,14 @@ import pytest
 from omnigent.runtime import event_hub
 
 
+@pytest.fixture(autouse=True)
+def _clean_event_hub_registry() -> None:
+    """Reset the module-global subscriber map between tests."""
+    event_hub._subscribers.clear()
+    yield
+    event_hub._subscribers.clear()
+
+
 async def _collect(
     user_key: str, expected: int, *, types: Iterable[str] | None = None
 ) -> list[dict]:
@@ -51,3 +59,16 @@ async def test_type_filter_excludes_non_matching() -> None:
 async def test_publish_without_subscriber_is_silent_noop() -> None:
     # Must not raise when nobody is listening (the common case).
     event_hub.publish("nobody-home", {"type": "session.created", "session_id": "x"})
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_emitted_when_queue_idle() -> None:
+    """Synthetic heartbeats keep half-open SSE sockets detectable."""
+    gen = event_hub.subscribe("u_hb", heartbeat_interval_s=0.05)
+    try:
+        first = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+        assert first == {"type": "heartbeat"}
+        second = await asyncio.wait_for(gen.__anext__(), timeout=1.0)
+        assert second == {"type": "heartbeat"}
+    finally:
+        await gen.aclose()

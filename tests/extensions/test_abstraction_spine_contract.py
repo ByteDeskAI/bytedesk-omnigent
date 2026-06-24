@@ -48,6 +48,10 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         "managed_launches",
         "server_metrics",
         "server_metrics_otel",
+        # BDP-2424 / MCP acting-identity: optional HMAC signer for assertion tokens.
+        "assertion_signer",
+        # DI composition root (flag-gated; AST scan sees the source-level assignment).
+        "di_container",
         # Phase 1 / ServiceRegistry: the dual-write sidecar key (flag-gated,
         # OMNIGENT_USE_SERVICE_REGISTRY default OFF — never set at runtime when off,
         # but the AST scan sees the source-level assignment).

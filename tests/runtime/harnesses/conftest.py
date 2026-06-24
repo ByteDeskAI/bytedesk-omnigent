@@ -23,13 +23,23 @@ care about PYTHONPATH are unaffected.
 from __future__ import annotations
 
 import os
+import shutil
+import tempfile
+import uuid
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
+from omnigent.runtime.harnesses import _HARNESS_MODULES
+from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
+
 # Project root: three parents up from this conftest
 # (tests/runtime/harnesses/conftest.py → repo root).
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
+
+_TEST_HARNESS_NAME = "test"
+_TEST_HARNESS_MODULE = "tests.runtime.harnesses._test_harness"
 
 
 @pytest.fixture(autouse=True)
@@ -45,3 +55,52 @@ def _ensure_subprocess_pythonpath(monkeypatch: pytest.MonkeyPatch) -> None:
     existing = os.environ.get("PYTHONPATH", "")
     new_path = f"{_PROJECT_ROOT}{os.pathsep}{existing}" if existing else str(_PROJECT_ROOT)
     monkeypatch.setenv("PYTHONPATH", new_path)
+
+
+@pytest.fixture
+def register_test_harness() -> Iterator[None]:
+    """Register the fixture harness for one test, then restore the registry."""
+    _HARNESS_MODULES[_TEST_HARNESS_NAME] = _TEST_HARNESS_MODULE
+    try:
+        yield
+    finally:
+        _HARNESS_MODULES.pop(_TEST_HARNESS_NAME, None)
+
+
+@pytest.fixture
+def short_tmp_parent() -> Iterator[Path]:
+    """Short writable parent dir for per-conversation Unix socket paths."""
+    roots = [Path("/tmp")]
+    temp_root = Path(tempfile.gettempdir())
+    if temp_root not in roots:
+        roots.append(temp_root)
+
+    last_error: OSError | None = None
+    for root in roots:
+        parent = root / f"omni-pm-{uuid.uuid4().hex[:8]}"
+        try:
+            parent.mkdir(mode=0o700)
+        except OSError as exc:
+            last_error = exc
+            continue
+        try:
+            yield parent
+        finally:
+            shutil.rmtree(parent, ignore_errors=True)
+        return
+
+    assert last_error is not None
+    raise last_error
+
+
+@pytest.fixture
+def manager(
+    short_tmp_parent: Path,
+    register_test_harness: None,
+) -> HarnessProcessManager:
+    """Harness process manager rooted in an isolated tmp dir."""
+    return HarnessProcessManager(
+        idle_timeout_s=60.0,
+        reaper_interval_s=60.0,
+        tmp_parent=short_tmp_parent,
+    )

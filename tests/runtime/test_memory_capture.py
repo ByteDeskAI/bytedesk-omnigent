@@ -57,3 +57,20 @@ def test_capture_skips_non_compaction_and_empty_summary(tmp_path) -> None:
 def test_capture_skips_without_agent_id(tmp_path) -> None:
     store = _store(tmp_path)
     assert capture_compaction_summaries(store, "conv_1", None, [_compaction("cmp_1", "x")]) == 0
+
+
+def test_capture_append_failure_is_logged_and_swallowed() -> None:
+    class _BoomStore:
+        def exists_for_compaction(self, compaction_id: str) -> bool:
+            return False
+
+        def append(self, **kwargs) -> None:
+            raise RuntimeError("db down")
+
+    n = capture_compaction_summaries(
+        _BoomStore(),
+        "conv_1",
+        "ag_maya",
+        [_compaction("cmp_1", "summary survives append failure")],
+    )
+    assert n == 0

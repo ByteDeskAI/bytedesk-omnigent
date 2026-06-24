@@ -11,6 +11,7 @@ from omnigent.tools.builtins.web_fetch import (
     RESEARCHER_NAME,
     WebFetchTool,
     build_researcher_spec,
+    build_web_fetch_prompt,
 )
 
 # ── Helpers ──────────────────────────────────────────
@@ -59,6 +60,13 @@ def test_web_fetch_schema_is_function() -> None:
 def test_web_fetch_name() -> None:
     """Tool name is 'web_fetch'."""
     assert WebFetchTool.name() == "web_fetch"
+
+
+def test_web_fetch_description_mentions_live_pages() -> None:
+    """Class-level description matches the schema's deep-research positioning."""
+    desc = WebFetchTool.description()
+    assert "live web pages" in desc
+    assert "web_search" in desc
 
 
 # ── Researcher spec ──────────────────────────────────
@@ -257,6 +265,20 @@ def test_runner_handler_validates_query_required() -> None:
         )
     )
     assert "query" in result.lower()
+
+
+# ── build_web_fetch_prompt ───────────────────────────
+
+
+def test_build_web_fetch_prompt_query_only() -> None:
+    """Without a URL the researcher prompt is query-only."""
+    assert build_web_fetch_prompt("latest release notes", None) == "Query: latest release notes"
+
+
+def test_build_web_fetch_prompt_includes_starting_url() -> None:
+    """An optional URL is threaded into the researcher user message."""
+    prompt = build_web_fetch_prompt("pricing", "https://example.com/pricing")
+    assert prompt == "Query: pricing\n\nStart with this URL: https://example.com/pricing"
 
 
 # ── build_researcher_spec standalone ────────────────

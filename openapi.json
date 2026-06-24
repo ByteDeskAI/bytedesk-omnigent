@@ -4021,7 +4021,7 @@
     },
     "/v1/agents/{agent_id}/image": {
       "get": {
-        "description": "Return the editable image of a template agent.\n\n:param request: Incoming request (for auth).\n:param agent_id: Template agent id, e.g. ``\"ag_abc123\"``.\n:returns: The :class:`AgentImage` editable surface.\n:raises OmnigentError: If the agent is missing or session-scoped.",
+        "description": "Return the editable image of a template agent.\n\nEmits the agent ``version`` as a strong ``ETag`` header so an\neditor can round-trip it as ``If-Match`` on the PUT for optimistic\nconcurrency (BDP-2412 / ADR-0150); the version is also in the body.\n\n:param request: Incoming request (for auth).\n:param response: Response (to set the ``ETag`` header).\n:param agent_id: Template agent id, e.g. ``\"ag_abc123\"``.\n:returns: The :class:`AgentImage` editable surface.\n:raises OmnigentError: If the agent is missing or session-scoped.",
         "operationId": "get_agent_image_v1_agents__agent_id__image_get",
         "parameters": [
           {
@@ -4110,6 +4110,323 @@
         "summary": "Put Agent Image",
         "tags": [
           "agents"
+        ]
+      }
+    },
+    "/v1/config/descriptors": {
+      "get": {
+        "description": "The self-describing catalog \u2014 integrators codegen off this.",
+        "operationId": "list_descriptors_v1_config_descriptors_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "scope",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scope"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tier",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tier"
+            }
+          },
+          {
+            "in": "query",
+            "name": "writable",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Writable"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Descriptors"
+      }
+    },
+    "/v1/config/descriptors/{key}": {
+      "get": {
+        "operationId": "get_descriptor_v1_config_descriptors__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Descriptor"
+      }
+    },
+    "/v1/config/events": {
+      "get": {
+        "description": "SSE stream of ``config.changed`` events \u2014 metadata only (BDP-2418).\n\nIntegrators and the ap-web admin subscribe to keep their config views\nlive; a subscriber that needs the new value re-GETs ``/config/values/{key}``\n(still secret-redacted), so the stream can't leak a secret.",
+        "operationId": "config_events_v1_config_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Config Events"
+      }
+    },
+    "/v1/config/values/{key}": {
+      "get": {
+        "description": "Current value; a secret returns ``{name, present, source}`` only.",
+        "operationId": "get_value_v1_config_values__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Value"
+      },
+      "put": {
+        "description": "Write a config value through the enforcement port (BDP-2417).\n\nBody ``{\"value\": ...}``; optional ``If-Match`` ETag for a guarded\ncompare-and-swap. Tier-0 \u2192 409, floor/schema violation \u2192 400, stale\nIf-Match \u2192 412 \u2014 all enforced server-side at the RegistryConfigService\nchoke point (a raw-API caller is governed identically to the UI).",
+        "operationId": "put_value_v1_config_values__key__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agent",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent"
+            }
+          },
+          {
+            "in": "query",
+            "name": "session",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Value"
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "description": "Subscribe to typed lifecycle events for the caller (BDP-2394, ADR-0149).\n\nA cross-cutting Publish-Subscribe channel (GoF Observer): the consumer\nreceives typed Event Messages \u2014 e.g. ``session.created`` \u2014 for sessions\naccessible to it, instead of hand-wiring a callback per event type. Pass\n``?types=a,b`` to narrow to specific types (EIP Message Filter). SSE with\na 20s heartbeat; live-tail only (reconcile via the REST snapshots on\nconnect, like the per-session stream).\n\n:param request: The FastAPI request, used to detect disconnect.\n:param types: Optional comma-separated event-type allowlist, e.g.\n    ``\"session.created\"``. Empty/absent yields every type.\n:returns: An SSE :class:`StreamingResponse` of typed events.",
+        "operationId": "subscribe_events_v1_events_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "types",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Types"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Subscribe Events",
+        "tags": [
+          "sessions"
         ]
       }
     },
@@ -4627,6 +4944,148 @@
           }
         },
         "summary": "Receive"
+      }
+    },
+    "/v1/integration-capabilities": {
+      "get": {
+        "description": "List integration blueprints ordered by product priority.",
+        "operationId": "list_capabilities_v1_integration_capabilities_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "communication",
+                    "project_management",
+                    "knowledge",
+                    "developer",
+                    "crm_support",
+                    "commerce_billing",
+                    "workflow_harness"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Capabilities"
+      }
+    },
+    "/v1/integration-capabilities/{slug}": {
+      "get": {
+        "description": "Read one integration blueprint by slug.",
+        "operationId": "get_capability_v1_integration_capabilities__slug__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Capability"
+      }
+    },
+    "/v1/integration-capabilities/{slug}/verification-matrix": {
+      "get": {
+        "description": "Compile rollout verification gates for one integration blueprint.",
+        "operationId": "get_capability_verification_matrix_v1_integration_capabilities__slug__verification_matrix_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "slug",
+            "required": true,
+            "schema": {
+              "title": "Slug",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Capability Verification Matrix"
       }
     },
     "/v1/me": {
@@ -5436,6 +5895,69 @@
           }
         },
         "summary": "Get Session Agent Contents",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/await": {
+      "post": {
+        "description": "Synchronous / await-completion (BDP-2392, ADR-0149).\n\nDispatch a message and return the assistant reply in ONE call \u2014\nthe \"ask and get the answer\" idiom (EIP Request-Reply +\nCorrelation Identifier). This is an OPTIONAL convenience: the\nasync ``POST /events`` path is unchanged, and a consumer that\nwants streaming/async still uses it.\n\nThe dispatch reuses the exact async path (so steering, policies,\nand persistence behave identically); this handler then awaits the\nnew assistant message bound to THIS turn, bounded by ``timeout_s``.\nA turn that does not complete in time returns 504 \u2014 the async\nturn keeps running and its reply is still readable via\n``GET /sessions/{id}/items``.\n\n:param body: A ``\"message\"`` :class:`SessionEventInput`, e.g.\n    ``{\"type\": \"message\", \"data\": {\"role\": \"user\",\n    \"content\": [{\"type\": \"input_text\", \"text\": \"Hi\"}]}}``.\n:param timeout_s: Max seconds to await completion (1\u2013600).\n:returns: ``{\"status\": \"completed\", \"item_id\", \"reply\"}``.\n:raises HTTPException: 422 for a non-message event; 504 on timeout.",
+        "operationId": "await_session_message_v1_sessions__session_id__await_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "timeout_s",
+            "required": false,
+            "schema": {
+              "default": 120.0,
+              "maximum": 600.0,
+              "minimum": 1.0,
+              "title": "Timeout S",
+              "type": "number"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SessionEventInput"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Await Session Message",
         "tags": [
           "sessions"
         ]

@@ -11,10 +11,12 @@ import pytest
 
 from omnigent.runtime.executors import (
     ContextWindowExceeded,
+    Executor,
     ExecutorError,
     NativeToolOutput,
     ReasoningChunk,
     TextChunk,
+    ToolCallInProgress,
     ToolCallRequested,
     TurnCancelled,
     TurnComplete,
@@ -36,6 +38,12 @@ from omnigent.runtime.executors import (
             name="get_weather",
             arguments={"city": "London"},
         ),
+        ToolCallInProgress(
+            call_id="call_abc",
+            name="get_weather",
+            arguments={"city": "London"},
+            is_client_side=True,
+        ),
         TurnComplete(text="Done."),
         TurnComplete(text=None),
         TurnCancelled(reason="user_cancelled", partial_text="I was saying"),
@@ -50,6 +58,7 @@ from omnigent.runtime.executors import (
         "reasoning_chunk",
         "native_tool_output",
         "tool_call_requested",
+        "tool_call_in_progress",
         "turn_complete_with_text",
         "turn_complete_no_text",
         "turn_cancelled_with_partial_text",
@@ -109,6 +118,23 @@ def test_dict_to_event_unknown_type_raises() -> None:
 
 
 # ── ToolCallObserved roundtrip (separate — more fields) ─────────
+
+
+def test_executor_default_capability_methods() -> None:
+    """Base executor defaults expose unknown limits and non-atomic turns."""
+
+    class _StubExecutor(Executor):
+        @classmethod
+        def from_spec(cls, _spec: object) -> _StubExecutor:
+            return cls()
+
+        async def run_turn(self, *_args: object, **_kwargs: object):
+            if False:  # pragma: no cover
+                yield
+
+    executor = _StubExecutor()
+    assert executor.max_context_tokens() is None
+    assert executor.run_turn_as_step() is False
 
 
 def test_tool_call_observed_serialization_roundtrip() -> None:

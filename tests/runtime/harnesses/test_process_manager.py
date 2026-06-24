@@ -29,8 +29,6 @@ import shutil
 import signal
 import sys
 import tempfile
-import uuid
-from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -46,78 +44,6 @@ from omnigent.runtime.harnesses.process_manager import (
 
 _TEST_HARNESS_NAME = "test"
 _TEST_HARNESS_MODULE = "tests.runtime.harnesses._test_harness"
-
-
-@pytest.fixture
-def register_test_harness() -> Iterator[None]:
-    """
-    Add the test fixture harness to ``_HARNESS_MODULES`` for the
-    test, removing it on teardown so other tests see a clean
-    registry.
-
-    :yields: Nothing — fixture exists for the side effect.
-    """
-    _HARNESS_MODULES[_TEST_HARNESS_NAME] = _TEST_HARNESS_MODULE
-    try:
-        yield
-    finally:
-        _HARNESS_MODULES.pop(_TEST_HARNESS_NAME, None)
-
-
-@pytest.fixture
-def short_tmp_parent() -> Iterator[Path]:
-    """
-    Per-test parent directory under a short writable temp root.
-
-    macOS limits AF_UNIX socket paths to ~104 characters; pytest's
-    :data:`tmp_path` resolves to ``/private/var/folders/...``
-    which already eats most of that budget. Use a short
-    ``/tmp/omni-pm-<short_uuid>`` parent when possible, falling
-    back to :func:`tempfile.gettempdir` for sandboxes where the
-    host's real ``/tmp`` is not writable.
-    """
-    roots = [Path("/tmp")]
-    temp_root = Path(tempfile.gettempdir())
-    if temp_root not in roots:
-        roots.append(temp_root)
-
-    last_error: OSError | None = None
-    for root in roots:
-        parent = root / f"omni-pm-{uuid.uuid4().hex[:8]}"
-        try:
-            parent.mkdir(mode=0o700)
-        except OSError as exc:
-            last_error = exc
-            continue
-        try:
-            yield parent
-        finally:
-            shutil.rmtree(parent, ignore_errors=True)
-        return
-
-    assert last_error is not None
-    raise last_error
-
-
-@pytest.fixture
-def manager(
-    short_tmp_parent: Path,
-    register_test_harness: None,
-) -> HarnessProcessManager:
-    """
-    Manager rooted in an isolated tmp dir, with the test harness
-    pre-registered.
-
-    Tests own ``await manager.start()`` / ``shutdown()`` so they
-    can assert state across the lifecycle.
-    """
-    return HarnessProcessManager(
-        # Aggressive defaults so reaper / orphan tests don't have
-        # to wait minutes. Individual tests override per-case.
-        idle_timeout_s=60.0,
-        reaper_interval_s=60.0,
-        tmp_parent=short_tmp_parent,
-    )
 
 
 # ── Boot / shutdown ─────────────────────────────────────────────

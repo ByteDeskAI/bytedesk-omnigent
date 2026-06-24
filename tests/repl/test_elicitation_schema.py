@@ -52,6 +52,17 @@ def test_returns_none_for_empty_or_missing_properties(
     )
 
 
+def test_returns_none_when_property_entry_is_not_dict() -> None:
+    """A malformed property value aborts auto-fill for the whole schema."""
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "bad": "not-a-schema-dict",
+        },
+    }
+    assert _build_elicitation_content_from_schema(schema) is None
+
+
 # ── Boolean properties ────────────────────────────────────────
 
 

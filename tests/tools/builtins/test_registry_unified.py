@@ -16,6 +16,8 @@ from __future__ import annotations
 import importlib
 import pkgutil
 
+import pytest
+
 import omnigent.tools.builtins as _builtins_pkg
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins import (
@@ -92,6 +94,23 @@ def test_get_builtin_tool_returns_none_for_unknown_name() -> None:
     assert get_builtin_tool("definitely_not_a_tool") is None
 
 
+@pytest.mark.parametrize(
+    "name",
+    [
+        "upload_file",
+        "list_files",
+        "download_file",
+        "search_conversations",
+        "export_agent",
+    ],
+)
+def test_get_builtin_tool_lazy_factories(name: str) -> None:
+    """Lazy factory builtins instantiate without import cycles."""
+    tool = get_builtin_tool(name)
+    assert tool is not None
+    assert tool.name() == name
+
+
 def test_get_builtin_tool_instantiates_known_tools() -> None:
     """Instantiable tools produce a real Tool instance. Smoke
     test — if this breaks, every agent with `web_search`
@@ -163,6 +182,12 @@ def test_builtin_names_size_matches_registry() -> None:
                 "deliberation_find",
                 # BDP-2276 E2: self-learning routing over the outcome scoreboard.
                 "find_specialist",
+                # ByteDesk extension tools (ADR-0143 / BDP-2300 seam).
+                "bytedesk_confluence",
+                "bytedesk_github",
+                "bytedesk_jira",
+                "bytedesk_slack",
+                "resolve_assignee",
             }
         )
         == BUILTIN_NAMES

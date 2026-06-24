@@ -59,6 +59,8 @@ from omnigent.spec.types import (
     Phase,
     PhaseSelector,
     PolicyAction,
+    StateUpdate,
+    StateUpdateAction,
 )
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
@@ -392,6 +394,44 @@ async def test_accept_applies_labels(
     conv = conversation_store.get_conversation(engine.conversation_id)
     assert conv is not None
     assert conv.labels == {"integrity": "0"}
+
+
+@pytest.mark.asyncio
+async def test_accept_applies_state_updates(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """On accept, ASK-accumulated state_updates reach the policy engine."""
+    policy = _ask_policy("gate")
+    engine = _engine_with_policies(conversation_store, [policy])
+    recorder = _Recorder()
+    updates = [
+        StateUpdate(
+            key="approved_step",
+            action=StateUpdateAction.SET,
+            value="done",
+        )
+    ]
+    result = PolicyResult(
+        action=PolicyAction.ASK,
+        reason="please approve",
+        deciding_policy="gate",
+        state_updates=updates,
+    )
+
+    accepted = await _await_elicitation(
+        task_id="task_1",
+        root_task_id="task_1",
+        result=result,
+        phase=Phase.REQUEST,
+        content_preview="hello",
+        policy_engine=engine,
+        register=recorder.register,
+        emit=recorder.emit,
+        park=_accepting_park('{"action": "accept"}'),
+    )
+
+    assert accepted is True
+    assert engine.session_state["approved_step"] == "done"
 
 
 @pytest.mark.asyncio

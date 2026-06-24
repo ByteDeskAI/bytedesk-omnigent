@@ -10,6 +10,12 @@ vi.mock("@/components/icons/ClaudeIcon", () => ({
 vi.mock("@/components/icons/CodexIcon", () => ({
   CodexIcon: () => null,
 }));
+vi.mock("@/components/icons/GrokIcon", () => ({
+  GrokIcon: () => null,
+}));
+// @lobehub/ui's EmojiPicker imports @emoji-mart/data JSON without the
+// import-attribute Node 22+ requires; stub so agent-picker tests load.
+vi.mock("@emoji-mart/data", () => ({ default: { categories: [], emojis: {} } }));
 
 // Radix UI primitives (DropdownMenu, etc.) call these pointer-capture and
 // scroll APIs that jsdom doesn't implement. Stub them so component tests

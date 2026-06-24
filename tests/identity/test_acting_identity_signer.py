@@ -56,6 +56,21 @@ def test_unconfigured_signer_returns_none():
     assert HmacAssertionSigner(None).sign({"user_id": "alice"}) is None
 
 
+def test_signer_accepts_bytes_secret():
+    token = HmacAssertionSigner(b"byte-secret").sign(
+        {"user_id": "alice", "exp": time.time() + 300}
+    )
+    assert HmacAssertionVerifier(b"byte-secret").verify(token) is not None
+
+
+def test_signer_from_env_reads_secret(monkeypatch):
+    monkeypatch.setenv("OMNIGENT_ASSERTION_HMAC_SECRET", "env-secret")
+    token = HmacAssertionSigner.from_env().sign(
+        {"user_id": "alice", "exp": time.time() + 300}
+    )
+    assert HmacAssertionVerifier("env-secret").verify(token) is not None
+
+
 def test_wrong_secret_does_not_verify():
     token = _signer(secret="one").sign({"user_id": "alice", "exp": time.time() + 300})
     assert HmacAssertionVerifier("two").verify(token) is None

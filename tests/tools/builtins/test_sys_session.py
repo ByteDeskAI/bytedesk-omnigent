@@ -19,7 +19,14 @@ from dataclasses import dataclass
 
 import pytest
 
-from omnigent.entities.conversation import MessageData, NewConversationItem
+from omnigent.entities import Conversation
+from omnigent.entities.conversation import (
+    ConversationItem,
+    FunctionCallData,
+    FunctionCallOutputData,
+    MessageData,
+    NewConversationItem,
+)
 from omnigent.runtime import pending_elicitations
 from omnigent.session_lifecycle import CLOSED_LABEL_KEY, CLOSED_LABEL_VALUE
 from omnigent.spec.types import AgentSpec
@@ -27,14 +34,26 @@ from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
 from omnigent.tools.base import ToolContext
+from omnigent.tools.builtins import spawn as spawn_module
 from omnigent.tools.builtins.spawn import (
+    _ACTIVITY_MAX_CHARS,
     _CLOSED_TITLE_INFIX,
     _HISTORY_DEFAULT_TAIL,
     _HISTORY_MAX_TAIL,
     SysSessionCloseTool,
+    SysSessionCreateTool,
     SysSessionGetHistoryTool,
+    SysSessionGetInfoTool,
     SysSessionListTool,
     SysSessionSendTool,
+    _agent_title_from_conversation,
+    _clamp_tail_items,
+    _find_open_child_by_title,
+    _parse_session_args,
+    _project_activity_item,
+    _resolve_caller_tree,
+    _resolve_parent_conversation_id,
+    _truncate,
 )
 
 
@@ -819,8 +838,272 @@ def test_peek_empty_conversation_id_returns_error(session_fixture: _Fixture) -> 
     assert "conversation_id" in payload["error"]
 
 
-# Tree-scoping resolution via the parent task is exercised by
-# ``test_peek_returns_items_chronological`` (happy path) and
-# ``test_peek_out_of_tree_conversation_is_rejected`` (rejection
-# path). No standalone resolver test — the mechanism has no
-# observable behavior beyond those two outcomes.
+# ── spawn.py helper and schema coverage ───────────────────
+
+
+def test_resolve_parent_conversation_id_requires_active_workflow() -> None:
+    """Spawn tools refuse invocation when ``ctx.conversation_id`` is missing."""
+    ctx = ToolContext(task_id="task_x", agent_id="ag_x", conversation_id=None)
+    with pytest.raises(RuntimeError, match="conversation_id"):
+        _resolve_parent_conversation_id(ctx)
+
+
+def test_session_list_tool_identity_and_schema() -> None:
+    """``sys_session_list`` advertises name, description, and optional filter."""
+    assert SysSessionListTool.name() == "sys_session_list"
+    assert len(SysSessionListTool.description()) > 0
+    schema = SysSessionListTool().get_schema()
+    params = schema["function"]["parameters"]
+    assert schema["function"]["name"] == "sys_session_list"
+    assert params["required"] == []
+    assert "agent_name" in params["properties"]
+    assert params.get("additionalProperties") is False
+
+
+def test_session_list_returns_open_named_children(session_fixture: _Fixture) -> None:
+    """Happy path: open ``agent:title`` children appear in ``sub_agents``."""
+    raw = SysSessionListTool().invoke("{}", session_fixture.ctx)
+    payload = json.loads(raw)
+    assert payload["sessions"] == []
+    assert payload["sub_agents"] == [
+        {
+            "agent": "researcher",
+            "title": "auth",
+            "conversation_id": session_fixture.child_conv_id,
+        },
+    ]
+
+
+def test_session_list_skips_malformed_and_closed_titles(session_fixture: _Fixture) -> None:
+    """List filters out None titles, titles without ``:``, and tombstoned rows."""
+    session_fixture.conv_store.create_conversation(
+        kind="sub_agent",
+        title=None,
+        parent_conversation_id=session_fixture.parent_conv_id,
+    )
+    session_fixture.conv_store.create_conversation(
+        kind="sub_agent",
+        title="noColonTitle",
+        parent_conversation_id=session_fixture.parent_conv_id,
+    )
+    tombstoned = session_fixture.conv_store.create_conversation(
+        kind="sub_agent",
+        title=f"ghost:draft{_CLOSED_TITLE_INFIX}conv_tombstone",
+        parent_conversation_id=session_fixture.parent_conv_id,
+    )
+    assert tombstoned.id
+
+    raw = SysSessionListTool().invoke("{}", session_fixture.ctx)
+    payload = json.loads(raw)
+    ids = {entry["conversation_id"] for entry in payload["sub_agents"]}
+    assert session_fixture.child_conv_id in ids
+    assert len(payload["sub_agents"]) == 1
+
+
+def test_session_get_info_tool_identity_and_schema() -> None:
+    """Runner-dispatched ``sys_session_get_info`` exposes optional ``session_id``."""
+    assert SysSessionGetInfoTool.name() == "sys_session_get_info"
+    assert len(SysSessionGetInfoTool.description()) > 0
+    schema = SysSessionGetInfoTool().get_schema()
+    params = schema["function"]["parameters"]
+    assert schema["function"]["name"] == "sys_session_get_info"
+    assert params["required"] == []
+    assert "session_id" in params["properties"]
+    assert params.get("additionalProperties") is False
+
+
+def test_session_create_tool_identity_and_schema() -> None:
+    """Runner-dispatched ``sys_session_create`` advertises both launch modes."""
+    assert SysSessionCreateTool.name() == "sys_session_create"
+    assert len(SysSessionCreateTool.description()) > 0
+    schema = SysSessionCreateTool().get_schema()
+    params = schema["function"]["parameters"]
+    assert schema["function"]["name"] == "sys_session_create"
+    assert params["required"] == []
+    assert set(params["properties"]) == {"agent_id", "config_path", "title", "message"}
+    assert params.get("additionalProperties") is False
+
+
+def test_project_activity_item_covers_tool_and_message_shapes() -> None:
+    """Activity projection handles tool calls, tool results, and mixed content."""
+    call_item = ConversationItem(
+        id="item_call",
+        type="function_call",
+        status="completed",
+        response_id="resp_1",
+        created_at=1,
+        data=FunctionCallData(
+            agent="researcher",
+            name="sys_os_read",
+            arguments='{"path": "README.md"}',
+            call_id="call_1",
+        ),
+    )
+    output_item = ConversationItem(
+        id="item_out",
+        type="function_call_output",
+        status="completed",
+        response_id="resp_1",
+        created_at=2,
+        data=FunctionCallOutputData(call_id="call_1", output="file contents"),
+    )
+    # model_construct bypasses validation so we can exercise the
+    # isinstance(block, str) branch in _project_activity_item.
+    message_item = ConversationItem.model_construct(
+        id="item_msg",
+        type="message",
+        status="completed",
+        response_id="resp_1",
+        created_at=3,
+        data=MessageData.model_construct(
+            role="user",
+            content=[
+                {"type": "input_text", "text": "hello"},
+                "plain-string-block",
+                {"type": "output_text", "output_text": "via output_text key"},
+            ],
+        ),
+    )
+
+    call_proj = _project_activity_item(call_item)
+    assert call_proj["type"] == "tool_call"
+    assert call_proj["name"] == "sys_os_read"
+
+    output_proj = _project_activity_item(output_item)
+    assert output_proj["type"] == "tool_result"
+    assert output_proj["content"] == "file contents"
+
+    msg_proj = _project_activity_item(message_item)
+    assert msg_proj["type"] == "text"
+    assert "hello" in msg_proj["content"]
+    assert "plain-string-block" in msg_proj["content"]
+    assert "via output_text key" in msg_proj["content"]
+
+
+def test_truncate_caps_long_activity_fields() -> None:
+    """Oversize strings gain the ``[truncated]`` suffix at the activity cap."""
+    short = _truncate("short")
+    assert short == "short"
+    long_text = "x" * (_ACTIVITY_MAX_CHARS + 50)
+    clipped = _truncate(long_text)
+    assert clipped.endswith(" [truncated]")
+    assert len(clipped) == _ACTIVITY_MAX_CHARS + len(" [truncated]")
+
+
+def test_find_open_child_by_title_matches_open_row(session_fixture: _Fixture) -> None:
+    """Title lookup returns the open child and ignores closed siblings."""
+    found = _find_open_child_by_title(
+        parent_conversation_id=session_fixture.parent_conv_id,
+        sa_agent="researcher",
+        sa_title="auth",
+        conv_store=session_fixture.conv_store,
+    )
+    assert found is not None
+    assert found.id == session_fixture.child_conv_id
+
+    SysSessionCloseTool().invoke(
+        json.dumps({"conversation_id": session_fixture.child_conv_id}),
+        session_fixture.ctx,
+    )
+    assert (
+        _find_open_child_by_title(
+            parent_conversation_id=session_fixture.parent_conv_id,
+            sa_agent="researcher",
+            sa_title="auth",
+            conv_store=session_fixture.conv_store,
+        )
+        is None
+    )
+
+
+def test_agent_title_from_conversation_rejects_malformed_title() -> None:
+    """Malformed sub-agent titles fail loud instead of returning empty fields."""
+    bad = Conversation(
+        id="conv_bad",
+        created_at=0,
+        updated_at=0,
+        title="no-separator",
+        kind="sub_agent",
+        parent_conversation_id="conv_parent",
+        root_conversation_id="conv_root",
+    )
+    with pytest.raises(RuntimeError, match="malformed title"):
+        _agent_title_from_conversation(bad)
+
+
+def test_resolve_caller_tree_raises_when_conversation_row_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing caller rows surface as framework invariant violations."""
+    ctx = ToolContext(
+        task_id="task_missing",
+        agent_id="ag_missing",
+        conversation_id="conv_missing",
+    )
+
+    class _MissingStore:
+        def get_conversation(self, _conv_id: str) -> Conversation | None:
+            return None
+
+    monkeypatch.setattr(
+        "omnigent.runtime.get_conversation_store",
+        lambda: _MissingStore(),
+    )
+    with pytest.raises(RuntimeError, match="not found"):
+        _resolve_caller_tree(ctx)
+
+
+def test_clamp_tail_items_rejects_sub_one_values() -> None:
+    """``tail_items`` below 1 returns a validation error string."""
+    result = _clamp_tail_items(0)
+    assert isinstance(result, str)
+    payload = json.loads(result)
+    assert "tail_items must be >= 1" in payload["error"]
+
+
+def test_parse_session_args_rejects_non_object_json() -> None:
+    """Non-object JSON arguments return a structured parser error."""
+    result = _parse_session_args(
+        json.dumps(["not", "an", "object"]),
+        required=("conversation_id",),
+        tool_name="sys_session_get_history",
+    )
+    assert isinstance(result, str)
+    payload = json.loads(result)
+    assert payload["error"] == "sys_session_get_history arguments must be a JSON object"
+
+
+def test_close_returns_busy_error_when_child_is_active(
+    session_fixture: _Fixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the busy helper fires, close propagates ``sub_agent_busy``."""
+    busy_payload = json.dumps({"error": "sub_agent_busy", "conversation_id": "conv_x"})
+    monkeypatch.setattr(spawn_module, "_busy_check_or_none", lambda **_: busy_payload)
+
+    raw = SysSessionCloseTool().invoke(
+        json.dumps({"conversation_id": session_fixture.child_conv_id}),
+        session_fixture.ctx,
+    )
+    assert raw == busy_payload
+
+
+def test_peek_projects_truncated_tool_output(session_fixture: _Fixture) -> None:
+    """Peek truncates oversized tool output through the activity projector."""
+    long_output = "y" * (_ACTIVITY_MAX_CHARS + 100)
+    session_fixture.conv_store.append(
+        session_fixture.child_conv_id,
+        [
+            NewConversationItem(
+                type="function_call_output",
+                response_id="resp_trunc",
+                data=FunctionCallOutputData(call_id="call_trunc", output=long_output),
+            ),
+        ],
+    )
+    raw = SysSessionGetHistoryTool().invoke(
+        json.dumps({"conversation_id": session_fixture.child_conv_id, "tail_items": 1}),
+        session_fixture.ctx,
+    )
+    items = json.loads(raw)["items"]
+    assert items[-1]["content"].endswith(" [truncated]")

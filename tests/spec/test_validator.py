@@ -15,6 +15,7 @@ from omnigent.spec.types import (
     MCPServerConfig,
     ModalityConfig,
     SkillSpec,
+    ToolRuntime,
     ToolsConfig,
 )
 from omnigent.spec.validator import validate
@@ -715,3 +716,156 @@ def test_os_env_no_validation_when_absent() -> None:
     result = validate(spec)
     os_env_errors = [e for e in result.errors if e.path.startswith("os_env")]
     assert os_env_errors == [], f"absent os_env should not produce errors, got: {result.errors}"
+
+
+# ── Remaining validator branches ────────────────────────────────
+
+
+def test_invalid_executor_type_rejected() -> None:
+    spec = _minimal_spec(executor=ExecutorSpec(type="bogus", config={}))
+    result = validate(spec)
+    assert not result.valid
+    assert any(e.path == "executor.type" for e in result.errors)
+
+
+def test_claude_sdk_rejects_connection_and_compaction() -> None:
+    spec = _minimal_spec(
+        executor=ExecutorSpec(type="claude_sdk"),
+        llm=LLMConfig(model="claude-sonnet-4", connection={"api_key": "sk-test"}),
+        compaction=CompactionConfig(),
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any(e.path == "executor.connection" for e in result.errors)
+    assert any(e.path == "compaction" for e in result.errors)
+
+
+def test_llm_and_executor_model_disagreement_rejected() -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        executor=ExecutorSpec(
+            type="omnigent",
+            model="model-a",
+            config={"harness": "claude-sdk"},
+        ),
+        llm=LLMConfig(model="model-b"),
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any(e.path == "executor.model" for e in result.errors)
+
+
+def test_mcp_http_rejects_stdio_only_fields() -> None:
+    spec = _minimal_spec(
+        mcp_servers=[
+            MCPServerConfig(
+                name="mixed",
+                transport="http",
+                url="http://mcp.example.com",
+                args=["-y", "pkg"],
+            ),
+            MCPServerConfig(
+                name="envy",
+                transport="http",
+                url="http://mcp.example.com/env",
+                env={"TOKEN": "x"},
+            ),
+        ]
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any("mcp_servers[0].args" in e.path for e in result.errors)
+    assert any("mcp_servers[1].env" in e.path for e in result.errors)
+
+
+def test_mcp_stdio_rejects_headers_and_unknown_transport() -> None:
+    spec = _minimal_spec(
+        mcp_servers=[
+            MCPServerConfig(
+                name="hdr",
+                transport="stdio",
+                command="npx",
+                headers={"Authorization": "Bearer x"},
+            ),
+            MCPServerConfig(name="weird", transport="grpc", command="tool"),
+        ]
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any("mcp_servers[0].headers" in e.path for e in result.errors)
+    assert any("mcp_servers[1].transport" in e.path for e in result.errors)
+
+
+def test_mcp_name_collides_with_reserved_builtin() -> None:
+    spec = _minimal_spec(
+        mcp_servers=[MCPServerConfig(name="web_fetch", transport="http", url="http://x")]
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any("reserved builtin tool name" in e.message for e in result.errors)
+
+
+def test_compaction_threshold_and_recent_window_bounds() -> None:
+    spec = _minimal_spec(
+        compaction=CompactionConfig(trigger_threshold=1.5, recent_window=-1),
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any(e.path == "compaction.trigger_threshold" for e in result.errors)
+    assert any(e.path == "compaction.recent_window" for e in result.errors)
+
+
+def test_duplicate_sub_agent_names_across_tree() -> None:
+    duplicate = _minimal_spec(
+        name="worker",
+        llm=LLMConfig(model="openai/gpt-4o-mini", connection={"api_key": "sk-test"}),
+    )
+    spec = _minimal_spec(
+        sub_agents=[
+            duplicate,
+            _minimal_spec(
+                name="worker",
+                llm=LLMConfig(model="openai/gpt-4o-mini", connection={"api_key": "sk-test"}),
+            ),
+        ],
+    )
+    result = validate(spec)
+    assert not result.valid
+    assert any("duplicate sub-agent name" in e.message for e in result.errors)
+
+
+def test_local_tool_builtin_collision_and_runtime_invariants() -> None:
+    spec = _minimal_spec(
+        local_tools=[
+            LocalToolInfo(name="web_fetch", path="tools/x.py", language="python"),
+            LocalToolInfo(name="serverless", path=None, language="python", runtime=ToolRuntime.SERVER),
+            LocalToolInfo(
+                name="client_bad_path",
+                path="tools/client.py",
+                language="python",
+                runtime=ToolRuntime.CLIENT,
+            ),
+            LocalToolInfo(
+                name="client_no_schema",
+                path=None,
+                language="python",
+                runtime=ToolRuntime.CLIENT,
+                parameters=None,
+            ),
+        ]
+    )
+    result = validate(spec)
+    assert not result.valid
+    paths = {e.path for e in result.errors}
+    assert "local_tools[0].name" in paths
+    assert "local_tools[1].path" in paths
+    assert "local_tools[2].path" in paths
+    assert "local_tools[3].parameters" in paths
+
+
+def test_capabilities_slugs_must_be_unique_nonempty_strings() -> None:
+    spec = _minimal_spec(capabilities=["  ", "alpha", "alpha"])
+    result = validate(spec)
+    assert not result.valid
+    assert any(e.path == "capabilities[0]" for e in result.errors)
+    assert any("duplicate capability slug" in e.message for e in result.errors)

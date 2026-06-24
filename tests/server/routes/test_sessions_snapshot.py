@@ -445,6 +445,9 @@ async def test_session_snapshot_uses_router_when_singleton_unset(
             self.resolved_for.append(conversation_id)
             return RoutedRunner(runner_id="runner_test", client=fake_client)  # type: ignore[arg-type]
 
+        async def aclient_for_session_resources(self, conversation_id: str) -> RoutedRunner:
+            return self.client_for_session_resources(conversation_id)
+
     fake_router = _FakeRouter()
 
     # Singleton stays None (production-shape router-only deployment);
@@ -719,6 +722,9 @@ async def test_session_snapshot_prefers_router_over_singleton(
     class _FakeRouter:
         def client_for_session_resources(self, conversation_id: str) -> RoutedRunner:
             return RoutedRunner(runner_id="runner_test", client=router_client)  # type: ignore[arg-type]
+
+        async def aclient_for_session_resources(self, conversation_id: str) -> RoutedRunner:
+            return self.client_for_session_resources(conversation_id)
 
     monkeypatch.setattr(
         "omnigent.runtime.get_runner_router",

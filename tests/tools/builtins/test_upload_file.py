@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from omnigent.tools.base import ToolContext
-from omnigent.tools.builtins.upload_file import UploadFileTool
+from omnigent.tools.builtins.upload_file import UploadFileTool, safe_resolve
 
 
 @pytest.fixture()
@@ -44,6 +44,46 @@ def tool_ctx(workspace: Path) -> ToolContext:
         workspace=workspace,
         conversation_id="conv_001",
     )
+
+
+def test_upload_file_name_and_schema() -> None:
+    """Identity helpers are wired for tool registration."""
+    assert UploadFileTool.name() == "upload_file"
+    assert "download" in UploadFileTool.description().lower()
+    schema = UploadFileTool().get_schema()
+    assert schema["function"]["name"] == "upload_file"
+    assert schema["function"]["parameters"]["required"] == ["path"]
+
+
+def test_safe_resolve_rejects_symlink_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Symlinks whose strict target escapes the workspace are rejected."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside.txt"
+    outside.write_text("secret")
+    link = workspace / "link.txt"
+    link.symlink_to(outside)
+
+    # ``Path.resolve()`` follows symlinks before ``is_symlink()`` runs, so
+    # exercise the defensive branch by preserving the symlink path on the
+    # non-strict resolve while still resolving the strict target outside.
+    original_resolve = Path.resolve
+
+    def _resolve(self: Path, *args: object, **kwargs: object) -> Path:
+        strict = kwargs.get("strict", False)
+        if self == link and strict:
+            return outside.resolve()
+        if self == link:
+            return link
+        return original_resolve(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", _resolve)
+
+    with pytest.raises(ValueError, match="Symlink escapes workspace"):
+        safe_resolve("link.txt", workspace)
 
 
 def test_upload_file_stores_and_returns_file_id(
@@ -166,6 +206,51 @@ def test_upload_file_rejects_missing_file(
 
     assert "Error" in result
     assert "not found" in result.lower()
+
+
+def test_upload_file_requires_workspace(tool_ctx: ToolContext) -> None:
+    """Without a workspace root the tool cannot resolve relative paths."""
+    tool = UploadFileTool()
+    ctx = ToolContext(
+        task_id=tool_ctx.task_id,
+        agent_id=tool_ctx.agent_id,
+        workspace=None,
+        conversation_id=tool_ctx.conversation_id,
+    )
+    result = tool.invoke('{"path": "chart.png"}', ctx)
+    assert result == "Error: no workspace available"
+
+
+def test_upload_file_requires_session_id(
+    workspace: Path,
+    tool_ctx: ToolContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Uploads are scoped to a conversation/session id."""
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: object())
+    monkeypatch.setattr("omnigent.runtime.get_artifact_store", lambda: object())
+    tool = UploadFileTool()
+    ctx = ToolContext(
+        task_id=tool_ctx.task_id,
+        agent_id=tool_ctx.agent_id,
+        workspace=workspace,
+        conversation_id=None,
+    )
+    result = tool.invoke('{"path": "chart.png"}', ctx)
+    assert result == "Error: upload_file requires a session id"
+
+
+def test_upload_file_requires_file_store(
+    workspace: Path,
+    tool_ctx: ToolContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deployments without file/artifact stores must fail closed."""
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: None)
+    monkeypatch.setattr("omnigent.runtime.get_artifact_store", lambda: None)
+    tool = UploadFileTool()
+    result = tool.invoke('{"path": "chart.png"}', tool_ctx)
+    assert result == "Error: file store not available"
 
 
 def test_upload_file_rejects_empty_path(

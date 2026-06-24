@@ -76,6 +76,16 @@ def test_filesystem_source_missing_ref_raises(tmp_path: Path) -> None:
         src.load(str(tmp_path / "nope"))
 
 
+def test_filesystem_source_list_empty_without_root() -> None:
+    assert FilesystemSpecSource(root=None).list() == []
+
+
+def test_filesystem_source_list_empty_when_root_not_directory(tmp_path: Path) -> None:
+    not_dir = tmp_path / "file.txt"
+    not_dir.write_text("x")
+    assert FilesystemSpecSource(root=not_dir).list() == []
+
+
 def test_filesystem_source_list_enumerates_bundles(tmp_path: Path) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "a" / "config.yaml").write_text("spec_version: 1\n")

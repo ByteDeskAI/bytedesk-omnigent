@@ -72,6 +72,15 @@ def test_validate_no_json() -> None:
     assert not r.valid and r.value is None and r.errors
 
 
+def test_validate_invalid_schema_definition() -> None:
+    """A malformed schema definition surfaces as an output_schema error."""
+    bad_schema = {"type": 123}
+    r = validate_output(bad_schema, '{"ok": true}')
+    assert not r.valid
+    assert r.value == {"ok": True}
+    assert r.errors and r.errors[0].startswith("invalid output_schema:")
+
+
 def test_extract_json_prefers_fence_then_whole_then_span() -> None:
     assert extract_json('```json\n{"a":1}\n```')[1] == {"a": 1}
     assert extract_json('{"a":1}')[1] == {"a": 1}

@@ -20,6 +20,8 @@ from omnigent.repl._event_tape import (
     Stage,
     TapeEntry,
     _format_payload,
+    _format_payload_detail,
+    _render_formatted_items,
     _snapshot_event,
     _summarize_formatted_item,
     _truncate_deep,
@@ -844,3 +846,217 @@ def test_log_entry_jsonl_includes_payload(
     assert record["payload"] is not None
     assert record["payload"]["delta"] == "hello"
     assert record["payload"]["type"] == "output_text.delta"
+
+
+# ── Remaining edge paths (batch25) ─────────────────────────────────────
+
+
+def test_snapshot_event_model_dump_failure_falls_through() -> None:
+    """Pydantic-style ``model_dump`` exceptions fall through when ``vars()`` fails."""
+
+    class _BoomDump:
+        __slots__ = ()
+
+        def model_dump(self) -> dict[str, object]:
+            raise RuntimeError("dump failed")
+
+    assert _snapshot_event(_BoomDump()) is None
+
+
+def test_snapshot_event_asdict_failure_falls_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``dataclasses.asdict`` failures fall through to ``vars()`` / None."""
+    import dataclasses
+
+    class _SlottedStub:
+        __slots__ = ("value",)
+
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+    event = _SlottedStub("x")
+    monkeypatch.setattr(
+        dataclasses,
+        "is_dataclass",
+        lambda obj: isinstance(obj, _SlottedStub),
+    )
+    monkeypatch.setattr(
+        dataclasses,
+        "asdict",
+        lambda _event: (_ for _ in ()).throw(RuntimeError("asdict failed")),
+    )
+    assert _snapshot_event(event) is None
+
+
+def test_build_tape_targets_truncates_long_type_names() -> None:
+    """Sidebar labels truncate event type names longer than 22 characters."""
+    tape = EventTape()
+    long_name = "A" * 30
+    entry = tape.record_raw(_FakeTextDelta(delta="x"))
+    entry.raw_event_type = long_name
+    targets = build_tape_targets(tape)
+    assert targets[0].label.startswith("A" * 20 + "…")
+
+
+def test_build_tape_targets_yellow_icon_for_translated_stage() -> None:
+    """Translated-but-not-rendered events use the yellow sidebar icon."""
+    tape = EventTape()
+    e1 = tape.record_raw(_FakeTextDelta(delta="x"))
+    tape.update_translation(e1, _FakeSDKTextDelta(delta="x"))
+    assert build_tape_targets(tape)[0].icon == "🟡"
+
+
+def test_build_tape_detail_not_yet_translated() -> None:
+    """Detail panel shows placeholder when translation has not run."""
+    tape = EventTape()
+    tape.record_raw(_FakeTextDelta(delta="x"))
+    renderable = build_tape_detail(tape, "0", _FakeFmt())
+    from rich.console import Console
+
+    console = Console(width=120, no_color=True, file=None)
+    with console.capture() as capture:
+        console.print(renderable)
+    assert "(not yet translated)" in capture.get()
+
+
+def test_build_tape_detail_formatter_produced_nothing() -> None:
+    """Translated events with no formatter output show the not-rendered reason."""
+    tape = EventTape()
+    e1 = tape.record_raw(_FakeTextDelta(delta="x"))
+    tape.update_translation(e1, _FakeSDKTextDelta(delta="x"))
+    renderable = build_tape_detail(tape, "0", _FakeFmt())
+    from rich.console import Console
+
+    console = Console(width=120, no_color=True, file=None)
+    with console.capture() as capture:
+        console.print(renderable)
+    assert "formatter produced nothing" in capture.get()
+
+
+def test_build_tape_detail_rendered_without_formatter_capture() -> None:
+    """Rendered events without stored formatter items explain the capture gap."""
+    tape = EventTape()
+    e1 = tape.record_raw(_FakeTextDelta(delta="x"))
+    tape.update_translation(e1, _FakeSDKTextDelta(delta="x"))
+    tape.mark_rendered(e1)
+    renderable = build_tape_detail(tape, "0", _FakeFmt())
+    from rich.console import Console
+
+    console = Console(width=120, no_color=True, file=None)
+    with console.capture() as capture:
+        console.print(renderable)
+    assert "_render_history_item" in capture.get()
+
+
+def test_build_tape_detail_empty_render_and_missing_payload() -> None:
+    """Whitespace-only items and missing payloads render explicit placeholders."""
+    tape = EventTape()
+    e1 = tape.record_raw(_FakeTextDelta(delta="x"))
+    tape.update_translation(e1, _FakeSDKTextDelta(delta="x"))
+    tape.update_format(e1, [_FakeStreamingText(text="   ")])
+    tape.mark_rendered(e1)
+    e1.raw_payload = None
+    renderable = build_tape_detail(tape, "0", _FakeFmt())
+    from rich.console import Console
+
+    console = Console(width=120, no_color=True, file=None)
+    with console.capture() as capture:
+        console.print(renderable)
+    text = capture.get()
+    assert "(empty render)" in text
+    assert "(payload not captured)" in text
+
+
+def test_build_tape_detail_flags_large_inter_event_gap() -> None:
+    """Gaps at or above the threshold show the warning flag in the detail panel."""
+    tape = EventTape()
+    e1 = TapeEntry(
+        ts=time.time(),
+        delta_ms=1500.0,
+        raw_event_type="_FakeTextDelta",
+        sdk_translation="_FakeSDKTextDelta",
+        stage_reached=Stage.RENDERED,
+        raw_payload={"delta": "x"},
+    )
+    tape._buf.append(e1)
+    renderable = build_tape_detail(tape, "0", _FakeFmt())
+    from rich.console import Console
+
+    console = Console(width=120, no_color=True, file=None)
+    with console.capture() as capture:
+        console.print(renderable)
+    assert "⚠ GAP" in capture.get()
+
+
+def test_render_formatted_items_stream_replace_and_render_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """StreamReplace renderables render; unprintable items show a failure label."""
+    from rich.console import Console
+    from rich.text import Text as RichText
+
+    @dataclass
+    class _StreamReplace:
+        renderable: object
+
+    real_print = Console.print
+    calls = 0
+
+    def _flaky_print(self: Console, renderable: object, *args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls >= 2:
+            raise RuntimeError("render failed")
+        return real_print(self, renderable, *args, **kwargs)
+
+    monkeypatch.setattr(Console, "print", _flaky_print)
+
+    preview = _render_formatted_items(
+        [
+            _StreamReplace(renderable=RichText("inner")),
+            object(),
+        ]
+    )
+    assert "inner" in preview
+    assert "render failed" in preview
+
+
+def test_format_payload_detail_falls_back_to_repr_on_json_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Detail payload formatting falls back to repr when JSON encoding fails."""
+    import omnigent.repl._event_tape as event_tape_mod
+
+    def _boom(*_args: object, **_kwargs: object) -> str:
+        raise TypeError("cannot encode")
+
+    monkeypatch.setattr(event_tape_mod.json, "dumps", _boom)
+    detail = _format_payload_detail({"key": "value"})
+    assert "value" in detail
+
+
+def test_format_payload_detail_caps_line_count() -> None:
+    """Detail payload formatting caps very long JSON output."""
+    huge = {f"k{i}": i for i in range(200)}
+    lines = _format_payload_detail(huge).splitlines()
+    assert any("more lines" in line for line in lines)
+
+
+def test_format_payload_json_failure_uses_repr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Overlay payload formatting falls back to repr when JSON encoding fails."""
+    import omnigent.repl._event_tape as event_tape_mod
+
+    def _boom(*_args: object, **_kwargs: object) -> str:
+        raise TypeError("cannot encode")
+
+    monkeypatch.setattr(event_tape_mod.json, "dumps", _boom)
+    result = _format_payload({"key": "value"})
+    assert "value" in result
+
+
+def test_truncate_deep_passes_through_scalar_values() -> None:
+    """Non-string scalars are returned unchanged by ``_truncate_deep``."""
+    assert _truncate_deep(42) == 42

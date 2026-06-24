@@ -1,9 +1,18 @@
 """Tests for the accountability tick: rebalance + escalate (BDP-2272 C4, ADR-0142)."""
 from __future__ import annotations
 
-from bytedesk_omnigent.accountability import run_accountability_tick
+import asyncio
+from contextlib import contextmanager
+from typing import Any
+
+import pytest
+
+import bytedesk_omnigent.maintenance as maintenance
+from bytedesk_omnigent.accountability import accountability_loop, run_accountability_tick
 from bytedesk_omnigent.goals import SqlAlchemyGoalStore
 from bytedesk_omnigent.peer import SqlAlchemyPeerMessageStore
+
+pytestmark_loop = pytest.mark.asyncio
 
 
 def _stores(tmp_path) -> tuple[SqlAlchemyGoalStore, SqlAlchemyPeerMessageStore]:
@@ -95,3 +104,93 @@ def test_escalation_fires_once_per_blocked_episode_not_every_tick(tmp_path) -> N
 
     assert third.escalated == 1
     assert len(peers.topic_feed(topic="accountability:escalation")) == 2
+
+
+@contextmanager
+def _fake_lock(acquired: bool):
+    yield acquired
+
+
+async def _run_accountability_one_tick(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    *,
+    acquired: bool = True,
+    manager_agent_id: str | None = "ag_mgr",
+) -> None:
+    """Drive exactly one ``accountability_loop`` iteration then cancel."""
+    goals, peers = _stores(tmp_path)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
+    monkeypatch.setattr("bytedesk_omnigent.peer.get_peer_message_store", lambda: peers)
+
+    calls = {"n": 0}
+
+    async def _sleep(_seconds: float) -> None:
+        calls["n"] += 1
+        if calls["n"] >= 2:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(maintenance.asyncio, "sleep", _sleep)
+    monkeypatch.setattr(
+        maintenance,
+        "advisory_lock",
+        lambda engine, key: _fake_lock(acquired),
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await accountability_loop(
+            manager_agent_id=manager_agent_id,
+            stall_seconds=3600,
+            interval_seconds=0,
+        )
+
+
+@pytest.mark.asyncio
+async def test_accountability_loop_runs_tick_under_lock(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The background loop invokes ``run_accountability_tick`` via ``to_thread``."""
+    goals, peers = _stores(tmp_path)
+    goal = goals.create_goal(title="loop stalled", now=100)
+    goals.claim_goal(goal_id=goal.id, owner_agent_id="ag_loop", now=100)
+
+    tick_calls: list[int] = []
+    real_tick = run_accountability_tick
+
+    def _recording_tick(*args, **kwargs):
+        tick_calls.append(1)
+        return real_tick(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "bytedesk_omnigent.accountability.loop.run_accountability_tick",
+        _recording_tick,
+    )
+    await _run_accountability_one_tick(monkeypatch, tmp_path)
+    assert tick_calls == [1]
+    assert goals.list_goals(status="open")
+
+
+@pytest.mark.asyncio
+async def test_accountability_loop_logs_nonzero_report(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tick that rebalances or escalates emits an info log line."""
+    import bytedesk_omnigent.accountability.loop as loop_mod
+
+    goals, peers = _stores(tmp_path)
+    goal = goals.create_goal(title="blocked loop", now=100)
+    goals.advance_goal(goal_id=goal.id, status="blocked", now=100)
+    logged: list[tuple[tuple[Any, ...], dict[str, Any]]] = []
+
+    def _capture_info(msg: str, *args: Any, **kwargs: Any) -> None:
+        logged.append(((msg, *args), kwargs))
+
+    monkeypatch.setattr(loop_mod._logger, "info", _capture_info)
+    await _run_accountability_one_tick(monkeypatch, tmp_path, manager_agent_id="ag_mgr")
+
+    assert logged
+    msg, rebalanced, escalated = logged[0][0]
+    assert msg == "accountability: rebalanced=%d escalated=%d"
+    assert escalated == 1

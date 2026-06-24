@@ -713,6 +713,54 @@ def test_resolve_content_type_no_filename_uses_fallback() -> None:
     assert _resolve_content_type(None, None) == "application/octet-stream"
 
 
+def test_session_id_from_block_prefers_conversation_id_alias() -> None:
+    """Blocks may carry ownership under either session or conversation id."""
+    from omnigent.runtime.content_resolver import _session_id_from_block
+
+    assert _session_id_from_block({"session_id": "conv_a"}) == "conv_a"
+    assert _session_id_from_block({"conversation_id": "conv_b"}) == "conv_b"
+    assert _session_id_from_block({"conversation_id": ""}) is None
+
+
+def test_resolve_file_uses_conversation_id_from_block_for_ownership() -> None:
+    """Session-scoped files resolve when the block carries ``conversation_id``."""
+    store = FakeFileStore(
+        files={
+            "file_scoped": StoredFile(
+                id="file_scoped",
+                created_at=1000,
+                filename="photo.png",
+                bytes=len(PNG_BYTES),
+                content_type="image/png",
+                session_id="conv_owned",
+            ),
+        }
+    )
+    artifact_store = FakeArtifactStore(blobs={"file_scoped": PNG_BYTES})
+    item = _make_conversation_item(
+        [
+            {
+                "type": "input_image",
+                "file_id": "file_scoped",
+                "conversation_id": "conv_owned",
+            }
+        ]
+    )
+    resolved = resolve_content_references([item], store, artifact_store)  # type: ignore[arg-type]
+    resolved_data = resolved[0].data
+    assert isinstance(resolved_data, MessageData)
+    assert "image_url" in resolved_data.content[0]
+
+
+def test_resolve_content_type_text_like_extensions_default_to_plain() -> None:
+    """Bare text-like extensions resolve to text/plain instead of octet-stream."""
+    from omnigent.runtime.content_resolver import _resolve_content_type
+
+    assert _resolve_content_type(None, "notes.txt") == "text/plain"
+    assert _resolve_content_type(None, "app.log") == "text/plain"
+    assert _resolve_content_type(None, "service.cfg") == "text/plain"
+
+
 def test_resolve_content_type_known_extension_uses_mimetypes() -> None:
     """Standard extensions (e.g. .pdf, .html) use mimetypes.guess_type."""
     from omnigent.runtime.content_resolver import _resolve_content_type

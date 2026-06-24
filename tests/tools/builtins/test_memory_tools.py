@@ -20,6 +20,7 @@ from omnigent.tools.builtins.memory import (
     MemoryAppendTool,
     MemoryCompartmentsListTool,
     MemoryQueryTool,
+    _resolve_owner,
 )
 
 
@@ -111,7 +112,107 @@ def test_query_routes_reinforcement_through_port(tmp_path, monkeypatch) -> None:
 
 def test_invalid_scope_errors(store) -> None:
     assert "error" in _append({"content": "x", "scope": "tenant"})
+    assert "error" in _query({"query": "x", "scope": "tenant"})
 
 
 def test_missing_content_errors(store) -> None:
     assert "error" in _append({"scope": "agent"})
+
+
+def test_memory_tool_identity_helpers() -> None:
+    """Registration helpers expose stable metadata for all memory tools."""
+    assert MemoryAppendTool.name() == "memory_append"
+    assert "recall" in MemoryAppendTool.description().lower()
+    assert MemoryAppendTool().get_schema()["function"]["name"] == "memory_append"
+
+    assert MemoryQueryTool.name() == "memory_query"
+    assert "salience" in MemoryQueryTool.description().lower()
+    query_params = MemoryQueryTool().get_schema()["function"]["parameters"]
+    assert query_params["required"] == ["query"]
+
+    assert MemoryCompartmentsListTool.name() == "memory_compartments_list"
+    assert "compartments" in MemoryCompartmentsListTool.description().lower()
+    assert (
+        MemoryCompartmentsListTool().get_schema()["function"]["parameters"]["required"]
+        == []
+    )
+
+
+def test_resolve_owner_team_and_agent_requirements() -> None:
+    """Owner resolution is server-derived per scope."""
+    ctx = _ctx("ag_maya")
+    assert _resolve_owner("team", ctx) == "team"
+    assert _resolve_owner("topic", ctx) == "shared"
+    assert _resolve_owner("agent", ctx) == "ag_maya"
+
+    no_agent = ToolContext(task_id="t", agent_id=None, conversation_id="c")
+    with pytest.raises(ValueError, match="agent identity"):
+        _resolve_owner("agent", no_agent)
+
+
+def test_team_scope_append_and_query_roundtrip(store) -> None:
+    """Team-scope memories are shared across agents."""
+    _append({"content": "standup at nine", "scope": "team", "name": "rituals"}, agent_id="ag_a")
+    res = _query(
+        {"query": "standup", "scope": "team", "name": "rituals"},
+        agent_id="ag_b",
+    )
+    assert len(res["results"]) == 1
+
+
+def test_append_without_agent_identity_errors(store) -> None:
+    """Agent-scope writes require a server-stamped agent id."""
+    ctx = ToolContext(task_id="t", agent_id=None, conversation_id="c")
+    result = json.loads(MemoryAppendTool().invoke('{"content": "x"}', ctx))
+    assert "agent identity" in result["error"]
+
+
+def test_query_missing_query_argument(store) -> None:
+    """Query tool rejects empty query strings."""
+    result = json.loads(MemoryQueryTool().invoke("{}", _ctx()))
+    assert result["error"] == "missing required 'query' argument"
+
+
+def test_query_empty_results_include_message(store) -> None:
+    """No hits return an explicit empty-results message."""
+    result = _query({"query": "definitely-not-stored"})
+    assert result["results"] == []
+    assert result["message"] == "No matching memories."
+
+
+def test_append_provider_value_error_surfaces(store, monkeypatch) -> None:
+    """Provider write failures round-trip as structured tool errors."""
+    from omnigent.runtime import get_memory_provider
+
+    provider = get_memory_provider()
+
+    def _boom(**_kwargs: object) -> str:
+        raise ValueError("weight out of range")
+
+    monkeypatch.setattr(provider, "write", _boom)
+    result = _append({"content": "bad weight", "weight": 99})
+    assert result["error"] == "weight out of range"
+
+
+def test_query_provider_value_error_surfaces(store, monkeypatch) -> None:
+    """Provider recall failures round-trip as structured tool errors."""
+    from omnigent.runtime import get_memory_provider
+
+    provider = get_memory_provider()
+
+    def _boom(**_kwargs: object) -> list[object]:
+        raise ValueError("invalid limit")
+
+    monkeypatch.setattr(provider, "recall", _boom)
+    result = _query({"query": "anything"})
+    assert result["error"] == "invalid limit"
+
+
+def test_compartments_list_without_agent_id_lists_shared_only(store) -> None:
+    """Without an agent id only team/topic compartments are listed."""
+    _append({"content": "shared", "scope": "topic", "name": "arch"}, agent_id="ag_maya")
+    ctx = ToolContext(task_id="t", agent_id=None, conversation_id="c")
+    out = json.loads(MemoryCompartmentsListTool().invoke("{}", ctx))
+    scopes = {c["scope"] for c in out["compartments"]}
+    assert "agent" not in scopes
+    assert "topic" in scopes or "team" in scopes
