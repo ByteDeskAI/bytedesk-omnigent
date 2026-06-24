@@ -155,6 +155,26 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class AsanaWebhookAdapter:
+    """Asana webhook adapter for ``POST /v1/ingress/asana``.
+
+    Asana signs delivery bodies with ``X-Hook-Signature`` using HMAC-SHA256 and
+    the webhook secret. Asana's native payload carries an ``events`` list rather
+    than a single event header, so the adapter reads a ByteDesk/edge-proxy
+    ``X-Asana-Event`` routing header when present and otherwise falls back to the
+    per-source ``"*"`` catch-all binding.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-hook-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-asana-event") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -179,6 +199,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("asana", AsanaWebhookAdapter)
     return registry
 
 
