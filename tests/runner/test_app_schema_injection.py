@@ -25,6 +25,18 @@ def _schema(name: str) -> dict[str, Any]:
     }
 
 
+def _nested_schema(name: str) -> dict[str, Any]:
+    """Nested OpenAI function-tool schema, as produced by Tool.get_schema()."""
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": "",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }
+
+
 def test_inject_appends_after_existing_tools() -> None:
     """MCP schemas land AFTER the Omnigent server's tools, in order.
 
@@ -111,6 +123,26 @@ def test_inject_skips_mcp_already_present() -> None:
     names = [t["name"] for t in body["tools"]]
     assert names == ["sys_os_read", "confluence_get_service_info", "confluence_search_pages"]
     assert names.count("confluence_get_service_info") == 1
+
+
+def test_inject_skips_nested_schema_already_present_after_normalize() -> None:
+    """Nested builtins de-dupe before the executor flattens dynamic tools.
+
+    Regression: the streaming path injects nested builtin schemas such as
+    ``load_skill``. If the injector only checks top-level ``name`` fields, the
+    executor later flattens both copies and Codex rejects the turn with
+    ``duplicate dynamic tool name: load_skill``.
+    """
+    from omnigent.runtime.harnesses._executor_adapter import _normalize_tool_schemas
+
+    body = {"tools": [_nested_schema("load_skill"), _nested_schema("sys_session_list")]}
+    mcp = [_nested_schema("load_skill"), _nested_schema("sys_agent_list")]
+
+    _inject_mcp_schemas(body, mcp)
+
+    names = [t.get("name") for t in _normalize_tool_schemas(body["tools"])]
+    assert names == ["load_skill", "sys_session_list", "sys_agent_list"]
+    assert names.count("load_skill") == 1
 
 
 # ---------------------------------------------------------------------------
