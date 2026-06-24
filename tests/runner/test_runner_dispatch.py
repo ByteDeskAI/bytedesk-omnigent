@@ -1256,9 +1256,18 @@ async def test_runner_post_returns_503_when_spec_resolver_fails(
 
 
 @pytest.mark.asyncio
-async def test_runner_stream_emits_failed_when_tool_spec_resolver_fails() -> None:
-    """Streaming spec resolver failures emit ``response.failed`` SSE.
+async def test_runner_stream_logs_lazy_spec_failure_and_relays_action_required(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Streaming turns log lazy spec failures at builtin injection, then relay tools.
 
+    The streaming ``proxy_stream`` path resolves the turn spec once before
+    posting to the harness (builtin schema injection). A resolver failure there
+    is logged and builtin injection is skipped; the idempotent lazy resolver
+    does not re-surface that failure when ``action_required`` arrives, so the
+    harness frame is still relayed for local dispatch.
+
+    :param caplog: Pytest log capture for the lazy-resolution warning.
     :returns: None.
     """
     chunks = [
@@ -1277,7 +1286,7 @@ async def test_runner_stream_emits_failed_when_tool_spec_resolver_fails() -> Non
         agent_id: str, session_id: str | None = None
     ) -> AgentSpec | None:
         """
-        Raise during local tool dispatch spec resolution.
+        Raise during lazy turn spec resolution.
 
         :param agent_id: Agent id requested by the runner.
         :returns: Never returns.
@@ -1293,29 +1302,27 @@ async def test_runner_stream_emits_failed_when_tool_spec_resolver_fails() -> Non
         spec_resolver=_failing_spec_resolver,
         server_client=NullServerClient(),  # type: ignore[arg-type]
     )
-    async with _runner_test_client(app) as http:
-        response = await http.post(
-            "/v1/sessions/conv_stream_spec_resolver_failed/events?stream=true",
-            json={
-                "type": "message",
-                "role": "user",
-                "harness": _TEST_HARNESS_NAME,
-                "agent_id": "ag_stream",
-                "model": "x",
-                "content": [],
-            },
-        )
+    with caplog.at_level(logging.WARNING, logger="omnigent.runner.app"):
+        async with _runner_test_client(app) as http:
+            response = await http.post(
+                "/v1/sessions/conv_stream_spec_resolver_failed/events?stream=true",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "harness": _TEST_HARNESS_NAME,
+                    "agent_id": "ag_stream",
+                    "model": "x",
+                    "content": [],
+                },
+            )
 
     assert response.status_code == 200
     assert "event: response.created" in response.text
-    assert "event: response.failed" in response.text
-    # The exception class (a safe, generic label) is still surfaced as the
-    # error ``type``; the failure message is a fixed client-safe string. The
-    # raw resolver exception text must not leak into the SSE stream (it is
-    # logged on the runner instead).
-    assert "RuntimeError" in response.text
-    assert "Failed to resolve the agent spec for this turn." in response.text
-    assert "stream spec resolver unavailable for ag_stream" not in response.text
+    assert "action_required" in response.text
+    assert "omnigent_runner_dispatched" in response.text
+    assert "lazy turn spec resolution failed" in caplog.text
+    assert "stream spec resolver unavailable for ag_stream" in caplog.text
+    assert "event: response.failed" not in response.text
 
 
 def test_build_spawn_env_applies_model_override(
