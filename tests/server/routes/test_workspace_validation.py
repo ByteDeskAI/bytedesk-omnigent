@@ -544,6 +544,117 @@ async def test_tilde_workspace_rejected(
 # ── Host failure handling ────────────────────────────────
 
 
+async def test_connection_lost_during_stat(
+    host_setup: tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify a dropped host connection during stat surfaces as validation error."""
+    registry, _, _ = host_setup
+
+    def _raise_connection_error(_conn: object, _data: str) -> None:
+        raise ConnectionError("connection replaced")
+
+    monkeypatch.setattr(registry, "send_text", _raise_connection_error)
+
+    with pytest.raises(WorkspaceValidationError) as exc_info:
+        await validate_workspace(
+            host_registry=registry,
+            host_id=_HOST_ID,
+            workspace="/Users/corey/foo",
+            spec_cwd=".",
+        )
+    assert "connection lost" in exc_info.value.message
+
+
+async def test_stat_timeout_surfaces(
+    host_setup: tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Verify a host that never replies to stat fails with a timeout message."""
+    registry, _, drain_task = host_setup
+    drain_task.cancel()
+    try:
+        await drain_task
+    except asyncio.CancelledError:
+        pass
+
+    async def _never_completes(_future: asyncio.Future[object], **_kwargs: object) -> None:
+        raise asyncio.TimeoutError
+
+    monkeypatch.setattr(asyncio, "wait_for", _never_completes)
+
+    with pytest.raises(WorkspaceValidationError) as exc_info:
+        await validate_workspace(
+            host_registry=registry,
+            host_id=_HOST_ID,
+            workspace="/Users/corey/foo",
+            spec_cwd=".",
+        )
+    assert "did not respond to stat" in exc_info.value.message
+
+
+async def test_empty_workspace_canonical_rejected(
+    host_setup: tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]],
+) -> None:
+    """Verify a workspace stat with no canonical_path is rejected."""
+    registry, _, _ = host_setup
+    registry._stat_replies_for_test["/Users/corey/foo"] = {  # type: ignore[attr-defined]
+        "status": "ok",
+        "exists": True,
+        "type": "directory",
+        "canonical_path": None,
+        "error": None,
+    }
+    with pytest.raises(WorkspaceValidationError) as exc_info:
+        await validate_workspace(
+            host_registry=registry,
+            host_id=_HOST_ID,
+            workspace="/Users/corey/foo",
+            spec_cwd=".",
+        )
+    assert "empty canonical_path for the workspace" in exc_info.value.message
+
+
+async def test_boundary_not_directory_rejected(
+    host_setup: tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]],
+) -> None:
+    """Verify a boundary path that exists as a file is rejected."""
+    registry, _, _ = host_setup
+    _set_stat(registry, "/Users/corey/foo", canonical="/Users/corey/foo")
+    _set_stat(registry, "/Users/corey/universe", exists=True, type_="file")
+    with pytest.raises(WorkspaceValidationError) as exc_info:
+        await validate_workspace(
+            host_registry=registry,
+            host_id=_HOST_ID,
+            workspace="/Users/corey/foo",
+            spec_cwd="/Users/corey/universe",
+        )
+    assert "not a directory" in exc_info.value.message
+
+
+async def test_empty_boundary_canonical_rejected(
+    host_setup: tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]],
+) -> None:
+    """Verify a boundary stat with no canonical_path is rejected."""
+    registry, _, _ = host_setup
+    _set_stat(registry, "/Users/corey/foo", canonical="/Users/corey/foo")
+    registry._stat_replies_for_test["/Users/corey/universe"] = {  # type: ignore[attr-defined]
+        "status": "ok",
+        "exists": True,
+        "type": "directory",
+        "canonical_path": None,
+        "error": None,
+    }
+    with pytest.raises(WorkspaceValidationError) as exc_info:
+        await validate_workspace(
+            host_registry=registry,
+            host_id=_HOST_ID,
+            workspace="/Users/corey/foo",
+            spec_cwd="/Users/corey/universe",
+        )
+    assert "empty canonical_path for the agent's boundary" in exc_info.value.message
+
+
 async def test_host_stat_failure_surfaced(
     host_setup: tuple[HostRegistry, _FakeWebSocket, asyncio.Task[None]],
 ) -> None:
