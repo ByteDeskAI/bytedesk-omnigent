@@ -325,6 +325,16 @@ def test_reconnect_under_new_owner_reowns_host_id(
     assert host_store.list_hosts(owner="alice@example.com") == []
 
 
+def test_list_all_hosts_returns_every_owner(host_store: HostStore) -> None:
+    """list_all_hosts spans owners — the org-shared pool source (ADR-0151)."""
+    host_store.upsert_on_connect(host_id="h_a", name="a", owner="alice@example.com")
+    host_store.upsert_on_connect(host_id="h_b", name="b", owner="bob@example.com")
+
+    assert {h.host_id for h in host_store.list_all_hosts()} == {"h_a", "h_b"}
+    # The per-owner query still isolates (private scope relies on it).
+    assert [h.host_id for h in host_store.list_hosts(owner="alice@example.com")] == ["h_a"]
+
+
 def test_set_offline(host_store: HostStore) -> None:
     """
     Verify that set_offline transitions a host from online to offline.

@@ -686,14 +686,18 @@ def multi_user_app(
 
 async def test_list_hosts_filters_by_owner(
     multi_user_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Verify that GET /v1/hosts only returns hosts owned by the
-    requesting user.
+    Under the ``private`` visibility scope (ADR-0151), GET /v1/hosts only
+    returns hosts owned by the requesting user.
 
-    If alice sees bob's host, the owner filter is broken and
-    host enumeration is possible across users.
+    If alice sees bob's host under ``private``, the owner filter is broken
+    and host enumeration is possible across users.
     """
+    monkeypatch.setattr(
+        "omnigent.server.host_access.host_visibility_scope", lambda: "private"
+    )
     _app, _reg, host_store, _cs = multi_user_app
     host_store.upsert_on_connect("host_alice", "alice-laptop", "alice@test.com")
     host_store.upsert_on_connect("host_bob", "bob-laptop", "bob@test.com")
@@ -720,16 +724,57 @@ async def test_list_hosts_filters_by_owner(
         assert host_ids == {"host_bob"}, f"Bob should only see host_bob, got {host_ids}."
 
 
+async def test_list_hosts_org_shared_spans_owners(
+    multi_user_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """org-shared visibility (ADR-0151): any member sees all EXTERNAL hosts,
+    while managed/sandbox hosts stay owner-only.
+
+    Bob sees Alice's external host (the shared pool) but NOT her managed
+    sandbox host — the managed hijack boundary holds in every scope.
+    """
+    monkeypatch.setattr(
+        "omnigent.server.host_access.host_visibility_scope", lambda: "org-shared"
+    )
+    _app, _reg, host_store, _cs = multi_user_app
+    host_store.upsert_on_connect("host_alice", "alice-laptop", "alice@test.com")
+    host_store.upsert_on_connect("host_bob", "bob-laptop", "bob@test.com")
+    host_store.register_managed_host(
+        host_id="host_alice_sb",
+        name="alice-sandbox",
+        owner="alice@test.com",
+        token="launch-token",
+        provider="modal",
+        sandbox_id="sb-1",
+        token_expires_at=int(time.time()) + 3600,
+    )
+
+    async with AsyncClient(transport=ASGITransport(app=_app), base_url="http://test") as client:
+        resp = await client.get("/v1/hosts", headers={"x-test-user": "bob@test.com"})
+
+    assert resp.status_code == 200
+    host_ids = {h["host_id"] for h in resp.json()["hosts"]}
+    assert host_ids == {"host_alice", "host_bob"}, (
+        f"Bob should see both external hosts under org-shared, got {host_ids}."
+    )
+    assert "host_alice_sb" not in host_ids, "Managed sandbox host must stay owner-only."
+
+
 async def test_get_host_403_wrong_owner(
     multi_user_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Verify that GET /v1/hosts/{id} returns 403 when the requesting
-    user doesn't own the host.
+    Under the ``private`` visibility scope (ADR-0151), GET /v1/hosts/{id}
+    returns 403 when the requesting user doesn't own the host.
 
-    If it returns 200, a user can read another user's host details,
-    which is an information leak.
+    If it returns 200 under ``private``, a user can read another user's host
+    details, which is an information leak.
     """
+    monkeypatch.setattr(
+        "omnigent.server.host_access.host_visibility_scope", lambda: "private"
+    )
     _app, _reg, host_store, _cs = multi_user_app
     host_store.upsert_on_connect("host_alice2", "alice-laptop", "alice@test.com")
 
@@ -746,14 +791,19 @@ async def test_get_host_403_wrong_owner(
 
 async def test_launch_runner_403_wrong_owner(
     multi_user_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Verify that POST /v1/hosts/{id}/runners returns 403 when the
-    requesting user doesn't own the host.
+    Under the ``private`` visibility scope (ADR-0151), POST
+    /v1/hosts/{id}/runners returns 403 when the requesting user doesn't own
+    the host.
 
-    If it returns 200, a user can launch runners on another user's
-    machine — a critical security violation.
+    If it returns 200 under ``private``, a user can launch runners on
+    another user's machine — a critical security violation.
     """
+    monkeypatch.setattr(
+        "omnigent.server.host_access.host_visibility_scope", lambda: "private"
+    )
     _app, registry, host_store, conv_store = multi_user_app
     host_store.upsert_on_connect("host_alice3", "alice-laptop", "alice@test.com")
     from omnigent.host.frames import HostHelloFrame
@@ -962,13 +1012,18 @@ def _register_fake_host(registry: HostRegistry, host_id: str, owner: str) -> Non
 
 async def test_resolve_host_launch_enforces_host_and_session_ownership(
     db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    The shared launch-authorization helper rejects every cross-user
-    path and only succeeds when the caller owns BOTH the host and the
-    session. This is the single chokepoint both launch routes use, so
-    each branch here maps to a real exploit it blocks.
+    Under the ``private`` visibility scope (ADR-0151), the shared
+    launch-authorization helper rejects every cross-user path and only
+    succeeds when the caller owns BOTH the host and the session. This is the
+    single chokepoint both launch routes use, so each branch here maps to a
+    real exploit it blocks.
     """
+    monkeypatch.setattr(
+        "omnigent.server.host_access.host_visibility_scope", lambda: "private"
+    )
     registry = HostRegistry()
     host_store = HostStore(db_uri)
     conv_store = SqlAlchemyConversationStore(db_uri)
