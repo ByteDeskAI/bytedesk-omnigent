@@ -46,6 +46,7 @@ from omnigent.runtime.workflow import (
     _route_databricks_model_for_compaction,
     _serialize_os_env,
     _serialize_retry_policy,
+    _strip_mcp_tool_prefix,
     compact_conversation_now,
     configure_agent_harness_with_provider,
     configure_agent_harness_with_ucode,
@@ -472,6 +473,12 @@ def test_serialize_os_env_encodes_spec() -> None:
     payload = _serialize_os_env(OSEnvSpec(type="caller_process", fork=True))
     assert payload is not None
     assert json.loads(payload)["fork"] is True
+
+
+def test_strip_mcp_tool_prefix_strips_mcp_server_segment() -> None:
+    assert _strip_mcp_tool_prefix("mcp__jira__jira_search_issues") == "jira_search_issues"
+    assert _strip_mcp_tool_prefix("my__tool") == "my__tool"
+    assert _strip_mcp_tool_prefix("mcp__missing_third") == "mcp__missing_third"
 
 
 def test_serialize_retry_policy_omits_defaults() -> None:
