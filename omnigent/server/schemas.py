@@ -1937,6 +1937,241 @@ class PermissionObject(BaseModel):
     version: int = 1
 
 
+# ── Data-surface read models (Phase 9a, BDP-2444, ADR-0152) ──────────
+#
+# Additive, read-only projections over existing internal omnigent state
+# that no other endpoint exposed: long-term memory, per-session/per-user
+# cost, the spawn tree, pending elicitations, and fleet health. Mounted by
+# ``omnigent.server.routes.data_surfaces``.
+
+
+class MemoryObject(BaseModel):
+    """
+    One durable, weighted, decaying memory (FU1, ADR-0132).
+
+    Projection of a :class:`omnigent.db.db_models.SqlMemory` row scoped to a
+    session via ``source_conversation_id``. Pure read — no decay is applied
+    here; ``weight`` is the stored salience.
+
+    :param id: Memory identifier, e.g. ``"mem_abc123"``.
+    :param object: Fixed resource type, always ``"memory"``.
+    :param content: The remembered text.
+    :param weight: Stored salience (pre-decay), e.g. ``1.0``.
+    :param salience: Optional capture-time salience score, e.g. ``0.8``.
+        ``None`` when not recorded.
+    :param confidence: Optional capture-time confidence score. ``None`` when
+        not recorded.
+    :param created_at: Unix epoch seconds the memory was first written.
+    :param last_accessed_at: Unix epoch seconds of the last reinforcement
+        (drives the decay clock).
+    :param access_count: Number of times the memory has been recalled.
+    :param archived: Whether the memory has been evicted below the archive
+        floor (excluded from recall).
+    :param source_conversation_id: Session the memory was captured from, e.g.
+        ``"conv_abc123"``. ``None`` for memories with no recorded source.
+    """
+
+    id: str
+    object: str = "memory"
+    content: str
+    weight: float
+    salience: float | None = None
+    confidence: float | None = None
+    created_at: int
+    last_accessed_at: int
+    access_count: int
+    archived: bool
+    source_conversation_id: str | None = None
+
+
+class MemoryListResponse(BaseModel):
+    """
+    Page of session-scoped memories.
+
+    Returned by ``GET /v1/sessions/{id}/memories``.
+
+    :param object: Fixed resource type, always ``"list"``.
+    :param data: The memories captured from this session, newest first.
+    :param has_more: Whether more memories exist beyond ``limit``.
+    """
+
+    object: str = "list"
+    data: list[MemoryObject] = Field(default_factory=list)
+    has_more: bool = False
+
+
+class UsageSummary(BaseModel):
+    """
+    Cumulative token + cost usage for a session subtree.
+
+    Returned by ``GET /v1/sessions/{id}/usage/summary``. Counts are summed
+    over the session and its sub-agent descendants (same subtree total the
+    snapshot's ``usage`` field uses), so a parent folds in its sub-agents.
+
+    :param input_tokens: Cumulative non-cached input (prompt) tokens.
+    :param output_tokens: Cumulative output (completion) tokens.
+    :param cache_read_input_tokens: Cumulative tokens served from the prompt
+        cache (cache hits).
+    :param cache_creation_input_tokens: Cumulative tokens written to the
+        prompt cache (cache creation).
+    :param total_tokens: Cumulative total tokens (billing total).
+    :param total_cost_usd: Cumulative USD spend. ``None`` when no turn in the
+        subtree was priced (same "priced ⟺ key present" contract as the
+        snapshot).
+    :param usage_by_model: Per-model breakdown keyed by the raw harness model
+        id. ``None`` when no per-model usage was recorded.
+    """
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    total_tokens: int = 0
+    total_cost_usd: float | None = None
+    usage_by_model: dict[str, ModelUsage] | None = None
+
+
+class DailyCostSummary(BaseModel):
+    """
+    A user's accumulated LLM spend for one UTC day.
+
+    Returned by ``GET /v1/users/{user_id}/cost/daily``. Projection of the
+    :class:`omnigent.db.db_models.SqlUserDailyCost` rollup row.
+
+    :param date_utc: The UTC calendar day, ``"YYYY-MM-DD"``, e.g.
+        ``"2026-06-24"``.
+    :param cost_usd: Accumulated USD spend for the user on this day; ``0.0``
+        when no row exists.
+    :param ask_approved_usd: Highest soft cost-checkpoint (USD) the user has
+        already approved continuing past this day; ``0.0`` when none. (The
+        underlying column is ``ask_approved_usd`` — a USD checkpoint, not a
+        count.)
+    """
+
+    date_utc: str
+    cost_usd: float = 0.0
+    ask_approved_usd: float = 0.0
+
+
+class SpawnTreeMetadata(BaseModel):
+    """
+    Descriptive metadata for a node in a session spawn tree.
+
+    :param sub_agent_name: For sub-agent nodes, the sub-agent type name within
+        the parent's spec tree, e.g. ``"researcher"``. ``None`` for the root.
+    :param title: The node's stored title, e.g. ``"researcher:auth"``. ``None``
+        when untitled.
+    :param created_at: Unix epoch seconds the node was created.
+    :param last_activity_at: Unix epoch seconds the node was last updated.
+    """
+
+    sub_agent_name: str | None = None
+    title: str | None = None
+    created_at: int
+    last_activity_at: int
+
+
+class SpawnTree(BaseModel):
+    """
+    A session and its sub-agent descendants as a recursive tree.
+
+    Returned by ``GET /v1/sessions/{id}/spawn-tree``. Walks
+    ``parent_conversation_id`` within the shared ``root_conversation_id``.
+
+    :param session_id: This node's session/conversation id.
+    :param object: Fixed resource type, always ``"spawn_tree"``.
+    :param agent_type: The node's sub-agent type, e.g. ``"researcher"``;
+        ``"root"`` for the top-level session.
+    :param status: Coarse lifecycle status — the live in-memory status when
+        known (``"running"`` / ``"waiting"`` / ``"idle"`` / ``"failed"``),
+        else ``"archived"`` / ``"closed"`` from durable markers, else
+        ``"active"``.
+    :param metadata: Descriptive metadata for this node.
+    :param children: Sub-agent children, newest-first by ``created_at``.
+        Empty for a leaf, or when ``depth`` cut off further descent.
+    """
+
+    session_id: str
+    object: str = "spawn_tree"
+    agent_type: str
+    status: str
+    metadata: SpawnTreeMetadata
+    children: list[SpawnTree] = Field(default_factory=list)
+
+
+class PendingElicitationItem(BaseModel):
+    """
+    A compact projection of one outstanding elicitation prompt.
+
+    :param elicitation_id: Correlates the prompt to its reply, e.g.
+        ``"elicit_abc123"``.
+    :param prompt: The human-facing message, e.g. ``"Approve running 'rm'?"``.
+        ``None`` when the payload carried no message.
+    :param fields: For form-mode elicitations, the requested field names.
+        ``None`` for non-form prompts.
+    """
+
+    elicitation_id: str | None = None
+    prompt: str | None = None
+    fields: list[str] | None = None
+
+
+class SessionPendingElicitations(BaseModel):
+    """
+    Outstanding elicitations for one session.
+
+    :param conversation_id: The session, e.g. ``"conv_abc123"``.
+    :param pending_count: Number of outstanding prompts on this session.
+    :param oldest_created_at: Unix epoch seconds of the oldest outstanding
+        prompt. Always ``None`` — the in-memory pending index does not record
+        per-prompt timestamps.
+    :param elicitations: The compact prompt projections.
+    """
+
+    conversation_id: str
+    pending_count: int
+    oldest_created_at: int | None = None
+    elicitations: list[PendingElicitationItem] = Field(default_factory=list)
+
+
+class PendingElicitationsSummary(BaseModel):
+    """
+    Pending elicitations across the caller's accessible sessions.
+
+    Returned by ``GET /v1/elicitations/pending``.
+
+    :param total_count: Total outstanding prompts across the listed sessions.
+    :param by_session: One entry per session with at least one outstanding
+        prompt (scoped to sessions the caller can read).
+    """
+
+    total_count: int = 0
+    by_session: list[SessionPendingElicitations] = Field(default_factory=list)
+
+
+class FleetHealth(BaseModel):
+    """
+    Aggregate health of the hosts the caller can see.
+
+    Returned by ``GET /v1/hosts/health``. Scoped to the same host set the
+    caller would get from ``GET /v1/hosts`` (owner / visibility-scope filtered).
+
+    :param total_hosts: Number of hosts in the caller's scope.
+    :param online_hosts: Hosts online and seen within the liveness window.
+    :param offline_hosts: ``total_hosts - online_hosts``.
+    :param hosts_by_sandbox_provider: Count of hosts per sandbox provider; the
+        ``"external"`` key counts user-connected (non-managed) hosts.
+    :param avg_last_seen_seconds_ago: Mean age (seconds) of the hosts'
+        last-seen timestamps. ``None`` when there are no hosts.
+    """
+
+    total_hosts: int = 0
+    online_hosts: int = 0
+    offline_hosts: int = 0
+    hosts_by_sandbox_provider: dict[str, int] = Field(default_factory=dict)
+    avg_last_seen_seconds_ago: float | None = None
+
+
 # ─────────────────────────────────────────────────────────────────────
 # STREAM EVENTS — typed Pydantic union for SSE event boundary
 # ─────────────────────────────────────────────────────────────────────

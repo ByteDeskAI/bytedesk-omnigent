@@ -158,3 +158,42 @@ def test_invalid_scope_rejected(tmp_path) -> None:
     store = _store(tmp_path)
     with pytest.raises(ValueError, match="invalid memory scope"):
         store.append(scope="tenant", owner="acme", name="facts", content="x")
+
+
+def test_list_by_source_conversation_filters_and_orders(tmp_path) -> None:
+    """The session-scoped read returns only a session's rows, newest-first."""
+    store = _store(tmp_path)
+    base = int(time.time())
+    store.append(
+        scope="topic", owner="t", name="n", content="older from A",
+        source_conversation_id="conv_A", now=base,
+    )
+    store.append(
+        scope="topic", owner="t", name="n", content="newer from A",
+        source_conversation_id="conv_A", now=base + 10,
+    )
+    store.append(
+        scope="topic", owner="t", name="n", content="from B",
+        source_conversation_id="conv_B", now=base + 5,
+    )
+    rows = store.list_by_source_conversation("conv_A")
+    assert [r.content for r in rows] == ["newer from A", "older from A"]
+    assert all(r.source_conversation_id == "conv_A" for r in rows)
+    # No source-conversation rows -> empty (no cross-session leakage).
+    assert store.list_by_source_conversation("conv_missing") == []
+
+
+def test_list_by_source_conversation_excludes_archived_by_default(tmp_path) -> None:
+    """Archived (evicted) rows are excluded unless explicitly included."""
+    store = _store(tmp_path)
+    base = int(time.time())
+    store.append(
+        scope="topic", owner="t", name="ephemeral", content="will be evicted",
+        source_conversation_id="conv_A", half_life_seconds=1,
+        read_floor=0.5, archive_floor=0.5, now=base,
+    )
+    # Sweep far in the future (grace 0) so the decayed row is archived.
+    assert store.sweep(now=base + 10 * _DAY, grace_seconds=0) == 1
+    assert store.list_by_source_conversation("conv_A") == []
+    included = store.list_by_source_conversation("conv_A", include_archived=True)
+    assert len(included) == 1 and included[0].archived is True

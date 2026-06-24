@@ -435,6 +435,46 @@ class SqlAlchemyMemoryStore:
             )
             return returned
 
+    def list_by_source_conversation(
+        self,
+        source_conversation_id: str,
+        *,
+        include_archived: bool = False,
+        limit: int = 50,
+        sort_by: str = "created_at",
+    ) -> list[SqlMemory]:
+        """List memories captured from a session, newest-first (PURE READ).
+
+        Unlike :meth:`query`, this is a direct lookup by the
+        ``source_conversation_id`` column rather than a compartment + lexical
+        recall — it answers "what did this session contribute to memory?"
+        without a query string or decay ranking. No row is mutated. Used by the
+        read-only ``GET /v1/sessions/{id}/memories`` data surface (Phase 9a).
+
+        :param source_conversation_id: Session/conversation id the memories
+            were captured from, e.g. ``"conv_abc123"``.
+        :param include_archived: When ``False`` (the default), archived
+            (evicted) memories are excluded.
+        :param limit: Maximum number of rows to return (the route bounds it).
+        :param sort_by: Column to order by, ``"created_at"`` (default) or
+            ``"weight"``; anything else falls back to ``"created_at"``.
+        :returns: Detached :class:`SqlMemory` rows ordered newest/heaviest
+            first. Empty when the session captured no memories.
+        """
+        order_col = SqlMemory.weight if sort_by == "weight" else SqlMemory.created_at
+        with self._session() as session:
+            stmt = select(SqlMemory).where(
+                SqlMemory.source_conversation_id == source_conversation_id
+            )
+            if not include_archived:
+                stmt = stmt.where(SqlMemory.archived.is_(False))
+            stmt = stmt.order_by(order_col.desc()).limit(limit)
+            rows = session.execute(stmt).scalars().all()
+            # Detach so callers can read attributes after the session closes.
+            for row in rows:
+                session.expunge(row)
+            return list(rows)
+
     def _use_semantic(self) -> bool:
         """Whether this recall should use the semantic (pgvector) branch.
 
