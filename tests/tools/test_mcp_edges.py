@@ -15,6 +15,7 @@ from omnigent.tools.mcp import (
     McpServerConnection,
     _resolve_databricks_token,
     _resolve_oauth_token,
+    _resolve_token_exchange_token,
     _sleep,
 )
 
@@ -111,6 +112,116 @@ def test_resolve_oauth_token_invalid_expires_in_defaults(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
     assert _resolve_oauth_token(MCPOAuthConfig(token_url="http://t", client_id="c")) == "tok"
+
+
+def _token_exchange_oauth() -> MCPOAuthConfig:
+    return MCPOAuthConfig(
+        token_url="https://identity.example.com/connect/token",
+        client_id="agent-client",
+        client_secret="agent-secret",
+        scopes=["mcp.invoke"],
+        resource="urn:bytedesk:mcp",
+    )
+
+
+def test_resolve_token_exchange_token_returns_cached_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    import omnigent.tools.mcp as mcp_mod
+    import time
+
+    oauth = _token_exchange_oauth()
+    key = (oauth.token_url, oauth.client_id, "user-tok", oauth.resource, tuple(oauth.scopes))
+    mcp_mod._token_exchange_cache.clear()
+    mcp_mod._token_exchange_cache[key] = ("cached-obo", time.time() + 600)
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no http")))
+    assert _resolve_token_exchange_token(oauth, "user-tok") == "cached-obo"
+
+
+def test_resolve_token_exchange_token_posts_exchange_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+    import omnigent.tools.mcp as mcp_mod
+
+    mcp_mod._token_exchange_cache.clear()
+    captured: dict[str, object] = {}
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"access_token": "obo-tok", "expires_in": 600}
+
+    import httpx
+
+    def _fake_post(url, data=None, headers=None, timeout=None):
+        captured["url"] = url
+        captured["data"] = data
+        captured["headers"] = headers
+        return _Resp()
+
+    monkeypatch.setattr(httpx, "post", _fake_post)
+    token = _resolve_token_exchange_token(_token_exchange_oauth(), "user-access-tok")
+    assert token == "obo-tok"
+    form = captured["data"]
+    assert form["grant_type"] == "urn:ietf:params:oauth:grant-type:token-exchange"
+    assert form["subject_token"] == "user-access-tok"
+    assert form["subject_token_type"] == "urn:ietf:params:oauth:token-type:access_token"
+    assert form["client_secret"] == "agent-secret"
+    assert form["scope"] == "mcp.invoke"
+    assert form["resource"] == "urn:bytedesk:mcp"
+
+
+def test_resolve_token_exchange_token_http_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    import omnigent.tools.mcp as mcp_mod
+
+    mcp_mod._token_exchange_cache.clear()
+
+    def _boom(*_args, **_kwargs):
+        raise RuntimeError("network down")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", _boom)
+    with pytest.raises(RuntimeError, match="Failed to mint OAuth token-exchange token"):
+        _resolve_token_exchange_token(_token_exchange_oauth(), "user-tok")
+
+
+def test_resolve_token_exchange_token_missing_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    import omnigent.tools.mcp as mcp_mod
+
+    mcp_mod._token_exchange_cache.clear()
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"token_type": "Bearer"}
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    with pytest.raises(RuntimeError, match="returned no access_token"):
+        _resolve_token_exchange_token(_token_exchange_oauth(), "user-tok")
+
+
+def test_resolve_token_exchange_token_invalid_expires_in_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    import omnigent.tools.mcp as mcp_mod
+
+    mcp_mod._token_exchange_cache.clear()
+
+    class _Resp:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"access_token": "obo-tok", "expires_in": "not-a-number"}
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: _Resp())
+    assert _resolve_token_exchange_token(_token_exchange_oauth(), "user-tok") == "obo-tok"
 
 
 @pytest.mark.asyncio
