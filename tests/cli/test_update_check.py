@@ -28,12 +28,19 @@ from omnigent.update_check import (
 
 
 def test_find_repo_root_finds_git_dir() -> None:
-    """``_find_repo_root`` returns the repo root when a ``.git/`` exists."""
+    """``_find_repo_root`` returns the repo root only for a dev clone with ``.git/`` as a directory.
+
+    Git worktrees expose ``.git`` as a file, not a directory — the helper
+    intentionally returns ``None`` there so installed/worktree layouts are
+    not misclassified as editable dev clones.
+    """
     root = _find_repo_root()
-    # The test itself runs inside the repo, so root must be non-None
-    # and contain a .git directory.
-    assert root is not None
-    assert (root / ".git").is_dir()
+    repo_root = Path(__file__).resolve().parents[2]
+    git_entry = repo_root / ".git"
+    if git_entry.is_dir():
+        assert root == repo_root
+    else:
+        assert root is None
 
 
 def test_find_repo_root_no_git_integration(

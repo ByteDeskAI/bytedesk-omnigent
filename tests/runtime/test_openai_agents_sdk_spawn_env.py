@@ -183,10 +183,31 @@ def test_use_responses_absent_omits_env_var() -> None:
     assert "HARNESS_OPENAI_AGENTS_USE_RESPONSES" not in env
 
 
-def test_no_model_produces_no_model_env_var() -> None:
-    """A spec with no model produces no ``HARNESS_OPENAI_AGENTS_MODEL`` env var."""
+def test_no_model_produces_no_model_env_var(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spec with no model and no ambient provider omits the model env var.
+
+    When ``OPENAI_API_KEY`` is present, ambient provider detection applies
+    the bundled catalog default — that path is covered separately.
+    """
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     env = _build_openai_agents_sdk_spawn_env(_make_spec(model=None))
     assert "HARNESS_OPENAI_AGENTS_MODEL" not in env
+
+
+def test_no_model_with_ambient_openai_key_uses_catalog_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ambient ``OPENAI_API_KEY`` routes through the detected provider and sets a default model."""
+    from omnigent.onboarding.providers import default_chat_model
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test-ambient")
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    env = _build_openai_agents_sdk_spawn_env(_make_spec(model=None))
+    assert env["HARNESS_OPENAI_AGENTS_MODEL"] == default_chat_model("openai")
+    assert env["HARNESS_OPENAI_AGENTS_API_KEY"] == "sk-test-ambient"
 
 
 def test_profile_injects_ucode_state(

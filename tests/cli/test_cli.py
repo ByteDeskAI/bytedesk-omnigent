@@ -3441,6 +3441,8 @@ def test_claude_applies_auto_open_conversation_config(
     config_path = tmp_path / "config.yaml"
     monkeypatch.setattr("omnigent.cli._GLOBAL_CONFIG_PATH", config_path)
     _save_global_config({"auto_open_conversation": True})
+    monkeypatch.setattr("omnigent.cli._load_local_config", dict)
+    monkeypatch.setattr("omnigent.cli._ensure_backend", lambda *_: "http://localhost:0")
 
     captured: dict[str, object] = {}
     monkeypatch.setattr(
@@ -3467,6 +3469,8 @@ def test_codex_applies_auto_open_conversation_config(
     config_path = tmp_path / "config.yaml"
     monkeypatch.setattr("omnigent.cli._GLOBAL_CONFIG_PATH", config_path)
     _save_global_config({"auto_open_conversation": True})
+    monkeypatch.setattr("omnigent.cli._load_local_config", dict)
+    monkeypatch.setattr("omnigent.cli._ensure_backend", lambda *_: "http://localhost:0")
 
     captured: dict[str, object] = {}
     monkeypatch.setattr(
