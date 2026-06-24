@@ -7,6 +7,7 @@ unit tests lift coverage without standing up the full sessions router.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from pathlib import Path
 from typing import Any
@@ -17,14 +18,23 @@ from starlette.requests import Request
 
 from omnigent._wrapper_labels import CLAUDE_NATIVE_WRAPPER_VALUE
 from omnigent.entities import Agent, CommentsFingerprint, Conversation, LoadedAgent, StoredFile
-from omnigent.entities.conversation import ConversationItem, MessageData, NewConversationItem
+from omnigent.entities.conversation import (
+    ConversationItem,
+    FunctionCallData,
+    FunctionCallOutputData,
+    MessageData,
+    NewConversationItem,
+)
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import SessionPermission
 from omnigent.server.schemas import SessionEventInput
 from omnigent.spec.types import AgentSpec, ExecutorSpec
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.policies.types import Phase
-from omnigent.server._elicitation_registry import _PreResolvedHarnessElicitation
+from omnigent.server._elicitation_registry import (
+    _ParkedHarnessElicitation,
+    _PreResolvedHarnessElicitation,
+)
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.routes import sessions as sessions_mod
 from omnigent.server.routes.sessions import (
@@ -91,8 +101,17 @@ from omnigent.server.routes.sessions import (
     _multipart_missing_detail,
     _native_terminal_name_for_harness,
     _native_terminal_runtime,
+    _RunnerForwardResult,
+    _drive_terminal_resolved_elicitation,
+    _enrich_idle_status_with_subagent_output,
+    _latest_assistant_text_from_store,
     _parse_external_assistant_message,
     _parse_session_create_metadata,
+    _publish_elicitation_resolved,
+    _publish_elicitation_resolved_to_ancestors,
+    _publish_external_conversation_item,
+    _publish_external_output_text_delta,
+    _require_external_status_forward,
     _prune_pre_resolved_harness_elicitations,
     _reject_reserved_cost_control_label_seed,
     _targeted_elicitation_event,
@@ -1839,3 +1858,417 @@ def test_resolve_llm_model_returns_none_when_store_or_agent_missing(
     monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
     assert _resolve_llm_model(conv) is None
     cache.load.assert_not_called()
+
+
+# ── batch 45: external publish + status forward helpers ─────────────────────
+
+
+def test_publish_elicitation_resolved_emits_resolved_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    _publish_elicitation_resolved("conv_elicit", "elicit_abc")
+    assert published == [
+        {
+            "type": "response.elicitation_resolved",
+            "elicitation_id": "elicit_abc",
+        }
+    ]
+
+
+def test_publish_elicitation_resolved_to_ancestors_fans_out(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Conversation(
+        id="conv_root", created_at=0, updated_at=0, root_conversation_id="conv_root"
+    )
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_parent",
+    )
+    store = _AncestorStore({"conv_child": child, "conv_parent": parent, "conv_root": root})
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+
+    _publish_elicitation_resolved_to_ancestors(store, "conv_child", "elicit_xyz")  # type: ignore[arg-type]
+
+    assert [sid for sid, _ in published] == ["conv_parent", "conv_root"]
+    assert all(payload["elicitation_id"] == "elicit_xyz" for _, payload in published)
+
+
+def test_publish_external_conversation_item_skips_meta_and_routes_user_messages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    meta_item = ConversationItem(
+        id="msg_meta",
+        type="message",
+        status="completed",
+        response_id="resp_meta",
+        created_at=0,
+        data=MessageData(
+            role="user",
+            content=[{"type": "input_text", "text": "hidden"}],
+            is_meta=True,
+        ),
+    )
+    _publish_external_conversation_item("conv_ext", meta_item)
+    assert published == []
+
+    user_item = ConversationItem(
+        id="msg_user",
+        type="message",
+        status="completed",
+        response_id="resp_user",
+        created_at=0,
+        data=MessageData(
+            role="user",
+            content=[{"type": "input_text", "text": "hello"}],
+        ),
+    )
+    _publish_external_conversation_item("conv_ext", user_item, cleared_pending_id="pend_1")
+    assert published[0]["type"] == "session.input.consumed"
+    assert published[0]["data"]["cleared_pending_id"] == "pend_1"
+
+    assistant_item = ConversationItem(
+        id="msg_asst",
+        type="message",
+        status="completed",
+        response_id="resp_asst",
+        created_at=0,
+        data=MessageData(
+            role="assistant",
+            agent="claude-native",
+            content=[{"type": "output_text", "text": "done"}],
+        ),
+    )
+    _publish_external_conversation_item("conv_ext", assistant_item)
+    assert published[-1]["type"] == "response.output_item.done"
+    assert published[-1]["item"]["id"] == "msg_asst"
+
+
+def test_publish_external_output_text_delta_validates_and_publishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    body = SessionEventInput(
+        type="external_output_text_delta",
+        data={"delta": "partial", "message_id": "msg_1", "index": 2, "final": False},
+    )
+    _publish_external_output_text_delta("conv_delta", body)
+    assert published[0]["type"] == "response.output_text.delta"
+    assert published[0]["delta"] == "partial"
+    assert published[0]["message_id"] == "msg_1"
+    assert published[0]["index"] == 2
+    assert published[0]["final"] is False
+
+    with pytest.raises(OmnigentError):
+        _publish_external_output_text_delta(
+            "conv_delta",
+            SessionEventInput(type="external_output_text_delta", data={"delta": 1}),
+        )
+    with pytest.raises(OmnigentError):
+        _publish_external_output_text_delta(
+            "conv_delta",
+            SessionEventInput(
+                type="external_output_text_delta",
+                data={"delta": "x", "message_id": 42},
+            ),
+        )
+    with pytest.raises(OmnigentError):
+        _publish_external_output_text_delta(
+            "conv_delta",
+            SessionEventInput(
+                type="external_output_text_delta",
+                data={"delta": "x", "index": True},
+            ),
+        )
+    with pytest.raises(OmnigentError):
+        _publish_external_output_text_delta(
+            "conv_delta",
+            SessionEventInput(
+                type="external_output_text_delta",
+                data={"delta": "x", "final": "yes"},
+            ),
+        )
+
+
+def test_parse_external_conversation_item_rejects_malformed_payloads() -> None:
+    with pytest.raises(OmnigentError):
+        _parse_external_conversation_item(
+            SessionEventInput(
+                type="external_conversation_item",
+                data={"item_type": "message", "item_data": "not-a-dict"},
+            )
+        )
+    with pytest.raises(OmnigentError):
+        _parse_external_conversation_item(
+            SessionEventInput(
+                type="external_conversation_item",
+                data={
+                    "item_type": "message",
+                    "item_data": {"role": "user", "content": []},
+                    "response_id": "   ",
+                },
+            )
+        )
+    with pytest.raises(OmnigentError):
+        _parse_external_conversation_item(
+            SessionEventInput(
+                type="external_conversation_item",
+                data={
+                    "item_type": "message",
+                    "item_data": {"role": "assistant"},
+                },
+            )
+        )
+
+
+def test_parse_external_assistant_message_rejects_blank_response_id() -> None:
+    with pytest.raises(OmnigentError):
+        _parse_external_assistant_message(
+            SessionEventInput(
+                type="external_assistant_message",
+                data={"agent": "codex", "text": "hi", "response_id": "  "},
+            )
+        )
+
+
+def test_resolve_harness_reads_bound_agent_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_harness",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_harness",
+        agent_id="ag_harness",
+    )
+    agent = Agent(
+        id="ag_harness", created_at=1, name="h", bundle_location="ag_harness/x"
+    )
+    spec = AgentSpec(
+        spec_version=1,
+        name="h",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
+    )
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.return_value = LoadedAgent(spec=spec, workdir=Path("/tmp/h"))
+
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _resolve_harness(conv) == "claude-sdk"
+
+
+def test_resolve_harness_returns_none_when_store_or_agent_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_no_h",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_no_h",
+        agent_id="ag_no_h",
+    )
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", None)
+    assert _resolve_harness(conv) is None
+
+    store = MagicMock()
+    store.get.return_value = None
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    assert _resolve_harness(conv) is None
+
+
+def test_resolve_output_schema_returns_none_when_store_or_agent_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_no_schema",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_no_schema",
+        agent_id="ag_no_schema",
+    )
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", None)
+    assert _resolve_output_schema(conv) is None
+
+    store = MagicMock()
+    store.get.return_value = None
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    assert _resolve_output_schema(conv) is None
+
+
+def test_usage_by_model_for_display_skips_malformed_buckets() -> None:
+    projected = _usage_by_model_for_display(
+        {
+            "by_model": {
+                "good": {"input_tokens": 10, "total_cost_usd": 0.1},
+                "bad": "not-a-dict",
+            }
+        }
+    )
+    assert projected is not None
+    assert set(projected) == {"good"}
+    assert projected["good"].input_tokens == 10
+
+
+def test_message_text_ignores_non_dict_blocks() -> None:
+    assert _message_text(["not-a-block", {"type": "output_text", "text": "ok"}]) == "ok"
+    assert _message_text(["bad"]) is None
+
+
+class _AssistantTextStore:
+    def list_items(
+        self,
+        session_id: str,
+        *,
+        limit: int,
+        order: str,
+        type: str,
+    ) -> PagedList[ConversationItem]:
+        del session_id, limit, order, type
+        return PagedList(
+            data=[
+                ConversationItem(
+                    id="msg_meta",
+                    type="message",
+                    status="completed",
+                    response_id="resp_1",
+                    created_at=0,
+                    data=MessageData(
+                        role="assistant",
+                        agent="native",
+                        content=[{"type": "output_text", "text": "hidden"}],
+                        is_meta=True,
+                    ),
+                ),
+                ConversationItem(
+                    id="msg_asst",
+                    type="message",
+                    status="completed",
+                    response_id="resp_1",
+                    created_at=1,
+                    data=MessageData(
+                        role="assistant",
+                        agent="native",
+                        content=[{"type": "output_text", "text": "final answer"}],
+                    ),
+                ),
+            ]
+        )
+
+
+def test_latest_assistant_text_from_store_skips_meta_and_returns_newest() -> None:
+    store = _AssistantTextStore()
+    assert _latest_assistant_text_from_store(store, "conv_scan") == "final answer"  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_enrich_idle_status_with_subagent_output_attaches_text() -> None:
+    store = _AssistantTextStore()
+    enriched = await _enrich_idle_status_with_subagent_output(
+        {"status": "idle"},
+        "idle",
+        "conv_child",
+        store,  # type: ignore[arg-type]
+    )
+    assert enriched["output"] == "final answer"
+
+    unchanged = await _enrich_idle_status_with_subagent_output(
+        {"status": "running"},
+        "running",
+        "conv_child",
+        store,  # type: ignore[arg-type]
+    )
+    assert "output" not in unchanged
+
+
+def test_require_external_status_forward_raises_when_runner_missing_or_rejects() -> None:
+    with pytest.raises(OmnigentError) as missing:
+        _require_external_status_forward("conv_child", "idle", None)
+    assert missing.value.code == ErrorCode.RUNNER_UNAVAILABLE
+
+    with pytest.raises(OmnigentError) as rejected:
+        _require_external_status_forward(
+            "conv_child",
+            "idle",
+            _RunnerForwardResult(status_code=500, body="boom"),
+        )
+    assert rejected.value.code == ErrorCode.RUNNER_UNAVAILABLE
+    assert "500" in str(rejected.value)
+
+
+def test_drive_terminal_resolved_elicitation_records_calls_and_resolves_prompts() -> None:
+    sessions_mod._recent_mirrored_tool_calls.clear()
+    try:
+        call_item = ConversationItem(
+            id="fc_1",
+            type="function_call",
+            status="completed",
+            response_id="resp_fc",
+            created_at=0,
+            data=FunctionCallData(
+                agent="native",
+                name="Bash",
+                arguments='{"command": "ls"}',
+                call_id="call_1",
+            ),
+        )
+        _drive_terminal_resolved_elicitation("conv_term", call_item)
+        mirrored = sessions_mod._recent_mirrored_tool_calls["call_1"]
+        assert mirrored.tool_name == "Bash"
+        assert mirrored.tool_input == {"command": "ls"}
+
+        resolved = asyncio.Event()
+        sessions_mod._harness_parked_elicitations["elicit_term"] = _ParkedHarnessElicitation(
+            session_id="conv_term",
+            tool_name="Bash",
+            tool_input={"command": "ls"},
+            resolved_elsewhere=resolved,
+        )
+        output_item = ConversationItem(
+            id="fco_1",
+            type="function_call_output",
+            status="completed",
+            response_id="resp_fc",
+            created_at=1,
+            data=FunctionCallOutputData(call_id="call_1", output="ok"),
+        )
+        _drive_terminal_resolved_elicitation("conv_term", output_item)
+        assert resolved.is_set()
+    finally:
+        sessions_mod._recent_mirrored_tool_calls.clear()
+        sessions_mod._harness_parked_elicitations.clear()
