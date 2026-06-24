@@ -118,6 +118,28 @@ patches:
                     value: bytedesk_omnigent.extension:BytedeskExtension
                   - name: OMNIGENT_NATS_URL
                     value: nats://omnigent-nats:4222
+                  # Accounts mode (multi-user login) for local dev. env merges by
+                  # name, so this OVERRIDES the base server.yaml OMNIGENT_AUTH_ENABLED=0
+                  # — but only in THIS local-dev overlay, which is never reconciled
+                  # to prod, so the shared base (and prod) stay single-user. Needed so
+                  # the BDP-2426 accounts fix, the /config admin UI (BDP-2416), and the
+                  # host-pool-auth login path survive `apply -k`/`land` re-applies
+                  # instead of resetting to 0 (BDP-2433). The cookie secret is NOT
+                  # pinned here — the entrypoint's load_or_generate_cookie_secret
+                  # auto-generates + persists it. base_url is https (the Cloudflare
+                  # tunnel origin) so the session cookie is Secure/__Host-; log in via
+                  # https://omnigent.dev.bytedesk.ai, not the http://*.localhost URL.
+                  - name: OMNIGENT_AUTH_ENABLED
+                    value: "true"
+                  - name: OMNIGENT_ACCOUNTS_BASE_URL
+                    value: https://omnigent.dev.bytedesk.ai
+                  - name: OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME
+                    value: admin
+                  # LOCAL-DEV-ONLY known admin credential — NOT a production secret
+                  # (this overlay never ships to prod). Only used by bootstrap_admin
+                  # on a fresh DB; an already-bootstrapped admin keeps its password.
+                  - name: OMNIGENT_ACCOUNTS_INIT_ADMIN_PASSWORD
+                    value: "ConfigAdmin2026!"
                 readinessProbe:
                   initialDelaySeconds: 60
                   periodSeconds: 10
