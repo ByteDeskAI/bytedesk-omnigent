@@ -125,13 +125,53 @@ class PassThroughMintStrategy:
         return Credential(header_value=_bearer(token))
 
 
+class TokenExchangeMintStrategy:
+    """RFC 8693 token-exchange (OBO) bearer — acts-as the user, as the agent client.
+
+    The first strategy whose load-bearing input is the caller-supplied
+    ``subject_token`` (the user's OpenIddict MCP access token): it exchanges that
+    token at Identity's ``/connect/token`` while authenticating as the agent
+    client, yielding an on-behalf-of token (``sub`` = user, ``act_sub`` = agent).
+    The actor is conveyed by the authenticated client, so ``identity`` is not
+    load-bearing — a token-exchange with no ``subject_token`` is meaningless.
+
+    Config: ``oauth`` (required) — an :class:`omnigent.spec.types.MCPOAuthConfig`
+    naming the token endpoint + agent client credentials; ``subject_token``
+    (required) — the user's access token to exchange.
+    """
+
+    name = "token_exchange"
+
+    def mint(
+        self,
+        *,
+        identity: ActingIdentity | None,
+        integration: str,
+        config: Mapping[str, Any],
+    ) -> Credential:
+        del identity  # actor is the authenticated agent client; subject_token is load-bearing
+        from omnigent.tools.mcp import _resolve_token_exchange_token
+
+        oauth = config.get("oauth")
+        if oauth is None:
+            raise ValueError(f"token_exchange mint for {integration!r} requires config['oauth']")
+        subject_token = config.get("subject_token")
+        if not subject_token:
+            raise ValueError(
+                f"token_exchange mint for {integration!r} requires config['subject_token']"
+            )
+        token = _resolve_token_exchange_token(oauth, subject_token)
+        return Credential(header_value=_bearer(token))
+
+
 def build_mint_registry() -> PluggableRegistry[MintStrategy]:
-    """Build the mint-strategy registry (``static`` default + the other two)."""
+    """Build the mint-strategy registry (``static`` default + the others)."""
     registry: PluggableRegistry[MintStrategy] = PluggableRegistry(
         "mint_strategy", default=("static", StaticMintStrategy)
     )
     registry.register("client_credentials", ClientCredentialsMintStrategy)
     registry.register("pass_through", PassThroughMintStrategy)
+    registry.register("token_exchange", TokenExchangeMintStrategy)
     return registry
 
 
@@ -144,5 +184,6 @@ __all__ = [
     "ClientCredentialsMintStrategy",
     "PassThroughMintStrategy",
     "StaticMintStrategy",
+    "TokenExchangeMintStrategy",
     "build_mint_registry",
 ]

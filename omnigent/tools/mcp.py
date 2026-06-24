@@ -199,6 +199,86 @@ def _resolve_oauth_token(oauth: "MCPOAuthConfig") -> str:
     return token
 
 
+# RFC 8693 grant + subject-token-type URNs for the token-exchange (OBO) flow.
+_TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange"
+_ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
+
+# Cache of minted on-behalf-of (token-exchange) tokens. Keyed like the
+# client-credentials cache but with the subject_token folded in, since the OBO
+# token's subject is the exchanged user's token: (token_url, client_id,
+# subject_token, resource, scopes). Value is (access_token, expiry_epoch).
+_token_exchange_cache: dict[
+    tuple[str, str, str, str | None, tuple[str, ...]], tuple[str, float]
+] = {}
+
+
+def _resolve_token_exchange_token(oauth: MCPOAuthConfig, subject_token: str) -> str:
+    """
+    Mint (or reuse a cached) on-behalf-of bearer via RFC 8693 token-exchange.
+
+    Exchanges the user's *subject_token* (their OpenIddict MCP access token) for
+    an OBO access token at ``oauth.token_url`` while authenticating as the agent
+    client (``oauth.client_id`` / ``oauth.client_secret``). The returned token's
+    ``sub`` is the user and ``act_sub`` is the agent — the actor is conveyed by
+    the authenticated client, so *subject_token* is the load-bearing input.
+    Caches the token until shortly before its ``expires_in``; mirrors
+    :func:`_resolve_oauth_token` but with the token-exchange grant.
+
+    :param oauth: The OAuth config (token endpoint + agent client credentials).
+    :param subject_token: The user's access token to exchange.
+    :returns: An on-behalf-of bearer token string.
+    :raises RuntimeError: If the token endpoint errors or returns no token.
+    """
+    key = (oauth.token_url, oauth.client_id, subject_token, oauth.resource, tuple(oauth.scopes))
+    cached = _token_exchange_cache.get(key)
+    now = time.time()
+    if cached is not None and cached[1] - now > _OAUTH_REFRESH_SKEW:
+        return cached[0]
+
+    form: dict[str, str] = {
+        "grant_type": _TOKEN_EXCHANGE_GRANT,
+        "client_id": oauth.client_id,
+        "subject_token": subject_token,
+        "subject_token_type": _ACCESS_TOKEN_TYPE,
+    }
+    if oauth.client_secret:
+        form["client_secret"] = oauth.client_secret
+    if oauth.scopes:
+        form["scope"] = " ".join(oauth.scopes)
+    if oauth.resource:
+        form["resource"] = oauth.resource
+
+    try:
+        import httpx
+
+        resp = httpx.post(
+            oauth.token_url,
+            data=form,
+            headers={"Accept": "application/json"},
+            timeout=30.0,
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    except Exception as exc:
+        raise RuntimeError(
+            f"Failed to mint OAuth token-exchange token from "
+            f"{oauth.token_url!r} (client {oauth.client_id!r}): {exc}"
+        ) from exc
+
+    token = payload.get("access_token")
+    if not token:
+        raise RuntimeError(
+            f"OAuth token endpoint {oauth.token_url!r} returned no access_token "
+            f"(keys: {sorted(payload)})"
+        )
+    try:
+        expires_in = float(payload.get("expires_in", 300))
+    except (TypeError, ValueError):
+        expires_in = 300.0
+    _token_exchange_cache[key] = (token, now + expires_in)
+    return token
+
+
 # Seconds to wait after tripping before allowing a single
 # half-open probe. Long enough that a restarting server has
 # time to come back; short enough that recovery isn't delayed
