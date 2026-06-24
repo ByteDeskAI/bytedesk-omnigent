@@ -13,6 +13,7 @@ import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
+    GoogleWorkspaceWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
     WebhookSourceAdapter,
@@ -210,6 +211,33 @@ def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
     """A source with no bespoke adapter falls back to the GitHub default (BDP-2354)."""
     assert isinstance(resolve_webhook_adapter("anything"), GitHubWebhookAdapter)
+
+
+def test_google_workspace_adapter_verifies_channel_token_and_reads_resource_state() -> None:
+    """Google Workspace push channels authenticate with X-Goog-Channel-Token.
+
+    Route Drive/Calendar/Gmail changes by resource state so agents can bind to
+    states such as ``exists`` while ``sync`` notifications remain separate.
+    """
+    adapter = GoogleWorkspaceWebhookAdapter()
+    assert isinstance(adapter, WebhookSourceAdapter)
+
+    headers = {
+        "X-Goog-Channel-Token": "shared-channel-secret",
+        "X-Goog-Resource-State": "exists",
+        "X-Goog-Resource-ID": "drive-resource-123",
+    }
+
+    assert adapter.verify(b"", headers, "shared-channel-secret") is True
+    assert adapter.verify(b"", headers, "wrong-secret") is False
+    assert adapter.verify(b"", {}, "shared-channel-secret") is False
+    assert adapter.match_key(headers) == "exists"
+    assert adapter.match_key({"X-Goog-Channel-Token": "shared-channel-secret"}) == "*"
+
+
+def test_google_workspace_source_resolves_bespoke_adapter() -> None:
+    """The google-workspace source uses the push-channel token adapter."""
+    assert isinstance(resolve_webhook_adapter("google-workspace"), GoogleWorkspaceWebhookAdapter)
 
 
 def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry) -> None:
