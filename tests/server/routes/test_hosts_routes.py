@@ -12,13 +12,16 @@ import httpx
 
 
 async def test_hosts_not_mounted_without_host_store(client: httpx.AsyncClient) -> None:
-    """GET /v1/hosts returns 404 when hosts are not configured."""
+    """GET /v1/hosts is not the hosts JSON API when host_store is unset."""
     resp = await client.get("/v1/hosts")
-    # When host_store is not provided, the router is not mounted at all.
-    assert resp.status_code == 404
+    # Without host_store the hosts router is not mounted; the SPA catch-all
+    # serves index.html instead of {"hosts": [...]}.
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers.get("content-type", "")
 
 
 async def test_get_host_not_mounted(client: httpx.AsyncClient) -> None:
-    """GET /v1/hosts/{id} returns 404 when hosts are not configured."""
+    """GET /v1/hosts/{id} is not the hosts JSON API when host_store is unset."""
     resp = await client.get("/v1/hosts/host_nonexistent_12345")
-    assert resp.status_code == 404
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers.get("content-type", "")

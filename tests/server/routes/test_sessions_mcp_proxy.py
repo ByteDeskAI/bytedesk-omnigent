@@ -45,6 +45,9 @@ class _RaisingRunnerRouter:
             client=_RaisingRunnerClient(),  # type: ignore[arg-type]
         )
 
+    async def aclient_for_session_resources(self, conversation_id: str) -> RoutedRunner:
+        return self.client_for_session_resources(conversation_id)
+
 
 @pytest.mark.asyncio
 async def test_mcp_tools_list_runner_failure_is_genericized(

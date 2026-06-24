@@ -23,6 +23,7 @@ class _FakeHost:
     host_id: str = "host_1"
     name: str = "test-host"
     owner: str = "alice"
+    sandbox_provider: str | None = None
 
 
 @dataclass
@@ -59,9 +60,13 @@ class TestResolveHostOwner:
             resolve_host_owner(user_id="alice", host_id="host_x", host_store=store)
         assert exc_info.value.status_code == 404
 
-    def test_wrong_owner_403(self) -> None:
+    def test_wrong_owner_403(self, monkeypatch: pytest.MonkeyPatch) -> None:
         host = _FakeHost(host_id="host_1", owner="bob")
         store = _FakeHostStore(hosts={"host_1": host})
+        monkeypatch.setattr(
+            "omnigent.server.host_access.host_visibility_scope",
+            lambda: "private",
+        )
         with pytest.raises(HTTPException) as exc_info:
             resolve_host_owner(user_id="alice", host_id="host_1", host_store=store)
         assert exc_info.value.status_code == 403

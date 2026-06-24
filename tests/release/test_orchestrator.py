@@ -28,6 +28,10 @@ def _sign(body: bytes, secret: str) -> str:
     return hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
 
 
+def _hdrs(signature: str, event: str) -> dict[str, str]:
+    return {"x-omnigent-signature": signature, "x-omnigent-event": event}
+
+
 class _FakeExecutor:
     """Records the trigger call; never touches a real pipeline."""
 
@@ -107,10 +111,16 @@ def test_teamcity_callback_resumes_then_duplicate_is_idempotent(tmp_path) -> Non
     orch.start_release(version="1.2.3", session_id="sess-rel", now=now)
 
     body = json.dumps({"build": "green"}).encode()
+    headers = _hdrs(_sign(body, secret), release_signal_id("1.2.3"))
     first = process_inbound(
-        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="release:1.2.3",
-        payload={"build": "green"}, now=now,
+        source="teamcity",
+        raw_body=body,
+        headers=headers,
+        secret=secret,
+        store=store,
+        bus=bus,
+        payload={"build": "green"},
+        now=now,
     )
     assert first.status is IngressStatus.DELIVERED
     assert first.http_status == 202
@@ -120,9 +130,14 @@ def test_teamcity_callback_resumes_then_duplicate_is_idempotent(tmp_path) -> Non
 
     # A REPLAYED TeamCity callback must NOT wake again (no double-deploy).
     dup = process_inbound(
-        source="teamcity", raw_body=body, provided_signature=_sign(body, secret),
-        secret=secret, store=store, bus=bus, match_key="release:1.2.3",
-        payload={"build": "green"}, now=now,
+        source="teamcity",
+        raw_body=body,
+        headers=headers,
+        secret=secret,
+        store=store,
+        bus=bus,
+        payload={"build": "green"},
+        now=now,
     )
     assert dup.status is IngressStatus.ALREADY_RESOLVED
     assert dup.http_status == 409

@@ -42,6 +42,27 @@ def _snapshot_globals() -> dict[str, object]:
     }
 
 
+def _pristine_globals() -> dict[str, object]:
+    return {
+        "_conversation_store": None,
+        "_agent_store": None,
+        "_agent_cache": None,
+        "_file_store": None,
+        "_artifact_store": None,
+        "_comment_store": None,
+        "_policy_store": None,
+        "_caps": RuntimeCaps(),
+        "_terminal_registry": None,
+        "_resource_registry": None,
+        "_harness_process_manager": None,
+        "_runner_client": None,
+        "_runner_router": None,
+        "_runner_ws_factory": None,
+        "_runner_id": None,
+        "_dispatch_capabilities": {},
+    }
+
+
 def _restore_globals(saved: dict[str, object]) -> None:
     _globals._conversation_store = saved["_conversation_store"]  # type: ignore[assignment]
     _globals._agent_store = saved["_agent_store"]  # type: ignore[assignment]
@@ -67,6 +88,7 @@ def _restore_globals(saved: dict[str, object]) -> None:
 @pytest.fixture(autouse=True)
 def _isolate_runtime_globals() -> None:
     saved = _snapshot_globals()
+    _restore_globals(_pristine_globals())
     yield
     _restore_globals(saved)
 

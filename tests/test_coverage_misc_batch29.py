@@ -132,9 +132,9 @@ def test_timed_formatter_skips_elapsed_when_start_missing() -> None:
 
 
 def test_parse_approval_input_recognizes_always_and_once_tokens() -> None:
-    assert _parse_approval_input("A") is _ApprovalVerdict.APPROVE_ALWAYS
-    assert _parse_approval_input("yes") is _ApprovalVerdict.APPROVE_ONCE
-    assert _parse_approval_input("nope") is _ApprovalVerdict.REFUSE
+    assert _parse_approval_input("A") == _ApprovalVerdict.APPROVE_ALWAYS
+    assert _parse_approval_input("yes") == _ApprovalVerdict.APPROVE_ONCE
+    assert _parse_approval_input("nope") == _ApprovalVerdict.REFUSE
 
 
 @pytest.mark.asyncio

@@ -164,7 +164,7 @@ def test_render_startup_banner_appends_multi_vendor_creds_line() -> None:
     ],
 )
 def test_parse_approval_input_token_sets(text: str, verdict: _ApprovalVerdict) -> None:
-    assert _parse_approval_input(text) is verdict
+    assert _parse_approval_input(text) == verdict
 
 
 def test_completer_hides_alias_commands_from_popup() -> None:
