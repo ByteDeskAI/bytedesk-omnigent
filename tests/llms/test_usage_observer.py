@@ -26,9 +26,11 @@ def _reset_state() -> Any:
     """Reset shared module state before AND after each test so the
     write-through recorder doesn't mix leftover fixture rows from a
     previous test into the file the current test asserts on."""
+    _usage_observer._OBSERVERS.clear()
     _usage_observer._RECORDS.clear()
     _usage_observer._CURRENT_NODEID = None
     yield
+    _usage_observer._OBSERVERS.clear()
     _usage_observer._RECORDS.clear()
     _usage_observer._CURRENT_NODEID = None
 
