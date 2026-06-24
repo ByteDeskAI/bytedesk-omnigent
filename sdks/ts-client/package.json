@@ -1,0 +1,34 @@
+{
+  "name": "@bytedesk/omnigent-sdk",
+  "version": "0.1.0",
+  "description": "TypeScript SDK for the Omnigent server — typed sessions, the 44-variant ServerStreamEvent SSE union, and the semantic OmnigentBlock stream. Generated from the pinned omnigent schema; zero runtime dependencies.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist",
+    "src/contract"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "regenerate": "node codegen/generate-events.mjs && openapi-typescript src/contract/openapi.json -o src/generated/openapi-types.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "openapi-typescript": "^7.4.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
