@@ -132,8 +132,10 @@ from omnigent.server.routes.sessions import (
     _latest_assistant_text_from_store,
     _parse_external_assistant_message,
     _parse_session_create_metadata,
+    _persist_native_cumulative_usage,
     _poll_request_disconnect,
     _publish_and_wait_for_harness_elicitation,
+    _publish_subtree_cost_to_ancestors,
     _publish_elicitation_resolved,
     _publish_elicitation_resolved_to_ancestors,
     _schedule_deferred_elicitation_clear,
@@ -3202,3 +3204,377 @@ async def test_publish_and_wait_mirrors_request_to_ancestors(
         with contextlib.suppress(asyncio.CancelledError):
             await deliver_task
         _clear_harness_elicitation_state()
+
+
+# ── batch 52: native cumulative usage + subtree/ descendant edges ─────────────
+
+
+def test_persist_native_cumulative_usage_noops_without_cumulative_fields() -> None:
+    """No cumulative keys → no write and ``None`` return."""
+    conv = Conversation(
+        id="conv_native",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_native",
+        agent_id="ag_n",
+    )
+    store = _UsageConversationStore(conv)
+    assert _persist_native_cumulative_usage("conv_native", {}, store) is None  # type: ignore[arg-type]
+    assert store.written == {}
+
+
+def test_persist_native_cumulative_usage_persists_policy_cost_only() -> None:
+    """``policy_cost_usd`` alone updates enforcement without repricing display."""
+    conv = Conversation(
+        id="conv_policy",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_policy",
+        agent_id="ag_p",
+        session_usage={"total_cost_usd": 0.10},
+    )
+    store = _UsageConversationStore(conv)
+    result = _persist_native_cumulative_usage(
+        "conv_policy",
+        {"policy_cost_usd": 0.55},
+        store,  # type: ignore[arg-type]
+    )
+    assert result == 0.10
+    written = store.written["conv_policy"]
+    assert written["policy_cost_usd"] == 0.55
+    assert written["total_cost_usd"] == 0.10
+
+
+def test_persist_native_cumulative_usage_splits_codex_cached_input_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cached input is peeled out of the input total before pricing."""
+    conv = Conversation(
+        id="conv_codex",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_codex",
+        agent_id="ag_c",
+    )
+    store = _UsageConversationStore(conv)
+    monkeypatch.setattr(
+        "omnigent.llms.context_window.fetch_model_pricing",
+        lambda _model: object(),
+    )
+    monkeypatch.setattr(
+        "omnigent.llms.context_window.compute_llm_cost",
+        lambda usage, _pricing: 1.23,
+    )
+
+    result = _persist_native_cumulative_usage(
+        "conv_codex",
+        {
+            "cumulative_input_tokens": 100,
+            "cumulative_output_tokens": 40,
+            "cumulative_cache_read_input_tokens": 30,
+            "model": "claude-sonnet-4-6",
+        },
+        store,  # type: ignore[arg-type]
+    )
+
+    assert result == 1.23
+    written = store.written["conv_codex"]
+    assert written["cache_read_input_tokens"] == 30
+    assert written["input_tokens"] == 70
+    assert written["output_tokens"] == 40
+    assert written["total_tokens"] == 140
+    assert written["total_cost_usd"] == 1.23
+    assert written["by_model"]["claude-sonnet-4-6"]["input_tokens"] == 70
+
+
+class _SubtreeCostStore:
+    """Minimal store for ``load_session_usage`` + ancestor walks."""
+
+    def __init__(self, convs: dict[str, Conversation]) -> None:
+        self._convs = convs
+
+    def get_conversation(self, conv_id: str) -> Conversation | None:
+        return self._convs.get(conv_id)
+
+    def list_conversations(
+        self,
+        *,
+        root_conversation_id: str | None = None,
+        limit: int = 100,
+        after: str | None = None,
+        kind: str | None = "default",
+        **_: Any,
+    ) -> PagedList[Conversation]:
+        convs = [
+            c
+            for c in self._convs.values()
+            if c.root_conversation_id == root_conversation_id
+        ]
+        if after is not None:
+            ids = [c.id for c in convs]
+            if after in ids:
+                convs = convs[ids.index(after) + 1 :]
+        page = convs[:limit]
+        return PagedList(
+            data=page,
+            first_id=page[0].id if page else None,
+            last_id=page[-1].id if page else None,
+            has_more=len(convs) > limit,
+        )
+
+
+def test_publish_subtree_cost_to_ancestors_publishes_child_cost_to_parent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Child spend rolls into the ancestor subtree total and is broadcast."""
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id=None,
+        session_usage={"input_tokens": 50},
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        session_usage={"total_cost_usd": 2.0, "input_tokens": 10},
+    )
+    store = _SubtreeCostStore({"conv_parent": parent, "conv_child": child})
+    _publish_subtree_cost_to_ancestors(store, "conv_child")  # type: ignore[arg-type]
+    assert len(published) == 1
+    assert published[0][0] == "conv_parent"
+    assert published[0][1]["type"] == "session.usage"
+    assert published[0][1]["total_cost_usd"] == 2.0
+
+
+def test_publish_subtree_cost_to_ancestors_skips_unpriced_subtree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ancestors whose subtree has no priced cost or per-model usage are skipped."""
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id=None,
+        session_usage={"input_tokens": 50},
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        session_usage={"input_tokens": 10},
+    )
+    store = _SubtreeCostStore({"conv_parent": parent, "conv_child": child})
+    _publish_subtree_cost_to_ancestors(store, "conv_child")  # type: ignore[arg-type]
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_publish_and_wait_mints_elicitation_id_when_unspecified(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``elicitation_id=None`` registers a freshly minted correlation id."""
+    published: list[str] = []
+
+    async def _block_disconnect(_request: object) -> None:
+        await asyncio.sleep(3600)
+
+    monkeypatch.setattr(sessions_mod, "_poll_request_disconnect", _block_disconnect)
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload["elicitation_id"]),
+    )
+
+    verdict = ElicitationResult(action="accept")
+    _clear_harness_elicitation_state()
+    minted_holder: list[str] = []
+
+    async def _resolve_first_registered() -> None:
+        for _ in range(50):
+            await asyncio.sleep(0.01)
+            if sessions_mod._harness_elicitation_registry:
+                elicitation_id = next(iter(sessions_mod._harness_elicitation_registry))
+                minted_holder.append(elicitation_id)
+                sessions_mod._harness_elicitation_registry[elicitation_id].set_result(verdict)
+                return
+        raise AssertionError("no elicitation registered")
+
+    resolve_task = asyncio.create_task(_resolve_first_registered())
+    try:
+        result = await _publish_and_wait_for_harness_elicitation(
+            MagicMock(),
+            session_id="conv_mint",
+            params=ElicitationRequestParams(message="Approve?"),
+            timeout_s=5.0,
+            elicitation_id=None,
+        )
+        await resolve_task
+        assert result == verdict
+        assert len(minted_holder) == 1
+        assert minted_holder[0].startswith("elicit_")
+        assert published[0] == minted_holder[0]
+    finally:
+        resolve_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await resolve_task
+        _clear_harness_elicitation_state()
+
+
+@pytest.mark.asyncio
+async def test_schedule_deferred_elicitation_clear_mirrors_resolved_to_ancestors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deferred clear fans out ``elicitation_resolved`` to ancestor streams."""
+    resolved: list[tuple[str, str]] = []
+
+    def _mirror_resolved(
+        store: object,
+        session_id: str,
+        elicitation_id: str,
+    ) -> None:
+        resolved.append((session_id, elicitation_id))
+
+    monkeypatch.setattr(
+        sessions_mod,
+        "_publish_elicitation_resolved_to_ancestors",
+        _mirror_resolved,
+    )
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, _payload: None,
+    )
+
+    async def _instant_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod.asyncio, "sleep", _instant_sleep)
+    store = MagicMock()
+    _clear_harness_elicitation_state()
+    _schedule_deferred_elicitation_clear("conv_child", "elicit_anc", store)
+    pending = list(sessions_mod._deferred_elicitation_clear_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+    assert resolved == [("conv_child", "elicit_anc")]
+
+
+class _PaginatedDescendantStore:
+    def __init__(self, children_by_parent: dict[str, list[Conversation]]) -> None:
+        self._children = children_by_parent
+
+    def list_conversations(
+        self,
+        *,
+        kind: str | None = None,
+        parent_conversation_id: str | None = None,
+        limit: int = 100,
+        after: str | None = None,
+        **_: Any,
+    ) -> PagedList[Conversation]:
+        assert kind == "sub_agent"
+        assert parent_conversation_id is not None
+        kids = list(self._children.get(parent_conversation_id, []))
+        if after is not None:
+            ids = [c.id for c in kids]
+            if after in ids:
+                kids = kids[ids.index(after) + 1 :]
+        page = kids[:limit]
+        return PagedList(
+            data=page,
+            first_id=page[0].id if page else None,
+            last_id=page[-1].id if page else None,
+            has_more=len(kids) > limit,
+        )
+
+
+def test_descendant_sessions_paginates_and_deduplicates_seen_ids() -> None:
+    """Pagination continues after ``has_more`` and skips already-seen child ids."""
+    child_a = Conversation(
+        id="conv_a",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+        kind="sub_agent",
+    )
+    child_b = Conversation(
+        id="conv_b",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+        kind="sub_agent",
+    )
+    child_c = Conversation(
+        id="conv_c",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+        kind="sub_agent",
+    )
+    store = _PaginatedDescendantStore(
+        {"conv_root": [child_a, child_a, child_b, child_c]},
+    )
+    descendants = _descendant_sessions(store, "conv_root")  # type: ignore[arg-type]
+    assert [d.id for d in descendants] == ["conv_a", "conv_b", "conv_c"]
+
+
+def test_pending_elicitation_snapshot_skips_duplicate_child_elicitation_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Child prompts already mirrored on the parent are not duplicated."""
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_p",
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        agent_id="ag_c",
+    )
+    store = _DescendantStore({"conv_parent": [child]})
+
+    def _snapshot(conv_id: str) -> list[dict[str, object]]:
+        del conv_id
+        return [{"elicitation_id": "elicit_shared", "params": {"tool": "Bash"}}]
+
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.pending_elicitations.snapshot_for",
+        _snapshot,
+    )
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.pending_elicitations.pending_session_ids",
+        lambda: ["conv_parent", "conv_child"],
+    )
+
+    events = _pending_elicitation_snapshot_for_session(store, parent)  # type: ignore[arg-type]
+    assert len(events) == 1
+    assert events[0]["elicitation_id"] == "elicit_shared"
