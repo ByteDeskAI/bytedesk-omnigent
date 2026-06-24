@@ -430,26 +430,42 @@ class UnifiedAuthProvider(AuthProvider):
         return None
 
 
+def unwrap_auth_base(provider: AuthProvider | None) -> AuthProvider | None:
+    """The configured provider beneath a principal-resolver wrap (BDP-2426).
+
+    The BDP-2388 :class:`CompositeAuthProvider` wraps the configured provider
+    for request-time identity resolution whenever an extension contributes a
+    resolver (the bytedesk extension always does). Build-time mode detection —
+    the accounts source, the OIDC config, and the login URL the SPA redirects to
+    on 401 — must look *through* that wrap to the configured base, or it sees the
+    composite (which exposes none of those). Non-composite providers, and
+    ``None``, pass through unchanged.
+
+    :param provider: The (possibly composite-wrapped) configured provider.
+    :returns: The underlying configured provider (``._base``) when wrapped, else
+        ``provider`` itself.
+    """
+    if isinstance(provider, CompositeAuthProvider):
+        return provider._base
+    return provider
+
+
 def accounts_provider(provider: AuthProvider | None) -> UnifiedAuthProvider | None:
     """The active accounts :class:`UnifiedAuthProvider`, seen through a wrap.
 
-    The BDP-2388 principal-resolver :class:`CompositeAuthProvider` wraps the
-    configured provider whenever an extension contributes a resolver (the
-    bytedesk extension always does), so a bare
-    ``isinstance(provider, UnifiedAuthProvider)`` no longer recognizes accounts
-    mode — it sees the composite. This unwraps one level (``._base``) before the
-    source check so the accounts bootstrap, the ``/auth`` router, and the
-    ``/v1/info`` ``accounts_enabled`` flag keep working under a principal
-    resolver (BDP-2426).
+    A bare ``isinstance(provider, UnifiedAuthProvider)`` no longer recognizes
+    accounts mode once the principal-resolver :class:`CompositeAuthProvider`
+    wraps it, so this unwraps (:func:`unwrap_auth_base`) before the source check.
+    Keeps the accounts bootstrap, the ``/auth`` router, and the ``/v1/info``
+    ``accounts_enabled`` flag working under a principal resolver (BDP-2426).
 
     :param provider: The (possibly composite-wrapped) configured provider.
     :returns: The underlying accounts ``UnifiedAuthProvider``, or ``None`` when
         the deployment is not in accounts mode.
     """
-    if isinstance(provider, CompositeAuthProvider):
-        provider = provider._base
-    if isinstance(provider, UnifiedAuthProvider) and provider._source == "accounts":
-        return provider
+    base = unwrap_auth_base(provider)
+    if isinstance(base, UnifiedAuthProvider) and base._source == "accounts":
+        return base
     return None
 
 

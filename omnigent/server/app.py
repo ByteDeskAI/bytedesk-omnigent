@@ -1585,13 +1585,13 @@ def create_app(
         provider name (``sandbox_provider``) the web UI labels the
         new-session sandbox option with.
         """
-        from omnigent.server.auth import accounts_provider
+        from omnigent.server.auth import accounts_provider, unwrap_auth_base
 
         # Unwrap a principal-resolver CompositeAuthProvider (BDP-2426) so the
-        # accounts capability + login URL survive a contributed resolver.
-        _accounts_ap = accounts_provider(auth_provider)
-        accounts_enabled = _accounts_ap is not None
-        login_url = getattr(_accounts_ap or auth_provider, "login_url", None)
+        # accounts capability + login URL (accounts AND OIDC) survive a
+        # contributed resolver.
+        accounts_enabled = accounts_provider(auth_provider) is not None
+        login_url = getattr(unwrap_auth_base(auth_provider), "login_url", None)
         # needs_setup drives the SPA's first-run "Create admin" form:
         # true only in accounts mode while no password-having account
         # exists yet. Same predicate bootstrap_admin uses, computed
@@ -1652,10 +1652,14 @@ def create_app(
             ``{"user_id": null}`` if unauthenticated in header
             mode, or 401 with ``login_url`` in OIDC mode.
         """
+        from omnigent.server.auth import unwrap_auth_base
+
         user_id: str | None = None
         if auth_provider is not None:
             user_id = auth_provider.get_user_id(request)
-        login_url = getattr(auth_provider, "login_url", None)
+        # Identity resolves through the full composite chain (above), but the
+        # redirect target lives on the configured base — unwrap it (BDP-2426).
+        login_url = getattr(unwrap_auth_base(auth_provider), "login_url", None)
         if user_id is None and login_url is not None:
             return JSONResponse(
                 status_code=401,
@@ -2014,9 +2018,9 @@ def create_app(
     # provider's login_url / accounts/OIDC config + methods, so unwrap to the
     # base provider for router construction (the composite is only for
     # request-time identity resolution, not for mounting the /auth endpoints).
-    from omnigent.server.auth import CompositeAuthProvider as _Composite
+    from omnigent.server.auth import unwrap_auth_base
 
-    _base_ap = auth_provider._base if isinstance(auth_provider, _Composite) else auth_provider
+    _base_ap = unwrap_auth_base(auth_provider)
     if _base_ap is not None and getattr(_base_ap, "login_url", None):
         from omnigent.server.admin_list import load_admin_list
         from omnigent.server.auth import UnifiedAuthProvider

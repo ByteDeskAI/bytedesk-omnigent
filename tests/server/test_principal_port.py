@@ -26,6 +26,7 @@ from omnigent.server.auth import (
     CompositeAuthProvider,
     UnifiedAuthProvider,
     accounts_provider,
+    unwrap_auth_base,
 )
 from omnigent.server.principal import Principal
 
@@ -171,7 +172,36 @@ def test_composite_rich_resolver_supplies_tenant() -> None:
     assert composite.get_user_id(_conn()) == "ext-user"
 
 
-# ── accounts_provider unwrap (BDP-2426) ───────────────────────────────
+# ── unwrap_auth_base + accounts_provider unwrap (BDP-2426) ─────────────
+
+
+def test_unwrap_auth_base_returns_base_for_composite() -> None:
+    base = UnifiedAuthProvider(source="accounts", local_single_user=False)
+    composite = CompositeAuthProvider(base, [_StubProvider("ext-user")])
+    assert unwrap_auth_base(composite) is base
+
+
+def test_unwrap_auth_base_passes_through_non_composite() -> None:
+    base = UnifiedAuthProvider(source="header", local_single_user=True)
+    assert unwrap_auth_base(base) is base
+
+
+def test_unwrap_auth_base_none() -> None:
+    assert unwrap_auth_base(None) is None
+
+
+def test_login_url_is_recoverable_through_composite() -> None:
+    # The /v1/info + /v1/me login_url regression (BDP-2426): the redirect target
+    # lives on the configured base, which a composite hides. Unwrapping restores
+    # it for every mode the SPA redirects in.
+    for source, expected in (("accounts", "/login"), ("oidc", "/auth/login")):
+        base = UnifiedAuthProvider(source=source, local_single_user=False)
+        composite = CompositeAuthProvider(base, [_StubProvider(None)])
+        assert getattr(unwrap_auth_base(composite), "login_url", None) == expected
+    # Header mode has no login page → None, wrapped or not.
+    header = UnifiedAuthProvider(source="header", local_single_user=True)
+    wrapped = CompositeAuthProvider(header, [_StubProvider(None)])
+    assert getattr(unwrap_auth_base(wrapped), "login_url", None) is None
 
 
 def test_accounts_provider_recognizes_bare_accounts() -> None:
