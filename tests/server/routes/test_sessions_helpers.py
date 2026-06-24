@@ -8,13 +8,15 @@ unit tests lift coverage without standing up the full sessions router.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 from starlette.requests import Request
 
 from omnigent._wrapper_labels import CLAUDE_NATIVE_WRAPPER_VALUE
-from omnigent.entities import Conversation, StoredFile
+from omnigent.entities import Agent, CommentsFingerprint, Conversation, LoadedAgent, StoredFile
 from omnigent.entities.conversation import MessageData, NewConversationItem
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import SessionPermission
@@ -26,6 +28,14 @@ from omnigent.server._elicitation_registry import _PreResolvedHarnessElicitation
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.routes import sessions as sessions_mod
 from omnigent.server.routes.sessions import (
+    SessionLiveness,
+    _apply_liveness_to_items,
+    _agent_display_names_for,
+    _build_session_list_item,
+    _resolve_llm_model,
+    _resolve_output_schema,
+    _structured_ask_user_question,
+    _validated_harness_override,
     _CLAUDE_NATIVE_WRAPPER_LABEL_KEY,
     _CODEX_NATIVE_SUBAGENT_DISPLAY_FALLBACK,
     _CODEX_NATIVE_SUBAGENT_NICKNAME_LABEL_KEY,
@@ -1106,3 +1116,270 @@ def test_derive_terminal_launch_args_claude_permission_mode() -> None:
 
 def test_derive_terminal_launch_args_non_native_returns_none() -> None:
     assert _derive_terminal_launch_args_from_spec(_minimal_spec(harness="claude-sdk")) is None
+
+
+# ── batch-43: list projection + resolver helpers ─────────────────────────────
+
+
+def test_structured_ask_user_question_builds_typed_payload() -> None:
+    payload = _structured_ask_user_question(
+        {
+            "questions": [
+                {
+                    "header": "Scope",
+                    "question": "Which area?",
+                    "multiSelect": True,
+                    "options": [
+                        {"label": "Auth", "description": "Login flows", "preview": "auth.py"},
+                        "Skip",
+                        {"label": "", "description": "ignored"},
+                    ],
+                },
+                {"question": "", "options": ["x"]},
+            ],
+        }
+    )
+    assert payload is not None
+    assert len(payload["questions"]) == 1
+    question = payload["questions"][0]
+    assert question["question"] == "Which area?"
+    assert question["header"] == "Scope"
+    assert question["multiSelect"] is True
+    assert question["options"][0]["label"] == "Auth"
+    assert question["options"][0]["preview"] == "auth.py"
+    assert question["options"][1] == {"label": "Skip"}
+
+
+def test_structured_ask_user_question_returns_none_for_invalid_shapes() -> None:
+    assert _structured_ask_user_question("not-a-dict") is None
+    assert _structured_ask_user_question({"questions": []}) is None
+    assert _structured_ask_user_question({"questions": [{"question": "x", "options": []}]}) is None
+
+
+def test_build_session_list_item_projects_permissions_and_comments() -> None:
+    from omnigent.server.schemas import SessionListItem
+
+    conv = Conversation(
+        id="conv_list",
+        created_at=10,
+        updated_at=20,
+        root_conversation_id="conv_list",
+        agent_id="ag_demo",
+        title="Demo [closed]",
+        labels={"tier": "cheap"},
+        runner_id="run_1",
+        host_id="host_1",
+        reasoning_effort="high",
+        workspace="/tmp/ws",
+        git_branch="feature/x",
+        archived=True,
+    )
+    grants = [
+        SessionPermission(
+            user_id="alice@example.com",
+            conversation_id="conv_list",
+            level=LEVEL_OWNER,
+        ),
+    ]
+    fingerprint = CommentsFingerprint(count=3, last_updated_at=99_000_000)
+
+    item = _build_session_list_item(
+        conv,
+        agent_names_by_id={"ag_demo": "demo-agent"},
+        agent_display_names_by_id={"ag_demo": "Demo Person"},
+        grants=grants,
+        user_id="alice@example.com",
+        user_is_admin=False,
+        permissions_enabled=True,
+        pending_count=2,
+        child_session_ids=["conv_child"],
+        comments_fingerprint=fingerprint,
+    )
+
+    assert isinstance(item, SessionListItem)
+    assert item.id == "conv_list"
+    assert item.agent_name == "demo-agent"
+    assert item.agent_display_name == "Demo Person"
+    assert item.permission_level == LEVEL_OWNER
+    assert item.owner == "alice@example.com"
+    assert item.pending_elicitations_count == 2
+    assert item.comments_count == 3
+    assert item.comments_updated_at == 99_000_000
+    assert item.archived is True
+    assert item.git_branch == "feature/x"
+
+
+@pytest.mark.asyncio
+async def test_apply_liveness_to_items_mutates_runner_and_host_fields() -> None:
+    from omnigent.server.schemas import SessionListItem
+
+    items = [
+        SessionListItem(
+            id="conv_a",
+            agent_id="ag_a",
+            status="idle",
+            created_at=1,
+            updated_at=1,
+        ),
+        SessionListItem(
+            id="conv_b",
+            agent_id="ag_b",
+            status="running",
+            created_at=2,
+            updated_at=2,
+        ),
+    ]
+
+    def _lookup(ids: list[str]) -> dict[str, SessionLiveness]:
+        return {
+            "conv_a": SessionLiveness(runner_online=True, host_online=False),
+            "conv_b": SessionLiveness(runner_online=False, host_online=None),
+        }
+
+    await _apply_liveness_to_items(items, _lookup)
+    assert items[0].runner_online is True
+    assert items[0].host_online is False
+    assert items[1].runner_online is False
+    assert items[1].host_online is None
+
+
+@pytest.mark.asyncio
+async def test_apply_liveness_to_items_noop_when_lookup_missing() -> None:
+    from omnigent.server.schemas import SessionListItem
+
+    item = SessionListItem(
+        id="conv_x",
+        agent_id="ag_x",
+        status="idle",
+        created_at=0,
+        updated_at=0,
+        runner_online=None,
+        host_online=None,
+    )
+    await _apply_liveness_to_items([item], None)
+    assert item.runner_online is None
+    assert item.host_online is None
+
+
+def test_agent_display_names_for_resolves_params_display_name() -> None:
+    agent = Agent(
+        id="ag_maya",
+        created_at=1,
+        name="maya",
+        bundle_location="ag_maya/abc",
+    )
+    spec = AgentSpec(
+        spec_version=1,
+        name="maya",
+        params={"displayName": "Maya Chen"},
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
+    )
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.return_value = LoadedAgent(spec=spec, workdir=Path("/tmp/maya"))
+
+    names = _agent_display_names_for(["ag_maya"], store, cache)
+    assert names == {"ag_maya": "Maya Chen"}
+
+
+def test_agent_display_names_for_returns_empty_when_cache_disabled() -> None:
+    assert _agent_display_names_for(["ag_x"], MagicMock(), None) == {}
+
+
+def test_resolve_llm_model_reads_bound_agent_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.spec.types import LLMConfig
+
+    conv = Conversation(
+        id="conv_model",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_model",
+        agent_id="ag_test",
+    )
+    agent = Agent(id="ag_test", created_at=1, name="t", bundle_location="ag_test/x")
+    spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        llm=LLMConfig(model="claude-sonnet-4-6"),
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
+    )
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.return_value = LoadedAgent(spec=spec, workdir=Path("/tmp/t"))
+
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _resolve_llm_model(conv) == "claude-sonnet-4-6"
+    assert _resolve_llm_model(None) is None
+
+
+def test_resolve_output_schema_reads_bound_agent_spec(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    schema = {"type": "object", "properties": {"answer": {"type": "string"}}}
+    conv = Conversation(
+        id="conv_schema",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_schema",
+        agent_id="ag_schema",
+    )
+    agent = Agent(id="ag_schema", created_at=1, name="s", bundle_location="ag_schema/x")
+    spec = AgentSpec(
+        spec_version=1,
+        name="s",
+        output_schema=schema,
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
+    )
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.return_value = LoadedAgent(spec=spec, workdir=Path("/tmp/s"))
+
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _resolve_output_schema(conv) == schema
+
+
+def test_validated_harness_override_canonicalizes_known_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = Agent(id="ag_h", created_at=1, name="h", bundle_location="ag_h/x")
+    spec = AgentSpec(
+        spec_version=1,
+        name="h",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
+    )
+    cache = MagicMock()
+    cache.load.return_value = LoadedAgent(spec=spec, workdir=Path("/tmp/h"))
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _validated_harness_override("pi", agent) == "pi"
+    assert _validated_harness_override(None, agent) is None
+
+
+def test_validated_harness_override_rejects_unknown_harness() -> None:
+    agent = Agent(id="ag_h", created_at=1, name="h", bundle_location="ag_h/x")
+    with pytest.raises(OmnigentError) as exc:
+        _validated_harness_override("not-a-real-harness", agent)
+    assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+def test_validated_harness_override_rejects_non_omnigent_executor(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = Agent(id="ag_h", created_at=1, name="h", bundle_location="ag_h/x")
+    spec = AgentSpec(
+        spec_version=1,
+        name="h",
+        executor=ExecutorSpec(type="workflow", config={}),
+    )
+    cache = MagicMock()
+    cache.load.return_value = LoadedAgent(spec=spec, workdir=Path("/tmp/h"))
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    with pytest.raises(OmnigentError) as exc:
+        _validated_harness_override("claude-sdk", agent)
+    assert exc.value.code == ErrorCode.INVALID_INPUT
