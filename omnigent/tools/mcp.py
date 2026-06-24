@@ -547,6 +547,12 @@ class McpServerConnection:
 
     config: MCPServerConfig
     cwd: Path | None = None
+    # BDP-2434: the originating user's outbound access token. When set AND the
+    # server config carries an ``oauth`` block, this connection presents an
+    # on-behalf-of (RFC 8693 token-exchange) bearer instead of the
+    # ``client_credentials`` bearer — so a ByteDesk.Mcp call acts *as* the user.
+    # ``None`` (the default) ⇒ today's identity-blind egress, byte-identical.
+    subject_token: str | None = None
     # Elicitation callback invoked when the MCP server sends
     # ``elicitation/create`` inline during a ``tools/call``.
     # Receives ``(session_id, params)`` and returns an
@@ -1055,9 +1061,27 @@ class McpServerConnection:
         rotated credentials. Register new schemes (SigV4, mTLS, API key)
         against that registry without touching this call site.
 
+        BDP-2434 (OBO egress): when this connection carries a
+        ``subject_token`` AND the server config has an ``oauth`` block, the
+        Authorization header is an on-behalf-of (RFC 8693 token-exchange) bearer
+        instead of the ``client_credentials`` one. An explicit ``Authorization``
+        config header still wins (seeded first, OBO via ``setdefault``); the
+        ``client_credentials`` mint is skipped entirely (no wasted token). No
+        ``subject_token`` (or no ``oauth``) ⇒ the registry alone runs,
+        byte-identical to today.
+
         :returns: Merged headers dict, or ``None`` if no headers
             are needed (empty config headers and no scheme applied).
         """
+        if self.subject_token is not None and self.config.oauth is not None:
+            # Explicit config headers keep highest precedence; the OBO bearer
+            # fills an absent Authorization. The registry's oauth scheme is
+            # intentionally NOT run here — it would mint a discarded
+            # client-credentials token (the OBO bearer is the credential).
+            headers = dict(self.config.headers) if self.config.headers else {}
+            obo = _resolve_token_exchange_token(self.config.oauth, self.subject_token)
+            headers.setdefault("Authorization", f"Bearer {obo}")
+            return headers or None
         return DEFAULT_MCP_AUTH_REGISTRY.resolve_headers(self.config)
 
     async def _open_streamable_http_transport(

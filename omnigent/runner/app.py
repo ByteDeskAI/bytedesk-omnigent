@@ -12119,11 +12119,21 @@ def create_runner_app(
                             request_state=request_state,
                         )
                     else:
+                        # BDP-2434: when the acting identity carries the user's
+                        # subject_token, present an on-behalf-of bearer for this
+                        # MCP egress (e.g. ByteDesk.Mcp). Absent ⇒ today's
+                        # client_credentials connection, unchanged.
+                        _subject_token = (
+                            _acting_identity.subject_token
+                            if _acting_identity is not None
+                            else None
+                        )
                         output = await mcp_manager.call_tool(
                             spec,
                             bare_tool,
                             arguments,
                             session_id=session_id,
+                            subject_token=_subject_token,
                         )
                 except McpElicitationRequired as elicit:
                     # The external MCP server returned InputRequiredResult

@@ -123,6 +123,10 @@ def encode_acting_identity(
         "agent_id": identity.agent_id,
         "delegation": list(identity.delegation),
     }
+    # Omit the key entirely when absent so the no-OBO carrier stays byte-identical
+    # to the pre-subject_token wire shape (never ``subject_token: null``).
+    if identity.subject_token is not None:
+        claims["subject_token"] = identity.subject_token
     return signer.sign(claims)
 
 
@@ -153,12 +157,14 @@ def decode_acting_identity(
     )
     agent_id = payload.get("agent_id")
     delegation = payload.get("delegation")
+    subject_token = payload.get("subject_token")
     return acting_identity_for(
         principal,
         agent_id=agent_id if isinstance(agent_id, str) and agent_id else None,
         delegation=[d for d in delegation if isinstance(d, str)]
         if isinstance(delegation, list)
         else (),
+        subject_token=subject_token if isinstance(subject_token, str) and subject_token else None,
     )
 
 
