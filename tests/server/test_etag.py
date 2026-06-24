@@ -19,6 +19,9 @@ from omnigent.server.etag import parse_if_match
         ('"7"', 7),
         ('W/"7"', 7),
         ("  42  ", 42),
+        ('""', None),
+        ('W/""', None),
+        ('  ""  ', None),
     ],
 )
 def test_parse_if_match_valid(header: str | None, expected: int | None) -> None:

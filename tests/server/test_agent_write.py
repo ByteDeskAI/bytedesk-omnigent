@@ -109,3 +109,28 @@ def test_write_without_artifact_store_raises() -> None:
             agent_cache=None,
             expand_env=True,
         )
+
+
+class _VanishedAgentStore(_FakeAgentStore):
+    def update(
+        self,
+        agent_id: str,
+        bundle_location: str,
+        *,
+        expected_version: int | None = None,
+    ) -> Agent | None:
+        self.updates.append((agent_id, bundle_location))
+        return None
+
+
+def test_agent_vanished_mid_update_raises_not_found() -> None:
+    agent = _agent("ag_test/oldhash")
+    with pytest.raises(OmnigentError, match="Agent not found"):
+        apply_bundle_update(
+            agent,
+            b"new-bundle",
+            artifact_store=_FakeArtifactStore(),
+            agent_store=_VanishedAgentStore(agent),
+            agent_cache=None,
+            expand_env=True,
+        )
