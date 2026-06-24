@@ -1643,6 +1643,93 @@ def _host(
     return HostProcess(identity, server_url)
 
 
+class _JsonResponse:
+    """Small stand-in for ``httpx.Response`` used by host-auth tests."""
+
+    def __init__(self, status_code: int, payload: object) -> None:
+        """Initialize the fake response."""
+        self.status_code = status_code
+        self._payload = payload
+
+    def json(self) -> object:
+        """Return the configured JSON payload."""
+        return self._payload
+
+
+def test_build_connect_headers_uses_explicit_host_auth_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A provider-issued static-host bearer is sent as Authorization."""
+    monkeypatch.setenv("OMNIGENT_HOST_AUTH_TOKEN", "provider-jwt")
+
+    headers = _host("https://omnigent.example.com")._build_connect_headers()
+
+    assert headers["Authorization"] == "Bearer provider-jwt"
+
+
+def test_build_connect_headers_managed_token_wins_over_static_host_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Managed-host launch tokens keep precedence over user-provider auth."""
+    monkeypatch.setenv("OMNIGENT_HOST_TOKEN", "managed-token")
+    monkeypatch.setenv("OMNIGENT_HOST_AUTH_TOKEN", "provider-jwt")
+
+    headers = _host("https://omnigent.example.com")._build_connect_headers()
+
+    assert headers["X-Omnigent-Host-Token"] == "managed-token"
+    assert "Authorization" not in headers
+
+
+def test_build_connect_headers_logs_in_with_accounts_host_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Static host pods can mint a bearer from the accounts auth provider."""
+    calls: list[tuple[str, dict[str, object]]] = []
+
+    def _fake_post(url: str, **kwargs: object) -> _JsonResponse:
+        calls.append((url, kwargs))
+        return _JsonResponse(200, {"token": "accounts-session-jwt"})
+
+    monkeypatch.setenv("OMNIGENT_HOST_AUTH_USERNAME", "admin")
+    monkeypatch.setenv("OMNIGENT_HOST_AUTH_PASSWORD", "secret-password")
+    monkeypatch.setattr("omnigent.host.connect.httpx.post", _fake_post)
+
+    headers = _host("https://omnigent.example.com")._build_connect_headers()
+
+    assert headers["Authorization"] == "Bearer accounts-session-jwt"
+    assert calls == [
+        (
+            "https://omnigent.example.com/auth/login",
+            {
+                "json": {"username": "admin", "password": "secret-password"},
+                "timeout": 10.0,
+            },
+        )
+    ]
+
+
+def test_build_connect_headers_does_not_fall_back_when_static_auth_configured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A bad static-host login must fail closed under the intended owner."""
+    import omnigent.runner._entry as entry_mod
+
+    def _fake_post(url: str, **kwargs: object) -> _JsonResponse:
+        return _JsonResponse(401, {"error": "invalid username or password"})
+
+    def _unexpected_factory(*, server_url: str | None = None) -> object:
+        raise AssertionError("ambient auth factory should not be consulted")
+
+    monkeypatch.setenv("OMNIGENT_HOST_AUTH_USERNAME", "admin")
+    monkeypatch.setenv("OMNIGENT_HOST_AUTH_PASSWORD", "wrong-password")
+    monkeypatch.setattr("omnigent.host.connect.httpx.post", _fake_post)
+    monkeypatch.setattr(entry_mod, "_make_auth_token_factory", _unexpected_factory)
+
+    headers = _host("https://omnigent.example.com")._build_connect_headers()
+
+    assert "Authorization" not in headers
+
+
 async def test_run_retries_on_login_redirect(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,

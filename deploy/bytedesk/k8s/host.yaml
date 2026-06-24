@@ -9,9 +9,11 @@
 # (claude-native/codex/pi) would need the `--target host` image's baked CLIs; for
 # ByteDesk's openai-agents → Codex path the server image is sufficient.
 #
-# Connecting needs NO model creds and (with OMNIGENT_AUTH_ENABLED=0) NO token — the
-# host registers anonymously as the local user. Model creds are added only when we
-# run a real turn (envFrom omnigent-runner-secrets, optional, wired in Stage B).
+# Connecting needs no model creds. When server auth is enabled, the host tunnel
+# authenticates with OMNIGENT_HOST_AUTH_USERNAME/PASSWORD or
+# OMNIGENT_HOST_AUTH_TOKEN from omnigent-host-credentials; when auth is disabled,
+# it registers anonymously as the local user. Model creds are added only when we
+# run a real turn (envFrom omnigent-host-credentials).
 # Headless Service backing the StatefulSet (required for stable pod identity).
 # The host dials OUT to the server over the WS tunnel and is never addressed
 # inbound, so this Service exists only to satisfy the StatefulSet contract.
@@ -136,8 +138,6 @@ spec:
           env:
             - name: OMNIGENT_SERVER_URL
               value: http://omnigent-server.bytedesk.svc.cluster.local
-            - name: OMNIGENT_AUTH_ENABLED
-              value: "0"
             # claude-sdk under root needs this; harmless for openai-agents.
             - name: IS_SANDBOX
               value: "1"
@@ -195,10 +195,11 @@ spec:
               value: bytedesk-agent-configuration
             - name: OMNIGENT_INFISICAL_ENV
               value: development
-          # SHARED LLM/AI credentials — ONE Secret, every host replica gets it,
-          # and the host forwards these to every runner/agent it spawns. Drop the
-          # real key into this single Secret and all hosts run with it. optional
-          # so hosts still CONNECT before creds are set (creds only gate running turns).
+          # SHARED host-pool credentials — ONE Secret, every host replica gets it.
+          # Put OMNIGENT_HOST_AUTH_USERNAME/PASSWORD or OMNIGENT_HOST_AUTH_TOKEN
+          # here when server auth is enabled; put LLM/provider keys here for every
+          # runner/agent the host spawns. optional so unauthenticated local-dev
+          # servers can still connect before credentials are present.
           envFrom:
             - secretRef:
                 name: omnigent-host-credentials
