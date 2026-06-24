@@ -28,6 +28,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from typing import Protocol
 
 from starlette.requests import HTTPConnection
 
@@ -221,21 +222,38 @@ class CompositeAuthProvider(AuthProvider):
     supplying identity) can win when it has an answer, while an in-core deploy
     with no resolvers is behavior-identical to the base provider alone.
 
-    :param base: The configured :class:`AuthProvider` consulted last. ``None``
-        is rejected — a composite always wraps a real base.
+    ``tail_resolvers`` run strictly AFTER the configured base, so they are a
+    fall-through for system callers that carry no user identity — e.g. the
+    runner-token resolver (BDP-2437), which a request only ever clears when it
+    presents a server-issued binding token bound to a launched runner. A real
+    user cookie resolves on the base FIRST, so a tail resolver can never shadow
+    it. Crucially, the configured provider stays in the ``_base`` slot so
+    :func:`unwrap_auth_base` / :func:`accounts_provider` still see it — a tail
+    resolver must never occupy ``_base``.
+
+    :param base: The configured :class:`AuthProvider` consulted between the
+        head resolvers and the tail resolvers. ``None`` is rejected — a
+        composite always wraps a real base.
     :param resolvers: Extra resolvers tried, in order, before ``base``.
         Defaults to empty (zero behavior change).
+    :param tail_resolvers: Extra resolvers tried, in order, after ``base``.
+        Defaults to empty.
     """
 
     def __init__(
         self,
         base: AuthProvider,
         resolvers: list[AuthProvider] | None = None,
+        tail_resolvers: list[AuthProvider] | None = None,
     ) -> None:
         if base is None:
             raise ValueError("CompositeAuthProvider requires a base AuthProvider")
-        # Resolvers first, configured base last (fall-through terminus).
-        self._chain: tuple[AuthProvider, ...] = (*(resolvers or ()), base)
+        # Head resolvers first, configured base next, tail resolvers last.
+        self._chain: tuple[AuthProvider, ...] = (
+            *(resolvers or ()),
+            base,
+            *(tail_resolvers or ()),
+        )
         self._base = base
 
     def get_principal(self, request: HTTPConnection) -> Principal | None:
@@ -428,6 +446,85 @@ class UnifiedAuthProvider(AuthProvider):
         if self._local_single_user:
             return RESERVED_USER_LOCAL
         return None
+
+
+class _LaunchOwnerRegistry(Protocol):
+    """The slice of :class:`TunnelRegistry` the runner-token provider needs.
+
+    Typed as a :class:`Protocol` so :class:`RunnerTokenAuthProvider` does not
+    import the runner transport stack at module load and stays unit-testable
+    with a stub.
+    """
+
+    def launch_owner(self, runner_id: str) -> str | None: ...
+
+
+class RunnerTokenAuthProvider(AuthProvider):
+    """Resolve a runner's identity from its server-issued binding token (BDP-2437).
+
+    A runner spawned on a host pod authenticates its HTTP callbacks
+    (``GET /v1/sessions/{id}/agent/contents``, ``/items``,
+    ``/v1/sessions/{id}``) with the server-issued tunnel binding token, but
+    presents no user cookie. Under accounts mode the cookie-based provider then
+    yields no identity and the callbacks 401, failing every turn with
+    ``spec_resolver_failed``. This resolver is the symmetric HTTP-side mirror of
+    the BDP-2436 WS-tunnel fix: it derives the runner id from the token and
+    resolves the owner from the TRUSTED launch record the server stored when it
+    launched that runner id for a session.
+
+    Security invariant (identical to BDP-2436): a runner authenticates ONLY as
+    the owner it was launched for. ``runner_id = token_bound_runner_id(token)``;
+    ``owner = registry.launch_owner(runner_id)``. A token/runner_id the server
+    never launched (attacker-chosen/forged) has NO launch record, so ``owner``
+    is ``None`` and this resolver does not authenticate it — the composite falls
+    through and the request is rejected (401). The token alone never grants
+    access.
+
+    The token is read ONLY from the ``X-Omnigent-Runner-Tunnel-Token`` header
+    (the existing first-party runner→server scheme — see the WS tunnel and
+    ``cost_advisor._runner_identity_headers``). It is deliberately NOT read from
+    ``Authorization: Bearer``, which the accounts provider owns for session
+    JWTs.
+
+    Wired as a ``tail_resolver`` of :class:`CompositeAuthProvider` so it runs
+    strictly after the user-cookie base — it can never shadow a real logged-in
+    user.
+
+    :param registry: The server's runner tunnel registry. Read live on every
+        request so launch-record eviction / relaunch is reflected; the owner is
+        never cached here.
+    """
+
+    def __init__(self, registry: _LaunchOwnerRegistry) -> None:
+        self._registry = registry
+        # token → runner_id memo. Only the deterministic derivation is cached;
+        # the owner is always re-read from the registry below.
+        self._runner_id_cache: dict[str, str] = {}
+
+    def get_user_id(self, request: HTTPConnection) -> str | None:
+        """Return the launch owner for a valid runner token, else ``None``.
+
+        :param request: Incoming HTTP request or WebSocket handshake.
+        :returns: The owner the runner id was launched for, or ``None`` when no
+            (valid, launched) runner token is present.
+        """
+        from omnigent.runner.identity import (
+            RUNNER_TUNNEL_TOKEN_HEADER,
+            token_bound_runner_id,
+        )
+
+        token = request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER)
+        if not token:
+            return None
+        stripped = token.strip()
+        if not stripped:
+            return None
+        runner_id = self._runner_id_cache.get(stripped)
+        if runner_id is None:
+            runner_id = token_bound_runner_id(stripped)
+            self._runner_id_cache[stripped] = runner_id
+        # Always live: a forged token has no launch record → None → 401.
+        return self._registry.launch_owner(runner_id)
 
 
 def unwrap_auth_base(provider: AuthProvider | None) -> AuthProvider | None:
