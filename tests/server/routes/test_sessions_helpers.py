@@ -35,7 +35,7 @@ from omnigent.entities.permission import SessionPermission
 from omnigent.server.schemas import ElicitationRequestParams, ElicitationResult, SessionEventInput
 from omnigent.spec.types import AgentSpec, ExecutorSpec
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.policies.types import Phase
+from omnigent.policies.types import Phase, PolicyAction, PolicyResult
 from omnigent.server._elicitation_registry import (
     _ParkedHarnessElicitation,
     _PreResolvedHarnessElicitation,
@@ -91,6 +91,7 @@ from omnigent.server.routes.sessions import (
     _extract_assistant_text_from_event,
     _extract_user_text_from_event,
     _handle_external_session_todos,
+    _hold_native_ask_gate,
     _mcp_error_response,
     _mcp_ok_response,
     _native_ask_gate_lock,
@@ -145,6 +146,7 @@ from omnigent.server.routes.sessions import (
     _schedule_deferred_elicitation_clear,
     _signal_harness_elicitation_resolved_by_id,
     _signal_terminal_resolved_harness_elicitation,
+    _spawn_native_approval_popup_forward,
     _publish_external_conversation_item,
     _publish_external_output_text_delta,
     _require_external_status_forward,
@@ -4316,3 +4318,196 @@ async def test_persist_external_session_usage_includes_usage_by_model(
     by_model = published[0]["usage_by_model"]
     assert isinstance(by_model, dict)
     assert "claude-sonnet-4-6" in by_model
+
+
+# ── batch 56: native popup forward + hold_native_ask_gate ─────────────────────
+
+
+@pytest.mark.asyncio
+async def test_spawn_native_approval_popup_forward_posts_cost_approval_popup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fire-and-forget task forwards ``cost_approval_popup`` to the runner."""
+    forwarded: list[dict[str, object]] = []
+
+    async def _capture_forward(
+        session_id: str,
+        _router: object,
+        event: dict[str, object],
+    ) -> None:
+        forwarded.append({"session_id": session_id, "event": event})
+
+    monkeypatch.setattr(
+        sessions_mod,
+        "_forward_session_change_to_runner",
+        _capture_forward,
+    )
+    _spawn_native_approval_popup_forward(
+        "conv_popup",
+        "elicit_pop",
+        "Approve deletion?",
+        "cost_budget",
+    )
+    pending = list(sessions_mod._native_popup_forward_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+    assert len(forwarded) == 1
+    assert forwarded[0]["session_id"] == "conv_popup"
+    event = forwarded[0]["event"]
+    assert isinstance(event, dict)
+    assert event["type"] == "cost_approval_popup"
+    assert event["elicitation_id"] == "elicit_pop"
+    assert event["message"] == "Approve deletion?"
+    assert event["policy_name"] == "cost_budget"
+
+
+@pytest.mark.asyncio
+async def test_hold_native_ask_gate_returns_true_and_applies_side_effects_on_accept(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Approved ASK applies withheld labels and state updates."""
+    labels_applied: list[dict[str, str]] = []
+    states_applied: list[object] = []
+    popup_calls: list[tuple[str, str, str, str | None]] = []
+
+    def _record_popup(
+        session_id: str,
+        elicitation_id: str,
+        message: str,
+        policy_name: str | None = None,
+    ) -> None:
+        popup_calls.append((session_id, elicitation_id, message, policy_name))
+
+    async def _accept_verdict(*_args: object, **_kwargs: object) -> ElicitationResult:
+        return ElicitationResult(action="accept")
+
+    monkeypatch.setattr(sessions_mod, "_spawn_native_approval_popup_forward", _record_popup)
+    monkeypatch.setattr(
+        sessions_mod,
+        "_publish_and_wait_for_harness_elicitation",
+        _accept_verdict,
+    )
+    monkeypatch.setattr(sessions_mod, "resolve_ask_timeout", lambda _e, _r: 45)
+
+    engine = MagicMock()
+    engine.apply_label_writes = lambda labels: labels_applied.append(labels)
+    engine.apply_state_updates = lambda updates: states_applied.append(updates)
+
+    ask_result = PolicyResult(
+        action=PolicyAction.ASK,
+        reason="Deleting files requires approval",
+        deciding_policy="delete_guard",
+        set_labels={"integrity": "0"},
+        state_updates=[{"key": "calls", "action": "increment", "value": 1}],  # type: ignore[list-item]
+    )
+
+    approved = await _hold_native_ask_gate(
+        MagicMock(),
+        session_id="conv_gate",
+        phase=Phase.TOOL_CALL,
+        data={"name": "Bash", "arguments": {"command": "rm -rf /"}},
+        engine=engine,
+        result=ask_result,
+        conversation_store=MagicMock(),
+    )
+
+    assert approved is True
+    assert labels_applied == [{"integrity": "0"}]
+    assert len(states_applied) == 1
+    assert len(popup_calls) == 1
+    assert popup_calls[0][0] == "conv_gate"
+    assert popup_calls[0][2] == "Deleting files requires approval"
+    assert popup_calls[0][3] == "delete_guard"
+
+
+@pytest.mark.asyncio
+async def test_hold_native_ask_gate_returns_false_on_decline_without_side_effects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Declined ASK fails closed and does not apply withheld writes."""
+    labels_applied: list[dict[str, str]] = []
+
+    async def _decline_verdict(*_args: object, **_kwargs: object) -> ElicitationResult:
+        return ElicitationResult(action="decline")
+
+    monkeypatch.setattr(sessions_mod, "_spawn_native_approval_popup_forward", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        sessions_mod,
+        "_publish_and_wait_for_harness_elicitation",
+        _decline_verdict,
+    )
+    monkeypatch.setattr(sessions_mod, "resolve_ask_timeout", lambda _e, _r: 30)
+
+    engine = MagicMock()
+    engine.apply_label_writes = lambda labels: labels_applied.append(labels)
+
+    ask_result = PolicyResult(
+        action=PolicyAction.ASK,
+        reason="blocked",
+        deciding_policy="guard",
+        set_labels={"blocked": "1"},
+    )
+
+    approved = await _hold_native_ask_gate(
+        MagicMock(),
+        session_id="conv_deny",
+        phase=Phase.REQUEST,
+        data={"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        engine=engine,
+        result=ask_result,
+        conversation_store=MagicMock(),
+    )
+
+    assert approved is False
+    assert labels_applied == []
+
+
+@pytest.mark.asyncio
+async def test_hold_native_ask_gate_returns_false_on_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Timeout / disconnect (``None`` verdict) fails closed."""
+    monkeypatch.setattr(sessions_mod, "_spawn_native_approval_popup_forward", lambda *_a, **_k: None)
+
+    async def _no_verdict(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(
+        sessions_mod,
+        "_publish_and_wait_for_harness_elicitation",
+        _no_verdict,
+    )
+    monkeypatch.setattr(sessions_mod, "resolve_ask_timeout", lambda _e, _r: 5)
+
+    approved = await _hold_native_ask_gate(
+        MagicMock(),
+        session_id="conv_timeout",
+        phase=Phase.TOOL_CALL,
+        data={"name": "Bash", "arguments": {}},
+        engine=MagicMock(),
+        result=PolicyResult(action=PolicyAction.ASK, reason="wait", deciding_policy="p"),
+        conversation_store=MagicMock(),
+    )
+    assert approved is False
+
+
+@pytest.mark.asyncio
+async def test_resolve_elicitation_invalid_tombstone_payload_is_not_stored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unparked resolve with malformed verdict does not create a tombstone."""
+    async def _no_runner(*_args: object, **_kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _no_runner)
+    _clear_harness_elicitation_state()
+    elicitation_id = "elicit_invalid_tomb1234567890abcdef"
+    try:
+        await _resolve_elicitation(
+            "conv_bad_tomb",
+            {"elicitation_id": elicitation_id, "action": "not_valid"},
+            None,
+        )
+        assert elicitation_id not in sessions_mod._harness_pre_resolved_elicitations
+    finally:
+        _clear_harness_elicitation_state()
