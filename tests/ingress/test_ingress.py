@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import time
+from base64 import b64encode
 
 import pytest
 
@@ -15,6 +16,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    SalesforceWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -233,3 +235,28 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_salesforce_adapter_verifies_base64_hmac_and_reads_event_headers() -> None:
+    """Salesforce callbacks use a base64 HMAC header and route by Salesforce or
+    CloudEvents event type headers, so they need a first-class built-in adapter."""
+    adapter = resolve_webhook_adapter("salesforce")
+    assert isinstance(adapter, SalesforceWebhookAdapter)
+
+    body = b'{"ChangeEventHeader":{"entityName":"Opportunity"}}'
+    secret = "salesforce-client-secret"
+    digest = hmac.new(secret.encode(), body, hashlib.sha256).digest()
+    signature = b64encode(digest).decode("ascii")
+
+    assert adapter.verify(body, {"x-salesforce-signature": signature}, secret) is True
+    assert adapter.verify(body, {"x-salesforce-signature": "not-valid"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert (
+        adapter.match_key({"x-salesforce-event": "OpportunityChangeEvent"})
+        == "OpportunityChangeEvent"
+    )
+    assert (
+        adapter.match_key({"ce-type": "com.salesforce.event.OpportunityChangeEvent"})
+        == "com.salesforce.event.OpportunityChangeEvent"
+    )
+    assert adapter.match_key({}) == "*"
