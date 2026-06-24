@@ -354,6 +354,8 @@ async def test_v1_info_reports_accounts_through_principal_resolver_wrap(
         info = await client.get("/v1/info")
         # Accounts router mounted → POST /auth/login exists (422/401, not 404).
         login = await client.post("/auth/login", json={})
+        # Unauthenticated identity probe → 401 carrying the unwrapped login_url.
+        me = await client.get("/v1/me")
 
     assert info.status_code == 200
     body = info.json()
@@ -363,3 +365,7 @@ async def test_v1_info_reports_accounts_through_principal_resolver_wrap(
     assert body["needs_setup"] is False
     # The accounts /auth router is mounted (404 would mean it was skipped).
     assert login.status_code != 404
+    # /v1/me unwraps the composite for the redirect target (BDP-2426) — without
+    # the unwrap this is None and the 401 redirect is lost.
+    assert me.status_code == 401
+    assert me.json()["login_url"] == "/login"
