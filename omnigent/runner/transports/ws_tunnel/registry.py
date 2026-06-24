@@ -51,6 +51,11 @@ from omnigent.runner.transports.ws_tunnel.frames import (
 
 _logger = logging.getLogger(__name__)
 
+# Bound for the trusted launch-owner map (BDP-2436). One entry per
+# genuinely-launched runner id; FIFO-evicted past this cap so a
+# long-lived server cannot accumulate records for retired sessions.
+_MAX_LAUNCH_OWNERS = 8192
+
 
 class WebSocketLike(Protocol):
     """Minimal WebSocket protocol used by the registry + transport.
@@ -231,6 +236,17 @@ class TunnelRegistry:
         if max_connect_waiters_total < 1:
             raise ValueError("max_connect_waiters_total must be at least 1")
         self._sessions: dict[str, RunnerSession] = {}
+        # Trusted owner recorded at runner LAUNCH (BDP-2436). A runner
+        # authenticates its tunnel with a server-issued binding token but
+        # presents no user cookie, so under accounts mode its owner cannot
+        # be resolved from the handshake. The launch path records the
+        # authenticated owner that launched it here; the tunnel handler
+        # reads it to resolve ownership before rejecting. Persists across
+        # tunnel reconnects (NOT cleared on deregister) so a transient
+        # blip + capped-backoff reconnect of the same token-bound id still
+        # resolves its owner; bounded FIFO so a long-lived server cannot
+        # accumulate records for retired sessions without bound.
+        self._launch_owners: dict[str, str] = {}
         self._connect_waits: dict[str, RunnerConnectWaitState] = {}
         self._max_connect_waiters_per_runner = max_connect_waiters_per_runner
         self._max_connect_waiters_total = max_connect_waiters_total
@@ -482,6 +498,52 @@ class TunnelRegistry:
             if session is None:
                 return None
             return session.owner
+
+    def record_launch_owner(self, runner_id: str, owner: str) -> None:
+        """Record the trusted owner a runner id was launched for (BDP-2436).
+
+        The launch path mints a server-issued binding token + token-bound
+        runner id for a session and knows the authenticated owner that
+        launched it. A runner authenticates its tunnel with that token but
+        presents no user cookie, so under accounts mode its owner cannot be
+        resolved from the handshake. Recording it here lets the tunnel
+        handler resolve ownership for a token-validated runner before
+        rejecting it — without registering an owner-less (cross-tenant
+        visible/bindable) runner.
+
+        The record persists across tunnel reconnects (it is not dropped on
+        :meth:`deregister`) so a transient blip + capped-backoff reconnect
+        of the same token-bound id still resolves its owner. The map is
+        FIFO-bounded so it cannot grow without limit over a long-lived
+        server.
+
+        :param runner_id: Token-bound runner id minted at launch, e.g.
+            ``"runner_0123456789abcdef"``.
+        :param owner: Authenticated user the runner was launched for, e.g.
+            ``"alice@example.com"``.
+        :returns: None.
+        """
+        with self._lock:
+            # Refresh insertion order so re-recording an existing id keeps
+            # it from being the FIFO eviction victim.
+            self._launch_owners.pop(runner_id, None)
+            self._launch_owners[runner_id] = owner
+            while len(self._launch_owners) > _MAX_LAUNCH_OWNERS:
+                oldest = next(iter(self._launch_owners))
+                self._launch_owners.pop(oldest, None)
+
+    def launch_owner(self, runner_id: str) -> str | None:
+        """Return the trusted owner recorded for a runner at launch.
+
+        :param runner_id: Token-bound runner id, e.g.
+            ``"runner_0123456789abcdef"``.
+        :returns: The owner recorded by :meth:`record_launch_owner`, or
+            ``None`` when the server never launched this runner id (an
+            attacker-chosen token/runner_id has no record — the tunnel
+            handler must still reject it).
+        """
+        with self._lock:
+            return self._launch_owners.get(runner_id)
 
     def mark_frame_seen(self, session: RunnerSession) -> bool:
         """Record that a frame arrived for ``session``.

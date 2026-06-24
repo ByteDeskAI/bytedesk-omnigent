@@ -341,9 +341,23 @@ def create_runner_tunnel_router(
             is_loopback=is_loopback,
         )
         if tunnel_owner is None and auth_provider is not None:
+            # A token-validated runner authenticates with its server-issued
+            # binding token but presents no user cookie (BDP-2436): under
+            # accounts mode a runner spawned on a host pod connects from a
+            # non-loopback IP with no identity, so the handshake yields no
+            # owner. Fall back to the TRUSTED launch record — the
+            # authenticated owner the server recorded when it launched this
+            # runner id for a session — before rejecting. A runner the
+            # server never launched (attacker-chosen token/runner_id) has NO
+            # launch record, so this stays None and the runner is still
+            # refused below: the deliberate "no owner-less runner"
+            # cross-tenant guard above is preserved.
+            tunnel_owner = registry.launch_owner(runner_id)
+        if tunnel_owner is None and auth_provider is not None:
             # Auth is enabled but this non-loopback peer presented no
-            # authenticated identity (no cookie / Bearer). Refuse the
-            # handshake instead of registering an owner-less runner.
+            # authenticated identity (no cookie / Bearer) and the server
+            # has no launch record for it. Refuse the handshake instead of
+            # registering an owner-less runner.
             await ws.close(code=RUNNER_ID_MISMATCH_CLOSE_CODE, reason="unauthenticated")
             return
 

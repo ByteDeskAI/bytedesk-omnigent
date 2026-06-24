@@ -853,6 +853,49 @@ async def test_ws_tunnel_registers_authenticated_non_loopback_owner() -> None:
             await communicator.wait(timeout=1.0)
 
 
+async def test_ws_tunnel_registers_token_only_runner_from_launch_owner() -> None:
+    """A token-only runner connects via its trusted launch-recorded owner.
+
+    The regression BDP-2436 fixes: under accounts mode a runner spawned
+    on a host pod authenticates its tunnel with the server-issued binding
+    token (clearing the token-binding gate) but presents NO user cookie
+    and connects from a non-loopback IP, so the handshake yields no owner.
+    Before the fix the handler rejected it as ``unauthenticated`` (→ 403
+    → runner crash → ``no runner bound``). With the launch owner recorded
+    in the registry, the handler resolves the trusted owner and the runner
+    registers under it.
+
+    :returns: None.
+    """
+    route_app = _tunnel_route_app(auth_provider=_CredentialHeaderAuthProvider())
+
+    token = "server-issued-launch-token"
+    runner_id = token_bound_runner_id(token)
+    # The launch path (owner-authenticated) recorded this runner's owner.
+    route_app.registry.record_launch_owner(runner_id, "alice@example.com")
+
+    communicator = await _connect_route(
+        route_app.app,
+        f"/v1/runners/{runner_id}/tunnel",
+        headers=[
+            (RUNNER_TUNNEL_TOKEN_HEADER.lower().encode("ascii"), token.encode("ascii")),
+        ],
+        # Host pod → server: non-loopback, no user cookie.
+        client_host="203.0.113.7",
+    )
+
+    await _send_hello(communicator, route_app.registry, runner_id=runner_id)
+    try:
+        assert route_app.registry.online_runner_ids() == [runner_id]
+        # Registered under the trusted launch owner (not None, not
+        # "local"), so binding ownership checks enforce correctly.
+        assert route_app.registry.runner_owner(runner_id) == "alice@example.com"
+    finally:
+        await communicator.send_input({"type": "websocket.disconnect", "code": 1000})
+        with contextlib.suppress(asyncio.TimeoutError):
+            await communicator.wait(timeout=1.0)
+
+
 async def test_ws_tunnel_loopback_unauthenticated_registers_as_local() -> None:
     """Auth-enabled server still accepts the local loopback runner.
 

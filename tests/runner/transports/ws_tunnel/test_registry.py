@@ -389,3 +389,40 @@ async def test_online_runner_ids_returns_insertion_order() -> None:
     assert reg.online_runner_ids() == ["r1", "r2", "r3"]
     reg.deregister("r2")
     assert reg.online_runner_ids() == ["r1", "r3"]
+
+
+# ── launch-owner record (BDP-2436) ──
+#
+# A token-only runner (no user cookie) connecting from a non-loopback IP
+# under accounts mode can't be owner-resolved from the handshake. The
+# server records its trusted owner at LAUNCH so the tunnel handler can
+# resolve ownership without a user cookie.
+
+
+def test_launch_owner_unknown_returns_none() -> None:
+    """A runner id with no recorded launch has no trusted owner."""
+    reg = TunnelRegistry()
+    assert reg.launch_owner("runner_never_launched") is None
+
+
+def test_record_then_launch_owner_returns_recorded_owner() -> None:
+    """record_launch_owner is the trusted owner read back at connect."""
+    reg = TunnelRegistry()
+    reg.record_launch_owner("runner_abc", "alice@example.com")
+    assert reg.launch_owner("runner_abc") == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_launch_owner_record_survives_tunnel_disconnect() -> None:
+    """The launch record outlives a tunnel disconnect so reconnects resolve.
+
+    The runner reconnects its tunnel with the same token-bound id after a
+    transient network blip (serve.py capped backoff). The deregister that
+    fires on disconnect must NOT drop the trusted owner, or the reconnect
+    would resolve to ``None`` and be rejected — the very outage this fixes.
+    """
+    reg = TunnelRegistry()
+    reg.record_launch_owner("runner_abc", "alice@example.com")
+    reg.register("runner_abc", _NoopWS(), _hello())
+    reg.deregister("runner_abc")
+    assert reg.launch_owner("runner_abc") == "alice@example.com"
