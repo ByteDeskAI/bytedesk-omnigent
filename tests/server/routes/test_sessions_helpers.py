@@ -13,11 +13,15 @@ from typing import Any
 import pytest
 from starlette.requests import Request
 
+from omnigent._wrapper_labels import CLAUDE_NATIVE_WRAPPER_VALUE
 from omnigent.entities import Conversation, StoredFile
+from omnigent.entities.conversation import MessageData, NewConversationItem
 from omnigent.entities.permission import SessionPermission
+from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.policies.types import Phase
+from omnigent.server._elicitation_registry import _PreResolvedHarnessElicitation
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.routes import sessions as sessions_mod
-from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.routes.sessions import (
     _CLAUDE_NATIVE_WRAPPER_LABEL_KEY,
     _CODEX_NATIVE_SUBAGENT_DISPLAY_FALLBACK,
@@ -29,14 +33,32 @@ from omnigent.server.routes.sessions import (
     _SHARED_DISCOVERY_KEY,
     _add_model_usage_delta,
     _allow_all_edits_eligible,
+    _ancestor_session_ids,
     _attachment_disposition,
+    _build_actor,
+    _build_evaluation_context,
     _client_supplied_hook_elicitation_id,
     _codex_subagent_display_tool,
+    _codex_subagent_labels_from_body,
+    _coerce_cumulative_field,
+    _consume_pre_resolved_harness_elicitation,
     _discovery_key,
     _format_sse,
     _is_codex_native_subagent,
+    _is_native_terminal_session,
     _last_task_error_from_labels,
+    _merge_pending_file_blocks,
     _message_text,
+    _multipart_missing_detail,
+    _native_terminal_name_for_harness,
+    _native_terminal_runtime,
+    _parse_external_assistant_message,
+    _parse_session_create_metadata,
+    _prune_pre_resolved_harness_elicitations,
+    _reject_reserved_cost_control_label_seed,
+    _targeted_elicitation_event,
+    _validate_terminal_launch_args,
+    _validated_cost_control_mode_override,
     _model_usage_bucket,
     _owner_from_grants,
     _parse_last_event_id,
@@ -538,3 +560,270 @@ def test_is_codex_native_subagent_requires_wrapper_label() -> None:
     )
     assert _is_codex_native_subagent(codex_child) is True
     assert _is_codex_native_subagent(other) is False
+
+
+# ── elicitation tombstones + ancestor walk ───────────────────────────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_pre_resolved_elicitations() -> None:
+    """Isolate tombstone helper tests from other suites."""
+    sessions_mod._harness_pre_resolved_elicitations.clear()
+    yield
+    sessions_mod._harness_pre_resolved_elicitations.clear()
+
+
+def test_targeted_elicitation_event_annotates_params() -> None:
+    """Mirrored elicitations carry the owning session as resolution target."""
+    event = {"type": "response.elicitation_request", "params": {"tool": "Bash"}}
+    mirrored = _targeted_elicitation_event(event, target_session_id="conv_child")
+    assert mirrored["params"]["target_session_id"] == "conv_child"
+    assert mirrored["params"]["tool"] == "Bash"
+
+    bare = _targeted_elicitation_event(
+        {"type": "response.elicitation_request"},
+        target_session_id="conv_x",
+    )
+    assert bare["params"] == {"target_session_id": "conv_x"}
+
+
+class _AncestorStore:
+    def __init__(self, convs: dict[str, Conversation]) -> None:
+        self._convs = convs
+
+    def get_conversation(self, conv_id: str) -> Conversation | None:
+        return self._convs.get(conv_id)
+
+
+def test_ancestor_session_ids_walks_parent_chain() -> None:
+    """Ancestors return nearest-parent-first order."""
+    root = Conversation(
+        id="conv_root", created_at=0, updated_at=0, root_conversation_id="conv_root"
+    )
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_parent",
+    )
+    store = _AncestorStore({"conv_child": child, "conv_parent": parent, "conv_root": root})
+    assert _ancestor_session_ids(store, "conv_child") == ["conv_parent", "conv_root"]  # type: ignore[arg-type]
+
+
+def test_consume_pre_resolved_harness_elicitation_session_match() -> None:
+    """Matching session consumes the tombstone; mismatched session restores it."""
+    import time
+
+    tombstone = _PreResolvedHarnessElicitation(session_id="conv_a", created_at=time.time())
+    sessions_mod._harness_pre_resolved_elicitations["elicit_x"] = tombstone
+
+    consumed = _consume_pre_resolved_harness_elicitation("conv_a", "elicit_x")
+    assert consumed is tombstone
+    assert "elicit_x" not in sessions_mod._harness_pre_resolved_elicitations
+
+    sessions_mod._harness_pre_resolved_elicitations["elicit_y"] = _PreResolvedHarnessElicitation(
+        session_id="conv_owner", created_at=time.time()
+    )
+    assert _consume_pre_resolved_harness_elicitation("conv_other", "elicit_y") is None
+    assert "elicit_y" in sessions_mod._harness_pre_resolved_elicitations
+
+
+def test_prune_pre_resolved_harness_elicitations_expires_and_caps() -> None:
+    """Stale tombstones expire; overflow evicts oldest entries."""
+    sessions_mod._harness_pre_resolved_elicitations["old"] = _PreResolvedHarnessElicitation(
+        session_id="conv_a", created_at=0.0
+    )
+    sessions_mod._harness_pre_resolved_elicitations["fresh"] = _PreResolvedHarnessElicitation(
+        session_id="conv_a", created_at=200.0
+    )
+    _prune_pre_resolved_harness_elicitations(now=400.0)
+    assert "old" not in sessions_mod._harness_pre_resolved_elicitations
+    assert "fresh" in sessions_mod._harness_pre_resolved_elicitations
+
+    max_entries = sessions_mod._HARNESS_PRE_RESOLVED_ELICITATION_MAX_ENTRIES
+    for i in range(max_entries + 3):
+        sessions_mod._harness_pre_resolved_elicitations[f"elicit_{i}"] = (
+            _PreResolvedHarnessElicitation(session_id="conv_a", created_at=float(i))
+        )
+    _prune_pre_resolved_harness_elicitations(now=10_000.0)
+    assert len(sessions_mod._harness_pre_resolved_elicitations) <= max_entries
+
+
+# ── usage coercion + file merge + external parse ─────────────────────────────
+
+
+def test_coerce_cumulative_field_validates_numeric_and_int() -> None:
+    """Token fields require int; cost fields accept float."""
+    assert _coerce_cumulative_field({"cumulative_input_tokens": 10}, "cumulative_input_tokens", numeric=False) == 10
+    assert _coerce_cumulative_field({"cumulative_cost_usd": 0.5}, "cumulative_cost_usd", numeric=True) == 0.5
+    assert _coerce_cumulative_field({}, "missing", numeric=False) is None
+
+    with pytest.raises(OmnigentError):
+        _coerce_cumulative_field({"cumulative_input_tokens": -1}, "cumulative_input_tokens", numeric=False)
+    with pytest.raises(OmnigentError):
+        _coerce_cumulative_field({"cumulative_input_tokens": True}, "cumulative_input_tokens", numeric=False)
+
+
+def test_merge_pending_file_blocks_prepends_images() -> None:
+    """Pending file blocks fold into durable user messages."""
+    item = NewConversationItem(
+        type="message",
+        response_id="resp_merge",
+        data=MessageData(role="user", content=[{"type": "input_text", "text": "hi"}]),
+    )
+    pending = [
+        {"type": "input_image", "file_id": "file_img"},
+        {"type": "input_text", "text": "hi"},
+    ]
+    merged = _merge_pending_file_blocks(item, pending)
+    assert merged.data.content[0]["type"] == "input_image"
+    assert merged.data.content[1]["type"] == "input_text"
+
+
+def test_merge_pending_file_blocks_noops_without_files() -> None:
+    """Text-only pending content and duplicate file blocks are left unchanged."""
+    item = NewConversationItem(
+        type="message",
+        response_id="resp_merge",
+        data=MessageData(
+            role="user",
+            content=[{"type": "input_file", "file_id": "file_a"}],
+        ),
+    )
+    assert _merge_pending_file_blocks(item, [{"type": "input_text", "text": "x"}]) is item
+
+
+def test_parse_external_assistant_message_unpacks_fields() -> None:
+    """External assistant events require agent + text; response_id may be minted."""
+    from omnigent.server.schemas import SessionEventInput
+
+    body = SessionEventInput(
+        type="external_assistant_message",
+        data={"agent": " claude-native ", "text": "hello", "response_id": "resp_1"},
+    )
+    agent, text, response_id = _parse_external_assistant_message(body)
+    assert agent == "claude-native"
+    assert text == "hello"
+    assert response_id == "resp_1"
+
+    with pytest.raises(OmnigentError):
+        _parse_external_assistant_message(
+            SessionEventInput(type="external_assistant_message", data={"agent": "", "text": "x"})
+        )
+
+
+def test_codex_subagent_labels_from_body_maps_optional_fields() -> None:
+    """Codex child rows stamp wrapper + thread metadata from the event body."""
+    from omnigent.server.schemas import SessionEventInput
+
+    body = SessionEventInput(
+        type="external_codex_subagent_start",
+        data={
+            "parent_thread_id": "thread_parent",
+            "agent_nickname": "auth-auditor",
+            "agent_role": "reviewer",
+        },
+    )
+    labels = _codex_subagent_labels_from_body("thread_child", body)
+    assert labels[_CLAUDE_NATIVE_WRAPPER_LABEL_KEY] == _CODEX_NATIVE_SUBAGENT_WRAPPER_LABEL_VALUE
+    assert labels[_CODEX_NATIVE_SUBAGENT_NICKNAME_LABEL_KEY] == "auth-auditor"
+
+
+# ── validation helpers + native terminal metadata ────────────────────────────
+
+
+def test_build_actor_returns_run_as_or_none() -> None:
+    assert _build_actor(None) is None
+    assert _build_actor("alice@example.com") == {"run_as": "alice@example.com"}
+
+
+def test_validated_cost_control_mode_override_accepts_on_off() -> None:
+    assert _validated_cost_control_mode_override(None) is None
+    assert _validated_cost_control_mode_override("on") == "on"
+    with pytest.raises(OmnigentError):
+        _validated_cost_control_mode_override("maybe")
+
+
+def test_validate_terminal_launch_args_bounds() -> None:
+    assert _validate_terminal_launch_args(None) is None
+    assert _validate_terminal_launch_args(["--flag"]) == ["--flag"]
+    with pytest.raises(ValueError):
+        _validate_terminal_launch_args(["x" * 5000])
+
+
+def test_parse_session_create_metadata_validates_json() -> None:
+    parsed = _parse_session_create_metadata('{"title": "debug flow"}')
+    assert parsed.title == "debug flow"
+    with pytest.raises(OmnigentError):
+        _parse_session_create_metadata("not-json")
+
+
+def test_multipart_missing_detail_shape() -> None:
+    detail = _multipart_missing_detail("bundle")
+    assert detail["type"] == "missing"
+    assert detail["loc"] == ["body", "bundle"]
+
+
+def test_reject_reserved_cost_control_label_seed() -> None:
+    with pytest.raises(OmnigentError):
+        _reject_reserved_cost_control_label_seed({"cost_control.plan": "forged"})
+    _reject_reserved_cost_control_label_seed({"team": "ml"})
+
+
+def test_native_terminal_helpers_resolve_claude_wrapper() -> None:
+    conv = Conversation(
+        id="conv_claude",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_claude",
+        labels={_CLAUDE_NATIVE_WRAPPER_LABEL_KEY: CLAUDE_NATIVE_WRAPPER_VALUE},
+    )
+    assert _is_native_terminal_session(conv) is True
+    display, model, harness = _native_terminal_runtime(conv)
+    assert display == "Claude"
+    assert harness == "claude-native"
+    assert _native_terminal_name_for_harness("codex-native") == "codex"
+
+    plain = Conversation(
+        id="conv_plain", created_at=0, updated_at=0, root_conversation_id="conv_plain"
+    )
+    assert _is_native_terminal_session(plain) is False
+    with pytest.raises(OmnigentError):
+        _native_terminal_runtime(plain)
+
+
+def test_build_evaluation_context_maps_tool_and_request_phases() -> None:
+    actor = {"run_as": "alice@example.com"}
+    tool_ctx = _build_evaluation_context(
+        Phase.TOOL_CALL,
+        {"name": "Bash", "arguments": {"command": "ls"}},
+        {"context": {"model": "claude-sonnet", "harness": "claude-native"}},
+        actor=actor,
+    )
+    assert tool_ctx.tool_name == "Bash"
+    assert tool_ctx.model == "claude-sonnet"
+
+    result_ctx = _build_evaluation_context(
+        Phase.TOOL_RESULT,
+        {"result": "ok"},
+        {"request_data": {"name": "Bash"}},
+        actor=actor,
+    )
+    assert result_ctx.tool_name == "Bash"
+    assert result_ctx.content == {"result": "ok"}
+
+    request_ctx = _build_evaluation_context(
+        Phase.REQUEST,
+        {"text": "hello"},
+        {},
+        actor=actor,
+    )
+    assert request_ctx.content == "hello"
