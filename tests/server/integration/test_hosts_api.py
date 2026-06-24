@@ -666,14 +666,9 @@ def multi_user_app(
     # Stash the permission store so tests can set up session grants.
     app.state.permission_store = permission_store
     app.include_router(
-        # local_single_user=False: this fixture models a deployed
-        # multi-user server, so host_id re-own must be refused (the
-        # behavior under test). Override the suite-wide single-user
-        # default from tests/conftest.py (OMNIGENT_LOCAL_SINGLE_USER=1),
-        # which create_host_tunnel_router would otherwise read from env.
-        create_host_tunnel_router(
-            registry, host_store, auth_provider=auth, local_single_user=False
-        ),
+        # Registration is idempotent on host_id (ADR-0151): a reconnect under
+        # a different authenticated owner re-owns the host_id row in place.
+        create_host_tunnel_router(registry, host_store, auth_provider=auth),
         prefix="/v1",
     )
     app.include_router(
@@ -1087,25 +1082,26 @@ async def test_launch_runner_rejects_other_users_session(
     assert still.runner_id is None
 
 
-async def test_failed_connect_does_not_offline_another_users_host(
+async def test_reconnect_under_new_owner_reowns_at_tunnel(
     multi_user_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
 ) -> None:
-    """
-    A peer connecting to another owner's host_id fails the upsert
-    (host_id unique constraint) — and must NOT flip that owner's host
-    offline. Before the fix the broad except called set_offline(host_id)
-    on a connection that never registered, letting any authenticated user
-    repeatedly DoS another user's host.
+    """A reconnect under a different authenticated owner re-owns the host_id
+    in place at the tunnel level (ADR-0151, org-shared host pool).
+
+    ``host_id`` is the host's natural identity; ``owner`` is provenance. A host
+    presenting an existing host_id under a different *authenticated* owner
+    re-owns the row (a normal UPDATE) instead of colliding on
+    ``uq_hosts_host_id`` and tearing the connection down. The genuine
+    host-id hijack boundary for managed/sandbox hosts is upheld separately by
+    ``register_managed_host`` + the tunnel auth handshake (an unauthenticated
+    peer never reaches the upsert).
     """
     app, _registry, host_store, _cs = multi_user_app
 
-    # Alice's host is registered and online.
+    # An initial owner registers host_dos.
     host_store.upsert_on_connect("host_dos", "alice-laptop", "alice@test.com")
-    before = host_store.get_host("host_dos")
-    assert before is not None
-    assert before.status == "online"
 
-    # Bob (a different authenticated user) connects to Alice's host_id.
+    # A different authenticated owner reconnects with the same host_id.
     scope = _websocket_scope("/v1/hosts/host_dos/tunnel")
     scope["headers"] = [(b"x-test-user", b"bob@test.com")]
     comm = ApplicationCommunicator(app, scope)
@@ -1115,20 +1111,16 @@ async def test_failed_connect_does_not_offline_another_users_host(
     await comm.send_input(
         {"type": "websocket.receive", "text": _make_hello("bob-laptop")},
     )
-    # The failed upsert tears the connection down — drain to completion.
     with contextlib.suppress(Exception):
         await comm.wait(timeout=2.0)
 
     after = host_store.get_host("host_dos")
     assert after is not None
-    # Bob never claimed the host_id...
-    assert after.owner == "alice@test.com"
-    # ...and crucially, Alice's host is still online — set_offline did not
-    # run on Bob's failed (never-registered) connection.
-    assert after.status == "online", (
-        "Bob's failed connect to Alice's host_id flipped her host offline "
-        "(set_offline ran on a connection that never registered) — DoS."
-    )
+    # Re-owned to bob in place — exactly one row for the host_id, no collision.
+    assert after.owner == "bob@test.com"
+    assert after.name == "bob-laptop"
+    assert [h.host_id for h in host_store.list_hosts(owner="bob@test.com")] == ["host_dos"]
+    assert host_store.list_hosts(owner="alice@test.com") == []
 
 
 async def test_runner_exited_report_surfaces_in_runner_status(

@@ -185,7 +185,6 @@ class HostStore:
         name: str,
         owner: str,
         *,
-        allow_host_id_reown: bool = False,
         configured_harnesses: dict[str, bool] | None = None,
     ) -> Host:
         """
@@ -196,19 +195,20 @@ class HostStore:
         Called by the host tunnel endpoint when a host sends its
         ``host.hello`` frame.
 
-        The upsert keys on the ``(owner, name)`` primary key, but
-        ``host_id`` carries its own UNIQUE constraint. When the same
-        physical host re-registers under a *different* owner (e.g. a
-        local server respawned with a flipped auth posture changes the
-        owner between an accounts user and the reserved ``local`` user),
-        the ``(owner, name)`` lookup misses and a plain INSERT would
-        collide on ``host_id``. That collision is a deliberate W2-class
-        boundary in shared deployments — a different user must not be
-        able to claim another user's host_id — so re-owning is gated
-        behind *allow_host_id_reown*, which the server sets only for the
-        loopback single-user local server. Remote / multi-user servers
-        never set it, so the hijack boundary stays intact (the INSERT
-        raises ``IntegrityError`` and fails the handshake closed).
+        ``host_id`` is the host's natural identity (its own UNIQUE
+        constraint); ``owner`` is provenance metadata. Registration is
+        therefore **idempotent on host_id**: when the same physical host
+        re-registers under a *different* ``(owner, name)`` — e.g. an
+        accounts<->header auth swap flips the owner between an accounts
+        user and the reserved ``local`` user — the ``(owner, name)``
+        lookup misses, so we re-own the existing ``host_id`` row in place
+        (preserving the row and its conversation bindings) instead of
+        inserting and colliding on ``uq_hosts_host_id`` (ADR-0151). The
+        W2-class host-id hijack boundary for genuinely shared multi-tenant
+        deployments is upheld by the tunnel auth handshake (an
+        unauthenticated peer never reaches this method) and by
+        :meth:`register_managed_host`'s own cross-owner refusal — not by a
+        plain-INSERT collision.
 
         :param host_id: Stable host identifier, e.g.
             ``"host_a1b2c3d4..."``.
@@ -216,11 +216,6 @@ class HostStore:
             ``"corey-laptop"``.
         :param owner: Authenticated user ID from the Bearer token,
             e.g. ``"corey.zumar@databricks.com"``.
-        :param allow_host_id_reown: When ``True`` and a row already
-            exists for *host_id* under a different ``(owner, name)``,
-            re-own that row in place (preserving the ``host_id`` and its
-            conversation bindings) instead of inserting. Intended solely
-            for the single-user loopback local server.
         :param configured_harnesses: Per-harness readiness from the
             host's ``host.hello`` frame, e.g. ``{"claude-sdk": True}``.
             Written on every connect — including ``None`` from an older
@@ -234,7 +229,10 @@ class HostStore:
         )
         with self._session() as session:
             row = session.get(SqlHost, (owner, name))
-            if row is None and allow_host_id_reown:
+            if row is None:
+                # Re-own the host_id row in place when (owner, name) misses —
+                # registration is idempotent on host_id, so an owner/name flip
+                # is an UPDATE, never a uq_hosts_host_id collision (ADR-0151).
                 reowned = self._reown_host_id(
                     session,
                     host_id=host_id,
@@ -338,9 +336,11 @@ class HostStore:
     ) -> Host | None:
         """Re-own an existing host_id row under a new ``(owner, name)``.
 
-        Used only when ``upsert_on_connect`` opts in via
-        ``allow_host_id_reown`` (the single-user loopback local server).
-        Updates ``owner``, ``name``, ``status``, and ``updated_at`` on the
+        The unconditional reconnect path for a host whose ``(owner, name)``
+        changed (ADR-0151): registration is idempotent on ``host_id``, so a
+        flipped owner/name re-owns the existing row rather than colliding on
+        ``uq_hosts_host_id``. Updates ``owner``, ``name``, ``status``, and
+        ``updated_at`` on the
         row that already holds *host_id*, leaving ``host_id`` itself
         unchanged so the ``conversations.host_id`` foreign-key bindings
         survive the owner change. ``owner`` / ``name`` are the table's

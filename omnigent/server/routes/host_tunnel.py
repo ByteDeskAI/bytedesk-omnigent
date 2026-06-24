@@ -66,7 +66,6 @@ def create_host_tunnel_router(
     on_host_connect: Callable[[str], Awaitable[None]] | None = None,
     on_host_disconnect: Callable[[str], Awaitable[None]] | None = None,
     on_runner_exited: Callable[[str, str], Awaitable[None]] | None = None,
-    local_single_user: bool | None = None,
     runner_exit_reports: RunnerExitReports | None = None,
 ) -> APIRouter:
     """Build the router hosting the ``/hosts/{id}/tunnel`` WS endpoint.
@@ -97,23 +96,11 @@ def create_host_tunnel_router(
         runner-tunnel ``on_runner_disconnect`` path never fires).
     :param on_host_disconnect: Optional async callback fired when
         a host's tunnel closes. Receives the ``host_id``.
-    :param local_single_user: When ``True``, allow a host to re-own a
-        ``host_id`` already registered under a different owner — needed
-        only for the single-user loopback local server, where the owner
-        legitimately changes across an accounts↔header auth-mode flip.
-        ``None`` (the default) resolves from ``OMNIGENT_LOCAL_SINGLE_USER``
-        so the deployed multi-user server (which never sets it) keeps the
-        W2-class host-hijack boundary. Tests pass an explicit bool.
     :param runner_exit_reports: Shared store for ``host.runner_exited``
         reports, read by the runner status endpoint. ``None`` (e.g.
         minimal test wiring) drops the reports.
     :returns: A FastAPI router with the host tunnel endpoint.
     """
-    from omnigent.server.auth import local_single_user_enabled
-
-    allow_host_id_reown = (
-        local_single_user if local_single_user is not None else local_single_user_enabled()
-    )
     router = APIRouter()
 
     @router.websocket("/hosts/{host_id}/tunnel")
@@ -190,7 +177,6 @@ def create_host_tunnel_router(
                 host_id=host_id,
                 name=frame.name,
                 owner=tunnel_owner,
-                allow_host_id_reown=allow_host_id_reown,
                 configured_harnesses=frame.configured_harnesses,
             )
 
