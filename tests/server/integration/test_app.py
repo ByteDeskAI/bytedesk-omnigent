@@ -284,3 +284,82 @@ async def test_me_header_mode_behaviors(
     # Reserved name is rejected (returns None → route returns null).
     assert reserved.status_code == 200
     assert reserved.json() == {"user_id": None}
+
+
+async def test_v1_info_reports_accounts_through_principal_resolver_wrap(
+    runtime_init: None,
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Accounts mode survives a BDP-2388 principal-resolver Composite wrap (BDP-2426).
+
+    Regression: a contributed principal resolver wrapped the accounts provider
+    in a ``CompositeAuthProvider``, so ``create_app``'s
+    ``isinstance(auth_provider, UnifiedAuthProvider)`` accounts checks all
+    failed — ``/v1/info`` reported ``accounts_enabled=false`` and the ``/auth``
+    router was never mounted (so the first-boot admin was never created). With a
+    resolver present, all three sites must still recognize accounts mode.
+
+    :param runtime_init: Fixture that initializes the runtime with a mock LLM.
+    :param db_uri: Test database URI.
+    :param tmp_path: Pytest temporary directory fixture.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :returns: None.
+    """
+    import omnigent.extensions as ext_mod
+    from omnigent.server.accounts_config import AccountsConfig
+    from omnigent.server.accounts_store import SqlAlchemyAccountStore
+    from omnigent.server.auth import AuthProvider, UnifiedAuthProvider
+
+    class _SilentResolver(AuthProvider):
+        def get_user_id(self, request: object) -> str | None:
+            return None
+
+    # Force the principal-resolver Composite wrap that hid accounts mode.
+    monkeypatch.setattr(
+        ext_mod, "extension_principal_resolvers", lambda: [_SilentResolver()]
+    )
+
+    cfg = AccountsConfig(
+        cookie_secret=b"0" * 32,
+        session_ttl_hours=8,
+        base_url="http://test",
+        init_admin_password="testadminpw",
+        invite_ttl_seconds=3600,
+        magic_ttl_seconds=600,
+    )
+    accounts_ap = UnifiedAuthProvider(
+        source="accounts", accounts_config=cfg, local_single_user=False
+    )
+
+    monkeypatch.setattr(app_module, "_WEB_UI_DIST", tmp_path / "missing-web-ui")
+    artifact_store = LocalArtifactStore(str(tmp_path / "artifacts"))
+    app = app_module.create_app(
+        agent_store=SqlAlchemyAgentStore(db_uri),
+        file_store=SqlAlchemyFileStore(db_uri),
+        conversation_store=SqlAlchemyConversationStore(db_uri),
+        artifact_store=artifact_store,
+        agent_cache=AgentCache(
+            artifact_store=artifact_store,
+            cache_dir=tmp_path / "cache",
+        ),
+        permission_store=SqlAlchemyPermissionStore(db_uri),
+        auth_provider=accounts_ap,
+        account_store=SqlAlchemyAccountStore(db_uri),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        info = await client.get("/v1/info")
+        # Accounts router mounted → POST /auth/login exists (422/401, not 404).
+        login = await client.post("/auth/login", json={})
+
+    assert info.status_code == 200
+    body = info.json()
+    assert body["accounts_enabled"] is True
+    assert body["login_url"] == "/login"
+    # First-boot admin was bootstrapped (the gate ran) → setup no longer pending.
+    assert body["needs_setup"] is False
+    # The accounts /auth router is mounted (404 would mean it was skipped).
+    assert login.status_code != 404

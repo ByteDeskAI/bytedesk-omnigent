@@ -430,6 +430,29 @@ class UnifiedAuthProvider(AuthProvider):
         return None
 
 
+def accounts_provider(provider: AuthProvider | None) -> UnifiedAuthProvider | None:
+    """The active accounts :class:`UnifiedAuthProvider`, seen through a wrap.
+
+    The BDP-2388 principal-resolver :class:`CompositeAuthProvider` wraps the
+    configured provider whenever an extension contributes a resolver (the
+    bytedesk extension always does), so a bare
+    ``isinstance(provider, UnifiedAuthProvider)`` no longer recognizes accounts
+    mode — it sees the composite. This unwraps one level (``._base``) before the
+    source check so the accounts bootstrap, the ``/auth`` router, and the
+    ``/v1/info`` ``accounts_enabled`` flag keep working under a principal
+    resolver (BDP-2426).
+
+    :param provider: The (possibly composite-wrapped) configured provider.
+    :returns: The underlying accounts ``UnifiedAuthProvider``, or ``None`` when
+        the deployment is not in accounts mode.
+    """
+    if isinstance(provider, CompositeAuthProvider):
+        provider = provider._base
+    if isinstance(provider, UnifiedAuthProvider) and provider._source == "accounts":
+        return provider
+    return None
+
+
 def create_auth_provider() -> AuthProvider:
     """Factory: read ``OMNIGENT_AUTH_PROVIDER`` and return a
     :class:`UnifiedAuthProvider` configured for the selected source.

@@ -857,12 +857,15 @@ def create_app(
     # framing.
     _bootstrap_result = None  # populated below for the lifespan hook
     if auth_provider is not None and account_store is not None:
-        from omnigent.server.auth import UnifiedAuthProvider
+        from omnigent.server.auth import accounts_provider
 
-        if isinstance(auth_provider, UnifiedAuthProvider) and auth_provider._source == "accounts":
+        # Unwrap a principal-resolver CompositeAuthProvider (BDP-2426) so accounts
+        # bootstrap still fires when an extension contributes a resolver.
+        _accounts_ap = accounts_provider(auth_provider)
+        if _accounts_ap is not None:
             from omnigent.server.accounts_bootstrap import bootstrap_admin
 
-            _accounts_cfg = auth_provider._accounts_config
+            _accounts_cfg = _accounts_ap._accounts_config
             _bootstrap_result = bootstrap_admin(
                 account_store,
                 init_admin_password=_accounts_cfg.init_admin_password,
@@ -1582,12 +1585,13 @@ def create_app(
         provider name (``sandbox_provider``) the web UI labels the
         new-session sandbox option with.
         """
-        from omnigent.server.auth import UnifiedAuthProvider
+        from omnigent.server.auth import accounts_provider
 
-        accounts_enabled = (
-            isinstance(auth_provider, UnifiedAuthProvider) and auth_provider._source == "accounts"
-        )
-        login_url = getattr(auth_provider, "login_url", None)
+        # Unwrap a principal-resolver CompositeAuthProvider (BDP-2426) so the
+        # accounts capability + login URL survive a contributed resolver.
+        _accounts_ap = accounts_provider(auth_provider)
+        accounts_enabled = _accounts_ap is not None
+        login_url = getattr(_accounts_ap or auth_provider, "login_url", None)
         # needs_setup drives the SPA's first-run "Create admin" form:
         # true only in accounts mode while no password-having account
         # exists yet. Same predicate bootstrap_admin uses, computed
@@ -2006,7 +2010,14 @@ def create_app(
     # /magic/redeem, /users, /users/{id}/reset, /users/me/password).
     # Must be registered BEFORE the SPA static mount because the SPA's
     # HTML5-history fallback catches all unmatched extensionless paths.
-    if auth_provider is not None and getattr(auth_provider, "login_url", None):
+    # A principal-resolver CompositeAuthProvider (BDP-2426) hides the concrete
+    # provider's login_url / accounts/OIDC config + methods, so unwrap to the
+    # base provider for router construction (the composite is only for
+    # request-time identity resolution, not for mounting the /auth endpoints).
+    from omnigent.server.auth import CompositeAuthProvider as _Composite
+
+    _base_ap = auth_provider._base if isinstance(auth_provider, _Composite) else auth_provider
+    if _base_ap is not None and getattr(_base_ap, "login_url", None):
         from omnigent.server.admin_list import load_admin_list
         from omnigent.server.auth import UnifiedAuthProvider
 
@@ -2018,8 +2029,8 @@ def create_app(
         admin_list = load_admin_list(extra=frozenset(admins or ()))
 
         if (
-            isinstance(auth_provider, UnifiedAuthProvider)
-            and auth_provider._source == "accounts"
+            isinstance(_base_ap, UnifiedAuthProvider)
+            and _base_ap._source == "accounts"
             and account_store is not None
         ):
             from omnigent.server.routes.accounts_auth import (
@@ -2028,7 +2039,7 @@ def create_app(
 
             app.include_router(
                 create_accounts_auth_router(
-                    auth_provider, account_store, admin_list, permission_store
+                    _base_ap, account_store, admin_list, permission_store
                 ),
                 prefix="/auth",
                 tags=["auth"],
@@ -2041,7 +2052,7 @@ def create_app(
             # shared DB when enabled and the caller didn't pass one —
             # OIDC deploys don't otherwise wire an account store.
             oidc_account_store = account_store
-            _oidc_cfg = getattr(auth_provider, "_oidc_config", None)
+            _oidc_cfg = getattr(_base_ap, "_oidc_config", None)
             if (
                 oidc_account_store is None
                 and _oidc_cfg is not None
@@ -2054,7 +2065,7 @@ def create_app(
 
             app.include_router(
                 create_auth_router(
-                    auth_provider,
+                    _base_ap,
                     permission_store,
                     admin_list,
                     oidc_account_store,
