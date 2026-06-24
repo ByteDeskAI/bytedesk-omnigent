@@ -13,7 +13,7 @@ from fastapi import FastAPI
 
 from omnigent import claude_native_bridge, codex_native_bridge
 from omnigent.claude_native_bridge import bridge_dir_for_conversation_id
-from omnigent.runner import create_runner_app
+from omnigent.runner import create_runner_app, pending_approvals
 from omnigent.runner import app as runner_app
 from omnigent.runner.app import _session_event_queues_ref, _session_histories_ref
 from omnigent.runtime.compaction import CompactionResult, SummaryMetadata
@@ -57,7 +57,8 @@ class _ScriptedHarnessClient:
         return _StreamCtx()
 
     async def post(self, url: str, *, json: dict[str, Any], timeout: Any = None) -> Any:
-        del url, json, timeout
+        del url, timeout
+        self.posted_bodies.append(json)
 
         class _Response:
             status_code = 200
@@ -889,6 +890,10 @@ async def test_history_load_converts_tool_items_and_skips_unknown_types(
             [{"type": "input_text", "text": "BLOCK_PREVIEW"}],
             "BLOCK_PREVIEW",
         ),
+        (
+            ["RAW_BLOCK_PREVIEW"],
+            "RAW_BLOCK_PREVIEW",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -937,3 +942,80 @@ async def test_child_idle_status_uses_assistant_history_preview(
         and e.get("child", {}).get("last_message_preview") == expected_preview
         for e in events
     )
+
+
+@pytest.mark.asyncio
+async def test_events_approval_resolves_pending_and_forwards_to_harness() -> None:
+    conv = "conv_approval_forward"
+    harness_client = _ScriptedHarnessClient([])
+    pm = _FakeProcessManager(harness_client)
+    spec = AgentSpec(spec_version=1, name="approval-test")
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    pending_approvals.reset_for_tests()
+    fut = pending_approvals.register("elicit_forward")
+
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+            await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag_1"})
+            resp = await client.post(
+                f"/v1/sessions/{conv}/events",
+                json={
+                    "type": "approval",
+                    "data": {"elicitation_id": "elicit_forward", "action": "accept"},
+                },
+            )
+    finally:
+        pending_approvals.reset_for_tests()
+
+    assert resp.status_code == 200
+    assert fut.done()
+    assert fut.result() is True
+    assert harness_client.posted_bodies
+    assert harness_client.posted_bodies[-1]["type"] == "approval"
+
+
+@pytest.mark.asyncio
+async def test_events_approval_forward_returns_502_when_harness_post_fails() -> None:
+    class _FailingHarnessClient(_ScriptedHarnessClient):
+        async def post(self, url: str, *, json: dict[str, Any], timeout: Any = None) -> Any:
+            del url, json, timeout
+            raise httpx.ConnectError("harness gone")
+
+    conv = "conv_approval_forward_fail"
+    pm = _FakeProcessManager(_FailingHarnessClient([]))
+    spec = AgentSpec(spec_version=1, name="approval-test")
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv}/events",
+            json={
+                "type": "approval",
+                "data": {"elicitation_id": "elicit_missing", "action": "decline"},
+            },
+        )
+
+    assert resp.status_code == 502
+    assert resp.json().get("error") == "harness_forward_failed"
