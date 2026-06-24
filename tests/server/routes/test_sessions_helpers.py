@@ -5426,3 +5426,196 @@ async def test_persist_session_status_error_labels_swallows_store_failures() -> 
         ErrorDetail(code="runner_error", message="boom"),
         store,  # type: ignore[arg-type]
     )
+
+
+# ── batch 61: subagent lookup pagination + resolver exception paths ───────────
+
+
+class _TwoPageSubagentStore:
+    """Store that forces the find-* helpers to paginate with ``after=last_id``."""
+
+    def __init__(
+        self,
+        *,
+        first_page: list[Conversation],
+        second_page: list[Conversation],
+    ) -> None:
+        self._first = first_page
+        self._second = second_page
+        self._calls = 0
+
+    def list_conversations(
+        self,
+        *,
+        kind: str | None = None,
+        parent_conversation_id: str | None = None,
+        limit: int = 100,
+        after: str | None = None,
+        **_: Any,
+    ) -> PagedList[Conversation]:
+        del kind, parent_conversation_id, limit
+        self._calls += 1
+        if after is None:
+            page = self._first
+            return PagedList(
+                data=page,
+                first_id=page[0].id if page else None,
+                last_id=page[-1].id if page else None,
+                has_more=True,
+            )
+        assert after == self._first[-1].id
+        page = self._second
+        return PagedList(
+            data=page,
+            first_id=page[0].id if page else None,
+            last_id=page[-1].id if page else None,
+            has_more=False,
+        )
+
+
+def _subagent_conv(
+    *,
+    conv_id: str,
+    labels: dict[str, str] | None = None,
+    title: str | None = None,
+) -> Conversation:
+    return Conversation(
+        id=conv_id,
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        labels=labels or {},
+        title=title,
+    )
+
+
+def test_find_claude_native_subagent_child_paginates_to_second_page() -> None:
+    filler = _subagent_conv(
+        conv_id="conv_page1",
+        labels={_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY: "other"},
+    )
+    target = _subagent_conv(
+        conv_id="conv_page2",
+        labels={_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY: "sub_target"},
+    )
+    store = _TwoPageSubagentStore(first_page=[filler], second_page=[target])
+    found = _find_claude_native_subagent_child(store, "conv_parent", "sub_target")  # type: ignore[arg-type]
+    assert found is not None
+    assert found.id == "conv_page2"
+    assert store._calls == 2
+
+
+def test_find_subagent_child_by_title_paginates_to_second_page() -> None:
+    filler = _subagent_conv(conv_id="conv_page1", title="Explore:other")
+    target = _subagent_conv(conv_id="conv_page2", title="Explore:target")
+    store = _TwoPageSubagentStore(first_page=[filler], second_page=[target])
+    found = _find_subagent_child_by_title(store, "conv_parent", "Explore:target")  # type: ignore[arg-type]
+    assert found is not None
+    assert found.id == "conv_page2"
+    assert store._calls == 2
+
+
+def test_find_codex_native_subagent_child_paginates_to_second_page() -> None:
+    from omnigent.server.routes.sessions import _CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY
+
+    filler = _subagent_conv(
+        conv_id="conv_page1",
+        labels={_CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY: "thread_other"},
+    )
+    target = _subagent_conv(
+        conv_id="conv_page2",
+        labels={_CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY: "thread_target"},
+    )
+    store = _TwoPageSubagentStore(first_page=[filler], second_page=[target])
+    found = _find_codex_native_subagent_child(store, "conv_parent", "thread_target")  # type: ignore[arg-type]
+    assert found is not None
+    assert found.id == "conv_page2"
+    assert store._calls == 2
+
+
+def test_agent_display_names_for_skips_missing_agent_and_load_errors() -> None:
+    ok_agent = Agent(id="ag_ok", created_at=1, name="ok", bundle_location="ag_ok/x")
+    bad_agent = Agent(id="ag_bad", created_at=1, name="bad", bundle_location="ag_bad/x")
+    spec = AgentSpec(
+        spec_version=1,
+        name="ok",
+        params={"displayName": "OK Person"},
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-sdk"}),
+    )
+    store = MagicMock()
+    store.get.side_effect = lambda aid: {
+        "ag_ok": ok_agent,
+        "ag_bad": bad_agent,
+    }.get(aid)
+    cache = MagicMock()
+
+    def _load(agent_id: str, *_args: object, **_kwargs: object) -> LoadedAgent:
+        if agent_id == "ag_ok":
+            return LoadedAgent(spec=spec, workdir=Path("/tmp/ok"))
+        raise RuntimeError("bad bundle")
+
+    cache.load.side_effect = _load
+    names = _agent_display_names_for(["ag_missing", "ag_ok", "ag_bad"], store, cache)
+    assert names == {"ag_ok": "OK Person"}
+
+
+def test_resolve_llm_model_swallows_spec_load_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_err",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_err",
+        agent_id="ag_err",
+    )
+    agent = Agent(id="ag_err", created_at=1, name="e", bundle_location="ag_err/x")
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.side_effect = OSError("bundle unreadable")
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _resolve_llm_model(conv) is None
+
+
+def test_resolve_output_schema_swallows_spec_load_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_schema_err",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_schema_err",
+        agent_id="ag_err",
+    )
+    agent = Agent(id="ag_err", created_at=1, name="e", bundle_location="ag_err/x")
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.side_effect = ValueError("bad spec")
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _resolve_output_schema(conv) is None
+
+
+def test_resolve_harness_swallows_spec_load_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_harness_err",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_harness_err",
+        agent_id="ag_err",
+    )
+    agent = Agent(id="ag_err", created_at=1, name="e", bundle_location="ag_err/x")
+    store = MagicMock()
+    store.get.return_value = agent
+    cache = MagicMock()
+    cache.load.side_effect = KeyError("missing harness")
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+    assert _resolve_harness(conv) is None
