@@ -262,6 +262,60 @@ async def test_auto_create_codex_fork_patch_failure_still_launches(
 
 
 @pytest.mark.asyncio
+async def test_auto_create_codex_fork_rebuild_patch_failure_still_launches(
+    codex_env: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import omnigent.codex_native as codex_native
+    import omnigent.runner.app as runner_app_mod
+
+    session_id = "conv_codex_rebuild_patch"
+    built = tmp_path / "built-rollout.jsonl"
+    built.write_text("{}\n")
+
+    _install_fake_codex_server(monkeypatch, tmp_path, session_id)
+    monkeypatch.setattr(
+        runner_app_mod,
+        "_codex_native_launch_config",
+        AsyncMock(
+            return_value=_CodexNativeLaunchConfig(
+                workspace=codex_env,
+                policy_server_url="http://127.0.0.1:8000",
+                terminal_launch_args=None,
+                model_override=None,
+                external_session_id=None,
+                fork_source_id="conv_sdk_source",
+                fork_source_external_id=None,
+                fork_carry_history=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        codex_native,
+        "_ensure_local_codex_resume_rollout",
+        AsyncMock(return_value=built),
+    )
+
+    async def _patch_fail(*_a: Any, **_k: Any) -> httpx.Response:
+        raise httpx.ConnectError("ap down")
+
+    with caplog.at_level(logging.WARNING, logger="omnigent.runner.app"):
+        view = await _auto_create_codex_terminal(
+            session_id,
+            _LaunchRegistry(),  # type: ignore[arg-type]
+            lambda *_a, **_k: None,
+            server_client=SimpleNamespace(patch=AsyncMock(side_effect=_patch_fail)),  # type: ignore[arg-type]
+        )
+        await asyncio.sleep(0)
+
+    assert view.id == "terminal_codex_main"
+    assert "Could not pre-set external_session_id" in caplog.text
+    runner_app_mod._AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+
+
+@pytest.mark.asyncio
 async def test_auto_create_codex_fork_rebuild_failure_launches_fresh(
     codex_env: Path,
     tmp_path: Path,
@@ -619,6 +673,24 @@ def test_codex_ensure_response_with_policy_notice(tmp_path: Path) -> None:
         assert app_server.policy_notice_pending is False
     finally:
         _AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+
+
+def test_ensure_orchestrator_skills_skips_when_canonical_source_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    bundle_dir = tmp_path / "no-source-bundle"
+    bundle_dir.mkdir()
+    original_is_dir = Path.is_dir
+
+    def _is_dir(self: Path) -> bool:
+        if "onboarding/agent/skills/build-omnigent" in self.as_posix():
+            return False
+        return original_is_dir(self)
+
+    monkeypatch.setattr(Path, "is_dir", _is_dir)
+    _ensure_orchestrator_skills_in_bundle(bundle_dir, agent_spec=None)
+    assert not (bundle_dir / "skills" / "build-omnigent").exists()
 
 
 def test_ensure_orchestrator_skills_in_bundle_paths(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
