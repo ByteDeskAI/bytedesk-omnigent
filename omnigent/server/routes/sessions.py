@@ -5188,6 +5188,9 @@ async def _launch_runner_on_host(
     conversation_store: ConversationStore,
     host_registry: HostRegistry,
     host_conn: HostConnection,
+    *,
+    owner: str | None = None,
+    tunnel_registry: TunnelRegistry | None = None,
 ) -> _HostLaunchAttempt:
     """
     Ask a host to spawn a runner for a session and capture the result.
@@ -5205,6 +5208,16 @@ async def _launch_runner_on_host(
     :param conversation_store: Store for updating ``runner_id``.
     :param host_registry: In-memory ``HostRegistry``.
     :param host_conn: The live ``HostConnection`` for the host.
+    :param owner: Authenticated owner this runner is launched for, e.g.
+        ``"alice@example.com"``. Recorded as the runner's TRUSTED launch
+        owner (BDP-2436) so the tunnel handler can resolve ownership for
+        the token-only runner under accounts mode — the runner presents
+        its binding token but no user cookie, so its owner cannot be read
+        from the handshake. ``None`` (no-auth / single-user mode) records
+        nothing; the loopback runner resolves to the reserved local
+        identity at connect as before.
+    :param tunnel_registry: Runner-tunnel registry to record the launch
+        owner in. ``None`` (minimal test wirings) skips recording.
     :returns: The :class:`_HostLaunchAttempt` — the new runner id plus any
         structured refusal from the host.
     """
@@ -5213,6 +5226,11 @@ async def _launch_runner_on_host(
 
     binding_token = secrets.token_urlsafe(32)
     new_runner_id = token_bound_runner_id(binding_token)
+
+    # Record the trusted launch owner BEFORE the host spawns the runner,
+    # so it is present the instant the runner's tunnel connects (BDP-2436).
+    if owner is not None and tunnel_registry is not None:
+        tunnel_registry.record_launch_owner(new_runner_id, owner)
 
     await asyncio.to_thread(
         conversation_store.replace_runner_id,
@@ -5382,6 +5400,7 @@ async def _run_managed_launch(
         return
     await _bind_and_launch_managed_runner(
         session_id=session_id,
+        owner=owner,
         managed=managed,
         sandbox_config=sandbox_config,
         tracker=tracker,
@@ -5479,6 +5498,7 @@ async def _provision_managed_sandbox(
 async def _bind_and_launch_managed_runner(
     *,
     session_id: str,
+    owner: str,
     managed: ManagedHostLaunch,
     sandbox_config: ManagedSandboxConfig,
     tracker: ManagedLaunchTracker,
@@ -5497,6 +5517,9 @@ async def _bind_and_launch_managed_runner(
     the tracker on every path.
 
     :param session_id: Session/conversation identifier.
+    :param owner: User the managed host acts for — recorded as the
+        runner's trusted launch owner so its token-only tunnel resolves
+        ownership under accounts mode (BDP-2436).
     :param managed: The provision result (host id + workspace).
     :param sandbox_config: The deployment's sandbox config.
     :param tracker: The app's launch tracker.
@@ -5548,6 +5571,8 @@ async def _bind_and_launch_managed_runner(
                 conversation_store,
                 host_registry,
                 host_conn,
+                owner=owner,
+                tunnel_registry=tunnel_registry,
             )
             if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                 # The sandbox image should bake in the harness, but if the
@@ -16569,6 +16594,8 @@ def create_sessions_router(
                         conversation_store,
                         _host_reg,
                         _host_conn,
+                        owner=user_id,
+                        tunnel_registry=_tunnel_registry,
                     )
                     if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                         # The host refused: the agent's harness isn't
