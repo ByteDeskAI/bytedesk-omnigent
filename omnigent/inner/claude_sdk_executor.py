@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -38,12 +39,18 @@ import signal
 import sys
 import tempfile
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any, Protocol, TypeAlias, cast
 
+from omnigent.claude_native_bridge import (
+    build_mcp_config,
+    post_tools_changed,
+    prepare_bridge_dir,
+    start_tool_relay,
+)
 from omnigent.inner.bundle_skills import ensure_bundle_plugin_manifest
 from omnigent.llms._usage_observer import notify_from_dict as _notify_usage_from_dict
 from omnigent.onboarding.databricks_config import DATABRICKS_CLAUDE_DEFAULT_MODEL
@@ -685,7 +692,7 @@ _OMNIGENT_MCP_SERVER_NAME = "omnigent"
 _OMNIGENT_MCP_SERVER_CHUNK_SIZE = 5
 _OMNIGENT_MCP_PREFIX = f"mcp__{_OMNIGENT_MCP_SERVER_NAME}__"
 
-# When ``tools=`` is omitted, Claude Code keeps SDK MCP server tools visible.
+# When ``tools=`` is omitted, Claude Code keeps MCP server tools visible.
 # Explicitly disallow the native default tools that the old narrow
 # ``tools=["Skill", "ToolSearch"]`` base set suppressed, so Omnigent
 # continues routing filesystem, shell, task, and scheduling operations through
@@ -779,6 +786,74 @@ def _build_sdk_mcp_servers(
     return mcp_servers, generated_tool_names, generated_by_raw_name
 
 
+def _sanitize_claude_mcp_schema(value: Any) -> Any:  # type: ignore[explicit-any]
+    """Return a Claude Code-safe copy of an MCP JSON Schema node.
+
+    MCP permits boolean JSON Schema nodes. Claude Code's tool manifest accepts
+    boolean values for keywords such as ``additionalProperties: false`` but
+    rejects boolean property schemas like ``"event": true``. Convert ``true``
+    schema nodes to ``{}``, which is the equivalent permissive schema.
+    """
+    if value is True:
+        return {}
+    if value is False:
+        return False
+    if isinstance(value, list):
+        return [_sanitize_claude_mcp_schema(item) for item in value]
+    if isinstance(value, Mapping):
+        return {key: _sanitize_claude_mcp_schema(item) for key, item in value.items()}
+    return value
+
+
+def _claude_sdk_relay_tool_schema(schema: ToolSpec) -> ToolSpec | None:
+    """Convert one Omnigent tool schema to the stdio relay's visible schema."""
+    raw_name = schema.get("name")
+    if not isinstance(raw_name, str) or not raw_name:
+        return None
+    raw_desc = schema.get("description")
+    parameters = schema.get("parameters")
+    relay_schema: ToolSpec = {
+        "name": _claude_sdk_visible_tool_name(raw_name),
+        "description": raw_desc if isinstance(raw_desc, str) else "",
+        "parameters": (
+            _sanitize_claude_mcp_schema(parameters)
+            if isinstance(parameters, Mapping)
+            else {"type": "object", "properties": {}}
+        ),
+    }
+    return relay_schema
+
+
+def _build_stdio_bridge_mcp_tools(
+    tool_schemas: list[ToolSpec],
+) -> tuple[list[ToolSpec], list[str], dict[str, str], dict[str, str]]:
+    """Build relay schemas and name maps for the existing stdio MCP bridge."""
+    relay_tools: list[ToolSpec] = []
+    generated_tool_names: list[str] = []
+    generated_by_raw_name: dict[str, str] = {}
+    raw_by_visible_name: dict[str, str] = {}
+    seen_generated: set[str] = set()
+
+    for schema in tool_schemas:
+        raw_name = schema.get("name")
+        if not isinstance(raw_name, str) or not raw_name:
+            continue
+        relay_schema = _claude_sdk_relay_tool_schema(schema)
+        if relay_schema is None:
+            continue
+        visible_name = cast(str, relay_schema["name"])
+        generated_name = _generated_sdk_mcp_tool_name(_OMNIGENT_MCP_SERVER_NAME, raw_name)
+        raw_by_visible_name[visible_name] = raw_name
+        generated_by_raw_name[raw_name] = generated_name
+        relay_tools.append(relay_schema)
+        if generated_name in seen_generated:
+            continue
+        seen_generated.add(generated_name)
+        generated_tool_names.append(generated_name)
+
+    return relay_tools, generated_tool_names, generated_by_raw_name, raw_by_visible_name
+
+
 def _claude_sdk_visible_tool_name(raw_name: str) -> str:
     """Return the tool name registered with Claude's SDK MCP server.
 
@@ -803,7 +878,7 @@ def _omnigent_tool_naming_note(
     """Build a system-prompt note bridging bare Omnigent built-in tool names
     to the generated MCP names the claude-agent-sdk advertises.
 
-    ``create_sdk_mcp_server`` exposes tools as ``mcp__<server>__<tool>``.
+    Claude Code exposes MCP tools as ``mcp__<server>__<tool>``.
     Native agent prompts (and the openai-agents harness, which registers bare
     names directly) refer to the built-ins by their bare ``sys_*`` names.
     Without this bridge the model on the claude-sdk harness treats a bare
@@ -1363,6 +1438,7 @@ class ClaudeSDKExecutor(Executor):
         self._elicitation_handler: ElicitationHandler | None = None
         # Live Claude SDK clients keyed by Omnigent session id.
         self._clients: dict[str, _ClaudeClientState] = {}
+        self._mcp_bridge_dirs: dict[str, pathlib.Path] = {}
         # Session keys whose Claude harness process crashed and must not be reused.
         self._crashed_sessions: dict[str, str] = {}
 
@@ -1448,6 +1524,21 @@ class ClaudeSDKExecutor(Executor):
         if getattr(self, "_cli_wrapper_path", None):
             with suppress(Exception):
                 pathlib.Path(self._cli_wrapper_path).unlink(missing_ok=True)
+
+    def _bridge_dir_for_session(self, session_key: str) -> pathlib.Path:
+        """Return the stable stdio MCP bridge directory for one SDK session."""
+        existing = self._mcp_bridge_dirs.get(session_key)
+        if existing is not None:
+            return existing
+        digest = hashlib.sha256(session_key.encode("utf-8")).hexdigest()[:16]
+        workspace = pathlib.Path(self._cwd or os.getcwd())
+        bridge_dir = prepare_bridge_dir(
+            session_key,
+            bridge_id=f"claude-sdk-{digest}",
+            workspace=workspace,
+        )
+        self._mcp_bridge_dirs[session_key] = bridge_dir
+        return bridge_dir
 
     async def _route_options_through_gateway_shim(self, options: SdkOptions) -> None:
         """
@@ -1839,8 +1930,8 @@ class ClaudeSDKExecutor(Executor):
         executor only OBSERVES them in the message stream, which posts no
         policy event).
 
-        Double-evaluation guard: Omnigent's OWN tools are exposed as the
-        single ``omnigent`` SDK MCP server (the model sees
+        Double-evaluation guard: Omnigent's OWN tools are exposed through the
+        single ``omnigent`` MCP bridge (the model sees
         ``mcp__omnigent__*``). When the model calls one, the SDK wrapper
         routes it back through Omnigent's dispatch bridge
         (``_stable_tool_executor`` -> ``TurnContext.dispatch_tool`` ->
@@ -1850,7 +1941,7 @@ class ClaudeSDKExecutor(Executor):
         (see ``omnigent/runner/app.py`` "All tool calls go through AP:/mcp
         ... which enforces TOOL_CALL + TOOL_RESULT policies server-side").
         Spec-declared MCP tools are surfaced through that same
-        ``mcp__omnigent__*`` server, so they are covered there too.
+        ``mcp__omnigent__*`` bridge, so they are covered there too.
         Evaluating ``mcp__omnigent__*`` here as well would double-count
         the same call (and could double-charge a cost-budget checkpoint),
         so we SKIP that prefix and only gate the connector-native /
@@ -2003,16 +2094,49 @@ class ClaudeSDKExecutor(Executor):
             if isinstance((name := s.get("name")), str) and name
         ]
 
-        # Build MCP tools from Omnigent tool schemas. Claude Code hides an SDK
-        # MCP server with six or more tools, so large Omnigent/ByteDesk tool
-        # surfaces are split across deterministic small servers while every
-        # handler still dispatches to the original raw Omnigent tool name.
+        # Build MCP tools from Omnigent tool schemas. Use the existing
+        # Omnigent stdio MCP bridge instead of many in-process SDK MCP
+        # servers: the bridge can advertise the full active turn surface,
+        # while calls still dispatch through ``self._tool_executor`` and
+        # therefore through Omnigent's policy-aware tool path.
+        active_mcp_relay: Any | None = None  # type: ignore[explicit-any]
         if tools:
             (
-                mcp_servers,
+                relay_tools,
                 sdk_mcp_tool_names,
                 generated_by_raw_name,
-            ) = _build_sdk_mcp_servers(sdk, tools, self._tool_executor)
+                raw_by_visible_name,
+            ) = _build_stdio_bridge_mcp_tools(tools)
+            if relay_tools:
+                bridge_dir = self._bridge_dir_for_session(session_key)
+
+                async def _relay_tool_executor(
+                    visible_name: str,
+                    args: ToolArgs,
+                ) -> ToolResult:
+                    raw_name = raw_by_visible_name.get(visible_name, visible_name)
+                    if self._tool_executor is None:
+                        return {"error": f"No tool executor for '{raw_name}'"}
+                    raw = await self._tool_executor(raw_name, args)
+                    return raw if isinstance(raw, dict) else {"result": raw}
+
+                active_mcp_relay = start_tool_relay(
+                    bridge_dir=bridge_dir,
+                    tools=relay_tools,
+                    tool_executor=_relay_tool_executor,
+                    loop=asyncio.get_running_loop(),
+                )
+                mcp_config = build_mcp_config(
+                    bridge_dir,
+                    python_executable=sys.executable,
+                )
+                raw_mcp_servers = mcp_config.get("mcpServers")
+                mcp_servers = raw_mcp_servers if isinstance(raw_mcp_servers, dict) else {}
+                if session_key in self._clients:
+                    with suppress(Exception):
+                        post_tools_changed(bridge_dir, timeout_s=0.25)
+            else:
+                mcp_servers = {}
         else:
             mcp_servers = {}
             sdk_mcp_tool_names = []
@@ -2110,7 +2234,7 @@ class ClaudeSDKExecutor(Executor):
         # Bash/Read/Edit/Write. Do not pass ``tools=`` here: Claude Code treats
         # that argument as an active tool filter and drops SDK MCP server tools
         # that are not named in it. Instead, leave tool discovery to the SDK
-        # MCP servers, keep ``Skill``/``ToolSearch`` available through the
+        # MCP bridge, keep ``Skill``/``ToolSearch`` available through the
         # default base set, and use ``disallowed_tools`` below to suppress the
         # native defaults Omnigent does not own.
         # Translate the spec's host-skill filter into the SDK
@@ -2162,6 +2286,8 @@ class ClaudeSDKExecutor(Executor):
                 cfg.extra.get("reasoning_effort"), "Claude Agent SDK", CLAUDE_EFFORTS
             )
         except ValueError as exc:
+            if active_mcp_relay is not None:
+                active_mcp_relay.close()
             yield ExecutorError(message=str(exc), retryable=False)
             return
         if reasoning_effort is not None:
@@ -2294,6 +2420,8 @@ class ClaudeSDKExecutor(Executor):
             _req_verdict = await _policy_eval("PHASE_LLM_REQUEST", _req_data)
             if _req_verdict.action == "POLICY_ACTION_DENY":
                 _deny_reason = _req_verdict.reason or "no reason given"
+                if active_mcp_relay is not None:
+                    active_mcp_relay.close()
                 yield ExecutorError(message=f"LLM call denied by policy: {_deny_reason}")
                 return
 
@@ -2638,6 +2766,9 @@ class ClaudeSDKExecutor(Executor):
                 )
             )
             return
+        finally:
+            if active_mcp_relay is not None:
+                active_mcp_relay.close()
         if terminal_error:
             yield ExecutorError(message=terminal_error)
             return

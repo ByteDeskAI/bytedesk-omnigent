@@ -959,6 +959,48 @@ class TestBuildMcpTools(unittest.TestCase):
             "mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5",
         )
 
+    def test_stdio_bridge_aliases_external_tools_and_sanitizes_boolean_schema(self):
+        from omnigent.inner.claude_sdk_executor import _build_stdio_bridge_mcp_tools
+
+        raw_name = "bytedesk-platform__googleworkspace_calendar_event_create"
+        relay_tools, generated_names, generated, raw_by_visible = _build_stdio_bridge_mcp_tools(
+            [
+                {
+                    "name": raw_name,
+                    "description": "Create a calendar event.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "event": True,
+                            "calendarId": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            ]
+        )
+
+        self.assertEqual(len(relay_tools), 1)
+        self.assertEqual(
+            relay_tools[0]["name"],
+            "bytedesk_platform_googleworkspace_calendar_event_create",
+        )
+        self.assertEqual(
+            relay_tools[0]["parameters"]["properties"]["event"],  # type: ignore[index]
+            {},
+        )
+        self.assertIs(
+            relay_tools[0]["parameters"]["additionalProperties"],  # type: ignore[index]
+            False,
+        )
+        generated_name = "mcp__omnigent__bytedesk_platform_googleworkspace_calendar_event_create"
+        self.assertEqual(generated_names, [generated_name])
+        self.assertEqual(generated[raw_name], generated_name)
+        self.assertEqual(
+            raw_by_visible["bytedesk_platform_googleworkspace_calendar_event_create"],
+            raw_name,
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: Omnigent tool-naming note (BDP-2204)
@@ -1481,13 +1523,11 @@ class TestStreamEventStreaming(unittest.TestCase):
                 query_calls[0]["extra_args"],
                 {"no-session-persistence": None},
             )
-            # Skill is always in the base tool set so the Skill tool is
-            # actually exposed to the model when ``skills="all"`` (the
-            # SDK only adds Skill to ``allowedTools`` — without listing
-            # it in ``tools`` the CLI passes ``--tools ""`` and zeros
-            # the base set).
-            self.assertEqual(query_calls[0]["tools"], ["Skill"])
-            self.assertEqual(query_calls[0]["allowed_tools"], [])
+            # Leave ``tools`` unset so Claude's MCP discovery stays visible.
+            # Skill loading is controlled by the SDK ``skills`` option, not by
+            # filtering the active tool list.
+            self.assertIsNone(query_calls[0]["tools"])
+            self.assertEqual(query_calls[0]["allowed_tools"], ["ToolSearch"])
             self.assertEqual(query_calls[1]["session_id"], "session-b")
             self.assertEqual(query_calls[2]["session_id"], "session-a")
             self.assertEqual(len(connect_calls), 2)
@@ -1703,7 +1743,7 @@ class TestStreamEventStreaming(unittest.TestCase):
 
         _run(_t())
 
-    def test_large_mcp_surface_is_split_across_sdk_servers(self):
+    def test_large_mcp_surface_uses_single_stdio_bridge(self):
         from omnigent.inner.claude_sdk_executor import ClaudeSDKExecutor
 
         captured_options = {}
@@ -1783,17 +1823,20 @@ class TestStreamEventStreaming(unittest.TestCase):
                         schemas,
                         "",
                     )
-                ]
+            ]
 
-            self.assertEqual(list(captured_options["mcp_servers"]), ["omnigent", "omnigent2"])
-            self.assertEqual(len(captured_options["mcp_servers"]["omnigent"]["tools"]), 5)
-            self.assertEqual(len(captured_options["mcp_servers"]["omnigent2"]["tools"]), 1)
+            self.assertEqual(list(captured_options["mcp_servers"]), ["omnigent"])
+            self.assertIn("command", captured_options["mcp_servers"]["omnigent"])
             self.assertIn(
-                "mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5",
+                "omnigent.claude_native_bridge",
+                captured_options["mcp_servers"]["omnigent"]["args"],
+            )
+            self.assertIn(
+                "mcp__omnigent__bytedesk_platform_googleworkspace_tool_5",
                 captured_options["allowed_tools"],
             )
             self.assertIn(
-                "`mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5`",
+                "`mcp__omnigent__bytedesk_platform_googleworkspace_tool_5`",
                 captured_options["system_prompt"],
             )
             self.assertIsInstance(events[-1], TurnComplete)
