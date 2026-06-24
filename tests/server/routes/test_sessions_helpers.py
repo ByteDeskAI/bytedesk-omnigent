@@ -57,6 +57,7 @@ from omnigent.server.routes.sessions import (
     _resolve_output_schema,
     _structured_ask_user_question,
     _validated_harness_override,
+    _CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY,
     _CLAUDE_NATIVE_WRAPPER_LABEL_KEY,
     _CODEX_NATIVE_SUBAGENT_DISPLAY_FALLBACK,
     _CODEX_NATIVE_SUBAGENT_NICKNAME_LABEL_KEY,
@@ -76,6 +77,9 @@ from omnigent.server.routes.sessions import (
     _descendant_sessions,
     _derive_terminal_launch_args_from_spec,
     _enforce_tenant_scope,
+    _find_claude_native_subagent_child,
+    _find_subagent_child_by_title,
+    _publish_session_created,
     _extract_assistant_text_from_event,
     _extract_user_text_from_event,
     _handle_external_session_todos,
@@ -2272,3 +2276,74 @@ def test_drive_terminal_resolved_elicitation_records_calls_and_resolves_prompts(
     finally:
         sessions_mod._recent_mirrored_tool_calls.clear()
         sessions_mod._harness_parked_elicitations.clear()
+
+
+class _SubagentLookupStore(_DescendantStore):
+    """Descendant store that also supports title-based lookup tests."""
+
+    def __init__(self, children_by_parent: dict[str, list[Conversation]]) -> None:
+        super().__init__(children_by_parent)
+
+
+def test_find_claude_native_subagent_child_matches_label_across_pages() -> None:
+    target = Conversation(
+        id="conv_match",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        labels={_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY: "sub_abc"},
+    )
+    filler = Conversation(
+        id="conv_other",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        labels={_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY: "sub_other"},
+    )
+    store = _SubagentLookupStore({"conv_parent": [filler, target]})
+    found = _find_claude_native_subagent_child(store, "conv_parent", "sub_abc")  # type: ignore[arg-type]
+    assert found is not None
+    assert found.id == "conv_match"
+    assert _find_claude_native_subagent_child(store, "conv_parent", "missing") is None  # type: ignore[arg-type]
+
+
+def test_find_subagent_child_by_title_returns_exact_match() -> None:
+    child = Conversation(
+        id="conv_title",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        title="Explore:sub_123",
+    )
+    store = _SubagentLookupStore({"conv_parent": [child]})
+    assert (
+        _find_subagent_child_by_title(store, "conv_parent", "Explore:sub_123").id  # type: ignore[arg-type,union-attr]
+        == "conv_title"
+    )
+    assert _find_subagent_child_by_title(store, "conv_parent", "Explore:other") is None  # type: ignore[arg-type]
+
+
+def test_publish_session_created_emits_parent_stream_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    _publish_session_created("conv_parent", "conv_child", "ag_parent")
+    assert len(published) == 1
+    sid, payload = published[0]
+    assert sid == "conv_parent"
+    assert payload["type"] == "session.created"
+    assert payload["conversation_id"] == "conv_parent"
+    assert payload["child_session_id"] == "conv_child"
+    assert payload["agent_id"] == "ag_parent"
+    assert payload["parent_session_id"] == "conv_parent"
