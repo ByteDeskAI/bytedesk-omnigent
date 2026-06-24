@@ -1946,10 +1946,13 @@ class ClaudeSDKExecutor(Executor):
         sdk_mcp_tool_names: list[str] = []
         _seen_sdk_mcp_tool_names: set[str] = set()
         for raw_tname in tool_names:
-            # Claude SDK names every tool in the generated MCP server as
-            # ``mcp__omnigent__<raw-name>``. These generated names must be in
-            # ``tools`` or Claude Code treats the MCP server as configured but
-            # not callable when ``--tools`` narrows the base tool set.
+            # Claude Code names every tool in the generated SDK MCP server as
+            # ``mcp__omnigent__<tool-name>``. These generated names belong in
+            # ``allowed_tools`` so bypass-permission sessions can call them
+            # without prompting. They must NOT be added to ``tools``: the
+            # Claude Agent SDK documents ``tools`` as the base built-in tool
+            # set, and passing MCP tool names there makes Claude Code advertise
+            # names that fail at call time with "No such tool available".
             generated_name = (
                 f"mcp__omnigent__{_claude_sdk_visible_tool_name(raw_tname)}"
             )
@@ -2021,10 +2024,11 @@ class ClaudeSDKExecutor(Executor):
         # via its own conversation store.
         # OS-environment tools are provided via Omnigent ``sys_os_*``
         # MCP tools (declared via ``os_env`` in the spec), not the
-        # SDK's native Bash/Read/Edit/Write. Include only Skill plus the
-        # generated Omnigent MCP tool names so the configured MCP server
-        # remains callable while native Bash/Read/Edit/Write stay out.
-        base_tools: list[str] = ["Skill", *sdk_mcp_tool_names]
+        # SDK's native Bash/Read/Edit/Write. Include only the native ``Skill``
+        # tool here. SDK MCP server tools are configured through
+        # ``mcp_servers`` and permissioned via ``allowed_tools``; putting them
+        # in ``tools`` sends them to Claude Code's built-in tool filter.
+        base_tools: list[str] = ["Skill"]
         # Translate the spec's host-skill filter into the SDK
         # options. Falls back to ``"all"`` semantics when the
         # field is malformed (the parser already validates, so

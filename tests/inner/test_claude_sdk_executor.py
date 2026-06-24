@@ -1521,9 +1521,10 @@ class TestStreamEventStreaming(unittest.TestCase):
                     )
                 ]
             # OS operations route through sys_os_* MCP tools, not SDK
-            # built-ins. The generated Omnigent MCP tool is part of the base
-            # set so Claude Code can call it while native Bash stays absent.
-            self.assertEqual(captured_options["tools"], ["Skill", "mcp__omnigent__sleep"])
+            # built-ins. SDK MCP tools are exposed through the MCP server and
+            # allowed by generated name; ``tools`` remains the built-in base
+            # set so native Bash stays absent.
+            self.assertEqual(captured_options["tools"], ["Skill"])
             self.assertIn("mcp__omnigent__sleep", captured_options["allowed_tools"])
             self.assertNotIn("Bash", captured_options["allowed_tools"])
             self.assertNotIn("Bash", captured_options["tools"])
@@ -1620,7 +1621,7 @@ class TestStreamEventStreaming(unittest.TestCase):
             # what this test pins. ``Skill`` itself doesn't widen
             # the FS attack surface; it only loads pre-approved
             # SKILL.md content.
-            self.assertEqual(captured_options["tools"], ["Skill", generated_google_drive_tool])
+            self.assertEqual(captured_options["tools"], ["Skill"])
             self.assertEqual(captured_options["allowed_tools"], [generated_google_drive_tool])
             self.assertIsInstance(events[-1], TurnComplete)
 
