@@ -132,6 +132,9 @@ from omnigent.server.routes.sessions import (
     _latest_assistant_text_from_store,
     _parse_external_assistant_message,
     _parse_session_create_metadata,
+    _persist_external_model_change,
+    _persist_external_session_usage,
+    _persist_model_change_note,
     _persist_native_cumulative_usage,
     _poll_request_disconnect,
     _publish_and_wait_for_harness_elicitation,
@@ -3647,3 +3650,380 @@ def test_pending_elicitation_snapshot_skips_descendant_walk_when_only_self_pendi
     events = _pending_elicitation_snapshot_for_session(store, parent)  # type: ignore[arg-type]
     assert len(events) == 1
     assert events[0]["elicitation_id"] == "elicit_conv_parent"
+
+
+# ── batch 54: accumulate zero-token noop, pagination, external persist ────────
+
+
+def test_accumulate_session_usage_noops_when_all_token_counts_zero() -> None:
+    """Zero input/output/total tokens → no store write."""
+    conv = Conversation(
+        id="conv_zero",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_zero",
+        agent_id="ag_z",
+    )
+    store = _UsageConversationStore(conv)
+    assert _accumulate_session_usage(
+        {"usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0}},
+        "conv_zero",
+        store,  # type: ignore[arg-type]
+    ) is None
+    assert store.written == {}
+
+
+def test_descendant_sessions_continues_when_page_has_more_and_last_id() -> None:
+    """``after = page.last_id`` advances pagination across multiple pages."""
+    child_a = Conversation(
+        id="conv_a",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+        kind="sub_agent",
+    )
+    child_b = Conversation(
+        id="conv_b",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+        kind="sub_agent",
+    )
+
+    class _OnePerPageStore:
+        def list_conversations(
+            self,
+            *,
+            kind: str | None = None,
+            parent_conversation_id: str | None = None,
+            limit: int = 100,
+            after: str | None = None,
+            **_: Any,
+        ) -> PagedList[Conversation]:
+            assert kind == "sub_agent"
+            if parent_conversation_id != "conv_root":
+                return PagedList(data=[], first_id=None, last_id=None, has_more=False)
+            kids = [child_a, child_b]
+            if after is not None:
+                ids = [c.id for c in kids]
+                kids = kids[ids.index(after) + 1 :]
+            page = kids[:1]
+            return PagedList(
+                data=page,
+                first_id=page[0].id if page else None,
+                last_id=page[-1].id if page else None,
+                has_more=len(kids) > 1,
+            )
+
+    descendants = _descendant_sessions(_OnePerPageStore(), "conv_root")  # type: ignore[arg-type]
+    assert [d.id for d in descendants] == ["conv_a", "conv_b"]
+
+
+class _ExternalUsageStore:
+    """Store for external session-usage / model-change helpers."""
+
+    def __init__(self, conv: Conversation) -> None:
+        self._conv = conv
+        self._convs = {conv.id: conv}
+        self.usage_written: dict[str, dict[str, object]] = {}
+        self.labels_written: dict[str, dict[str, str]] = {}
+        self.updated: list[tuple[str, dict[str, object]]] = []
+        self.appended: list[tuple[str, list[ConversationItem]]] = []
+
+    def get_conversation(self, session_id: str) -> Conversation | None:
+        return self._convs.get(session_id)
+
+    def set_session_usage(self, session_id: str, usage: dict[str, object]) -> None:
+        self.usage_written[session_id] = usage
+        conv = self._convs.get(session_id)
+        if conv is not None:
+            conv.session_usage = usage  # type: ignore[assignment]
+
+    def set_labels(self, session_id: str, labels: dict[str, str]) -> None:
+        self.labels_written[session_id] = labels
+
+    def list_conversations(
+        self,
+        *,
+        root_conversation_id: str | None = None,
+        **_: Any,
+    ) -> PagedList[Conversation]:
+        convs = [
+            c for c in self._convs.values() if c.root_conversation_id == root_conversation_id
+        ]
+        return PagedList(
+            data=convs,
+            first_id=convs[0].id if convs else None,
+            last_id=convs[-1].id if convs else None,
+            has_more=False,
+        )
+
+    def update_conversation(self, session_id: str, **kwargs: object) -> None:
+        self.updated.append((session_id, kwargs))
+        conv = self._convs[session_id]
+        if "model_override" in kwargs:
+            conv.model_override = str(kwargs["model_override"])
+
+    def append(
+        self,
+        session_id: str,
+        items: list[NewConversationItem],
+    ) -> list[ConversationItem]:
+        persisted = [
+            ConversationItem(
+                id=f"item_{len(self.appended)}",
+                created_at=1,
+                type=item.type,
+                status="completed",
+                response_id=item.response_id,
+                data=item.data,
+            )
+            for item in items
+        ]
+        self.appended.append((session_id, persisted))
+        return persisted
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        del session_id
+        return None
+
+
+@pytest.mark.asyncio
+async def test_persist_external_session_usage_rejects_invalid_context_tokens() -> None:
+    conv = Conversation(
+        id="conv_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_ext",
+        agent_id="ag_e",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(type="external_session_usage", data={"context_tokens": -1})
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_session_usage("conv_ext", body, store)  # type: ignore[arg-type]
+    assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_persist_external_session_usage_rejects_invalid_context_window() -> None:
+    conv = Conversation(
+        id="conv_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_ext",
+        agent_id="ag_e",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(type="external_session_usage", data={"context_window": 0})
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_session_usage("conv_ext", body, store)  # type: ignore[arg-type]
+    assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_persist_external_session_usage_requires_at_least_one_field() -> None:
+    conv = Conversation(
+        id="conv_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_ext",
+        agent_id="ag_e",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(type="external_session_usage", data={})
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_session_usage("conv_ext", body, store)  # type: ignore[arg-type]
+    assert "requires at least one" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_session_usage_publishes_context_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Context-only update sets labels and broadcasts tokens without zeroing cost."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_ext",
+        agent_id="ag_e",
+        session_usage={"input_tokens": 10, "total_cost_usd": 0.5},
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(
+        type="external_session_usage",
+        data={"context_tokens": 42000, "context_window": 200000},
+    )
+    result = await _persist_external_session_usage("conv_ext", body, store)  # type: ignore[arg-type]
+    assert result == 42000
+    assert store.labels_written["conv_ext"]["omnigent.last_context_tokens"] == "42000"
+    assert store.labels_written["conv_ext"]["omnigent.last_context_window"] == "200000"
+    assert len(published) == 1
+    assert published[0]["type"] == "session.usage"
+    assert published[0]["context_tokens"] == 42000
+    assert published[0]["context_window"] == 200000
+    assert published[0]["total_cost_usd"] == 0.5
+
+
+@pytest.mark.asyncio
+async def test_persist_external_session_usage_accepts_policy_cost_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``policy_cost_usd`` alone satisfies the cumulative-field requirement."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_policy_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_policy_ext",
+        agent_id="ag_pe",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(
+        type="external_session_usage",
+        data={"policy_cost_usd": 1.25},
+    )
+    result = await _persist_external_session_usage("conv_policy_ext", body, store)  # type: ignore[arg-type]
+    assert result is None
+    assert store.usage_written["conv_policy_ext"]["policy_cost_usd"] == 1.25
+    assert published[-1]["type"] == "session.usage"
+
+
+@pytest.mark.asyncio
+async def test_persist_external_model_change_rejects_empty_model() -> None:
+    conv = Conversation(
+        id="conv_model",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_model",
+        agent_id="ag_m",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(type="external_model_change", data={"model": "   "})
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_model_change("conv_model", conv, body, store)  # type: ignore[arg-type]
+    assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_persist_external_model_change_noops_when_already_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_model",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_model",
+        agent_id="ag_m",
+        model_override="claude-sonnet-4-6",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(
+        type="external_model_change",
+        data={"model": "claude-sonnet-4-6"},
+    )
+    await _persist_external_model_change("conv_model", conv, body, store)  # type: ignore[arg-type]
+    assert store.updated == []
+    assert published == []
+
+
+@pytest.mark.asyncio
+async def test_persist_external_model_change_updates_and_publishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_model",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_model",
+        agent_id="ag_m",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(
+        type="external_model_change",
+        data={"model": "  databricks-gpt-5-4  "},
+    )
+    await _persist_external_model_change("conv_model", conv, body, store)  # type: ignore[arg-type]
+    assert store.updated == [("conv_model", {"model_override": "databricks-gpt-5-4"})]
+    assert len(published) == 1
+    assert published[0]["type"] == "session.model"
+    assert published[0]["conversation_id"] == "conv_model"
+    assert published[0]["model"] == "databricks-gpt-5-4"
+
+
+@pytest.mark.asyncio
+async def test_persist_model_change_note_appends_system_marker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_note",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_note",
+        agent_id="ag_n",
+    )
+    store = _ExternalUsageStore(conv)
+    await _persist_model_change_note("conv_note", "claude-opus-4-6", store)  # type: ignore[arg-type]
+    assert len(store.appended) == 1
+    item = store.appended[0][1][0]
+    assert item.type == "message"
+    assert isinstance(item.data, MessageData)
+    assert item.data.role == "user"
+    text = item.data.content[0]["text"]
+    assert "model changed to claude-opus-4-6" in text
+    assert published[-1]["type"] == "session.input.consumed"
+
+
+@pytest.mark.asyncio
+async def test_persist_model_change_note_records_reset_to_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_reset",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_reset",
+        agent_id="ag_r",
+    )
+    store = _ExternalUsageStore(conv)
+    await _persist_model_change_note("conv_reset", None, store)  # type: ignore[arg-type]
+    item = store.appended[0][1][0]
+    assert isinstance(item.data, MessageData)
+    assert "model reset to the agent default" in item.data.content[0]["text"]
