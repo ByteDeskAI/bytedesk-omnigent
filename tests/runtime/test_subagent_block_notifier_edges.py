@@ -280,3 +280,25 @@ async def test_handle_request_skips_resolution_notice_on_moot_delivery(
     monkeypatch.setattr(SubagentBlockNotifier, "_deliver_with_retry", _always_moot)
     await notifier.handle_request(child.id, _request_event("elicit_moot_handler"))
     assert dispatch.calls == []
+
+
+@pytest.mark.asyncio
+async def test_handle_request_top_level_returns_after_escalation(
+    conv_store: SqlAlchemyConversationStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Top-level sessions skip parent wake even after the escalation delay."""
+    monkeypatch.setattr(subagent_block_notifier, "_escalation_sleep", _instant_sleep)
+    top = conv_store.create_conversation(kind="default", title="root")
+    dispatch = _RecordingDispatch()
+    notifier = SubagentBlockNotifier(
+        conversation_store=conv_store,
+        wake_dispatch=dispatch,
+        loop=asyncio.get_event_loop(),
+    )
+    with notifier._lock:
+        notifier._notified.add("elicit_top_escalation")
+
+    await notifier.handle_request(top.id, _request_event("elicit_top_escalation"))
+
+    assert dispatch.calls == []
