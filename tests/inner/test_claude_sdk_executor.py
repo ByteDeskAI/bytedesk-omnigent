@@ -901,6 +901,64 @@ class TestBuildMcpTools(unittest.TestCase):
         parsed = json.loads(result["content"][0]["text"])
         self.assertIn("error", parsed)
 
+    def test_sdk_mcp_servers_chunk_at_five_tools(self):
+        from omnigent.inner.claude_sdk_executor import _build_sdk_mcp_servers
+
+        async def mock_executor(name, args):
+            return {"result": f"{name}:{args}"}
+
+        class _FakeSDK:
+            @staticmethod
+            def tool(name, desc, params):
+                def decorator(handler):
+                    return type(
+                        "Tool",
+                        (),
+                        {
+                            "name": name,
+                            "description": desc,
+                            "parameters": params,
+                            "handler": handler,
+                        },
+                    )()
+
+                return decorator
+
+            @staticmethod
+            def create_sdk_mcp_server(**kwargs):
+                return kwargs
+
+        schemas = [
+            {
+                "name": f"bytedesk-platform__googleworkspace_tool_{i}",
+                "description": f"Tool {i}",
+                "parameters": {"type": "object", "properties": {}},
+            }
+            for i in range(6)
+        ]
+        with patch("omnigent.inner.claude_sdk_executor._ensure_sdk", return_value=_FakeSDK):
+            servers, allowed_names, generated = _build_sdk_mcp_servers(
+                _FakeSDK,
+                schemas,
+                mock_executor,
+            )
+
+        self.assertEqual(list(servers), ["omnigent", "omnigent2"])
+        self.assertEqual(len(servers["omnigent"]["tools"]), 5)
+        self.assertEqual(len(servers["omnigent2"]["tools"]), 1)
+        self.assertIn(
+            "mcp__omnigent__bytedesk_platform_googleworkspace_tool_0",
+            allowed_names,
+        )
+        self.assertIn(
+            "mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5",
+            allowed_names,
+        )
+        self.assertEqual(
+            generated["bytedesk-platform__googleworkspace_tool_5"],
+            "mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests: Omnigent tool-naming note (BDP-2204)
@@ -945,16 +1003,21 @@ class TestOmnigentToolNamingNote(unittest.TestCase):
         from omnigent.inner.claude_sdk_executor import _omnigent_tool_alias_note
 
         note = _omnigent_tool_alias_note(
-            ["bytedesk-platform__googleworkspace_drive_search", "sys_agent_list"]
+            ["bytedesk-platform__googleworkspace_drive_search", "sys_agent_list"],
+            {
+                "bytedesk-platform__googleworkspace_drive_search": (
+                    "mcp__omnigent4__bytedesk_platform_googleworkspace_drive_search"
+                )
+            },
         )
         self.assertIn("raw `bytedesk-platform__googleworkspace_drive_search`", note)
         self.assertIn(
-            "`mcp__omnigent__bytedesk_platform_googleworkspace_drive_search`",
+            "`mcp__omnigent4__bytedesk_platform_googleworkspace_drive_search`",
             note,
         )
         self.assertIn("ToolSearch", note)
         self.assertIn(
-            "`select:<alias>`",
+            "`select:<callable-name>`",
             note,
         )
         self.assertNotIn("sys_agent_list", note)
@@ -1483,6 +1546,9 @@ class TestStreamEventStreaming(unittest.TestCase):
                 def __init__(self, options):
                     captured_options["tools"] = getattr(options, "tools", None)
                     captured_options["allowed_tools"] = getattr(options, "allowed_tools", None)
+                    captured_options["disallowed_tools"] = getattr(
+                        options, "disallowed_tools", None
+                    )
 
                 async def connect(self):
                     return None
@@ -1525,16 +1591,14 @@ class TestStreamEventStreaming(unittest.TestCase):
                         "",
                     )
                 ]
-            # OS operations route through sys_os_* MCP tools, not SDK
-            # built-ins. SDK MCP tools are exposed through the MCP server and
-            # allowed by generated name; ``tools`` remains the narrow built-in
-            # base set so native Bash stays absent. ``ToolSearch`` stays
-            # available so Claude can hydrate deferred MCP tool schemas.
-            self.assertEqual(captured_options["tools"], ["Skill", "ToolSearch"])
+            # OS operations route through sys_os_* MCP tools, not SDK built-ins.
+            # Leaving ``tools`` unset keeps SDK MCP server tools visible; native
+            # defaults such as Bash are hidden through ``disallowed_tools``.
+            self.assertIsNone(captured_options["tools"])
             self.assertIn("mcp__omnigent__sleep", captured_options["allowed_tools"])
             self.assertIn("ToolSearch", captured_options["allowed_tools"])
             self.assertNotIn("Bash", captured_options["allowed_tools"])
-            self.assertNotIn("Bash", captured_options["tools"])
+            self.assertIn("Bash", captured_options["disallowed_tools"])
             self.assertIsInstance(events[-1], TurnComplete)
 
         _run(_t())
@@ -1586,6 +1650,9 @@ class TestStreamEventStreaming(unittest.TestCase):
                 def __init__(self, options):
                     captured_options["tools"] = getattr(options, "tools", None)
                     captured_options["allowed_tools"] = getattr(options, "allowed_tools", None)
+                    captured_options["disallowed_tools"] = getattr(
+                        options, "disallowed_tools", None
+                    )
 
                 async def connect(self):
                     return None
@@ -1621,17 +1688,113 @@ class TestStreamEventStreaming(unittest.TestCase):
                         "",
                     )
                 ]
-            # Default ``skills_filter="all"`` exposes the ``Skill``
-            # tool so the model can invoke discovered skills via
-            # the Claude SDK plugin mechanism. The OS tools
-            # (Bash/Read/Edit/Write/Glob/Grep) stay absent — that's
-            # what this test pins. ``Skill`` itself doesn't widen
-            # the FS attack surface; it only loads pre-approved
-            # SKILL.md content.
-            self.assertEqual(captured_options["tools"], ["Skill", "ToolSearch"])
+            # Default ``skills_filter="all"`` exposes the ``Skill`` tool via
+            # the SDK's default base set. Native OS tools are explicitly
+            # disallowed so omitting ``tools`` does not widen the FS/shell
+            # surface while SDK MCP tools stay discoverable.
+            self.assertIsNone(captured_options["tools"])
             self.assertEqual(
                 captured_options["allowed_tools"],
                 ["ToolSearch", generated_google_drive_tool],
+            )
+            self.assertIn("Bash", captured_options["disallowed_tools"])
+            self.assertIn("Read", captured_options["disallowed_tools"])
+            self.assertIsInstance(events[-1], TurnComplete)
+
+        _run(_t())
+
+    def test_large_mcp_surface_is_split_across_sdk_servers(self):
+        from omnigent.inner.claude_sdk_executor import ClaudeSDKExecutor
+
+        captured_options = {}
+
+        class _ResultMessage:
+            def __init__(self, session_id, result):
+                self.session_id = session_id
+                self.result = result
+
+        class _FakeSDK:
+            AssistantMessage = type("AssistantMessage", (), {})
+            UserMessage = type("UserMessage", (), {})
+            SystemMessage = type("SystemMessage", (), {})
+            ResultMessage = _ResultMessage
+            StreamEvent = type("StreamEvent", (), {})
+            ClaudeAgentOptions = type(
+                "ClaudeAgentOptions",
+                (),
+                {"__init__": lambda self, **kwargs: self.__dict__.update(kwargs)},
+            )
+            messages = []
+
+            @staticmethod
+            def tool(name, desc, params):
+                def decorator(handler):
+                    return type(
+                        "Tool",
+                        (),
+                        {
+                            "name": name,
+                            "description": desc,
+                            "parameters": params,
+                            "handler": handler,
+                        },
+                    )()
+
+                return decorator
+
+            @staticmethod
+            def create_sdk_mcp_server(**kwargs):
+                return kwargs
+
+            class ClaudeSDKClient:
+                def __init__(self, options):
+                    captured_options["mcp_servers"] = getattr(options, "mcp_servers", None)
+                    captured_options["allowed_tools"] = getattr(options, "allowed_tools", None)
+                    captured_options["system_prompt"] = getattr(options, "system_prompt", None)
+
+                async def connect(self):
+                    return None
+
+                async def query(self, prompt, session_id="default"):
+                    _FakeSDK.messages = [_ResultMessage(session_id, "done")]
+
+                async def receive_response(self):
+                    for message in _FakeSDK.messages:
+                        yield message
+
+                async def disconnect(self):
+                    return None
+
+        async def _t():
+            executor = ClaudeSDKExecutor()
+            schemas = [
+                {
+                    "name": f"bytedesk-platform__googleworkspace_tool_{i}",
+                    "description": f"Tool {i}",
+                    "parameters": {"type": "object"},
+                }
+                for i in range(6)
+            ]
+            with patch("omnigent.inner.claude_sdk_executor._ensure_sdk", return_value=_FakeSDK):
+                events = [
+                    e
+                    async for e in executor.run_turn(
+                        [{"role": "user", "content": "hi", "session_id": "session-a"}],
+                        schemas,
+                        "",
+                    )
+                ]
+
+            self.assertEqual(list(captured_options["mcp_servers"]), ["omnigent", "omnigent2"])
+            self.assertEqual(len(captured_options["mcp_servers"]["omnigent"]["tools"]), 5)
+            self.assertEqual(len(captured_options["mcp_servers"]["omnigent2"]["tools"]), 1)
+            self.assertIn(
+                "mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5",
+                captured_options["allowed_tools"],
+            )
+            self.assertIn(
+                "`mcp__omnigent2__bytedesk_platform_googleworkspace_tool_5`",
+                captured_options["system_prompt"],
             )
             self.assertIsInstance(events[-1], TurnComplete)
 
