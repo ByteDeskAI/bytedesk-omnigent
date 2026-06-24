@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -549,7 +550,7 @@ async def test_run_turn_bg_loads_history_when_cache_empty() -> None:
 @pytest.mark.asyncio
 async def test_run_turn_bg_cold_cache_wraps_inbound_message_in_history() -> None:
     """A cold-cache turn seeds history with the inbound message before streaming."""
-    conv = "conv_empty_hist"
+    conv = f"conv_empty_hist_{uuid.uuid4().hex[:12]}"
     spec = AgentSpec(spec_version=1, name="empty-hist-agent")
     hc = _ScriptedHarnessClient(
         [
