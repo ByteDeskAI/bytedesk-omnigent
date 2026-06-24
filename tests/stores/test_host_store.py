@@ -254,15 +254,15 @@ def test_reown_host_id_across_owner_change_preserves_conversation_binding(
     host_store: HostStore,
     db_uri: str,
 ) -> None:
-    """With reown opted in, the same host_id may move to a new owner.
+    """The same host_id may move to a new owner — idempotent on host_id.
 
-    This is the auth-mode-flip case on the single-user local server: the
-    server respawns under a different auth posture, so the same physical
-    host (same host_id) re-registers under a different owner (accounts
-    user → reserved ``local``). The ``(owner, name)`` lookup misses, but
-    with ``allow_host_id_reown=True`` the existing row is re-owned in
-    place — keeping the host_id and its conversation binding — instead of
-    colliding on the host_id UNIQUE constraint.
+    The auth-mode-flip case (ADR-0151): a host respawns under a different
+    auth posture, so the same physical host (same host_id) re-registers
+    under a different owner (accounts user → reserved ``local``). The
+    ``(owner, name)`` lookup misses, so registration re-owns the existing
+    host_id row in place — keeping the host_id and its conversation
+    binding — instead of colliding on ``uq_hosts_host_id``. Re-own is now
+    unconditional (no opt-in flag).
     """
     from omnigent.stores.conversation_store.sqlalchemy_store import (
         SqlAlchemyConversationStore,
@@ -273,7 +273,6 @@ def test_reown_host_id_across_owner_change_preserves_conversation_binding(
         host_id="host_flip",
         name="laptop",
         owner="admin@example.com",
-        allow_host_id_reown=True,
     )
     conv = conversations.create_conversation(host_id="host_flip", workspace="/home/me/proj")
 
@@ -282,7 +281,6 @@ def test_reown_host_id_across_owner_change_preserves_conversation_binding(
         host_id="host_flip",
         name="laptop",
         owner="local",
-        allow_host_id_reown=True,
     )
 
     assert reowned.host_id == "host_flip"
@@ -298,34 +296,33 @@ def test_reown_host_id_across_owner_change_preserves_conversation_binding(
     assert host_store.list_hosts(owner="admin@example.com") == []
 
 
-def test_reown_disabled_rejects_foreign_owner_claiming_host_id(
+def test_reconnect_under_new_owner_reowns_host_id(
     host_store: HostStore,
 ) -> None:
-    """Without reown opt-in, a different owner cannot claim a host_id.
+    """A reconnect under a new owner re-owns the host_id in place (ADR-0151).
 
-    The deployed multi-user boundary (W2-class host hijack): Alice owns
-    ``host_x``; Bob connecting with the same host_id under the default
-    ``allow_host_id_reown=False`` must NOT be able to re-own it. The
-    host_id UNIQUE constraint fires (the same IntegrityError the host
-    tunnel relies on to fail the handshake closed), so Bob never takes
-    over Alice's host and Alice's row is untouched.
+    Org-shared host pool: ``host_id`` is the natural identity and ``owner``
+    is provenance metadata, so a host reconnecting under a different
+    authenticated owner re-owns the existing row (a normal UPDATE) rather
+    than colliding on ``uq_hosts_host_id``. The genuine host-id hijack
+    boundary for managed/sandbox hosts is upheld separately by
+    ``register_managed_host``'s cross-owner refusal and by the tunnel auth
+    handshake (an unauthenticated peer never reaches the upsert).
     """
-    from sqlalchemy.exc import IntegrityError
-
     host_store.upsert_on_connect(host_id="host_x", name="alice-box", owner="alice@example.com")
 
-    with pytest.raises(IntegrityError):
-        host_store.upsert_on_connect(
-            host_id="host_x",
-            name="bob-box",
-            owner="bob@example.com",
-        )
+    reowned = host_store.upsert_on_connect(
+        host_id="host_x",
+        name="bob-box",
+        owner="bob@example.com",
+    )
 
-    # Alice still owns host_x; Bob got nothing.
-    assert [h.owner for h in host_store.list_hosts(owner="alice@example.com")] == [
-        "alice@example.com"
-    ]
-    assert host_store.list_hosts(owner="bob@example.com") == []
+    # The host moved to Bob in place — one row, no duplicate, no collision.
+    assert reowned.host_id == "host_x"
+    assert reowned.owner == "bob@example.com"
+    assert reowned.name == "bob-box"
+    assert [h.host_id for h in host_store.list_hosts(owner="bob@example.com")] == ["host_x"]
+    assert host_store.list_hosts(owner="alice@example.com") == []
 
 
 def test_set_offline(host_store: HostStore) -> None:
