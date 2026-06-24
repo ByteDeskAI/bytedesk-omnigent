@@ -377,6 +377,10 @@ class _FakeRunnerRouter:
         self.resource_calls.append(session_id)
         return _RoutedRunner(self.client)
 
+    async def aclient_for_session_resources(self, session_id: str) -> _RoutedRunner:
+        """Async entry point used by :func:`_get_runner_client_for_resource_access`."""
+        return self.client_for_session_resources(session_id)
+
 
 @pytest.fixture
 def runner_globals_reset() -> Iterator[None]:

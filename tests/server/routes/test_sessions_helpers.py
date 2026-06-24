@@ -133,6 +133,7 @@ from omnigent.server.routes.sessions import (
     _publish_elicitation_resolved,
     _publish_elicitation_resolved_to_ancestors,
     _schedule_deferred_elicitation_clear,
+    _signal_harness_elicitation_resolved_by_id,
     _signal_terminal_resolved_harness_elicitation,
     _publish_external_conversation_item,
     _publish_external_output_text_delta,
@@ -2827,3 +2828,53 @@ async def test_schedule_deferred_elicitation_clear_skips_when_reparked(
 
     assert published == []
     sessions_mod._harness_elicitation_registry.clear()
+
+
+# ── batch 49: harness elicitation resolved-by-id ────────────────────────────
+
+
+def test_signal_harness_elicitation_resolved_by_id_requires_id() -> None:
+    with pytest.raises(OmnigentError) as exc:
+        _signal_harness_elicitation_resolved_by_id("conv_a", "")
+    assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+def test_signal_harness_elicitation_resolved_by_id_rejects_cross_session_owner() -> None:
+    elicitation_id = "elicit_codex_abc123def4567890abcdef12345678"
+    sessions_mod._harness_elicitation_owners[elicitation_id] = "conv_other"
+    try:
+        with pytest.raises(OmnigentError) as exc:
+            _signal_harness_elicitation_resolved_by_id("conv_a", elicitation_id)
+        assert exc.value.code == ErrorCode.INVALID_INPUT
+    finally:
+        sessions_mod._harness_elicitation_owners.pop(elicitation_id, None)
+
+
+def test_signal_harness_elicitation_resolved_by_id_pre_resolves_when_not_parked() -> None:
+    elicitation_id = "elicit_codex_deadbeefdeadbeefdeadbeefdeadbeef"
+    sessions_mod._harness_pre_resolved_elicitations.clear()
+    sessions_mod._harness_parked_elicitations.clear()
+    try:
+        _signal_harness_elicitation_resolved_by_id("conv_pre", elicitation_id)
+        tombstone = sessions_mod._harness_pre_resolved_elicitations[elicitation_id]
+        assert tombstone.session_id == "conv_pre"
+    finally:
+        sessions_mod._harness_pre_resolved_elicitations.clear()
+
+
+def test_signal_harness_elicitation_resolved_by_id_sets_parked_event() -> None:
+    elicitation_id = "elicit_codex_cafebabecafebabecafebabecafebabe"
+    resolved = asyncio.Event()
+    sessions_mod._harness_parked_elicitations.clear()
+    try:
+        sessions_mod._harness_parked_elicitations[elicitation_id] = _ParkedHarnessElicitation(
+            session_id="conv_parked",
+            tool_name="Bash",
+            tool_input={"command": "ls"},
+            resolved_elsewhere=resolved,
+        )
+        _signal_harness_elicitation_resolved_by_id("conv_parked", elicitation_id)
+        assert resolved.is_set()
+        assert elicitation_id not in sessions_mod._harness_pre_resolved_elicitations
+    finally:
+        sessions_mod._harness_parked_elicitations.clear()
