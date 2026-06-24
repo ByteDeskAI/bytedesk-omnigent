@@ -1772,6 +1772,22 @@ def create_app(
         prefix="/v1",
         tags=["sessions"],
     )
+    # Read-only data surfaces (Phase 9a, BDP-2444, ADR-0152): additive GET
+    # projections over existing state — long-term memory, per-session/per-user
+    # cost, the spawn tree, pending elicitations, fleet health. Same owner /
+    # session access-scoping as the sibling session/host reads.
+    from omnigent.server.routes.data_surfaces import create_data_surfaces_router
+
+    app.include_router(
+        create_data_surfaces_router(
+            conversation_store,
+            auth_provider=auth_provider,
+            permission_store=permission_store,
+            host_store=host_store,
+        ),
+        prefix="/v1",
+        tags=["data-surfaces"],
+    )
     # Read-only built-in agent discovery (designs/BUILTIN_AGENTS.md).
     # Successor to the removed GET /api/agents list; lists only
     # built-in (session_id IS NULL) agents for the new-session picker.

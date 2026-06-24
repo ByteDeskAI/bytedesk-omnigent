@@ -678,6 +678,30 @@
         "title": "CreatedEvent",
         "type": "object"
       },
+      "DailyCostSummary": {
+        "description": "A user's accumulated LLM spend for one UTC day.\n\nReturned by ``GET /v1/users/{user_id}/cost/daily``. Projection of the\n:class:`omnigent.db.db_models.SqlUserDailyCost` rollup row.\n\n:param date_utc: The UTC calendar day, ``\"YYYY-MM-DD\"``, e.g.\n    ``\"2026-06-24\"``.\n:param cost_usd: Accumulated USD spend for the user on this day; ``0.0``\n    when no row exists.\n:param ask_approved_usd: Highest soft cost-checkpoint (USD) the user has\n    already approved continuing past this day; ``0.0`` when none. (The\n    underlying column is ``ask_approved_usd`` \u2014 a USD checkpoint, not a\n    count.)",
+        "properties": {
+          "ask_approved_usd": {
+            "default": 0.0,
+            "title": "Ask Approved Usd",
+            "type": "number"
+          },
+          "cost_usd": {
+            "default": 0.0,
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "date_utc": {
+            "title": "Date Utc",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date_utc"
+        ],
+        "title": "DailyCostSummary",
+        "type": "object"
+      },
       "ElicitationRequestEvent": {
         "description": "Synchronous request for a decision from upstream.\n\nEmitted by Omnigent (or, under the new contract, by a harness)\nwhen the LLM / a tool / a policy needs a verdict before\nproceeding. The consumer replies via\n``POST /v1/sessions/{session_id}/events`` with\n``type == \"approval\"`` and\n:class:`omnigent.server.schemas.ElicitationResult` fields in\n``data``. This preserves MCP request/reply correlation by id\nwithout threading elicitations through PATCH.\n\nWire shape matches the existing emit at\n``omnigent/runtime/policies/approval.py:175``.\n\n:param type: Always ``\"response.elicitation_request\"``.\n:param elicitation_id: Unique correlation id for this\n    request \u2014 appears in the consumer's approval event payload,\n    e.g. ``\"elicit_abc123\"``.\n:param method: MCP method literal \u2014 always\n    ``\"elicitation/create\"`` (the value of\n    ``_MCP_ELICITATION_METHOD`` in\n    ``omnigent/runtime/policies/approval.py``).\n:param params: The MCP-shaped params block carrying the\n    prompt and (form-mode only) the requested schema.",
         "properties": {
@@ -1007,6 +1031,46 @@
         "title": "FailedEvent",
         "type": "object"
       },
+      "FleetHealth": {
+        "description": "Aggregate health of the hosts the caller can see.\n\nReturned by ``GET /v1/hosts/health``. Scoped to the same host set the\ncaller would get from ``GET /v1/hosts`` (owner / visibility-scope filtered).\n\n:param total_hosts: Number of hosts in the caller's scope.\n:param online_hosts: Hosts online and seen within the liveness window.\n:param offline_hosts: ``total_hosts - online_hosts``.\n:param hosts_by_sandbox_provider: Count of hosts per sandbox provider; the\n    ``\"external\"`` key counts user-connected (non-managed) hosts.\n:param avg_last_seen_seconds_ago: Mean age (seconds) of the hosts'\n    last-seen timestamps. ``None`` when there are no hosts.",
+        "properties": {
+          "avg_last_seen_seconds_ago": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Last Seen Seconds Ago"
+          },
+          "hosts_by_sandbox_provider": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Hosts By Sandbox Provider",
+            "type": "object"
+          },
+          "offline_hosts": {
+            "default": 0,
+            "title": "Offline Hosts",
+            "type": "integer"
+          },
+          "online_hosts": {
+            "default": 0,
+            "title": "Online Hosts",
+            "type": "integer"
+          },
+          "total_hosts": {
+            "default": 0,
+            "title": "Total Hosts",
+            "type": "integer"
+          }
+        },
+        "title": "FleetHealth",
+        "type": "object"
+      },
       "GrantPermissionRequest": {
         "description": "Request body for ``PUT /v1/sessions/{id}/permissions``.\n\n:param user_id: The user to grant access to, e.g.\n    ``\"alice@example.com\"`` or ``\"__public__\"`` for public\n    read access.\n:param level: Numeric permission level: ``1`` = read,\n    ``2`` = edit, ``3`` = manage.",
         "properties": {
@@ -1256,6 +1320,112 @@
         "title": "MCPServerSummary",
         "type": "object"
       },
+      "MemoryListResponse": {
+        "description": "Page of session-scoped memories.\n\nReturned by ``GET /v1/sessions/{id}/memories``.\n\n:param object: Fixed resource type, always ``\"list\"``.\n:param data: The memories captured from this session, newest first.\n:param has_more: Whether more memories exist beyond ``limit``.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "object": {
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "title": "MemoryListResponse",
+        "type": "object"
+      },
+      "MemoryObject": {
+        "description": "One durable, weighted, decaying memory (FU1, ADR-0132).\n\nProjection of a :class:`omnigent.db.db_models.SqlMemory` row scoped to a\nsession via ``source_conversation_id``. Pure read \u2014 no decay is applied\nhere; ``weight`` is the stored salience.\n\n:param id: Memory identifier, e.g. ``\"mem_abc123\"``.\n:param object: Fixed resource type, always ``\"memory\"``.\n:param content: The remembered text.\n:param weight: Stored salience (pre-decay), e.g. ``1.0``.\n:param salience: Optional capture-time salience score, e.g. ``0.8``.\n    ``None`` when not recorded.\n:param confidence: Optional capture-time confidence score. ``None`` when\n    not recorded.\n:param created_at: Unix epoch seconds the memory was first written.\n:param last_accessed_at: Unix epoch seconds of the last reinforcement\n    (drives the decay clock).\n:param access_count: Number of times the memory has been recalled.\n:param archived: Whether the memory has been evicted below the archive\n    floor (excluded from recall).\n:param source_conversation_id: Session the memory was captured from, e.g.\n    ``\"conv_abc123\"``. ``None`` for memories with no recorded source.",
+        "properties": {
+          "access_count": {
+            "title": "Access Count",
+            "type": "integer"
+          },
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_accessed_at": {
+            "title": "Last Accessed At",
+            "type": "integer"
+          },
+          "object": {
+            "default": "memory",
+            "title": "Object",
+            "type": "string"
+          },
+          "salience": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salience"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "weight",
+          "created_at",
+          "last_accessed_at",
+          "access_count",
+          "archived"
+        ],
+        "title": "MemoryObject",
+        "type": "object"
+      },
       "ModelUsage": {
         "description": "Cumulative token/cost usage attributed to a single LLM model.\n\nOne value in the ``usage_by_model`` map on :class:`SessionResponse` /\n:class:`SessionUsageEvent`, keyed by the raw harness-reported model id\n(e.g. ``\"claude-sonnet-4-6\"``, ``\"databricks-gpt-5-5\"``). Counts are\nsummed over the session's subtree (itself + sub-agent descendants), so a\nparent folds in sub-agents that ran a different model. Token buckets\nmirror the flat per-session breakdown.\n\n:param input_tokens: Cumulative non-cached input (prompt) tokens for this\n    model over the subtree, e.g. ``12000``. ``None`` when not recorded.\n:param output_tokens: Cumulative output (completion) tokens, e.g.\n    ``3400``. ``None`` when not recorded.\n:param total_tokens: Cumulative total tokens (counts cache buckets too,\n    as the harness reports), e.g. ``15400``. ``None`` when not recorded.\n:param cache_read_input_tokens: Cumulative tokens read from the prompt\n    cache, e.g. ``8000``. ``None`` when not recorded.\n:param cache_creation_input_tokens: Cumulative tokens written to the\n    prompt cache, e.g. ``2000``. ``None`` when not recorded.\n:param total_cost_usd: Cumulative USD spend attributed to this model,\n    e.g. ``0.42``. Present **only when this model's turns were priced**\n    (same \"priced \u27fa key present\" contract as the session total); ``None``\n    when the model is unpriced, so the sum of priced per-model costs\n    equals the session ``total_cost_usd``.",
         "properties": {
@@ -1268,7 +1438,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Cache Creation Input Tokens"
           },
           "cache_read_input_tokens": {
@@ -1280,7 +1449,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Cache Read Input Tokens"
           },
           "input_tokens": {
@@ -1292,7 +1460,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Input Tokens"
           },
           "output_tokens": {
@@ -1304,7 +1471,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Output Tokens"
           },
           "total_cost_usd": {
@@ -1316,7 +1482,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Total Cost Usd"
           },
           "total_tokens": {
@@ -1328,7 +1493,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Total Tokens"
           }
         },
@@ -1534,6 +1698,68 @@
           }
         },
         "title": "PaginatedList",
+        "type": "object"
+      },
+      "PendingElicitationItem": {
+        "description": "A compact projection of one outstanding elicitation prompt.\n\n:param elicitation_id: Correlates the prompt to its reply, e.g.\n    ``\"elicit_abc123\"``.\n:param prompt: The human-facing message, e.g. ``\"Approve running 'rm'?\"``.\n    ``None`` when the payload carried no message.\n:param fields: For form-mode elicitations, the requested field names.\n    ``None`` for non-form prompts.",
+        "properties": {
+          "elicitation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elicitation Id"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          }
+        },
+        "title": "PendingElicitationItem",
+        "type": "object"
+      },
+      "PendingElicitationsSummary": {
+        "description": "Pending elicitations across the caller's accessible sessions.\n\nReturned by ``GET /v1/elicitations/pending``.\n\n:param total_count: Total outstanding prompts across the listed sessions.\n:param by_session: One entry per session with at least one outstanding\n    prompt (scoped to sessions the caller can read).",
+        "properties": {
+          "by_session": {
+            "items": {
+              "$ref": "#/components/schemas/SessionPendingElicitations"
+            },
+            "title": "By Session",
+            "type": "array"
+          },
+          "total_count": {
+            "default": 0,
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "title": "PendingElicitationsSummary",
         "type": "object"
       },
       "PolicySummary": {
@@ -2707,6 +2933,43 @@
         "title": "SessionModelEvent",
         "type": "object"
       },
+      "SessionPendingElicitations": {
+        "description": "Outstanding elicitations for one session.\n\n:param conversation_id: The session, e.g. ``\"conv_abc123\"``.\n:param pending_count: Number of outstanding prompts on this session.\n:param oldest_created_at: Unix epoch seconds of the oldest outstanding\n    prompt. Always ``None`` \u2014 the in-memory pending index does not record\n    per-prompt timestamps.\n:param elicitations: The compact prompt projections.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "elicitations": {
+            "items": {
+              "$ref": "#/components/schemas/PendingElicitationItem"
+            },
+            "title": "Elicitations",
+            "type": "array"
+          },
+          "oldest_created_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Created At"
+          },
+          "pending_count": {
+            "title": "Pending Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "pending_count"
+        ],
+        "title": "SessionPendingElicitations",
+        "type": "object"
+      },
       "SessionPresenceEvent": {
         "description": "The session's viewer list changed \u2014 full state, not a delta.\n\nEmitted on ``GET /v1/sessions/{id}/stream`` whenever a user\njoins, leaves (after the server-side grace window absorbs\nreconnect churn), or flips their idle aggregate, and once to\neach newly-connected stream as a snapshot-on-connect. Every\nevent carries the COMPLETE viewer list so clients replace their\nstate wholesale \u2014 missed events self-heal on the next event or\nreconnect. Viewers are scoped to the session *tree* (the root\nconversation and every sub-agent conversation under it), so a\nuser on a sub-agent page and a user on the root page appear in\neach other's lists. See ``omnigent/server/presence.py`` and\n``designs/UI/PRESENCE.md``.\n\n:param type: Always ``\"session.presence\"``.\n:param conversation_id: The conversation whose stream delivered\n    this event \u2014 the root or a sub-agent conversation, e.g.\n    ``\"conv_abc123\"``. Matches the streamed conversation (not\n    necessarily the tree's root) so clients can guard events by\n    the conversation they are viewing.\n:param viewers: All users currently viewing any conversation in\n    the session tree (including the receiving user \u2014 the web\n    filters self out for display), ordered by join time.",
         "properties": {
@@ -3314,6 +3577,87 @@
         "title": "SkillSummary",
         "type": "object"
       },
+      "SpawnTree": {
+        "description": "A session and its sub-agent descendants as a recursive tree.\n\nReturned by ``GET /v1/sessions/{id}/spawn-tree``. Walks\n``parent_conversation_id`` within the shared ``root_conversation_id``.\n\n:param session_id: This node's session/conversation id.\n:param object: Fixed resource type, always ``\"spawn_tree\"``.\n:param agent_type: The node's sub-agent type, e.g. ``\"researcher\"``;\n    ``\"root\"`` for the top-level session.\n:param status: Coarse lifecycle status \u2014 the live in-memory status when\n    known (``\"running\"`` / ``\"waiting\"`` / ``\"idle\"`` / ``\"failed\"``),\n    else ``\"archived\"`` / ``\"closed\"`` from durable markers, else\n    ``\"active\"``.\n:param metadata: Descriptive metadata for this node.\n:param children: Sub-agent children, newest-first by ``created_at``.\n    Empty for a leaf, or when ``depth`` cut off further descent.",
+        "properties": {
+          "agent_type": {
+            "title": "Agent Type",
+            "type": "string"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/SpawnTree"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/SpawnTreeMetadata"
+          },
+          "object": {
+            "default": "spawn_tree",
+            "title": "Object",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "agent_type",
+          "status",
+          "metadata"
+        ],
+        "title": "SpawnTree",
+        "type": "object"
+      },
+      "SpawnTreeMetadata": {
+        "description": "Descriptive metadata for a node in a session spawn tree.\n\n:param sub_agent_name: For sub-agent nodes, the sub-agent type name within\n    the parent's spec tree, e.g. ``\"researcher\"``. ``None`` for the root.\n:param title: The node's stored title, e.g. ``\"researcher:auth\"``. ``None``\n    when untitled.\n:param created_at: Unix epoch seconds the node was created.\n:param last_activity_at: Unix epoch seconds the node was last updated.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "title": "Last Activity At",
+            "type": "integer"
+          },
+          "sub_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Agent Name"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "created_at",
+          "last_activity_at"
+        ],
+        "title": "SpawnTreeMetadata",
+        "type": "object"
+      },
       "TurnCancelledEvent": {
         "description": "Emitted when a turn is interrupted by the user or system.\n\n:param type: Fixed literal ``\"turn.cancelled\"``.\n:param session_id: Session/conversation identifier,\n    e.g. ``\"conv_abc123\"``.",
         "properties": {
@@ -3745,6 +4089,63 @@
           }
         },
         "title": "UsageDetails",
+        "type": "object"
+      },
+      "UsageSummary": {
+        "description": "Cumulative token + cost usage for a session subtree.\n\nReturned by ``GET /v1/sessions/{id}/usage/summary``. Counts are summed\nover the session and its sub-agent descendants (same subtree total the\nsnapshot's ``usage`` field uses), so a parent folds in its sub-agents.\n\n:param input_tokens: Cumulative non-cached input (prompt) tokens.\n:param output_tokens: Cumulative output (completion) tokens.\n:param cache_read_input_tokens: Cumulative tokens served from the prompt\n    cache (cache hits).\n:param cache_creation_input_tokens: Cumulative tokens written to the\n    prompt cache (cache creation).\n:param total_tokens: Cumulative total tokens (billing total).\n:param total_cost_usd: Cumulative USD spend. ``None`` when no turn in the\n    subtree was priced (same \"priced \u27fa key present\" contract as the\n    snapshot).\n:param usage_by_model: Per-model breakdown keyed by the raw harness model\n    id. ``None`` when no per-model usage was recorded.",
+        "properties": {
+          "cache_creation_input_tokens": {
+            "default": 0,
+            "title": "Cache Creation Input Tokens",
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "default": 0,
+            "title": "Cache Read Input Tokens",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "total_tokens": {
+            "default": 0,
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "usage_by_model": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ModelUsage"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage By Model"
+          }
+        },
+        "title": "UsageSummary",
         "type": "object"
       },
       "ValidationError": {
@@ -4409,6 +4810,56 @@
         "summary": "Put Value"
       }
     },
+    "/v1/elicitations/pending": {
+      "get": {
+        "description": "Summarize outstanding elicitation prompts across accessible sessions.\n\nReads the in-memory pending-elicitations index, scoped to sessions the\ncaller can READ \u2014 a caller never sees another owner's pending prompts.\n\n:param session_ids: Optional comma-separated allow-list to restrict the\n    summary to specific sessions (each still access-checked).",
+        "operationId": "pending_elicitations_summary_v1_elicitations_pending_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "session_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingElicitationsSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pending Elicitations Summary",
+        "tags": [
+          "data-surfaces"
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
         "description": "Subscribe to typed lifecycle events for the caller (BDP-2394, ADR-0149).\n\nA cross-cutting Publish-Subscribe channel (GoF Observer): the consumer\nreceives typed Event Messages \u2014 e.g. ``session.created`` \u2014 for sessions\naccessible to it, instead of hand-wiring a callback per event type. Pass\n``?types=a,b`` to narrow to specific types (EIP Message Filter). SSE with\na 20s heartbeat; live-tail only (reconcile via the REST snapshots on\nconnect, like the per-session stream).\n\n:param request: The FastAPI request, used to detect disconnect.\n:param types: Optional comma-separated event-type allowlist, e.g.\n    ``\"session.created\"``. Empty/absent yields every type.\n:returns: An SSE :class:`StreamingResponse` of typed events.",
@@ -4612,6 +5063,28 @@
         "summary": "List Hosts",
         "tags": [
           "hosts"
+        ]
+      }
+    },
+    "/v1/hosts/health": {
+      "get": {
+        "description": "Aggregate health of the hosts the caller can see.\n\nScoped exactly like ``GET /v1/hosts`` (owner / visibility-scope\nfiltered) so the summary never counts another owner's managed hosts.",
+        "operationId": "hosts_health_v1_hosts_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Hosts Health",
+        "tags": [
+          "data-surfaces"
         ]
       }
     },
@@ -6818,6 +7291,88 @@
         ]
       }
     },
+    "/v1/sessions/{session_id}/memories": {
+      "get": {
+        "description": "List long-term memories captured from a session.\n\nReads :class:`omnigent.db.db_models.SqlMemory` rows by\n``source_conversation_id``. ``scopes`` is accepted for forward\ncompatibility (memory compartments are scope/owner/topic-keyed, not\nsession-keyed) but does not filter session-sourced rows today.\n\n:param scopes: Reserved compartment-scope filter (currently unused).\n:param limit: Max memories to return (1-200).\n:param sort_by: ``\"created_at\"`` (default) or ``\"weight\"``.",
+        "operationId": "list_session_memories_v1_sessions__session_id__memories_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scopes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scopes"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "created_at",
+              "pattern": "^(created_at|weight)$",
+              "title": "Sort By",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Session Memories",
+        "tags": [
+          "data-surfaces"
+        ]
+      }
+    },
     "/v1/sessions/{session_id}/owner": {
       "get": {
         "description": "Return the owner of a session.\n\nRequires read-level access.\n\n:param request: The incoming FastAPI request (for auth).\n:param session_id: Session to look up,\n    e.g. ``\"conv_abc123\"``.\n:returns: ``{\"owner\": \"<user_id>\"}`` or\n    ``{\"owner\": null}``.",
@@ -8676,6 +9231,61 @@
         ]
       }
     },
+    "/v1/sessions/{session_id}/spawn-tree": {
+      "get": {
+        "description": "Return a session and its sub-agent descendants as a tree.\n\nAuthorizes READ on the requested session (the same check the\nchild-sessions read uses), then walks ``parent_conversation_id``\nwithin the shared ``root_conversation_id`` \u2014 one tree read, built\nin-memory.\n\n:param depth: Max levels of descendants to include (children of the\n    requested node are depth 1).",
+        "operationId": "session_spawn_tree_v1_sessions__session_id__spawn_tree_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpawnTree"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Spawn Tree",
+        "tags": [
+          "data-surfaces"
+        ]
+      }
+    },
     "/v1/sessions/{session_id}/stream": {
       "get": {
         "description": "Subscribe to the session's live SSE event stream.\n\nDoes NOT replay history; clients reconcile via the snapshot\nendpoint. The generator handles disconnects via a\n``try/finally`` that emits the ``[DONE]`` sentinel in all\nexit paths \u2014 see :func:`_stream_live_events`.\n\nHolding this stream open registers the caller as a session\n*viewer* (presence): co-viewers' streams receive\n``session.presence`` events on join/leave/idle edges, and\nthis stream's snapshot-on-connect includes the current\nviewer list. Presence is scoped to the session tree's root\nconversation, so viewers of different agents/sub-agents in\none session see each other. See\n``omnigent/server/presence.py``.\n\n:param request: The FastAPI request, used to detect\n    disconnect.\n:param session_id: Session/conversation identifier,\n    e.g. ``\"conv_abc123\"``.\n:param idle: Presence idle flag computed by the web client\n    at connect time (tab backgrounded \u2265 its debounce). An\n    idle *flip* mid-view arrives as a reconnect carrying the\n    new value \u2014 there is no separate update endpoint.\n:returns: An SSE :class:`StreamingResponse`.\n:raises OmnigentError: 404 if no session exists.",
@@ -8780,6 +9390,49 @@
         "summary": "Switch Session Agent",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/usage/summary": {
+      "get": {
+        "description": "Return cumulative token + cost usage for a session subtree.\n\nReuses :func:`omnigent.runtime.policies.builder.load_session_usage`\n(the subtree-summed dict the snapshot displays) so a parent folds in\nits sub-agents.",
+        "operationId": "session_usage_summary_v1_sessions__session_id__usage_summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Usage Summary",
+        "tags": [
+          "data-surfaces"
         ]
       }
     },
@@ -8909,6 +9562,66 @@
           }
         },
         "summary": "List Tasks"
+      }
+    },
+    "/v1/users/{user_id}/cost/daily": {
+      "get": {
+        "description": "Return a user's accumulated LLM spend for one UTC day.\n\nA caller may only read their own daily cost (an admin may read any\nuser's). ``date`` defaults to today (UTC).\n\n:param date: UTC day ``\"YYYY-MM-DD\"``; defaults to today.\n:raises HTTPException: 403 reading another user's cost without admin.",
+        "operationId": "user_daily_cost_v1_users__user_id__cost_daily_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyCostSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "User Daily Cost",
+        "tags": [
+          "data-surfaces"
+        ]
       }
     }
   }
