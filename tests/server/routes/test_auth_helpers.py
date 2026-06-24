@@ -13,13 +13,25 @@ from __future__ import annotations
 import pytest
 
 from omnigent.errors import ErrorCode, OmnigentError
+from unittest.mock import MagicMock
+
 from omnigent.server.auth import (
     LEVEL_EDIT,
     LEVEL_OWNER,
     LEVEL_READ,
+    RESERVED_USER_LOCAL,
     RESERVED_USER_PUBLIC,
 )
-from omnigent.server.routes._auth_helpers import require_access_and_level
+from omnigent.server.routes._auth_helpers import (
+    _require_access_sync,
+    attribution_user,
+    get_permission_level,
+    get_session_owner_id,
+    get_user_id,
+    require_access,
+    require_access_and_level,
+    require_user,
+)
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
@@ -226,3 +238,120 @@ async def test_missing_conversation_raises_404(
         )
 
     assert exc.value.code == ErrorCode.NOT_FOUND
+
+
+def test_get_user_id_returns_none_without_auth_provider() -> None:
+    request = MagicMock()
+    assert get_user_id(request, None) is None
+
+
+def test_get_user_id_delegates_to_auth_provider() -> None:
+    request = MagicMock()
+    provider = MagicMock()
+    provider.get_user_id.return_value = ALICE
+    assert get_user_id(request, provider) == ALICE
+    provider.get_user_id.assert_called_once_with(request)
+
+
+def test_attribution_user_drops_local_sentinel() -> None:
+    assert attribution_user(RESERVED_USER_LOCAL) is None
+    assert attribution_user(ALICE) == ALICE
+    assert attribution_user(None) is None
+
+
+def test_require_user_raises_401_when_identity_missing() -> None:
+    request = MagicMock()
+    provider = MagicMock()
+    provider.get_user_id.return_value = None
+    with pytest.raises(OmnigentError) as exc:
+        require_user(request, provider)
+    assert exc.value.code == ErrorCode.UNAUTHORIZED
+
+
+def test_require_user_returns_none_when_auth_disabled() -> None:
+    assert require_user(MagicMock(), None) is None
+
+
+def test_require_user_returns_identity_when_authenticated() -> None:
+    request = MagicMock()
+    provider = MagicMock()
+    provider.get_user_id.return_value = ALICE
+    assert require_user(request, provider) == ALICE
+
+
+@pytest.mark.asyncio
+async def test_require_access_async_wrapper_enforces_permissions(
+    perm_store: SqlAlchemyPermissionStore, conv_store: SqlAlchemyConversationStore
+) -> None:
+    conv = conv_store.create_conversation()
+    perm_store.ensure_user(BOB)
+    perm_store.grant(BOB, conv.id, LEVEL_READ)
+
+    await require_access(BOB, conv.id, LEVEL_READ, perm_store, conv_store)
+
+    with pytest.raises(OmnigentError) as forbidden:
+        await require_access(BOB, conv.id, LEVEL_EDIT, perm_store, conv_store)
+    assert forbidden.value.code == ErrorCode.FORBIDDEN
+
+    with pytest.raises(OmnigentError) as missing:
+        await require_access(ALICE, conv.id, LEVEL_READ, perm_store, conv_store)
+    assert missing.value.code == ErrorCode.NOT_FOUND
+
+
+def test_require_access_sync_skips_when_permissions_disabled(
+    conv_store: SqlAlchemyConversationStore,
+) -> None:
+    _require_access_sync(None, "conv_x", LEVEL_READ, None, conv_store)
+
+
+def test_require_access_sync_raises_401_for_anonymous_user(
+    perm_store: SqlAlchemyPermissionStore, conv_store: SqlAlchemyConversationStore
+) -> None:
+    with pytest.raises(OmnigentError) as exc:
+        _require_access_sync(None, "conv_x", LEVEL_READ, perm_store, conv_store)
+    assert exc.value.code == ErrorCode.UNAUTHORIZED
+
+
+@pytest.mark.asyncio
+async def test_get_permission_level_returns_direct_grant(
+    perm_store: SqlAlchemyPermissionStore, conv_store: SqlAlchemyConversationStore
+) -> None:
+    conv = conv_store.create_conversation()
+    perm_store.ensure_user(ALICE)
+    perm_store.grant(ALICE, conv.id, LEVEL_EDIT)
+    level = await get_permission_level(ALICE, conv.id, perm_store)
+    assert level == LEVEL_EDIT
+    assert await get_permission_level(None, conv.id, perm_store) is None
+    assert await get_permission_level(ALICE, conv.id, None) is None
+
+
+@pytest.mark.asyncio
+async def test_sub_agent_insufficient_parent_level_raises_403(
+    perm_store: SqlAlchemyPermissionStore, conv_store: SqlAlchemyConversationStore
+) -> None:
+    parent = conv_store.create_conversation()
+    child = conv_store.create_conversation(
+        kind="sub_agent",
+        parent_conversation_id=parent.id,
+        sub_agent_name="worker",
+    )
+    perm_store.ensure_user(BOB)
+    perm_store.grant(BOB, parent.id, LEVEL_READ)
+
+    with pytest.raises(OmnigentError) as exc:
+        await require_access_and_level(BOB, child.id, LEVEL_EDIT, perm_store, conv_store)
+    assert exc.value.code == ErrorCode.FORBIDDEN
+
+
+def test_get_session_owner_id_finds_owner_grant(
+    perm_store: SqlAlchemyPermissionStore, conv_store: SqlAlchemyConversationStore
+) -> None:
+    conv = conv_store.create_conversation()
+    perm_store.ensure_user(ALICE)
+    perm_store.ensure_user(BOB)
+    perm_store.grant(ALICE, conv.id, LEVEL_READ)
+    perm_store.grant(BOB, conv.id, LEVEL_OWNER)
+
+    assert get_session_owner_id(conv.id, perm_store) == BOB
+    assert get_session_owner_id(conv.id, None) is None
+    assert get_session_owner_id("conv_missing", perm_store) is None
