@@ -274,6 +274,19 @@ def test_created_by_absent_from_snapshot_when_none() -> None:
     assert "created_by" not in snap[0]
 
 
+def test_resolve_unknown_conversation_is_noop() -> None:
+    """Resolving on a conversation with no pending entries is harmless."""
+    pending_inputs.resolve("conv_missing", "pending_deadbeef")
+    assert pending_inputs.snapshot_for("conv_missing") == []
+
+
+def test_resolve_last_entry_removes_conversation_bucket() -> None:
+    """Dropping the final pending entry clears the conversation key."""
+    only = pending_inputs.record("conv_a", [_text_block("solo")])
+    pending_inputs.resolve("conv_a", only)
+    assert pending_inputs.snapshot_for("conv_a") == []
+
+
 def test_stale_entries_evicted_after_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     A never-drained entry is evicted once it ages past the TTL.
