@@ -681,7 +681,102 @@ def _build_mcp_tools(
     return mcp_tools
 
 
-_OMNIGENT_MCP_PREFIX = "mcp__omnigent__"
+_OMNIGENT_MCP_SERVER_NAME = "omnigent"
+_OMNIGENT_MCP_SERVER_CHUNK_SIZE = 5
+_OMNIGENT_MCP_PREFIX = f"mcp__{_OMNIGENT_MCP_SERVER_NAME}__"
+
+# When ``tools=`` is omitted, Claude Code keeps SDK MCP server tools visible.
+# Explicitly disallow the native default tools that the old narrow
+# ``tools=["Skill", "ToolSearch"]`` base set suppressed, so Omnigent
+# continues routing filesystem, shell, task, and scheduling operations through
+# its own policy-aware MCP tools.
+_CLAUDE_SDK_NATIVE_TOOLS_TO_HIDE: tuple[str, ...] = (
+    "Task",
+    "AskUserQuestion",
+    "Bash",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "DesignSync",
+    "Edit",
+    "EnterPlanMode",
+    "EnterWorktree",
+    "ExitPlanMode",
+    "ExitWorktree",
+    "Monitor",
+    "NotebookEdit",
+    "PushNotification",
+    "Read",
+    "RemoteTrigger",
+    "ScheduleWakeup",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+    "WebFetch",
+    "WebSearch",
+    "Workflow",
+    "Write",
+)
+
+
+def _omnigent_mcp_server_name(index: int) -> str:
+    """Return the deterministic SDK MCP server name for a chunk index."""
+    if index == 0:
+        return _OMNIGENT_MCP_SERVER_NAME
+    return f"{_OMNIGENT_MCP_SERVER_NAME}{index + 1}"
+
+
+def _generated_sdk_mcp_tool_name(server_name: str, raw_name: str) -> str:
+    """Return the Claude Code callable name for a raw Omnigent tool."""
+    return f"mcp__{server_name}__{_claude_sdk_visible_tool_name(raw_name)}"
+
+
+def _build_sdk_mcp_servers(
+    sdk: _ClaudeSDK,
+    tool_schemas: list[ToolSpec],
+    tool_executor: ToolExecutor | None,
+) -> tuple[dict[str, Any], list[str], dict[str, str]]:
+    """Build chunked SDK MCP servers and the generated tool-name map.
+
+    Claude Code 2.1.x hides all tools from an in-process SDK MCP server once
+    that server exposes six or more tools. Keep each generated server at five
+    tools so larger Omnigent/ByteDesk MCP surfaces remain discoverable through
+    the normal MCP path without duplicating connector implementations.
+    """
+    mcp_servers: dict[str, Any] = {}  # type: ignore[explicit-any]
+    generated_tool_names: list[str] = []
+    generated_by_raw_name: dict[str, str] = {}
+    seen_generated: set[str] = set()
+
+    for offset in range(0, len(tool_schemas), _OMNIGENT_MCP_SERVER_CHUNK_SIZE):
+        chunk = tool_schemas[offset : offset + _OMNIGENT_MCP_SERVER_CHUNK_SIZE]
+        if not chunk:
+            continue
+        chunk_index = offset // _OMNIGENT_MCP_SERVER_CHUNK_SIZE
+        server_name = _omnigent_mcp_server_name(chunk_index)
+        mcp_tools = _build_mcp_tools(chunk, tool_executor)
+        if not mcp_tools:
+            continue
+        mcp_servers[server_name] = sdk.create_sdk_mcp_server(
+            name=server_name,
+            version="1.0.0",
+            tools=mcp_tools,
+        )
+        for schema in chunk:
+            raw_name = schema.get("name")
+            if not isinstance(raw_name, str) or not raw_name:
+                continue
+            generated_name = _generated_sdk_mcp_tool_name(server_name, raw_name)
+            generated_by_raw_name[raw_name] = generated_name
+            if generated_name in seen_generated:
+                continue
+            seen_generated.add(generated_name)
+            generated_tool_names.append(generated_name)
+
+    return mcp_servers, generated_tool_names, generated_by_raw_name
 
 
 def _claude_sdk_visible_tool_name(raw_name: str) -> str:
@@ -701,17 +796,19 @@ def _claude_sdk_visible_tool_name(raw_name: str) -> str:
     return raw_name.replace("-", "_").replace("__", "_")
 
 
-def _omnigent_tool_naming_note(tool_names: list[str]) -> str:
+def _omnigent_tool_naming_note(
+    tool_names: list[str],
+    generated_by_raw_name: dict[str, str] | None = None,
+) -> str:
     """Build a system-prompt note bridging bare Omnigent built-in tool names
-    to the ``mcp__omnigent__`` namespace the claude-agent-sdk advertises.
+    to the generated MCP names the claude-agent-sdk advertises.
 
-    ``create_sdk_mcp_server`` always exposes tools as ``mcp__<server>__<tool>``,
-    so an Omnigent built-in registered as ``sys_agent_list`` reaches the model
-    as ``mcp__omnigent__sys_agent_list``. Native agent prompts (and the
-    openai-agents harness, which registers bare names directly) refer to the
-    built-ins by their bare ``sys_*`` names. Without this bridge the model on
-    the claude-sdk harness treats a bare ``sys_agent_list`` as a *skill* and the
-    Claude Code CLI returns "Unknown skill: sys_agent_list" (BDP-2204).
+    ``create_sdk_mcp_server`` exposes tools as ``mcp__<server>__<tool>``.
+    Native agent prompts (and the openai-agents harness, which registers bare
+    names directly) refer to the built-ins by their bare ``sys_*`` names.
+    Without this bridge the model on the claude-sdk harness treats a bare
+    ``sys_agent_list`` as a *skill* and the Claude Code CLI returns
+    "Unknown skill: sys_agent_list" (BDP-2204).
 
     Only the ``sys_*`` built-ins are documented — those are the tools prompts
     reference by bare name. MCP-server tools (e.g. ``bytedesk-platform``) carry
@@ -721,40 +818,48 @@ def _omnigent_tool_naming_note(tool_names: list[str]) -> str:
     builtins = sorted({n for n in tool_names if n and n.startswith("sys_")})
     if not builtins:
         return ""
+    generated = generated_by_raw_name or {}
     listed = "\n".join(
-        f"- bare `{n}` → call `{_OMNIGENT_MCP_PREFIX}{n}`" for n in builtins
+        f"- bare `{n}` → call `{generated.get(n, _OMNIGENT_MCP_PREFIX + n)}`"
+        for n in builtins
     )
     return (
         "# Omnigent built-in tool names\n"
-        "Your Omnigent orchestration/OS built-in tools are exposed to you under "
-        f"the `{_OMNIGENT_MCP_PREFIX}` prefix. When any instruction names one of "
-        "these by its bare name, invoke the prefixed form below. These are "
-        "regular tools, NOT skills — never use the `Skill` tool to call them:\n"
+        "Your Omnigent orchestration/OS built-in tools are exposed to you as "
+        "generated MCP tool names. When any instruction names one of these by "
+        "its bare name, invoke the callable form below. These are regular "
+        "tools, NOT skills — never use the `Skill` tool to call them:\n"
         f"{listed}"
     )
 
 
-def _omnigent_tool_alias_note(tool_names: list[str]) -> str:
+def _omnigent_tool_alias_note(
+    tool_names: list[str],
+    generated_by_raw_name: dict[str, str] | None = None,
+) -> str:
     """Document Claude-safe aliases for namespaced external MCP tools."""
+    generated = generated_by_raw_name or {}
     aliases = [
-        (raw, _claude_sdk_visible_tool_name(raw))
+        (
+            raw,
+            generated.get(raw, _OMNIGENT_MCP_PREFIX + _claude_sdk_visible_tool_name(raw)),
+        )
         for raw in sorted({n for n in tool_names if n})
         if _claude_sdk_visible_tool_name(raw) != raw
     ]
     if not aliases:
         return ""
     listed = "\n".join(
-        f"- raw `{raw}` → call `{_OMNIGENT_MCP_PREFIX}{alias}`"
-        for raw, alias in aliases
+        f"- raw `{raw}` → call `{generated_name}`" for raw, generated_name in aliases
     )
     return (
         "# Omnigent external MCP tool aliases\n"
         "Some Omnigent MCP tools come from external servers and have raw "
         "`server__tool` names. Claude Code exposes those through safe aliases "
-        "under the `mcp__omnigent__` prefix. When an instruction names one of "
-        "these raw tools, invoke the alias below. If an alias is deferred or "
-        "is not immediately callable, first call `ToolSearch` with "
-        "`select:<alias>` to load its schema, then call the alias:\n"
+        "as generated MCP tool names. When an instruction names one of these "
+        "raw tools, invoke the callable name below. If a callable is deferred "
+        "or is not immediately callable, first call `ToolSearch` with "
+        "`select:<callable-name>` to load its schema, then call the callable:\n"
         f"{listed}"
     )
 
@@ -1892,35 +1997,37 @@ class ClaudeSDKExecutor(Executor):
             yield TurnComplete(response=None)
             return
 
-        # Build MCP tools from Omnigent tool schemas
-        mcp_tools = _build_mcp_tools(tools, self._tool_executor) if tools else []
-
-        # Create MCP server config for Omnigent tools. The SDK's
-        # ``McpServerConfig`` union is opaque to us — we pass through
-        # whatever ``create_sdk_mcp_server`` returns.
-        mcp_servers: dict[str, Any] = {}  # type: ignore[explicit-any]
-        if mcp_tools:
-            mcp_servers["omnigent"] = sdk.create_sdk_mcp_server(
-                name="omnigent",
-                version="1.0.0",
-                tools=mcp_tools,
-            )
-
-        # Bridge bare ``sys_*`` references in the agent prompt to the
-        # ``mcp__omnigent__`` names the SDK actually advertises (BDP-2204).
-        # Without this the model treats a bare ``sys_agent_list`` as a skill
-        # and the CLI returns "Unknown skill: sys_agent_list".
         tool_names = [
             name
             for s in tools
             if isinstance((name := s.get("name")), str) and name
         ]
-        if "omnigent" in mcp_servers:
+
+        # Build MCP tools from Omnigent tool schemas. Claude Code hides an SDK
+        # MCP server with six or more tools, so large Omnigent/ByteDesk tool
+        # surfaces are split across deterministic small servers while every
+        # handler still dispatches to the original raw Omnigent tool name.
+        if tools:
+            (
+                mcp_servers,
+                sdk_mcp_tool_names,
+                generated_by_raw_name,
+            ) = _build_sdk_mcp_servers(sdk, tools, self._tool_executor)
+        else:
+            mcp_servers = {}
+            sdk_mcp_tool_names = []
+            generated_by_raw_name = {}
+
+        # Bridge bare ``sys_*`` references in the agent prompt to the generated
+        # MCP names the SDK actually advertises (BDP-2204). Without this the
+        # model treats a bare ``sys_agent_list`` as a skill and the Claude Code
+        # CLI returns "Unknown skill: sys_agent_list".
+        if mcp_servers:
             naming_note = "\n\n".join(
                 note
                 for note in (
-                    _omnigent_tool_naming_note(tool_names),
-                    _omnigent_tool_alias_note(tool_names),
+                    _omnigent_tool_naming_note(tool_names, generated_by_raw_name),
+                    _omnigent_tool_alias_note(tool_names, generated_by_raw_name),
                 )
                 if note
             )
@@ -1945,24 +2052,6 @@ class ClaudeSDKExecutor(Executor):
         # elicitation system when an elicitation handler is wired in.
         # When ``allowed_tools`` is empty the SDK omits ``--allowedTools``
         # entirely, letting Claude's normal permission flow apply.
-        sdk_mcp_tool_names: list[str] = []
-        _seen_sdk_mcp_tool_names: set[str] = set()
-        for raw_tname in tool_names:
-            # Claude Code names every tool in the generated SDK MCP server as
-            # ``mcp__omnigent__<tool-name>``. These generated names belong in
-            # ``allowed_tools`` so bypass-permission sessions can call them
-            # without prompting. They must NOT be added to ``tools``: the
-            # Claude Agent SDK documents ``tools`` as the base built-in tool
-            # set, and passing MCP tool names there makes Claude Code advertise
-            # names that fail at call time with "No such tool available".
-            generated_name = (
-                f"mcp__omnigent__{_claude_sdk_visible_tool_name(raw_tname)}"
-            )
-            if generated_name in _seen_sdk_mcp_tool_names:
-                continue
-            _seen_sdk_mcp_tool_names.add(generated_name)
-            sdk_mcp_tool_names.append(generated_name)
-
         allowed_tools: list[str] = []
         if self._permission_mode == "bypassPermissions":
             # Allow all Omnigent MCP tools and deferred-tool hydration
@@ -2009,16 +2098,6 @@ class ClaudeSDKExecutor(Executor):
         # See ``claude_agent_sdk._internal.transport.subprocess_cli.
         # _apply_skills_defaults`` for the auto-derivation.
         #
-        # ``tools`` is the model's BASE tool set; ``allowed_tools``
-        # is just a permission filter on it. ``skills="all"`` only
-        # adds ``Skill`` to ``allowed_tools`` — to actually expose
-        # the tool to the model we have to put it in ``tools`` too.
-        # Without this, the SDK passes ``--tools ""`` to the CLI
-        # which ZEROS the base set, and the agent never sees a
-        # ``Skill`` tool even with ``--allowedTools=Skill`` set
-        # (the live regression that makes the agent answer "I
-        # don't have a Skill tool exposed in this session").
-        #
         # ``--bare`` (formerly in ``extra_args``) is intentionally
         # NOT passed: bare mode skips CLAUDE.md auto-discovery,
         # plugin sync, and auto-memory — exactly the host config
@@ -2026,17 +2105,14 @@ class ClaudeSDKExecutor(Executor):
         # they explicitly opted into. ``no-session-persistence``
         # stays because omnigent owns conversation persistence
         # via its own conversation store.
-        # OS-environment tools are provided via Omnigent ``sys_os_*``
-        # MCP tools (declared via ``os_env`` in the spec), not the
-        # SDK's native Bash/Read/Edit/Write. Include only the native ``Skill``
-        # and ``ToolSearch`` tools here. SDK MCP server tools are configured
-        # through ``mcp_servers`` and permissioned via ``allowed_tools``;
-        # putting them in ``tools`` sends them to Claude Code's built-in tool
-        # filter. ``ToolSearch`` is required because Claude Code defers some
-        # MCP tool schemas when the tool list is large; without it, explicit
-        # MCP calls can fail with "No such tool available" before the SDK MCP
-        # handler runs.
-        base_tools: list[str] = ["Skill", "ToolSearch"]
+        # OS-environment tools are provided via Omnigent ``sys_os_*`` MCP tools
+        # (declared via ``os_env`` in the spec), not the SDK's native
+        # Bash/Read/Edit/Write. Do not pass ``tools=`` here: Claude Code treats
+        # that argument as an active tool filter and drops SDK MCP server tools
+        # that are not named in it. Instead, leave tool discovery to the SDK
+        # MCP servers, keep ``Skill``/``ToolSearch`` available through the
+        # default base set, and use ``disallowed_tools`` below to suppress the
+        # native defaults Omnigent does not own.
         # Translate the spec's host-skill filter into the SDK
         # options. Falls back to ``"all"`` semantics when the
         # field is malformed (the parser already validates, so
@@ -2055,10 +2131,10 @@ class ClaudeSDKExecutor(Executor):
         if self._bundle_dir is not None:
             bundle_plugins.append({"type": "local", "path": str(self._bundle_dir)})
         options_kwargs: dict[str, Any] = {  # type: ignore[explicit-any]  # ClaudeAgentOptions accepts mixed-typed kwargs (str / list / dict / callable / etc.)
-            "tools": base_tools,
             "system_prompt": system_prompt or None,
             "mcp_servers": mcp_servers if mcp_servers else {},
             "allowed_tools": allowed_tools,
+            "disallowed_tools": list(_CLAUDE_SDK_NATIVE_TOOLS_TO_HIDE),
             "permission_mode": self._permission_mode,
             "max_turns": cfg.extra.get("max_turns"),
             "env": env,
