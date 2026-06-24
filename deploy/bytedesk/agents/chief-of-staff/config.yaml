@@ -152,12 +152,34 @@ tools:
     # tools, and combined with her ~44 sys_* builtins that overflows the
     # claude-sdk tool surface — the CLI then silently drops the sys_* tools and
     # she can't delegate ("No such tool available: mcp__omnigent__sys_agent_list").
-    # She delegates platform ACTIONS to specialists; she only needs to SEE state.
-    # Curate to a small read/inventory subset (bare tool names) so her total tool
-    # count stays small and the sys_* orchestration tools are always surfaced.
+    # She delegates broad platform ACTIONS to specialists, but owns founder-facing
+    # coordination artifacts directly. Keep a curated bare-name allowlist so the
+    # sys_* orchestration tools stay surfaced, while exposing the full Google
+    # Workspace surface published by ByteDesk.Mcp.
     tool_allowlist:
       - platform_get_inventory          # discover available platform capabilities to delegate
       - sales_list_prospecting_searches # read sales prospecting state
       - sales_get_prospecting_search
       - tools_list_market_research      # read market-research outputs
       - dev_get_dev_server_status       # read dev environment status
+      - googleworkspace_docs_create
+      - googleworkspace_docs_batch_update
+      - googleworkspace_docs_template_merge
+      - googleworkspace_docs_template_seed
+      - googleworkspace_sheets_create
+      - googleworkspace_sheets_values_update
+      - googleworkspace_slides_create
+      - googleworkspace_drive_share_internal
+      - googleworkspace_drive_replicate_template
+      - googleworkspace_drive_search
+      - googleworkspace_drive_file_create
+      - googleworkspace_gmail_draft_create
+      - googleworkspace_gmail_thread_read
+      - googleworkspace_gmail_search
+      - googleworkspace_calendar_event_create
+      - googleworkspace_calendar_freebusy
+      - googleworkspace_meet_space_create
+      - googleworkspace_meeting_schedule
+      - googleworkspace_chat_send_internal
+      - googleworkspace_people_search
+      - googleworkspace_directory_user_get
