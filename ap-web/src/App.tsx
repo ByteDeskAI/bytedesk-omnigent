@@ -25,6 +25,9 @@ const PoliciesPage = lazy(() =>
 const ConfigPage = lazy(() =>
   import("@/pages/ConfigPage").then((m) => ({ default: m.ConfigPage })),
 );
+const TerminalPage = lazy(() =>
+  import("@/pages/TerminalPage").then((m) => ({ default: m.TerminalPage })),
+);
 const ApprovePage = lazy(() =>
   import("@/pages/ApprovePage").then((m) => ({ default: m.ApprovePage })),
 );
@@ -66,7 +69,10 @@ interface AppProps {
  * including the internal hosted product that syncs from this repo
  * — ``/login`` / ``/register`` / ``/members`` are NOT in the route
  * table at all. Navigating to any of those paths lands on
- * ``<NotFoundPage />``. The bundle still ships those components as
+ * ``<NotFoundPage />``. The Omni CLI terminal has its own
+ * ``omni_cli_terminal_enabled`` gate because it is not an account
+ * management page and can run in local/header deployments. The
+ * bundle still ships those components as
  * separate chunks (via ``React.lazy``) but they're never downloaded.
  *
  * ``/login`` and ``/register`` sit OUTSIDE the AppShell tree on
@@ -123,6 +129,9 @@ function App({ basename }: AppProps = {}) {
           <Route path={prefix || "/"} element={<ChatPage />} />
           <Route path={`${prefix}/c/:conversationId`} element={<ChatPage />} />
           <Route path={`${prefix}/inbox`} element={<InboxPage />} />
+          {info.omni_cli_terminal_enabled && (
+            <Route path={`${prefix}/terminal`} element={<TerminalPage />} />
+          )}
           {info.accounts_enabled && (
             <>
               <Route path={`${prefix}/members`} element={<MembersPage />} />

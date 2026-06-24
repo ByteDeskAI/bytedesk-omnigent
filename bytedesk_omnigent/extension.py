@@ -18,6 +18,7 @@ from fastapi import APIRouter
 
 if TYPE_CHECKING:
     from omnigent.server.auth import AuthProvider
+    from omnigent.stores.permission_store import PermissionStore
     from omnigent.tools.base import Tool
 
 logger = logging.getLogger(__name__)
@@ -45,13 +46,20 @@ class BytedeskExtension:
     name = "bytedesk"
 
     # ── routers ──────────────────────────────────────────────────────
-    def routers(self, auth_provider: AuthProvider | None = None) -> list[APIRouter]:
+    def routers(
+        self,
+        auth_provider: AuthProvider | None = None,
+        permission_store: PermissionStore | None = None,
+    ) -> list[APIRouter]:
         from bytedesk_omnigent.routes.config import create_config_router
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
+        )
+        from bytedesk_omnigent.routes.omni_cli_terminal import (
+            create_omni_cli_terminal_router,
         )
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
@@ -63,6 +71,10 @@ class BytedeskExtension:
             create_integration_capabilities_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
             create_config_router(auth_provider=auth_provider),
+            create_omni_cli_terminal_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────

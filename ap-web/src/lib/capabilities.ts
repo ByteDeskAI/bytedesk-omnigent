@@ -2,10 +2,10 @@
  * Runtime capabilities probe.
  *
  * Hits ``GET /v1/info`` once at app boot to learn what the server
- * supports — currently just whether the accounts auth provider is
- * active. The SPA uses the result to decide whether to register
- * ``/login`` / ``/register`` / ``/members`` routes and whether to
- * render the ``AccountMenu``.
+ * supports — currently whether the accounts auth provider is active
+ * and whether the standalone Omni CLI terminal is enabled. The SPA
+ * uses the result to decide whether to register auth/admin routes
+ * and whether to render the bottom-left menu.
  *
  * This is the single gate for accounts UI in the SPA. When the
  * internal hosted product (header / OIDC) syncs from this repo
@@ -56,6 +56,11 @@ export interface ServerInfo {
    * ``managed_sandboxes_enabled`` is true.
    */
   sandbox_provider: string | null;
+  /**
+   * True when the server exposes the standalone Omni CLI terminal route.
+   * This is separate from session/agent terminals.
+   */
+  omni_cli_terminal_enabled: boolean;
 }
 
 /** Sentinel used when the probe fails — accounts is off, no login URL. */
@@ -66,6 +71,7 @@ const _OFF: ServerInfo = {
   databricks_features: false,
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
+  omni_cli_terminal_enabled: false,
 };
 
 let _cached: ServerInfo | null = null;
@@ -98,6 +104,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           managed_sandboxes_enabled: data.managed_sandboxes_enabled === true,
           sandbox_provider:
             typeof data.sandbox_provider === "string" ? data.sandbox_provider : null,
+          omni_cli_terminal_enabled: data.omni_cli_terminal_enabled === true,
         };
         return _cached;
       }

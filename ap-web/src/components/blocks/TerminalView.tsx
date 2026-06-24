@@ -1,4 +1,4 @@
-// xterm.js view bridged to an agent's tmux session over a WebSocket.
+// xterm.js view bridged to a terminal endpoint over a WebSocket.
 //
 // The xterm + WebSocket lifecycle lives in `TerminalSession` (plain
 // JS, outside React). This component is a thin shell: a callback ref
@@ -41,10 +41,12 @@ export const RECONNECT_BACKOFF_MS = [500, 1000, 2000, 4000, 8000] as const;
 export const RECONNECT_STABLE_MS = 30_000;
 
 interface TerminalViewProps {
-  /** Session/conversation identifier, e.g. ``"conv_abc123"``. */
-  sessionId: string;
-  /** Opaque terminal resource id, e.g. ``"terminal_bash_s1"``. */
-  terminalId: string;
+  /** Session/conversation identifier for session terminals, e.g. ``"conv_abc123"``. */
+  sessionId?: string;
+  /** Opaque session terminal resource id, e.g. ``"terminal_bash_s1"``. */
+  terminalId?: string;
+  /** Explicit attach path for non-session terminal surfaces. */
+  attachPath?: string;
   /** If true, drops keyboard input and runs ``tmux attach -r``. */
   readOnly?: boolean;
   /**
@@ -70,6 +72,7 @@ interface TerminalViewProps {
 export function TerminalView({
   sessionId,
   terminalId,
+  attachPath,
   readOnly = false,
   onStateChange,
   onActivity,
@@ -77,6 +80,9 @@ export function TerminalView({
   onResume,
   resumePending = false,
 }: TerminalViewProps) {
+  if (!attachPath && (!sessionId || !terminalId)) {
+    throw new Error("TerminalView requires either attachPath or sessionId + terminalId");
+  }
   const [state, setState] = useState<ConnectionState>({ kind: "connecting" });
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -167,7 +173,7 @@ export function TerminalView({
         if (cancelled) return;
         terminalSession = new TerminalSession(
           node,
-          buildAttachUrl(sessionId, terminalId, readOnly),
+          buildAttachUrl({ sessionId, terminalId, readOnly, attachPath }),
           notifyState,
           isDarkRef.current,
           notifyActivity,
@@ -182,7 +188,7 @@ export function TerminalView({
         onStateChangeRef.current?.(null);
       };
     },
-    [sessionId, terminalId, readOnly, notifyState, notifyActivity, notifyInput],
+    [sessionId, terminalId, readOnly, attachPath, notifyState, notifyActivity, notifyInput],
   );
 
   // Push theme changes into the live session without remounting.
@@ -253,7 +259,7 @@ export function TerminalView({
     <div
       data-testid="terminal-view"
       data-state={state.kind}
-      data-terminal-id={terminalId}
+      data-terminal-id={terminalId ?? attachPath}
       className="relative flex min-h-0 flex-1 flex-col"
     >
       {/* `p-1` lives on the wrapper, not the xterm mount node: FitAddon
@@ -437,8 +443,22 @@ export function buildAttachPath(sessionId: string, terminalId: string, readOnly:
  * :param readOnly: If true, requests a read-only attach.
  * :returns: The fully-qualified ``ws(s)://`` URL.
  */
-function buildAttachUrl(sessionId: string, terminalId: string, readOnly: boolean): string {
+function buildAttachUrl({
+  sessionId,
+  terminalId,
+  readOnly,
+  attachPath,
+}: {
+  sessionId?: string;
+  terminalId?: string;
+  readOnly: boolean;
+  attachPath?: string;
+}): string {
   // Delegates origin/prefix resolution to the embed host when present
   // (standalone falls back to the current page's origin).
+  if (attachPath) return resolveWebSocketUrl(attachPath);
+  if (!sessionId || !terminalId) {
+    throw new Error("buildAttachUrl requires sessionId + terminalId when attachPath is absent");
+  }
   return resolveWebSocketUrl(buildAttachPath(sessionId, terminalId, readOnly));
 }

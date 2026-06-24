@@ -33,6 +33,7 @@ resources:
   - postgres.yaml
   - nats.yaml
   - config.yaml
+  - omni-cli-terminal.yaml
   - server.yaml
   - host.yaml
   # Infisical-operator-managed MCP client secret (BDP-2169, ADR-0138). A CR

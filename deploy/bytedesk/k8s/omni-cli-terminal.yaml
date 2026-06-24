@@ -1,0 +1,112 @@
+# Admin Omni CLI terminal target.
+#
+# The browser never talks to this pod directly. The Omnigent server exposes an
+# admin-only WebSocket, then uses Kubernetes exec to attach here. A StatefulSet
+# gives the pod a stable name (`omnigent-cli-0`), which lets RBAC constrain the
+# server ServiceAccount to that one pod instead of granting namespace-wide exec.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: omnigent-server
+  labels:
+    app.kubernetes.io/name: omnigent-server
+    app.kubernetes.io/part-of: bytedesk-omnigent
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: omnigent-cli-exec
+  labels:
+    app.kubernetes.io/name: omnigent-cli
+    app.kubernetes.io/part-of: bytedesk-omnigent
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    resourceNames: ["omnigent-cli-0"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    resourceNames: ["omnigent-cli-0"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: omnigent-server-cli-exec
+  labels:
+    app.kubernetes.io/name: omnigent-cli
+    app.kubernetes.io/part-of: bytedesk-omnigent
+subjects:
+  - kind: ServiceAccount
+    name: omnigent-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: omnigent-cli-exec
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-cli
+  labels:
+    app.kubernetes.io/name: omnigent-cli
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  clusterIP: None
+  selector:
+    app.kubernetes.io/name: omnigent-cli
+  ports:
+    - name: noop
+      port: 1
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-cli
+  labels:
+    app.kubernetes.io/name: omnigent-cli
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  serviceName: omnigent-cli
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-cli
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-cli
+        app.kubernetes.io/part-of: bytedesk-omnigent
+    spec:
+      containers:
+        - name: cli
+          image: localhost:32000/bytedesk-omnigent-host:local # image-managed
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-lc"]
+          args:
+            - |
+              set -e
+              echo "[omni-cli] ready; server=$OMNIGENT_SERVER_URL"
+              exec sleep infinity
+          env:
+            - name: OMNIGENT_SERVER_URL
+              value: http://omnigent-server.bytedesk.svc.cluster.local
+            - name: HOME
+              value: /var/omni-cli-home
+            - name: OMNIGENT_CONFIG_HOME
+              value: /var/omni-cli-home/.omnigent
+            - name: OMNIGENT_DATA_DIR
+              value: /var/omni-cli-home/data
+          resources:
+            requests:
+              cpu: 50m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: omni-cli-home
+              mountPath: /var/omni-cli-home
+      volumes:
+        - name: omni-cli-home
+          emptyDir: {}

@@ -20,6 +20,7 @@ import {
 
 const terminalSessionMock = vi.hoisted(() => ({
   instances: [] as Array<{
+    url: string;
     onState: (state: ConnectionState) => void;
     dispose: ReturnType<typeof vi.fn>;
     setTheme: ReturnType<typeof vi.fn>;
@@ -36,10 +37,11 @@ vi.mock("./TerminalSession", async (importOriginal) => ({
 
     constructor(
       _container: HTMLDivElement,
-      _url: string,
+      url: string,
       onState: (state: ConnectionState) => void,
     ) {
       terminalSessionMock.instances.push({
+        url,
         onState,
         dispose: this.dispose,
         setTheme: this.setTheme,
@@ -94,6 +96,13 @@ describe("buildAttachPath", () => {
     // a leading slash is required for that concatenation to be
     // correct against any page origin.
     expect(buildAttachPath("conv_abc", "terminal_bash_s1", false).startsWith("/")).toBe(true);
+  });
+
+  it("can attach to an explicit non-session terminal path", async () => {
+    render(<TerminalView attachPath="/v1/admin/omni-cli/terminal/attach" />);
+
+    await waitFor(() => expect(terminalSessionMock.instances).toHaveLength(1));
+    expect(terminalSessionMock.instances[0].url).toContain("/v1/admin/omni-cli/terminal/attach");
   });
 });
 

@@ -57,6 +57,7 @@ spec:
       labels:
         app.kubernetes.io/name: omnigent-server
     spec:
+      serviceAccountName: omnigent-server
       # imagePullSecrets is added by the prod fleet overlay (harbor-prod-pull-secret).
       # Local MicroK8s pulls from localhost:32000 (no secret needed).
       containers:
@@ -97,6 +98,21 @@ spec:
             # Coordination backplane — JetStream KV + fan-out across replicas.
             - name: OMNIGENT_NATS_URL
               value: nats://omnigent-nats:4222
+            # Admin-only Omni CLI terminal. The UI attaches to the server, and
+            # the server execs into the dedicated StatefulSet pod
+            # `omnigent-cli-0` using the narrowly-scoped ServiceAccount below.
+            - name: OMNIGENT_OMNI_CLI_TERMINAL_ENABLED
+              value: "1"
+            - name: OMNIGENT_OMNI_CLI_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: OMNIGENT_OMNI_CLI_POD_NAME
+              value: omnigent-cli-0
+            - name: OMNIGENT_OMNI_CLI_CONTAINER
+              value: cli
+            - name: OMNIGENT_OMNI_CLI_SERVER_URL
+              value: http://omnigent-server.bytedesk.svc.cluster.local
             # ByteDesk platform MCP auth (BDP-2169, ADR-0138). Maya's
             # `bytedesk-platform` MCP tool uses the generic `oauth`
             # client-credentials provider (BDP-2182), which mints + refreshes a
