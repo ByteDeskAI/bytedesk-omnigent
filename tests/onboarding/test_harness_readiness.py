@@ -128,6 +128,8 @@ def test_configured_harness_map_covers_all_spellings(
         "antigravity",
         "agy",
         "google-antigravity",
+        # Grok native CLI harness alias (HARNESS_ALIASES → grok-native).
+        "grok",
     }
     assert set(result) == expected_keys
 

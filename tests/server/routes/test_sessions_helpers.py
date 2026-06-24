@@ -132,6 +132,8 @@ from omnigent.server.routes.sessions import (
     _parse_session_create_metadata,
     _publish_elicitation_resolved,
     _publish_elicitation_resolved_to_ancestors,
+    _schedule_deferred_elicitation_clear,
+    _signal_terminal_resolved_harness_elicitation,
     _publish_external_conversation_item,
     _publish_external_output_text_delta,
     _require_external_status_forward,
@@ -2684,3 +2686,144 @@ def test_build_new_item_wraps_validated_event_data() -> None:
     assert item.response_id == "resp_new"
     assert item.created_by == "alice@example.com"
     assert item.data.role == "user"  # type: ignore[attr-defined]
+
+
+# ── batch 48: terminal elicitation signal + deferred clear ───────────────────
+
+
+def test_signal_terminal_resolved_noop_without_parked_candidates() -> None:
+    sessions_mod._harness_parked_elicitations.clear()
+    _signal_terminal_resolved_harness_elicitation("conv_none", "Bash", {"command": "ls"})
+    assert sessions_mod._harness_parked_elicitations == {}
+
+
+def test_signal_terminal_resolved_prefers_exact_tool_input_match() -> None:
+    exact = asyncio.Event()
+    other = asyncio.Event()
+    sessions_mod._harness_parked_elicitations.clear()
+    try:
+        sessions_mod._harness_parked_elicitations["elicit_a"] = _ParkedHarnessElicitation(
+            session_id="conv_sig",
+            tool_name="Bash",
+            tool_input={"command": "ls"},
+            resolved_elsewhere=exact,
+        )
+        sessions_mod._harness_parked_elicitations["elicit_b"] = _ParkedHarnessElicitation(
+            session_id="conv_sig",
+            tool_name="Bash",
+            tool_input={"command": "pwd"},
+            resolved_elsewhere=other,
+        )
+        _signal_terminal_resolved_harness_elicitation(
+            "conv_sig",
+            "Bash",
+            {"command": "ls"},
+        )
+        assert exact.is_set()
+        assert not other.is_set()
+    finally:
+        sessions_mod._harness_parked_elicitations.clear()
+
+
+def test_signal_terminal_resolved_single_candidate_without_exact_input() -> None:
+    resolved = asyncio.Event()
+    sessions_mod._harness_parked_elicitations.clear()
+    try:
+        sessions_mod._harness_parked_elicitations["elicit_only"] = _ParkedHarnessElicitation(
+            session_id="conv_single",
+            tool_name="Edit",
+            tool_input={"path": "a.py"},
+            resolved_elsewhere=resolved,
+        )
+        _signal_terminal_resolved_harness_elicitation(
+            "conv_single",
+            "Edit",
+            {"path": "b.py"},
+        )
+        assert resolved.is_set()
+    finally:
+        sessions_mod._harness_parked_elicitations.clear()
+
+
+def test_signal_terminal_resolved_stays_conservative_with_ambiguous_candidates() -> None:
+    first = asyncio.Event()
+    second = asyncio.Event()
+    sessions_mod._harness_parked_elicitations.clear()
+    try:
+        sessions_mod._harness_parked_elicitations["elicit_1"] = _ParkedHarnessElicitation(
+            session_id="conv_amb",
+            tool_name="Bash",
+            tool_input={"command": "ls"},
+            resolved_elsewhere=first,
+        )
+        sessions_mod._harness_parked_elicitations["elicit_2"] = _ParkedHarnessElicitation(
+            session_id="conv_amb",
+            tool_name="Bash",
+            tool_input={"command": "pwd"},
+            resolved_elsewhere=second,
+        )
+        _signal_terminal_resolved_harness_elicitation(
+            "conv_amb",
+            "Bash",
+            {"command": "whoami"},
+        )
+        assert not first.is_set()
+        assert not second.is_set()
+    finally:
+        sessions_mod._harness_parked_elicitations.clear()
+
+
+@pytest.mark.asyncio
+async def test_schedule_deferred_elicitation_clear_publishes_after_grace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    async def _instant_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod.asyncio, "sleep", _instant_sleep)
+    sessions_mod._harness_elicitation_registry.clear()
+    _schedule_deferred_elicitation_clear("conv_defer", "elicit_defer", None)
+    await asyncio.sleep(0)
+    pending = list(sessions_mod._deferred_elicitation_clear_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+
+    assert published == [
+        {
+            "type": "response.elicitation_resolved",
+            "elicitation_id": "elicit_defer",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_schedule_deferred_elicitation_clear_skips_when_reparked(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    async def _instant_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(sessions_mod.asyncio, "sleep", _instant_sleep)
+    sessions_mod._harness_elicitation_registry["elicit_reparked"] = asyncio.get_running_loop().create_future()
+    _schedule_deferred_elicitation_clear("conv_defer", "elicit_reparked", None)
+    await asyncio.sleep(0)
+    pending = list(sessions_mod._deferred_elicitation_clear_tasks)
+    if pending:
+        await asyncio.gather(*pending)
+
+    assert published == []
+    sessions_mod._harness_elicitation_registry.clear()
