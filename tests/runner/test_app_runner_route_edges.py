@@ -11,11 +11,15 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from omnigent import claude_native_bridge, codex_native_bridge
+from omnigent.claude_native_bridge import bridge_dir_for_conversation_id
 from omnigent.runner import create_runner_app
+from omnigent.runner import app as runner_app
 from omnigent.runner.app import _session_event_queues_ref, _session_histories_ref
 from omnigent.runtime.compaction import CompactionResult, SummaryMetadata
 from omnigent.spec.types import AgentSpec, CompactionConfig, ExecutorSpec
-from tests.runner.helpers import NullServerClient
+from omnigent.terminals import TerminalRegistry
+from tests.runner.helpers import NullServerClient, make_test_terminal_instance
 
 
 def _sse(event: dict[str, Any]) -> str:
@@ -418,3 +422,518 @@ async def test_proactive_compaction_failure_still_publishes_completed(
     finally:
         _session_histories_ref.pop(conv, None)
         _session_event_queues_ref.pop(conv, None)
+
+
+class _PaginatedServerClient:
+    """Minimal paginated history server stub for history-loader tests."""
+
+    def __init__(self, items: list[dict[str, Any]]) -> None:
+        self._items = items
+
+    async def get(
+        self, url: str, *, params: dict[str, str] | None = None, timeout: float = 10.0
+    ) -> Any:
+        del url, timeout
+        params = params or {}
+        after = params.get("after")
+        limit = int(params.get("limit", "100"))
+        start = 0
+        if after:
+            for i, item in enumerate(self._items):
+                if item.get("id") == after:
+                    start = i + 1
+                    break
+        page = self._items[start : start + limit]
+        has_more = (start + limit) < len(self._items)
+
+        class _Resp:
+            status_code = 200
+
+            def json(self) -> dict[str, Any]:
+                return {"data": page, "has_more": has_more}
+
+        return _Resp()
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_claude_native_dispatches_popup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[tuple[Any, ...]] = []
+
+    def _fake_popup(
+        bridge_dir: Any,
+        *,
+        session_id: str,
+        elicitation_id: str,
+        message: str,
+        policy_name: str | None,
+        timeout_s: float,
+    ) -> None:
+        captured.append(
+            (bridge_dir, session_id, elicitation_id, message, policy_name, timeout_s)
+        )
+
+    monkeypatch.setattr(claude_native_bridge, "display_cost_approval_popup", _fake_popup)
+
+    native_spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return native_spec
+
+    conv_id = "conv_claude_cost_popup"
+    pm = _FakeProcessManager(_ScriptedHarnessClient([]))
+    app = create_runner_app(
+        process_manager=pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        assert (
+            await client.post(
+                "/v1/sessions",
+                json={"session_id": conv_id, "agent_id": "ag_1"},
+            )
+        ).status_code == 201
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "cost_approval_popup",
+                "elicitation_id": "elicit_abc",
+                "message": "Budget exceeded",
+                "policy_name": "cost-cap",
+            },
+        )
+
+    assert resp.status_code == 204, resp.text
+    assert len(captured) == 1
+    bridge_dir, session_id, elicitation_id, message, policy_name, timeout_s = captured[0]
+    assert bridge_dir == bridge_dir_for_conversation_id(conv_id)
+    assert session_id == conv_id
+    assert elicitation_id == "elicit_abc"
+    assert message == "Budget exceeded"
+    assert policy_name == "cost-cap"
+    assert timeout_s == 1.0
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_claude_native_returns_503_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("tmux popup unavailable")
+
+    monkeypatch.setattr(claude_native_bridge, "display_cost_approval_popup", _boom)
+
+    native_spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return native_spec
+
+    conv_id = "conv_claude_cost_popup_fail"
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv_id, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "cost_approval_popup",
+                "elicitation_id": "elicit_fail",
+                "message": "Approve spend",
+            },
+        )
+
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body.get("error") == "claude_native_cost_popup_failed"
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_codex_native_launches_popup(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    captured: list[tuple[Any, ...]] = []
+
+    def _fake_launch(
+        socket_path: str,
+        tmux_target: str,
+        config_file: Any,
+        *,
+        session_id: str,
+        elicitation_id: str,
+        message: str,
+        policy_name: str | None,
+    ) -> None:
+        captured.append(
+            (
+                socket_path,
+                tmux_target,
+                config_file,
+                session_id,
+                elicitation_id,
+                message,
+                policy_name,
+            )
+        )
+
+    monkeypatch.setattr("omnigent.native_cost_popup.launch_cost_popup", _fake_launch)
+
+    codex_spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "codex-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return codex_spec
+
+    conv_id = "conv_codex_cost_popup"
+    terminal_registry = TerminalRegistry()
+    instance = make_test_terminal_instance("codex", "main", tmp_path)
+    terminal_registry._by_conversation.setdefault(conv_id, {})[("codex", "main")] = instance
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+        terminal_registry=terminal_registry,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv_id, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "cost_approval_popup",
+                "elicitation_id": "elicit_codex",
+                "message": "Continue?",
+            },
+        )
+
+    assert resp.status_code == 204, resp.text
+    assert len(captured) == 1
+    socket_path, tmux_target, config_file, session_id, elicitation_id, message, policy_name = (
+        captured[0]
+    )
+    assert socket_path == str(instance.socket_path)
+    assert tmux_target == "main"
+    assert config_file == codex_native_bridge.bridge_dir_for_bridge_id(conv_id) / codex_native_bridge._POLICY_HOOK_FILE
+    assert session_id == conv_id
+    assert elicitation_id == "elicit_codex"
+    assert message == "Continue?"
+    assert policy_name is None
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_codex_native_returns_204_without_terminal() -> None:
+    codex_spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "codex-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return codex_spec
+
+    conv_id = "conv_codex_cost_popup_no_term"
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+        terminal_registry=TerminalRegistry(),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv_id, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "cost_approval_popup",
+                "elicitation_id": "elicit_no_term",
+                "message": "Approve",
+            },
+        )
+
+    assert resp.status_code == 204, resp.text
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_codex_native_returns_503_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("popup launch failed")
+
+    monkeypatch.setattr("omnigent.native_cost_popup.launch_cost_popup", _boom)
+
+    codex_spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "codex-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return codex_spec
+
+    conv_id = "conv_codex_cost_popup_fail"
+    terminal_registry = TerminalRegistry()
+    instance = make_test_terminal_instance("codex", "main", tmp_path)
+    terminal_registry._by_conversation.setdefault(conv_id, {})[("codex", "main")] = instance
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+        terminal_registry=terminal_registry,
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv_id, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "cost_approval_popup",
+                "elicitation_id": "elicit_codex_fail",
+                "message": "Approve",
+            },
+        )
+
+    assert resp.status_code == 503
+    assert resp.json().get("error") == "codex_native_cost_popup_failed"
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_rejects_missing_elicitation_id() -> None:
+    native_spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "claude-native"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return native_spec
+
+    conv_id = "conv_cost_popup_bad_body"
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv_id, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={"type": "cost_approval_popup", "message": "missing id"},
+        )
+
+    assert resp.status_code == 400
+    assert resp.json().get("error") == "invalid_input"
+
+
+@pytest.mark.asyncio
+async def test_events_cost_approval_popup_non_native_is_204_noop() -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="t",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "openai-agents"}),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    conv_id = "conv_cost_popup_noop"
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv_id, "agent_id": "ag_1"})
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "cost_approval_popup",
+                "elicitation_id": "elicit_noop",
+                "message": "ignored",
+            },
+        )
+
+    assert resp.status_code == 204, resp.text
+
+
+@pytest.mark.asyncio
+async def test_history_load_converts_tool_items_and_skips_unknown_types(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    history = [
+        {
+            "id": "item_1",
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": "run tool"}],
+        },
+        {
+            "id": "item_2",
+            "type": "function_call",
+            "call_id": "call_x",
+            "name": "lookup",
+            "arguments": '{"q":"x"}',
+        },
+        {"id": "item_3", "type": "reasoning", "text": "thinking"},
+        {
+            "id": "item_4",
+            "type": "function_call_output",
+            "call_id": "call_x",
+            "output": "result",
+        },
+        {
+            "id": "item_5",
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "done"}],
+        },
+    ]
+    server_client = _PaginatedServerClient(history)
+    spec = AgentSpec(spec_version=1, name="history-tools")
+    harness_client = _ScriptedHarnessClient(
+        [
+            _sse({"type": "response.created", "response": {"id": "resp_h"}}),
+            _sse({"type": "response.completed", "response": {"id": "resp_h"}}),
+        ]
+    )
+    pm = _FakeProcessManager(harness_client)
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=server_client,  # type: ignore[arg-type]
+    )
+
+    caplog.set_level(logging.WARNING, logger="omnigent.runner.app")
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        assert (
+            await client.post(
+                "/v1/sessions",
+                json={"session_id": "conv_tool_history", "agent_id": "ag_1"},
+            )
+        ).status_code == 201
+        assert (
+            await client.post(
+                "/v1/sessions/conv_tool_history/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "model": "test",
+                    "content": [{"type": "input_text", "text": "next"}],
+                },
+            )
+        ).status_code == 202
+        for _ in range(200):
+            if harness_client.posted_bodies:
+                break
+            await asyncio.sleep(0.01)
+
+    assert harness_client.posted_bodies
+    content = harness_client.posted_bodies[0].get("content", [])
+    types = [item.get("type") for item in content if isinstance(item, dict)]
+    assert "function_call" in types
+    assert "function_call_output" in types
+    assert "reasoning" not in types
+    assert "_convert_raw_items_to_input: skipped" in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("history_content", "expected_preview"),
+    [
+        ("STRING_PREVIEW", "STRING_PREVIEW"),
+        (
+            [{"type": "input_text", "text": "BLOCK_PREVIEW"}],
+            "BLOCK_PREVIEW",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_child_idle_status_uses_assistant_history_preview(
+    history_content: str | list[dict[str, str]],
+    expected_preview: str,
+) -> None:
+    parent_id = "conv_parent_hist_preview"
+    child_id = f"conv_child_hist_preview_{expected_preview}"
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    runner_app._session_event_queues_ref.pop(parent_id, None)
+    _session_histories_ref[child_id] = [
+        {"type": "message", "role": "assistant", "content": history_content},
+    ]
+    runner_app.register_child_session(
+        child_id,
+        parent_session_id=parent_id,
+        title="worker:main",
+        tool="worker",
+        session_name="main",
+    )
+
+    publisher = app.state.session_resource_registry._session_status_publisher
+    assert publisher is not None
+
+    try:
+        publisher(child_id, "idle")
+        events: list[dict[str, Any]] = []
+        queue = _session_event_queues_ref.get(parent_id)
+        if queue is not None:
+            while not queue.empty():
+                item = queue.get_nowait()
+                if isinstance(item, dict):
+                    events.append(item)
+    finally:
+        runner_app.unregister_child_session(child_id)
+        _session_histories_ref.pop(child_id, None)
+        _session_event_queues_ref.pop(parent_id, None)
+
+    assert any(
+        e.get("type") == "session.child_session.updated"
+        and e.get("child", {}).get("last_message_preview") == expected_preview
+        for e in events
+    )
