@@ -817,6 +817,28 @@ class TestBuildMcpTools(unittest.TestCase):
         self.assertEqual(parsed["result"], 42)
         self.assertNotIn("isError", result)
 
+    def test_namespaced_external_tool_uses_claude_safe_alias(self):
+        from omnigent.inner.claude_sdk_executor import _build_mcp_tools
+
+        calls = []
+
+        async def mock_executor(name, args):
+            calls.append((name, args))
+            return {"result": "ok"}
+
+        raw_name = "bytedesk-platform__googleworkspace_drive_search"
+        schemas = [
+            {
+                "name": raw_name,
+                "description": "Search Google Drive",
+                "parameters": {"type": "object", "properties": {}},
+            }
+        ]
+        tools = _build_mcp_tools(schemas, mock_executor)
+        self.assertEqual(tools[0].name, "bytedesk_platform_googleworkspace_drive_search")
+        _run(tools[0].handler({"query": "name = 'missing'"}))
+        self.assertEqual(calls, [(raw_name, {"query": "name = 'missing'"})])
+
     def test_handler_marks_blocked_result_as_error(self):
         from omnigent.inner.claude_sdk_executor import _build_mcp_tools
 
@@ -918,6 +940,19 @@ class TestOmnigentToolNamingNote(unittest.TestCase):
         self.assertEqual(
             _omnigent_tool_naming_note(["platform_get_inventory", ""]), ""
         )
+
+    def test_documents_namespaced_external_aliases(self):
+        from omnigent.inner.claude_sdk_executor import _omnigent_tool_alias_note
+
+        note = _omnigent_tool_alias_note(
+            ["bytedesk-platform__googleworkspace_drive_search", "sys_agent_list"]
+        )
+        self.assertIn("raw `bytedesk-platform__googleworkspace_drive_search`", note)
+        self.assertIn(
+            "`mcp__omnigent__bytedesk_platform_googleworkspace_drive_search`",
+            note,
+        )
+        self.assertNotIn("sys_agent_list", note)
 
 
 # ---------------------------------------------------------------------------
@@ -1560,7 +1595,9 @@ class TestStreamEventStreaming(unittest.TestCase):
         async def _t():
             executor = ClaudeSDKExecutor()
             google_drive_tool = "bytedesk-platform__googleworkspace_drive_search"
-            generated_google_drive_tool = f"mcp__omnigent__{google_drive_tool}"
+            generated_google_drive_tool = (
+                "mcp__omnigent__bytedesk_platform_googleworkspace_drive_search"
+            )
             with patch("omnigent.inner.claude_sdk_executor._ensure_sdk", return_value=_FakeSDK):
                 events = [
                     e
