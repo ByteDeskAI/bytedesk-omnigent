@@ -264,7 +264,7 @@ testpaths = ["tests"]
 # credentials and/or extra setup (Databricks profile; npm build +
 # Playwright browsers for the UI suite; a deployed Databricks App URL
 # for the live suite). Opt-in via explicit pytest invocation.
-addopts = "--ignore=tests/e2e --ignore=tests/e2e_ui --ignore=tests/e2e_live --ignore=tests/integration"
+addopts = "--ignore=tests/e2e --ignore=tests/e2e_ui --ignore=tests/e2e_live --ignore=tests/integration --ignore=tests/server/integration"
 # Default per-test wallclock cap. Catches infinite hangs in any
 # suite (unit, inner, integration, e2e) without bothering tests
 # that actually finish. The longest legitimate integration tests
