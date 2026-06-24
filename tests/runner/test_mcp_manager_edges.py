@@ -12,6 +12,7 @@ import pytest
 from mcp.types import ElicitResult, Tool as McpToolDef
 
 from omnigent.runner.mcp_manager import (
+    McpSchemasResult,
     RunnerMcpManager,
     _POOL_SPEC_CAPACITY,
     _SpecEntry,
@@ -94,6 +95,37 @@ async def test_call_tool_raises_when_spec_has_no_mcp_servers() -> None:
 
 
 @pytest.mark.asyncio
+async def test_call_tool_bootstraps_pool_via_schemas_for(
+    patch_connection: dict[str, Any],
+) -> None:
+    patch_connection["__tools_for__"]["github"] = [_make_tool_def("search")]
+    manager = RunnerMcpManager()
+    spec = _make_spec(_make_config("github"))
+    try:
+        output = await manager.call_tool(spec, "github__search", {"q": "asyncio"})
+    finally:
+        await manager.shutdown()
+    assert output == "called search with {'q': 'asyncio'}"
+    assert patch_connection["github"].connect_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_call_tool_raises_when_pool_entry_stays_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = RunnerMcpManager()
+    spec = _make_spec(_make_config("github"))
+
+    async def _noop_schemas_for(_spec: AgentSpec) -> McpSchemasResult:
+        return McpSchemasResult(schemas=[], tool_names=set(), failures={})
+
+    monkeypatch.setattr(manager, "schemas_for", _noop_schemas_for)
+    with pytest.raises(RuntimeError, match="failed to initialize MCPs"):
+        await manager.call_tool(spec, "github__search", {})
+    await manager.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_call_tool_accepts_bare_tool_name(patch_connection: dict[str, Any]) -> None:
     patch_connection["__tools_for__"]["github"] = [_make_tool_def("search")]
     manager = RunnerMcpManager()
@@ -106,12 +138,34 @@ async def test_call_tool_accepts_bare_tool_name(patch_connection: dict[str, Any]
     assert output == "called search with {'q': 'x'}"
 
 
+def test_resolve_owning_server_returns_none_without_mcp_servers() -> None:
+    manager = RunnerMcpManager()
+    spec = AgentSpec(spec_version=1, name="no-mcp")
+    assert manager._resolve_owning_server(spec, "search") is None
+
+
 @pytest.mark.asyncio
 async def test_resolve_owning_server_returns_none_without_pool_entry() -> None:
     manager = RunnerMcpManager()
     spec = _make_spec(_make_config("github"))
     assert manager._resolve_owning_server(spec, "search") is None
     await manager.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_resolve_owning_server_skips_failed_servers_and_returns_none_for_missing_tool(
+    patch_connection: dict[str, Any],
+) -> None:
+    patch_connection["__tools_for__"]["good"] = [_make_tool_def("search")]
+    patch_connection["__raise_for__"]["bad"] = RuntimeError("upstream down")
+    manager = RunnerMcpManager()
+    spec = _make_spec(_make_config("bad"), _make_config("good"))
+    try:
+        await manager.schemas_for(spec)
+        assert manager._resolve_owning_server(spec, "search") is not None
+        assert manager._resolve_owning_server(spec, "missing_tool") is None
+    finally:
+        await manager.shutdown()
 
 
 @pytest.mark.asyncio
