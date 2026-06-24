@@ -17,7 +17,7 @@ from starlette.requests import Request
 
 from omnigent._wrapper_labels import CLAUDE_NATIVE_WRAPPER_VALUE
 from omnigent.entities import Agent, CommentsFingerprint, Conversation, LoadedAgent, StoredFile
-from omnigent.entities.conversation import MessageData, NewConversationItem
+from omnigent.entities.conversation import ConversationItem, MessageData, NewConversationItem
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import SessionPermission
 from omnigent.server.schemas import SessionEventInput
@@ -29,9 +29,20 @@ from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_U
 from omnigent.server.routes import sessions as sessions_mod
 from omnigent.server.routes.sessions import (
     SessionLiveness,
+    _accumulate_session_usage,
     _apply_liveness_to_items,
     _agent_display_names_for,
     _build_session_list_item,
+    _build_session_response,
+    _parse_external_conversation_item,
+    _pending_elicitation_snapshot_for_session,
+    _publish_and_persist_resource_event,
+    _publish_compaction_completed,
+    _publish_compaction_failed,
+    _publish_compaction_in_progress,
+    _publish_elicitation_request_to_ancestors,
+    _publish_external_assistant_message,
+    _publish_input_consumed,
     _resolve_llm_model,
     _resolve_output_schema,
     _structured_ask_user_question,
@@ -1383,3 +1394,448 @@ def test_validated_harness_override_rejects_non_omnigent_executor(
     with pytest.raises(OmnigentError) as exc:
         _validated_harness_override("claude-sdk", agent)
     assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+# ── batch-44: publish, parse, usage, and snapshot helpers ────────────────────
+
+
+def _conversation_item(
+    *,
+    item_id: str = "msg_1",
+    role: str = "user",
+    text: str = "hello",
+    is_meta: bool = False,
+    agent: str | None = None,
+) -> ConversationItem:
+    data_kwargs: dict[str, object] = {
+        "role": role,
+        "content": [{"type": "input_text" if role == "user" else "output_text", "text": text}],
+        "is_meta": is_meta,
+    }
+    if agent is not None:
+        data_kwargs["agent"] = agent
+    return ConversationItem(
+        id=item_id,
+        type="message",
+        status="completed",
+        response_id="resp_1",
+        created_at=1,
+        data=MessageData(**data_kwargs),  # type: ignore[arg-type]
+        created_by="alice@example.com",
+    )
+
+
+def test_publish_input_consumed_skips_meta_and_emits_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+
+    _publish_input_consumed("conv_x", _conversation_item(is_meta=True))
+    assert published == []
+
+    _publish_input_consumed(
+        "conv_x",
+        _conversation_item(),
+        cleared_pending_id="pending_abc",
+    )
+    assert len(published) == 1
+    assert published[0][0] == "conv_x"
+    assert published[0][1]["type"] == "session.input.consumed"
+    data = published[0][1]["data"]
+    assert data["item_id"] == "msg_1"
+    assert data["cleared_pending_id"] == "pending_abc"
+
+
+def test_publish_compaction_events_use_standard_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    _publish_compaction_in_progress("conv_cmp")
+    _publish_compaction_completed("conv_cmp", total_tokens=8421)
+    _publish_compaction_failed("conv_cmp")
+
+    assert published[0] == {"type": "response.compaction.in_progress"}
+    assert published[1]["type"] == "response.compaction.completed"
+    assert published[1]["total_tokens"] == 8421
+    assert published[2] == {"type": "response.compaction.failed"}
+
+
+def test_publish_external_assistant_message_broadcasts_output_item_done(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    item = _conversation_item(
+        item_id="msg_asst",
+        role="assistant",
+        text="mirrored reply",
+        agent="claude-native",
+    )
+    _publish_external_assistant_message(
+        "conv_ext",
+        item,
+        response_id="resp_ext",
+        agent_name="claude-native",
+    )
+
+    assert len(published) == 1
+    assert published[0]["type"] == "response.output_item.done"
+    assert published[0]["item"]["id"] == "msg_asst"
+    assert published[0]["item"]["role"] == "assistant"
+
+
+def test_parse_external_assistant_message_mints_response_id_when_absent() -> None:
+    from omnigent.server.schemas import SessionEventInput
+
+    body = SessionEventInput(
+        type="external_assistant_message",
+        data={"agent": "codex-native", "text": "done"},
+    )
+    agent, text, response_id = _parse_external_assistant_message(body)
+    assert agent == "codex-native"
+    assert text == "done"
+    assert response_id.startswith("resp_")
+
+
+def test_parse_external_conversation_item_builds_typed_new_item() -> None:
+    from omnigent.server.schemas import SessionEventInput
+
+    body = SessionEventInput(
+        type="external_conversation_item",
+        data={
+            "item_type": "message",
+            "item_data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "external ping"}],
+            },
+            "response_id": "resp_item",
+        },
+    )
+    parsed = _parse_external_conversation_item(body)
+    assert parsed.type == "message"
+    assert parsed.response_id == "resp_item"
+    assert parsed.data.role == "user"  # type: ignore[attr-defined]
+
+    with pytest.raises(OmnigentError):
+        _parse_external_conversation_item(
+            SessionEventInput(
+                type="external_conversation_item",
+                data={"item_type": "unknown", "item_data": {}},
+            )
+        )
+
+
+def test_structured_ask_user_question_accepts_string_options() -> None:
+    payload = _structured_ask_user_question(
+        {
+            "questions": [
+                {
+                    "question": "Pick one",
+                    "options": ["Alpha", {"label": ""}],
+                }
+            ],
+        }
+    )
+    assert payload is not None
+    assert payload["questions"][0]["options"] == [{"label": "Alpha"}]
+
+
+class _UsageConversationStore:
+    def __init__(self, conv: Conversation) -> None:
+        self._conv = conv
+        self.written: dict[str, dict[str, object]] = {}
+
+    def get_conversation(self, session_id: str) -> Conversation | None:
+        if session_id == self._conv.id:
+            return self._conv
+        return None
+
+    def set_session_usage(self, session_id: str, usage: dict[str, object]) -> None:
+        self.written[session_id] = usage
+
+    def get_session_owner(self, session_id: str) -> str | None:
+        del session_id
+        return None
+
+
+def test_accumulate_session_usage_noops_without_usage_dict() -> None:
+    conv = Conversation(
+        id="conv_usage",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_usage",
+        agent_id="ag_u",
+    )
+    store = _UsageConversationStore(conv)
+    assert _accumulate_session_usage({"status": "completed"}, "conv_usage", store) is None  # type: ignore[arg-type]
+    assert store.written == {}
+
+
+def test_accumulate_session_usage_persists_token_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_usage",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_usage",
+        agent_id="ag_u",
+        session_usage={"input_tokens": 5, "output_tokens": 2, "total_tokens": 7},
+    )
+    store = _UsageConversationStore(conv)
+    monkeypatch.setattr(
+        "omnigent.llms.context_window.fetch_model_pricing",
+        lambda _model: None,
+    )
+
+    total = _accumulate_session_usage(
+        {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 40,
+                "total_tokens": 140,
+                "model": "claude-sonnet-4-6",
+            }
+        },
+        "conv_usage",
+        store,  # type: ignore[arg-type]
+    )
+
+    assert total is None
+    assert store.written["conv_usage"]["input_tokens"] == 105
+    assert store.written["conv_usage"]["output_tokens"] == 42
+    assert "total_cost_usd" not in store.written["conv_usage"]
+
+
+def test_accumulate_session_usage_adds_priced_cost_when_catalog_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_priced",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_priced",
+        agent_id="ag_p",
+    )
+    store = _UsageConversationStore(conv)
+    monkeypatch.setattr(
+        "omnigent.llms.context_window.fetch_model_pricing",
+        lambda _model: object(),
+    )
+    monkeypatch.setattr(
+        "omnigent.llms.context_window.compute_llm_cost",
+        lambda _usage, _pricing: 0.42,
+    )
+
+    total = _accumulate_session_usage(
+        {
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "model": "claude-sonnet-4-6",
+            }
+        },
+        "conv_priced",
+        store,  # type: ignore[arg-type]
+    )
+
+    assert total == 0.42
+    assert store.written["conv_priced"]["total_cost_usd"] == 0.42
+
+
+def test_build_session_response_projects_usage_and_rejects_unbound_agent() -> None:
+    conv = Conversation(
+        id="conv_resp",
+        created_at=1,
+        updated_at=2,
+        root_conversation_id="conv_resp",
+        agent_id="ag_resp",
+        session_usage={
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "total_cost_usd": 0.01,
+        },
+    )
+    response = _build_session_response(
+        conv,
+        [],
+        "running",
+        permission_level=LEVEL_EDIT,
+        llm_model="claude-sonnet-4-6",
+        last_total_tokens=15,
+    )
+    assert response.id == "conv_resp"
+    assert response.status == "running"
+    assert response.llm_model == "claude-sonnet-4-6"
+    assert response.total_cost_usd == 0.01
+    assert response.permission_level == LEVEL_EDIT
+
+    unbound = Conversation(
+        id="conv_bad",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_bad",
+        agent_id=None,
+    )
+    with pytest.raises(OmnigentError) as exc:
+        _build_session_response(unbound, [], "idle")
+    assert exc.value.code == ErrorCode.INTERNAL_ERROR
+
+
+def test_pending_elicitation_snapshot_includes_child_prompts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_p",
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        agent_id="ag_c",
+    )
+    store = _DescendantStore({"conv_parent": [child]})
+
+    def _snapshot(conv_id: str) -> list[dict[str, object]]:
+        if conv_id == "conv_parent":
+            return [{"elicitation_id": "elicit_parent", "params": {}}]
+        return [{"elicitation_id": "elicit_child", "params": {}}]
+
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.pending_elicitations.snapshot_for",
+        _snapshot,
+    )
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.pending_elicitations.pending_session_ids",
+        lambda: ["conv_parent", "conv_child"],
+    )
+
+    events = _pending_elicitation_snapshot_for_session(store, parent)  # type: ignore[arg-type]
+    assert len(events) == 2
+    assert events[0]["elicitation_id"] == "elicit_parent"
+    assert events[1]["params"]["target_session_id"] == "conv_child"
+
+
+def test_publish_elicitation_request_to_ancestors_mirrors_target_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = Conversation(
+        id="conv_root", created_at=0, updated_at=0, root_conversation_id="conv_root"
+    )
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_parent",
+    )
+    store = _AncestorStore(
+        {"conv_child": child, "conv_parent": parent, "conv_root": root}
+    )
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+
+    _publish_elicitation_request_to_ancestors(
+        store,  # type: ignore[arg-type]
+        "conv_child",
+        {"type": "response.elicitation_request", "params": {"tool": "Bash"}},
+    )
+
+    assert [sid for sid, _ in published] == ["conv_parent", "conv_root"]
+    assert all(
+        payload["params"]["target_session_id"] == "conv_child" for _, payload in published
+    )
+
+
+def test_publish_and_persist_resource_event_created_and_deleted_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    store = MagicMock()
+    resource = {"id": "term_1", "name": "bash"}
+    _publish_and_persist_resource_event(
+        "conv_res",
+        "session.resource.created",
+        "term_1",
+        "terminal",
+        store,
+        resource=resource,
+    )
+    _publish_and_persist_resource_event(
+        "conv_res",
+        "session.resource.deleted",
+        "term_1",
+        "terminal",
+        store,
+    )
+
+    assert published[0]["type"] == "session.resource.created"
+    assert published[0]["resource"] == resource
+    assert published[1]["type"] == "session.resource.deleted"
+    assert published[1]["resource_id"] == "term_1"
+    assert store.append.call_count == 2
+
+
+def test_resolve_llm_model_returns_none_when_store_or_agent_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = Conversation(
+        id="conv_missing",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_missing",
+        agent_id="ag_missing",
+    )
+    cache = MagicMock()
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: cache)
+
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", None)
+    assert _resolve_llm_model(conv) is None
+
+    store = MagicMock()
+    store.get.return_value = None
+    monkeypatch.setattr("omnigent.runtime._globals._agent_store", store)
+    assert _resolve_llm_model(conv) is None
+    cache.load.assert_not_called()
