@@ -3578,3 +3578,72 @@ def test_pending_elicitation_snapshot_skips_duplicate_child_elicitation_ids(
     events = _pending_elicitation_snapshot_for_session(store, parent)  # type: ignore[arg-type]
     assert len(events) == 1
     assert events[0]["elicitation_id"] == "elicit_shared"
+
+
+# ── batch 53: subtree usage_by_model publish + snapshot fast-path ─────────────
+
+
+def test_publish_subtree_cost_to_ancestors_publishes_usage_by_model_without_flat_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Per-model token usage alone triggers a broadcast when flat cost is absent."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id=None,
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        session_usage={
+            "by_model": {"claude-sonnet-4-6": {"input_tokens": 120, "output_tokens": 30}},
+        },
+    )
+    store = _SubtreeCostStore({"conv_parent": parent, "conv_child": child})
+    _publish_subtree_cost_to_ancestors(store, "conv_child")  # type: ignore[arg-type]
+    assert len(published) == 1
+    assert published[0]["type"] == "session.usage"
+    assert "total_cost_usd" not in published[0]
+    assert "usage_by_model" in published[0]
+
+
+def test_pending_elicitation_snapshot_skips_descendant_walk_when_only_self_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No other pending sessions → return parent snapshot without listing children."""
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_p",
+    )
+    store = MagicMock()
+
+    def _must_not_walk_descendants(*_args: object, **_kwargs: object) -> list[Conversation]:
+        raise AssertionError("descendant walk should be skipped")
+
+    monkeypatch.setattr(sessions_mod, "_descendant_sessions", _must_not_walk_descendants)
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.pending_elicitations.snapshot_for",
+        lambda conv_id: [{"elicitation_id": f"elicit_{conv_id}", "params": {}}],
+    )
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions.pending_elicitations.pending_session_ids",
+        lambda: ["conv_parent"],
+    )
+
+    events = _pending_elicitation_snapshot_for_session(store, parent)  # type: ignore[arg-type]
+    assert len(events) == 1
+    assert events[0]["elicitation_id"] == "elicit_conv_parent"
