@@ -1486,10 +1486,12 @@ class TestStreamEventStreaming(unittest.TestCase):
                     )
                 ]
             # OS operations route through sys_os_* MCP tools, not SDK
-            # built-ins. Only Skill remains in the native base set.
-            self.assertEqual(captured_options["tools"], ["Skill"])
+            # built-ins. The generated Omnigent MCP tool is part of the base
+            # set so Claude Code can call it while native Bash stays absent.
+            self.assertEqual(captured_options["tools"], ["Skill", "mcp__omnigent__sleep"])
             self.assertIn("mcp__omnigent__sleep", captured_options["allowed_tools"])
             self.assertNotIn("Bash", captured_options["allowed_tools"])
+            self.assertNotIn("Bash", captured_options["tools"])
             self.assertIsInstance(events[-1], TurnComplete)
 
         _run(_t())
@@ -1557,6 +1559,8 @@ class TestStreamEventStreaming(unittest.TestCase):
 
         async def _t():
             executor = ClaudeSDKExecutor()
+            google_drive_tool = "bytedesk-platform__googleworkspace_drive_search"
+            generated_google_drive_tool = f"mcp__omnigent__{google_drive_tool}"
             with patch("omnigent.inner.claude_sdk_executor._ensure_sdk", return_value=_FakeSDK):
                 events = [
                     e
@@ -1564,8 +1568,8 @@ class TestStreamEventStreaming(unittest.TestCase):
                         [{"role": "user", "content": "hi", "session_id": "session-a"}],
                         [
                             {
-                                "name": "sleep",
-                                "description": "sleep",
+                                "name": google_drive_tool,
+                                "description": "Search Google Drive",
                                 "parameters": {"type": "object"},
                             }
                         ],
@@ -1579,8 +1583,8 @@ class TestStreamEventStreaming(unittest.TestCase):
             # what this test pins. ``Skill`` itself doesn't widen
             # the FS attack surface; it only loads pre-approved
             # SKILL.md content.
-            self.assertEqual(captured_options["tools"], ["Skill"])
-            self.assertEqual(captured_options["allowed_tools"], ["mcp__omnigent__sleep"])
+            self.assertEqual(captured_options["tools"], ["Skill", generated_google_drive_tool])
+            self.assertEqual(captured_options["allowed_tools"], [generated_google_drive_tool])
             self.assertIsInstance(events[-1], TurnComplete)
 
         _run(_t())

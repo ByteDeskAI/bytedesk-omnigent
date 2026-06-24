@@ -1892,19 +1892,26 @@ class ClaudeSDKExecutor(Executor):
         # elicitation system when an elicitation handler is wired in.
         # When ``allowed_tools`` is empty the SDK omits ``--allowedTools``
         # entirely, letting Claude's normal permission flow apply.
+        sdk_mcp_tool_names: list[str] = []
+        _seen_sdk_mcp_tool_names: set[str] = set()
+        for schema in tools:
+            raw_tname = schema.get("name")
+            # Claude SDK names every tool in the generated MCP server as
+            # ``mcp__omnigent__<raw-name>``. These generated names must be in
+            # ``tools`` or Claude Code treats the MCP server as configured but
+            # not callable when ``--tools`` narrows the base tool set.
+            if not isinstance(raw_tname, str) or not raw_tname:
+                continue
+            generated_name = f"mcp__omnigent__{raw_tname}"
+            if generated_name in _seen_sdk_mcp_tool_names:
+                continue
+            _seen_sdk_mcp_tool_names.add(generated_name)
+            sdk_mcp_tool_names.append(generated_name)
+
         allowed_tools: list[str] = []
         if self._permission_mode == "bypassPermissions":
             # Allow all Omnigent MCP tools (no per-call gate needed)
-            for schema in tools:
-                raw_tname = schema.get("name")
-                # Claude SDK's ``allowed_tools`` requires concrete strings;
-                # Omnigent tool schemas always carry a name (see
-                # ``Tool.tool_schema``), but defend against malformed specs
-                # by skipping unnamed entries rather than producing a
-                # bogus ``mcp__omnigent__`` allow-entry.
-                if not isinstance(raw_tname, str) or not raw_tname:
-                    continue
-                allowed_tools.append(f"mcp__omnigent__{raw_tname}")
+            allowed_tools.extend(sdk_mcp_tool_names)
 
         # cfg.model > spec model > Databricks default (only on the
         # Databricks-profile gateway path) > None (lets the SDK pick its own
@@ -1964,9 +1971,10 @@ class ClaudeSDKExecutor(Executor):
         # via its own conversation store.
         # OS-environment tools are provided via Omnigent ``sys_os_*``
         # MCP tools (declared via ``os_env`` in the spec), not the
-        # SDK's native Bash/Read/Edit/Write.  Only the Skill tool
-        # needs to be in the SDK's base set.
-        base_tools: list[str] = ["Skill"]
+        # SDK's native Bash/Read/Edit/Write. Include only Skill plus the
+        # generated Omnigent MCP tool names so the configured MCP server
+        # remains callable while native Bash/Read/Edit/Write stay out.
+        base_tools: list[str] = ["Skill", *sdk_mcp_tool_names]
         # Translate the spec's host-skill filter into the SDK
         # options. Falls back to ``"all"`` semantics when the
         # field is malformed (the parser already validates, so
