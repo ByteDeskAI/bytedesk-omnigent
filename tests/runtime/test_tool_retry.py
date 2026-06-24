@@ -141,6 +141,25 @@ def test_call_tool_with_timeout_raises_on_slow_tool() -> None:
         call_tool_with_timeout(slow_tool, timeout=1)
 
 
+def test_call_tool_with_timeout_invokes_cancel_fn_on_timeout() -> None:
+    """A timeout invokes ``cancel_fn`` before raising TimeoutError."""
+
+    def slow_tool() -> str:
+        time.sleep(2)
+        return "late"
+
+    cancelled: list[str] = []
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        call_tool_with_timeout(
+            slow_tool,
+            timeout=1,
+            cancel_fn=lambda: cancelled.append("cancelled"),
+        )
+
+    assert cancelled == ["cancelled"]
+
+
 # -- execute_tool_with_retry --
 
 
