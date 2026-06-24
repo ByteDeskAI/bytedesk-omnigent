@@ -108,6 +108,16 @@ async def test_invalid_field_raises(field: str, value: Any, match: str) -> None:
 
 
 @pytest.mark.asyncio
+async def test_invalid_model_override_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defense-in-depth: shell-shaped model overrides are rejected at the runner."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.setenv("OMNIGENT_RUNNER_WORKSPACE", "/tmp")
+    client = _Client(_Resp(200, {"model_override": "--evil-flag"}))
+    with pytest.raises(RuntimeError, match="Invalid model_override"):
+        await _run(client)
+
+
+@pytest.mark.asyncio
 async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """A well-formed snapshot (with fork labels) parses into a launch config."""
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
