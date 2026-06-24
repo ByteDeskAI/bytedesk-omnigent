@@ -59,8 +59,6 @@ def _fips_safe_md5(*args: Any, **kwargs: Any) -> Any:
 
 hashlib.md5 = _fips_safe_md5
 
-from pydantic import TypeAdapter  # noqa: E402 — must follow md5 patch
-
 # ── Module-level constants (rule 34) ──────────────────────────────
 
 # Output path. The spec lives at the repo root so external tooling
@@ -134,35 +132,6 @@ def _build_app_with_stub_stores() -> Any:
     )
 
 
-def _server_stream_event_schema() -> dict[str, Any]:
-    """
-    Return the JSON-Schema dict for the ``ServerStreamEvent`` union.
-
-    Pydantic's ``TypeAdapter.json_schema(ref_template=...)`` emits a
-    schema with internal ``$ref`` pointers in OpenAPI's expected
-    ``#/components/schemas/<name>`` form. We then split out the
-    union-root schema and inline the variant definitions into the
-    components map so each per-event class appears as a top-level
-    component schema.
-
-    :returns: A dict with two keys:
-
-        * ``"root"`` — the discriminated-union schema (the value
-          assigned to ``components.schemas.ServerStreamEvent``).
-        * ``"definitions"`` — the per-variant component schemas
-          (merged into ``components.schemas``).
-    """
-    from omnigent.server.schemas import ServerStreamEvent
-
-    adapter: TypeAdapter[ServerStreamEvent] = TypeAdapter(ServerStreamEvent)
-    schema = adapter.json_schema(ref_template="#/components/schemas/{model}")
-    # Pydantic returns ``{"oneOf": [...], "discriminator": {...},
-    # "$defs": {...}}``. We hoist ``$defs`` to top-level component
-    # schemas and keep the rest as the union root.
-    definitions = schema.pop("$defs", {})
-    return {"root": schema, "definitions": definitions}
-
-
 def _rewrite_sse_route(
     paths: dict[str, Any],
     path: str,
@@ -218,18 +187,13 @@ def generate_spec() -> dict[str, Any]:
     spec["openapi"] = _OPENAPI_VERSION
 
     # Inject the ServerStreamEvent union + per-variant defs into
-    # ``components.schemas`` so the SSE routes' $ref points resolve.
+    # ``components.schemas``. Shared with the live app.openapi() wrapper +
+    # /v1/schema/events (omnigent/server/event_schema.py) so the three can't drift.
+    from omnigent.server.event_schema import inject_event_union
+
     components = spec.setdefault("components", {})
     schemas = components.setdefault("schemas", {})
-    union = _server_stream_event_schema()
-    schemas["ServerStreamEvent"] = union["root"]
-    for name, definition in union["definitions"].items():
-        # Don't clobber a same-named schema FastAPI already
-        # synthesized — the union's per-variant defs include
-        # ``ResponseObject`` (referenced from terminal events), and
-        # FastAPI also emits one. Keep FastAPI's version; the
-        # serialized shape is identical for our models.
-        schemas.setdefault(name, definition)
+    inject_event_union(schemas)
 
     # Rewrite SSE routes' content entries to use ``itemSchema``.
     paths = spec.get("paths", {})

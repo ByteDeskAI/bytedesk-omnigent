@@ -1697,8 +1697,8 @@ def create_app(
             )
         return {"user_id": user_id}
 
-    @app.get("/v1/_capabilities")
-    async def capabilities() -> dict[str, list[dict]]:
+    @app.get("/v1/_capabilities", response_model=None)
+    async def capabilities() -> dict[str, Any]:
         """Pluggable-seam capability manifest (BDP-2374).
 
         Returns one entry per live pluggable seam — its registered
@@ -1715,8 +1715,33 @@ def create_app(
         :returns: ``{"seams": [<describe() + override_env>, ...]}``.
         """
         from omnigent.pluggable.manifest import capability_manifest
+        from omnigent.server.event_schema import (
+            EVENT_SCHEMA_VERSION,
+            event_schema_hash,
+        )
+        from omnigent.server.schemas import _KNOWN_EVENT_TYPES
 
-        return {"seams": capability_manifest()}
+        return {
+            "seams": capability_manifest(),
+            "schema": {
+                "events": {
+                    "version": EVENT_SCHEMA_VERSION,
+                    "hash": event_schema_hash(),
+                    "variant_count": len(_KNOWN_EVENT_TYPES),
+                },
+            },
+        }
+
+    @app.get("/v1/schema/events")
+    async def schema_events() -> dict[str, Any]:
+        """The ServerStreamEvent discriminated-union JSON-Schema (BDP-2443).
+
+        The authoritative event contract the ByteDesk SDK generates its typed
+        event union from. Intentionally UNAUTHED, matching ``/v1/info``.
+        """
+        from omnigent.server.event_schema import event_schema_document
+
+        return event_schema_document()
 
     app.include_router(
         create_sessions_router(
@@ -2165,6 +2190,22 @@ def create_app(
                 "health": "/health",
                 "docs": "/docs",
             }
+
+    # BDP-2443 (ADR-0152): make the ServerStreamEvent union part of the live
+    # /openapi.json. FastAPI doesn't $ref it from the SSE routes, so it is
+    # otherwise absent from the live spec. Wrap FastAPI's own generator (not a
+    # reconstruction) so the base spec stays byte-identical; the injection is
+    # idempotent and shared with scripts/dump_openapi.py.
+    _default_openapi = app.openapi
+
+    def _openapi_with_event_union() -> dict[str, Any]:
+        from omnigent.server.event_schema import inject_event_union
+
+        schema = _default_openapi()
+        inject_event_union(schema.setdefault("components", {}).setdefault("schemas", {}))
+        return schema
+
+    app.openapi = _openapi_with_event_union  # type: ignore[method-assign]
 
     return app
 
