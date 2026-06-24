@@ -12128,12 +12128,21 @@ def create_runner_app(
                             if _acting_identity is not None
                             else None
                         )
+                        # BDP-2435: thread the acting agent's id as ``act_as`` so
+                        # the OBO token's ``act_sub`` is THIS persona (None ⇒
+                        # shared act_sub, unchanged).
+                        _act_as_agent_id = (
+                            _acting_identity.agent_id
+                            if _acting_identity is not None
+                            else None
+                        )
                         output = await mcp_manager.call_tool(
                             spec,
                             bare_tool,
                             arguments,
                             session_id=session_id,
                             subject_token=_subject_token,
+                            agent_id=_act_as_agent_id,
                         )
                 except McpElicitationRequired as elicit:
                     # The external MCP server returned InputRequiredResult

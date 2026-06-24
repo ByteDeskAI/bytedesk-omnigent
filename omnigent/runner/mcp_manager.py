@@ -108,6 +108,10 @@ class _SpecEntry:
     # entry, byte-identical to today; set only on an OBO-keyed entry so its
     # connections present a token-exchange bearer.
     subject_token: str | None = None
+    # BDP-2435: the acting agent's id for an OBO pool entry, threaded onto its
+    # connections as ``act_as`` so the platform stamps this persona as
+    # ``act_sub``. ``None`` for the shared entry, unchanged.
+    agent_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -207,17 +211,25 @@ def compute_spec_hash(configs: list[MCPServerConfig], cwd: Path | None = None) -
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
-def _obo_pool_key(spec_hash: str, subject_token: str | None) -> str:
-    """Pool key for a dispatch, folding the OBO subject_token in (BDP-2434).
+def _obo_pool_key(
+    spec_hash: str, subject_token: str | None, agent_id: str | None = None
+) -> str:
+    """Pool key for a dispatch, folding the OBO subject_token + agent_id in.
 
-    ``None`` ⇒ the bare *spec_hash* (the shared, identity-blind entry —
-    byte-identical to today). A present subject_token derives a distinct,
+    ``subject_token is None`` ⇒ the bare *spec_hash* (the shared, identity-blind
+    entry — byte-identical to today). A present subject_token derives a distinct,
     non-reversible suffix so each on-behalf-of identity gets its own pooled
     connection without the raw token ever becoming a dict key.
+
+    BDP-2435: *agent_id* is folded into the OBO suffix too, so two different
+    agents acting for the SAME user (same subject_token) never share one pooled
+    connection/bearer (which would mint the wrong ``act_sub``). ``None`` agent_id
+    is a distinct key value from any concrete agent.
     """
     if subject_token is None:
         return spec_hash
-    digest = hashlib.sha256(subject_token.encode("utf-8")).hexdigest()[:16]
+    material = f"{subject_token}\x00{agent_id or ''}"
+    digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:16]
     return f"{spec_hash}:obo:{digest}"
 
 
@@ -464,6 +476,7 @@ class RunnerMcpManager:
         arguments: dict[str, Any],
         session_id: str | None = None,
         subject_token: str | None = None,
+        agent_id: str | None = None,
     ) -> str:
         """
         Dispatch *tool_name* against the pool's cached MCP session.
@@ -480,6 +493,10 @@ class RunnerMcpManager:
             connections present an on-behalf-of (token-exchange) bearer, so an
             OBO call never reuses the shared ``client_credentials`` connection.
             ``None`` (default) ⇒ the shared, identity-blind entry, unchanged.
+        :param agent_id: BDP-2435 — the acting agent's id, threaded onto the OBO
+            connection as ``act_as`` so the platform stamps THIS persona as
+            ``act_sub``. Folded into the OBO pool key so two agents acting for the
+            same user get separate connections. ``None`` ⇒ shared ``act_sub``.
         :returns: Tool result string.
         :raises McpElicitationRequired: When the MCP server returns
             an ``InputRequiredResult`` requiring user input before
@@ -499,10 +516,12 @@ class RunnerMcpManager:
                 await self.schemas_for(spec)
                 entry = self._specs.get(spec_hash)
         else:
-            # OBO path: a per-subject_token entry whose connections present a
-            # token-exchange bearer. ``schemas_for`` only ever populates the
-            # shared entry, so connect this one here.
-            entry = await self._ensure_connected_obo_entry(spec_hash, configs, subject_token)
+            # OBO path: a per-(subject_token, agent_id) entry whose connections
+            # present a token-exchange bearer. ``schemas_for`` only ever populates
+            # the shared entry, so connect this one here.
+            entry = await self._ensure_connected_obo_entry(
+                spec_hash, configs, subject_token, agent_id
+            )
         if entry is None:
             raise RuntimeError(f"runner failed to initialize MCPs for spec {spec.name!r}")
 
@@ -539,18 +558,22 @@ class RunnerMcpManager:
         spec_hash: str,
         configs: list[MCPServerConfig],
         subject_token: str,
+        agent_id: str | None = None,
     ) -> _SpecEntry:
-        """Return the OBO pool entry for *subject_token*, connecting it on demand.
+        """Return the OBO pool entry for *(subject_token, agent_id)*, connecting on demand.
 
-        Keyed by :func:`_obo_pool_key` so each on-behalf-of identity gets its own
-        pooled connections (which present a token-exchange bearer) — separate
-        from the shared identity-blind entry. Mirrors the on-demand connect dance
-        in :meth:`schemas_for`: ensure the entry, schedule a connect for any
-        unconnected server, then await it outside the lock.
+        Keyed by :func:`_obo_pool_key` so each on-behalf-of identity — and, per
+        BDP-2435, each acting *agent_id* — gets its own pooled connections (which
+        present a token-exchange bearer) — separate from the shared identity-blind
+        entry. Mirrors the on-demand connect dance in :meth:`schemas_for`: ensure
+        the entry, schedule a connect for any unconnected server, then await it
+        outside the lock.
         """
-        pool_key = _obo_pool_key(spec_hash, subject_token)
+        pool_key = _obo_pool_key(spec_hash, subject_token, agent_id)
         async with self._lock:
-            entry = self._ensure_entry(pool_key, configs, subject_token=subject_token)
+            entry = self._ensure_entry(
+                pool_key, configs, subject_token=subject_token, agent_id=agent_id
+            )
             self._touch(pool_key)
             connect_task = entry.prewarm_task
             needs_connect = any(s.connection is None for s in entry.servers.values())
@@ -623,17 +646,19 @@ class RunnerMcpManager:
         pool_key: str,
         configs: list[MCPServerConfig],
         subject_token: str | None = None,
+        agent_id: str | None = None,
     ) -> _SpecEntry:
         """Return or create the pool entry for *pool_key*. Caller holds lock.
 
         *subject_token* is recorded on a freshly-created entry so its connections
         present an OBO bearer (BDP-2434); ``None`` ⇒ the shared identity-blind
-        entry, unchanged.
+        entry, unchanged. *agent_id* (BDP-2435) is recorded the same way so the
+        connection threads ``act_as`` for a per-persona ``act_sub``.
         """
         entry = self._specs.get(pool_key)
         if entry is not None:
             return entry
-        entry = _SpecEntry(spec_hash=pool_key, subject_token=subject_token)
+        entry = _SpecEntry(spec_hash=pool_key, subject_token=subject_token, agent_id=agent_id)
         for cfg in configs:
             entry.servers[cfg.name] = _ServerEntry(config=cfg)
         self._specs[pool_key] = entry
@@ -692,6 +717,9 @@ class RunnerMcpManager:
                     # so this connection presents a token-exchange bearer; the
                     # shared entry passes ``None`` (identity-blind, unchanged).
                     subject_token=entry.subject_token,
+                    # BDP-2435: the acting agent's id, threaded as ``act_as`` for a
+                    # per-persona ``act_sub``; ``None`` on the shared entry.
+                    agent_id=entry.agent_id,
                 )
                 tools = await conn.connect()
                 server.connection = conn

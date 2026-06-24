@@ -205,14 +205,17 @@ _ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token"
 
 # Cache of minted on-behalf-of (token-exchange) tokens. Keyed like the
 # client-credentials cache but with the subject_token folded in, since the OBO
-# token's subject is the exchanged user's token: (token_url, client_id,
-# subject_token, resource, scopes). Value is (access_token, expiry_epoch).
+# token's subject is the exchanged user's token, plus the BDP-2435 ``act_as``
+# (the acting agent persona stamped as ``act_sub``): (token_url, client_id,
+# subject_token, act_as, resource, scopes). Value is (access_token, expiry_epoch).
 _token_exchange_cache: dict[
-    tuple[str, str, str, str | None, tuple[str, ...]], tuple[str, float]
+    tuple[str, str, str, str | None, str | None, tuple[str, ...]], tuple[str, float]
 ] = {}
 
 
-def _resolve_token_exchange_token(oauth: MCPOAuthConfig, subject_token: str) -> str:
+def _resolve_token_exchange_token(
+    oauth: MCPOAuthConfig, subject_token: str, act_as: str | None = None
+) -> str:
     """
     Mint (or reuse a cached) on-behalf-of bearer via RFC 8693 token-exchange.
 
@@ -226,10 +229,21 @@ def _resolve_token_exchange_token(oauth: MCPOAuthConfig, subject_token: str) -> 
 
     :param oauth: The OAuth config (token endpoint + agent client credentials).
     :param subject_token: The user's access token to exchange.
+    :param act_as: BDP-2435 — the acting agent's id. When set, sent as the
+        ``act_as`` form param so the platform stamps that SPECIFIC persona as
+        ``act_sub`` (instead of the shared service account). ``None`` ⇒ no
+        ``act_as`` sent, shared ``act_sub`` (degrade-to-default).
     :returns: An on-behalf-of bearer token string.
     :raises RuntimeError: If the token endpoint errors or returns no token.
     """
-    key = (oauth.token_url, oauth.client_id, subject_token, oauth.resource, tuple(oauth.scopes))
+    key = (
+        oauth.token_url,
+        oauth.client_id,
+        subject_token,
+        act_as,
+        oauth.resource,
+        tuple(oauth.scopes),
+    )
     cached = _token_exchange_cache.get(key)
     now = time.time()
     if cached is not None and cached[1] - now > _OAUTH_REFRESH_SKEW:
@@ -241,6 +255,8 @@ def _resolve_token_exchange_token(oauth: MCPOAuthConfig, subject_token: str) -> 
         "subject_token": subject_token,
         "subject_token_type": _ACCESS_TOKEN_TYPE,
     }
+    if act_as:
+        form["act_as"] = act_as
     if oauth.client_secret:
         form["client_secret"] = oauth.client_secret
     if oauth.scopes:
@@ -553,6 +569,10 @@ class McpServerConnection:
     # ``client_credentials`` bearer — so a ByteDesk.Mcp call acts *as* the user.
     # ``None`` (the default) ⇒ today's identity-blind egress, byte-identical.
     subject_token: str | None = None
+    # BDP-2435: the acting agent's id. When set, threaded into the token-exchange
+    # as ``act_as`` so the platform stamps THIS persona as ``act_sub`` (instead of
+    # the shared service account). ``None`` ⇒ no ``act_as`` sent (shared act_sub).
+    agent_id: str | None = None
     # Elicitation callback invoked when the MCP server sends
     # ``elicitation/create`` inline during a ``tools/call``.
     # Receives ``(session_id, params)`` and returns an
@@ -1079,7 +1099,11 @@ class McpServerConnection:
             # intentionally NOT run here — it would mint a discarded
             # client-credentials token (the OBO bearer is the credential).
             headers = dict(self.config.headers) if self.config.headers else {}
-            obo = _resolve_token_exchange_token(self.config.oauth, self.subject_token)
+            # BDP-2435: thread ``act_as=agent_id`` so the OBO token's ``act_sub``
+            # is this specific persona (None ⇒ shared act_sub, unchanged).
+            obo = _resolve_token_exchange_token(
+                self.config.oauth, self.subject_token, act_as=self.agent_id
+            )
             headers.setdefault("Authorization", f"Bearer {obo}")
             return headers or None
         return DEFAULT_MCP_AUTH_REGISTRY.resolve_headers(self.config)
