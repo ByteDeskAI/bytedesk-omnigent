@@ -952,6 +952,11 @@ class TestOmnigentToolNamingNote(unittest.TestCase):
             "`mcp__omnigent__bytedesk_platform_googleworkspace_drive_search`",
             note,
         )
+        self.assertIn("ToolSearch", note)
+        self.assertIn(
+            "`select:<alias>`",
+            note,
+        )
         self.assertNotIn("sys_agent_list", note)
 
 
@@ -1522,10 +1527,12 @@ class TestStreamEventStreaming(unittest.TestCase):
                 ]
             # OS operations route through sys_os_* MCP tools, not SDK
             # built-ins. SDK MCP tools are exposed through the MCP server and
-            # allowed by generated name; ``tools`` remains the built-in base
-            # set so native Bash stays absent.
-            self.assertEqual(captured_options["tools"], ["Skill"])
+            # allowed by generated name; ``tools`` remains the narrow built-in
+            # base set so native Bash stays absent. ``ToolSearch`` stays
+            # available so Claude can hydrate deferred MCP tool schemas.
+            self.assertEqual(captured_options["tools"], ["Skill", "ToolSearch"])
             self.assertIn("mcp__omnigent__sleep", captured_options["allowed_tools"])
+            self.assertIn("ToolSearch", captured_options["allowed_tools"])
             self.assertNotIn("Bash", captured_options["allowed_tools"])
             self.assertNotIn("Bash", captured_options["tools"])
             self.assertIsInstance(events[-1], TurnComplete)
@@ -1621,8 +1628,11 @@ class TestStreamEventStreaming(unittest.TestCase):
             # what this test pins. ``Skill`` itself doesn't widen
             # the FS attack surface; it only loads pre-approved
             # SKILL.md content.
-            self.assertEqual(captured_options["tools"], ["Skill"])
-            self.assertEqual(captured_options["allowed_tools"], [generated_google_drive_tool])
+            self.assertEqual(captured_options["tools"], ["Skill", "ToolSearch"])
+            self.assertEqual(
+                captured_options["allowed_tools"],
+                ["ToolSearch", generated_google_drive_tool],
+            )
             self.assertIsInstance(events[-1], TurnComplete)
 
         _run(_t())
@@ -1712,6 +1722,7 @@ class TestStreamEventStreaming(unittest.TestCase):
                     )
                 ]
             self.assertIn("mcp__omnigent__sys_session_send", captured_options["allowed_tools"])
+            self.assertIn("ToolSearch", captured_options["allowed_tools"])
             self.assertIsInstance(events[-1], TurnComplete)
 
         _run(_t())

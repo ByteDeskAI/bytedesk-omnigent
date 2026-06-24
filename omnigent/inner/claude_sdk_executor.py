@@ -752,7 +752,9 @@ def _omnigent_tool_alias_note(tool_names: list[str]) -> str:
         "Some Omnigent MCP tools come from external servers and have raw "
         "`server__tool` names. Claude Code exposes those through safe aliases "
         "under the `mcp__omnigent__` prefix. When an instruction names one of "
-        "these raw tools, invoke the alias below:\n"
+        "these raw tools, invoke the alias below. If an alias is deferred or "
+        "is not immediately callable, first call `ToolSearch` with "
+        "`select:<alias>` to load its schema, then call the alias:\n"
         f"{listed}"
     )
 
@@ -1963,7 +1965,9 @@ class ClaudeSDKExecutor(Executor):
 
         allowed_tools: list[str] = []
         if self._permission_mode == "bypassPermissions":
-            # Allow all Omnigent MCP tools (no per-call gate needed)
+            # Allow all Omnigent MCP tools and deferred-tool hydration
+            # (no per-call gate needed).
+            allowed_tools.append("ToolSearch")
             allowed_tools.extend(sdk_mcp_tool_names)
 
         # cfg.model > spec model > Databricks default (only on the
@@ -2025,10 +2029,14 @@ class ClaudeSDKExecutor(Executor):
         # OS-environment tools are provided via Omnigent ``sys_os_*``
         # MCP tools (declared via ``os_env`` in the spec), not the
         # SDK's native Bash/Read/Edit/Write. Include only the native ``Skill``
-        # tool here. SDK MCP server tools are configured through
-        # ``mcp_servers`` and permissioned via ``allowed_tools``; putting them
-        # in ``tools`` sends them to Claude Code's built-in tool filter.
-        base_tools: list[str] = ["Skill"]
+        # and ``ToolSearch`` tools here. SDK MCP server tools are configured
+        # through ``mcp_servers`` and permissioned via ``allowed_tools``;
+        # putting them in ``tools`` sends them to Claude Code's built-in tool
+        # filter. ``ToolSearch`` is required because Claude Code defers some
+        # MCP tool schemas when the tool list is large; without it, explicit
+        # MCP calls can fail with "No such tool available" before the SDK MCP
+        # handler runs.
+        base_tools: list[str] = ["Skill", "ToolSearch"]
         # Translate the spec's host-skill filter into the SDK
         # options. Falls back to ``"all"`` semantics when the
         # field is malformed (the parser already validates, so
