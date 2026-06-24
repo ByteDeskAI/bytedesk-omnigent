@@ -3891,17 +3891,7 @@
           "200": {
             "content": {
               "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "items": {
-                      "additionalProperties": true,
-                      "type": "object"
-                    },
-                    "type": "array"
-                  },
-                  "title": "Response Capabilities V1  Capabilities Get",
-                  "type": "object"
-                }
+                "schema": {}
               }
             },
             "description": "Successful Response"
@@ -5455,6 +5445,27 @@
         "tags": [
           "runners"
         ]
+      }
+    },
+    "/v1/schema/events": {
+      "get": {
+        "description": "The ServerStreamEvent discriminated-union JSON-Schema (BDP-2443).\n\nThe authoritative event contract the ByteDesk SDK generates its typed\nevent union from. Intentionally UNAUTHED, matching ``/v1/info``.",
+        "operationId": "schema_events_v1_schema_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Schema Events V1 Schema Events Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Schema Events"
       }
     },
     "/v1/sessions": {
