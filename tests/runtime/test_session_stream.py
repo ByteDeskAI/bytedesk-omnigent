@@ -723,3 +723,38 @@ async def test_subscribe_with_ids_fresh_connect_has_no_replay() -> None:
     # The live event (i=2) is delivered with its seq; the pre-subscribe i=1 is
     # NOT replayed (no cursor) — live-tail only, as before.
     assert event["i"] == 2 and seq == 2
+
+
+@pytest.mark.asyncio
+async def test_pre_ready_snapshot_failure_does_not_block_live_tail() -> None:
+    """A failing sync pre_ready_snapshot is swallowed; live events still flow."""
+    gen = session_stream.subscribe(
+        "conv_pre_ready_fail",
+        pre_ready_snapshot=lambda: (_ for _ in ()).throw(RuntimeError("snapshot boom")),
+    )
+    try:
+        fut = asyncio.ensure_future(anext(gen))
+        await asyncio.sleep(0)
+        session_stream.publish("conv_pre_ready_fail", {"type": "live", "i": 1})
+        event = await asyncio.wait_for(fut, timeout=1.0)
+        assert event == {"type": "live", "i": 1}
+    finally:
+        await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_on_subscribed_failure_does_not_block_live_tail() -> None:
+    """A failing async on_subscribed hook is swallowed; live events still flow."""
+
+    async def _boom() -> list[dict[str, Any]]:
+        raise RuntimeError("snapshot boom")
+
+    gen = session_stream.subscribe("conv_on_sub_fail", on_subscribed=_boom)
+    try:
+        fut = asyncio.ensure_future(anext(gen))
+        await asyncio.sleep(0)
+        session_stream.publish("conv_on_sub_fail", {"type": "live", "i": 1})
+        event = await asyncio.wait_for(fut, timeout=1.0)
+        assert event == {"type": "live", "i": 1}
+    finally:
+        await gen.aclose()

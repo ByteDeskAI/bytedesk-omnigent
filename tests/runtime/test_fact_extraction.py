@@ -37,6 +37,21 @@ def test_parse_facts_validates_and_drops_malformed() -> None:
 def test_parse_facts_robust_to_garbage() -> None:
     assert parse_facts("not json") == []
     assert parse_facts("") == []
+    assert parse_facts(json.dumps({"facts": "not a list"})) == []
+    assert parse_facts(json.dumps(42)) == []
+
+
+def test_parse_facts_accepts_wrapped_facts_dict() -> None:
+    raw = json.dumps(
+        {
+            "facts": [
+                {"text": "Wrapped key alias.", "salience": 1.0, "confidence": 0.9},
+                "not a dict",
+            ]
+        }
+    )
+    facts = parse_facts(raw)
+    assert facts == [Fact(text="Wrapped key alias.", salience=1.0, confidence=0.9)]
 
 
 def test_capture_facts_persists_confident_deduped(tmp_path) -> None:
@@ -80,4 +95,21 @@ def test_capture_facts_extractor_failure_is_swallowed(tmp_path) -> None:
 
     assert capture_facts(
         store, _Boom(), conversation_id="c", agent_id="ag", summary="s", enabled=True
+    ) == 0
+
+
+def test_capture_facts_persist_failure_is_logged_and_swallowed() -> None:
+    raw = json.dumps([{"fact": "Persist me.", "salience": 1.0, "confidence": 0.9}])
+
+    class _BoomStore:
+        def append(self, **kwargs) -> None:
+            raise RuntimeError("db down")
+
+    assert capture_facts(
+        _BoomStore(),
+        _FakeExtractor(raw),
+        conversation_id="c",
+        agent_id="ag",
+        summary="s",
+        enabled=True,
     ) == 0
