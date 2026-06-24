@@ -18,8 +18,6 @@ import httpx
 import pytest
 
 from omnigent.runtime.harnesses import _HARNESS_MODULES
-pytest_plugins = ("tests.runtime.harnesses.test_process_manager",)
-
 from omnigent.runtime.harnesses.process_manager import (
     _AP_PID_FILE,
     _TMP_PARENT,
