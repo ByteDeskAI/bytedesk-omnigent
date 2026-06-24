@@ -25,6 +25,7 @@ from omnigent.server.auth import (
     AuthProvider,
     CompositeAuthProvider,
     UnifiedAuthProvider,
+    accounts_provider,
 )
 from omnigent.server.principal import Principal
 
@@ -168,6 +169,39 @@ def test_composite_rich_resolver_supplies_tenant() -> None:
     )
     # get_user_id resolves through the same chain.
     assert composite.get_user_id(_conn()) == "ext-user"
+
+
+# ── accounts_provider unwrap (BDP-2426) ───────────────────────────────
+
+
+def test_accounts_provider_recognizes_bare_accounts() -> None:
+    base = UnifiedAuthProvider(source="accounts", local_single_user=False)
+    assert accounts_provider(base) is base
+
+
+def test_accounts_provider_unwraps_composite_wrapped_accounts() -> None:
+    # The bug (BDP-2426): a principal-resolver wrap hid the accounts provider,
+    # so bootstrap/router/`/v1/info` all stopped recognizing accounts mode.
+    base = UnifiedAuthProvider(source="accounts", local_single_user=False)
+    composite = CompositeAuthProvider(base, [_StubProvider("ext-user")])
+    assert accounts_provider(composite) is base
+
+
+def test_accounts_provider_none_for_header() -> None:
+    base = UnifiedAuthProvider(source="header", local_single_user=True)
+    assert accounts_provider(base) is None
+    composite = CompositeAuthProvider(base, [_StubProvider("ext-user")])
+    assert accounts_provider(composite) is None
+
+
+def test_accounts_provider_none_for_oidc() -> None:
+    base = UnifiedAuthProvider(source="oidc")
+    assert accounts_provider(base) is None
+    assert accounts_provider(CompositeAuthProvider(base, [])) is None
+
+
+def test_accounts_provider_none_for_none() -> None:
+    assert accounts_provider(None) is None
 
 
 # ── extension_principal_resolvers aggregator ──────────────────────────
