@@ -42,6 +42,7 @@ from omnigent.server._elicitation_registry import (
 )
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.routes import sessions as sessions_mod
+from omnigent.stores.conversation_store import NameAlreadyExistsError
 from omnigent.server.routes.sessions import (
     SessionLiveness,
     _accumulate_session_usage,
@@ -132,8 +133,12 @@ from omnigent.server.routes.sessions import (
     _forward_approval_to_runner,
     _enrich_idle_status_with_subagent_output,
     _latest_assistant_text_from_store,
+    _find_codex_native_subagent_child,
     _parse_external_assistant_message,
     _parse_session_create_metadata,
+    _persist_external_assistant_message,
+    _persist_external_codex_subagent_start,
+    _persist_external_subagent_start,
     _persist_external_model_change,
     _persist_external_session_usage,
     _persist_model_change_note,
@@ -4511,3 +4516,424 @@ async def test_resolve_elicitation_invalid_tombstone_payload_is_not_stored(
         assert elicitation_id not in sessions_mod._harness_pre_resolved_elicitations
     finally:
         _clear_harness_elicitation_state()
+
+
+# ── batch 57: external assistant persist + subagent registration ──────────────
+
+
+class _SubagentPersistStore:
+    """Store stub for external subagent registration helpers."""
+
+    def __init__(
+        self,
+        children_by_parent: dict[str, list[Conversation]] | None = None,
+    ) -> None:
+        self._children = children_by_parent or {}
+        self.labels_written: dict[str, dict[str, str]] = {}
+        self.created: list[dict[str, object]] = []
+        self._seq = 0
+
+    def list_conversations(
+        self,
+        *,
+        kind: str | None = None,
+        parent_conversation_id: str | None = None,
+        limit: int = 100,
+        after: str | None = None,
+        **_: Any,
+    ) -> PagedList[Conversation]:
+        assert kind == "sub_agent"
+        assert parent_conversation_id is not None
+        kids = list(self._children.get(parent_conversation_id, []))
+        if after is not None:
+            ids = [c.id for c in kids]
+            if after in ids:
+                kids = kids[ids.index(after) + 1 :]
+        page = kids[:limit]
+        return PagedList(
+            data=page,
+            first_id=page[0].id if page else None,
+            last_id=page[-1].id if page else None,
+            has_more=len(kids) > limit,
+        )
+
+    def create_conversation(
+        self,
+        *,
+        kind: str,
+        title: str,
+        parent_conversation_id: str,
+        agent_id: str | None,
+        runner_id: str | None = None,
+        sub_agent_name: str | None = None,
+        **__: Any,
+    ) -> Conversation:
+        for child in self._children.get(parent_conversation_id, []):
+            if child.title == title:
+                raise NameAlreadyExistsError(f"duplicate title {title!r}")
+        self._seq += 1
+        child = Conversation(
+            id=f"conv_child_{self._seq}",
+            created_at=0,
+            updated_at=0,
+            root_conversation_id=parent_conversation_id,
+            parent_conversation_id=parent_conversation_id,
+            kind=kind,
+            title=title,
+            agent_id=agent_id,
+            runner_id=runner_id,
+        )
+        self._children.setdefault(parent_conversation_id, []).append(child)
+        self.created.append(
+            {
+                "kind": kind,
+                "title": title,
+                "parent": parent_conversation_id,
+                "agent_id": agent_id,
+            }
+        )
+        return child
+
+    def set_labels(self, session_id: str, labels: dict[str, str]) -> None:
+        self.labels_written[session_id] = labels
+        for kids in self._children.values():
+            for child in kids:
+                if child.id == session_id:
+                    child.labels = {**child.labels, **labels}
+
+
+def _claude_subagent_start_body(**overrides: object) -> SessionEventInput:
+    data: dict[str, object] = {
+        "subagent_id": "sub_abc123",
+        "agent_type": "Explore",
+        "description": "search the repo",
+        "tool_use_id": "toolu_01",
+    }
+    data.update(overrides)
+    return SessionEventInput(type="external_subagent_start", data=data)
+
+
+def _codex_subagent_start_body(**overrides: object) -> SessionEventInput:
+    data: dict[str, object] = {
+        "thread_id": "thread_child_99",
+        "agent_nickname": "auth-auditor",
+        "agent_role": "security",
+    }
+    data.update(overrides)
+    return SessionEventInput(type="external_codex_subagent_start", data=data)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_assistant_message_appends_and_broadcasts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Mirrored assistant text is persisted and broadcast as output_item.done."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_asst_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_asst_ext",
+        agent_id="ag_claude",
+    )
+    store = _ExternalUsageStore(conv)
+    body = SessionEventInput(
+        type="external_assistant_message",
+        data={
+            "agent": "claude-native",
+            "text": "mirrored from terminal",
+            "response_id": "resp_mirror_1",
+        },
+    )
+    item_id = await _persist_external_assistant_message(
+        "conv_asst_ext",
+        body,
+        store,  # type: ignore[arg-type]
+    )
+    assert item_id == "item_0"
+    assert len(store.appended) == 1
+    persisted = store.appended[0][1][0]
+    assert isinstance(persisted.data, MessageData)
+    assert persisted.data.role == "assistant"
+    assert persisted.data.agent == "claude-native"
+    assert persisted.data.content[0]["text"] == "mirrored from terminal"
+    assert len(published) == 1
+    assert published[0]["type"] == "response.output_item.done"
+    assert published[0]["item"]["id"] == "item_0"
+
+
+def test_parse_external_assistant_message_rejects_empty_text() -> None:
+    body = SessionEventInput(
+        type="external_assistant_message",
+        data={"agent": "claude-native", "text": ""},
+    )
+    with pytest.raises(OmnigentError) as exc:
+        _parse_external_assistant_message(body)
+    assert exc.value.code == ErrorCode.INVALID_INPUT
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_rejects_missing_subagent_id() -> None:
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    store = _SubagentPersistStore()
+    body = _claude_subagent_start_body(subagent_id="")
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_subagent_start(
+            "conv_parent",
+            parent,
+            body,
+            store,  # type: ignore[arg-type]
+        )
+    assert "subagent_id" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_rejects_parent_without_agent_id() -> None:
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id=None,
+    )
+    store = _SubagentPersistStore()
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_subagent_start(
+            "conv_parent",
+            parent,
+            _claude_subagent_start_body(),
+            store,  # type: ignore[arg-type]
+        )
+    assert "no agent_id" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_returns_existing_by_label() -> None:
+    """Idempotent retry resolves the stamped child without creating a duplicate."""
+    existing = Conversation(
+        id="conv_existing",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        title="Explore:sub_abc123",
+        agent_id="ag_parent",
+        labels={_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY: "sub_abc123"},
+    )
+    store = _SubagentPersistStore({"conv_parent": [existing]})
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    child_id = await _persist_external_subagent_start(
+        "conv_parent",
+        parent,
+        _claude_subagent_start_body(),
+        store,  # type: ignore[arg-type]
+    )
+    assert child_id == "conv_existing"
+    assert store.created == []
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_mints_child_and_publishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    store = _SubagentPersistStore()
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+        runner_id="runner_1",
+    )
+    child_id = await _persist_external_subagent_start(
+        "conv_parent",
+        parent,
+        _claude_subagent_start_body(),
+        store,  # type: ignore[arg-type]
+    )
+    assert child_id == "conv_child_1"
+    assert len(store.created) == 1
+    assert store.created[0]["title"] == "Explore:sub_abc123"
+    labels = store.labels_written["conv_child_1"]
+    assert labels[_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY] == "sub_abc123"
+    assert labels[sessions_mod._CLAUDE_NATIVE_TOOL_USE_ID_LABEL_KEY] == "toolu_01"
+    assert labels[sessions_mod._CLAUDE_NATIVE_DESCRIPTION_LABEL_KEY] == "search the repo"
+    assert len(published) == 1
+    assert published[0][0] == "conv_parent"
+    assert published[0][1]["child_session_id"] == "conv_child_1"
+
+
+@pytest.mark.asyncio
+async def test_persist_external_subagent_start_recovers_orphan_after_title_collision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Title-collision recovery re-stamps labels and emits session.created."""
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    orphan = Conversation(
+        id="conv_orphan",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        title="Explore:sub_abc123",
+        agent_id="ag_parent",
+        labels={},
+    )
+    store = _SubagentPersistStore({"conv_parent": [orphan]})
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_parent",
+    )
+    child_id = await _persist_external_subagent_start(
+        "conv_parent",
+        parent,
+        _claude_subagent_start_body(),
+        store,  # type: ignore[arg-type]
+    )
+    assert child_id == "conv_orphan"
+    assert store.labels_written["conv_orphan"][_CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY] == "sub_abc123"
+    assert store.created == []
+    assert len(published) == 1
+    assert published[0][1]["child_session_id"] == "conv_orphan"
+
+
+def test_find_codex_native_subagent_child_matches_thread_id_label() -> None:
+    target = Conversation(
+        id="conv_codex_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        labels={
+            sessions_mod._CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY: "thread_child_99",
+        },
+    )
+    store = _SubagentPersistStore({"conv_parent": [target]})
+    found = _find_codex_native_subagent_child(store, "conv_parent", "thread_child_99")  # type: ignore[arg-type]
+    assert found is not None
+    assert found.id == "conv_codex_child"
+    assert _find_codex_native_subagent_child(store, "conv_parent", "missing") is None  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_persist_external_codex_subagent_start_rejects_missing_thread_id() -> None:
+    parent = Conversation(
+        id="conv_codex_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_codex_parent",
+        agent_id="ag_codex",
+    )
+    store = _SubagentPersistStore()
+    with pytest.raises(OmnigentError) as exc:
+        await _persist_external_codex_subagent_start(
+            "conv_codex_parent",
+            parent,
+            _codex_subagent_start_body(thread_id=""),
+            store,  # type: ignore[arg-type]
+        )
+    assert "thread_id" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_codex_subagent_start_upserts_existing_child() -> None:
+    existing = Conversation(
+        id="conv_codex_existing",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        parent_conversation_id="conv_parent",
+        kind="sub_agent",
+        title="codex-native-ui-subagent:thread_child_99",
+        agent_id="ag_codex",
+        labels={
+            sessions_mod._CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY: "thread_child_99",
+        },
+    )
+    store = _SubagentPersistStore({"conv_parent": [existing]})
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_codex",
+    )
+    child_id = await _persist_external_codex_subagent_start(
+        "conv_parent",
+        parent,
+        _codex_subagent_start_body(prompt="audit auth module"),
+        store,  # type: ignore[arg-type]
+    )
+    assert child_id == "conv_codex_existing"
+    assert store.created == []
+    labels = store.labels_written["conv_codex_existing"]
+    assert labels[sessions_mod._CODEX_NATIVE_SUBAGENT_NICKNAME_LABEL_KEY] == "auth-auditor"
+    assert labels[sessions_mod._CODEX_NATIVE_SUBAGENT_PROMPT_LABEL_KEY] == "audit auth module"
+
+
+@pytest.mark.asyncio
+async def test_persist_external_codex_subagent_start_creates_child_with_labels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[tuple[str, dict[str, object]]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda sid, payload: published.append((sid, payload)),
+    )
+    store = _SubagentPersistStore()
+    parent = Conversation(
+        id="conv_parent",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_parent",
+        agent_id="ag_codex",
+        runner_id="runner_codex",
+    )
+    child_id = await _persist_external_codex_subagent_start(
+        "conv_parent",
+        parent,
+        _codex_subagent_start_body(),
+        store,  # type: ignore[arg-type]
+    )
+    assert child_id == "conv_child_1"
+    assert store.created[0]["title"] == "codex-native-ui-subagent:thread_child_99"
+    labels = store.labels_written["conv_child_1"]
+    assert labels[sessions_mod._CODEX_NATIVE_SUBAGENT_THREAD_ID_LABEL_KEY] == "thread_child_99"
+    assert labels[_CLAUDE_NATIVE_WRAPPER_LABEL_KEY] == _CODEX_NATIVE_SUBAGENT_WRAPPER_LABEL_VALUE
+    assert len(published) == 1
+    assert published[0][1]["type"] == "session.created"
