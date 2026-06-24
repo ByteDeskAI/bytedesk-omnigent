@@ -15,6 +15,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    JsonPayloadWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -203,8 +204,8 @@ def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
     assert adapter.verify(body, {"x-hub-signature-256": "sha256=" + sig}, secret) is True
     assert adapter.verify(body, {"x-omnigent-signature": "bad"}, secret) is False
     assert adapter.verify(body, {}, secret) is False  # no signature header
-    assert adapter.match_key({"x-omnigent-event": "build.finished"}) == "build.finished"
-    assert adapter.match_key({}) == "*"  # absent → catch-all
+    assert adapter.match_key(b"{}", {"x-omnigent-event": "build.finished"}) == "build.finished"
+    assert adapter.match_key(b"{}", {}) == "*"  # absent → catch-all
 
 
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
@@ -222,7 +223,7 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
         def verify(self, raw_body, headers, secret) -> bool:
             return headers.get("stripe-token") == secret
 
-        def match_key(self, headers) -> str:
+        def match_key(self, raw_body, headers) -> str:
             return headers.get("stripe-event", "*")
 
     register_webhook_adapter("stripe", _StripeAdapter)
@@ -230,6 +231,59 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert isinstance(adapter, _StripeAdapter)
     assert adapter.verify(b"{}", {"stripe-token": "whsec"}, "whsec") is True
     assert adapter.verify(b"{}", {"stripe-token": "wrong"}, "whsec") is False
-    assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
+    assert adapter.match_key(b"{}", {"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_json_payload_adapter_routes_by_payload_event_fields() -> None:
+    """JSON SaaS adapters can bind Jira/Trello/Asana-style payload event names
+    without per-provider route code, while retaining the default HMAC contract."""
+    adapter = JsonPayloadWebhookAdapter()
+    body = json.dumps({"webhookEvent": "jira:issue_updated"}).encode()
+    secret = "jira-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-omnigent-signature": sig}, secret) is True
+    assert adapter.match_key(body, {}) == "jira:issue_updated"
+
+    nested = json.dumps({"action": {"type": "card.updated"}}).encode()
+    assert adapter.match_key(nested, {}) == "card.updated"
+    assert adapter.match_key(body, {"x-omnigent-event": "override"}) == "override"
+    assert adapter.match_key(b"not-json", {}) == "*"
+
+
+def test_builtin_json_saas_sources_resolve_payload_adapter() -> None:
+    assert isinstance(resolve_webhook_adapter("json"), JsonPayloadWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("jira"), JsonPayloadWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("trello"), JsonPayloadWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("asana"), JsonPayloadWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("notion"), JsonPayloadWebhookAdapter)
+
+
+def test_process_inbound_with_json_payload_adapter_delivers_bound_jira_event(tmp_path) -> None:
+    db = f"sqlite:///{tmp_path / 'jira.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "jira-secret"
+    bus.register_wait(
+        signal_id="issue:OPS-42", session_id="sess-jira", key="subscribe:jira",
+        kind="subscribe", target="jira", now=now,
+    )
+    store.register_binding(
+        source="jira", match_key="jira:issue_updated", signal_id="issue:OPS-42", now=now
+    )
+    body = json.dumps({"webhookEvent": "jira:issue_updated", "issue": "OPS-42"}).encode()
+
+    res = process_inbound(
+        source="jira", raw_body=body,
+        headers={"x-omnigent-signature": _sign(body, secret)},
+        secret=secret, store=store, bus=bus,
+        adapter=resolve_webhook_adapter("jira"),
+        payload={"issue": "OPS-42"}, now=now + 1,
+    )
+
+    assert res.status is IngressStatus.DELIVERED
+    assert res.http_status == 202
+    assert res.signal_id == "issue:OPS-42"
