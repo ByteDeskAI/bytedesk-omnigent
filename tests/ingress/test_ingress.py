@@ -15,6 +15,7 @@ from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
+    ServiceNowWebhookAdapter,
     WebhookSourceAdapter,
     process_inbound,
     register_webhook_adapter,
@@ -232,4 +233,29 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.verify(b"{}", {"stripe-token": "wrong"}, "whsec") is False
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
+    assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_servicenow_adapter_verifies_signature_and_reads_event() -> None:
+    """ServiceNow incident/change events can wake agents through the shared
+    ingress route with a ServiceNow-specific signature/event header contract."""
+    adapter = ServiceNowWebhookAdapter()
+    body = b'{"number":"INC0012345","sys_id":"abc123"}'
+    secret = "servicenow-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"x-servicenow-signature": sig}, secret) is True
+    assert adapter.verify(body, {"X-ServiceNow-Signature": "sha256=" + sig}, secret) is True
+    assert adapter.verify(body, {"x-omnigent-signature": sig}, secret) is True
+    assert adapter.verify(body, {"x-servicenow-signature": "bad"}, secret) is False
+    assert adapter.verify(body, {}, secret) is False
+    assert adapter.match_key({"x-servicenow-event": "incident.updated"}) == "incident.updated"
+    assert adapter.match_key({"X-ServiceNow-Event": "change.approved"}) == "change.approved"
+    assert adapter.match_key({}) == "*"
+
+
+def test_resolve_webhook_adapter_registers_servicenow_builtin() -> None:
+    """The built-in registry exposes ServiceNow without deployment-side glue."""
+    assert isinstance(resolve_webhook_adapter("servicenow"), ServiceNowWebhookAdapter)
+    assert isinstance(resolve_webhook_adapter("service-now"), ServiceNowWebhookAdapter)
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
