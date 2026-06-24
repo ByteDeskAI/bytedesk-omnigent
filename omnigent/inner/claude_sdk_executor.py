@@ -636,6 +636,7 @@ def _build_mcp_tools(
         # carry a ``name`` (see ``Tool.tool_schema``); fall back to ``""``
         # only for the description, which is legitimately optional.
         tname: str = raw_name if isinstance(raw_name, str) else ""
+        sdk_tname = _claude_sdk_visible_tool_name(tname)
         tdesc: str = raw_desc if isinstance(raw_desc, str) else ""
         tparams = schema.get("parameters", {"type": "object", "properties": {}})
 
@@ -675,12 +676,29 @@ def _build_mcp_tools(
 
             return handler
 
-        decorated = sdk.tool(tname, tdesc, tparams)(_make_handler(tname))
+        decorated = sdk.tool(sdk_tname, tdesc, tparams)(_make_handler(tname))
         mcp_tools.append(decorated)
     return mcp_tools
 
 
 _OMNIGENT_MCP_PREFIX = "mcp__omnigent__"
+
+
+def _claude_sdk_visible_tool_name(raw_name: str) -> str:
+    """Return the tool name registered with Claude's SDK MCP server.
+
+    Omnigent namespaces external MCP tools as ``server__tool`` so dispatch can
+    route calls back to the owning server. The Claude Code MCP wrapper also
+    uses ``mcp__server__tool``. Passing a raw name that itself contains ``__``
+    creates an ambiguous nested name such as
+    ``mcp__omnigent__bytedesk-platform__googleworkspace_drive_search``; live
+    Claude Code sessions then omit that tool from the active manifest. Register
+    a single-segment alias for those external tools and map the handler back to
+    the original raw name.
+    """
+    if "__" not in raw_name:
+        return raw_name
+    return raw_name.replace("-", "_").replace("__", "_")
 
 
 def _omnigent_tool_naming_note(tool_names: list[str]) -> str:
@@ -712,6 +730,29 @@ def _omnigent_tool_naming_note(tool_names: list[str]) -> str:
         f"the `{_OMNIGENT_MCP_PREFIX}` prefix. When any instruction names one of "
         "these by its bare name, invoke the prefixed form below. These are "
         "regular tools, NOT skills — never use the `Skill` tool to call them:\n"
+        f"{listed}"
+    )
+
+
+def _omnigent_tool_alias_note(tool_names: list[str]) -> str:
+    """Document Claude-safe aliases for namespaced external MCP tools."""
+    aliases = [
+        (raw, _claude_sdk_visible_tool_name(raw))
+        for raw in sorted({n for n in tool_names if n})
+        if _claude_sdk_visible_tool_name(raw) != raw
+    ]
+    if not aliases:
+        return ""
+    listed = "\n".join(
+        f"- raw `{raw}` → call `{_OMNIGENT_MCP_PREFIX}{alias}`"
+        for raw, alias in aliases
+    )
+    return (
+        "# Omnigent external MCP tool aliases\n"
+        "Some Omnigent MCP tools come from external servers and have raw "
+        "`server__tool` names. Claude Code exposes those through safe aliases "
+        "under the `mcp__omnigent__` prefix. When an instruction names one of "
+        "these raw tools, invoke the alias below:\n"
         f"{listed}"
     )
 
@@ -1867,9 +1908,19 @@ class ClaudeSDKExecutor(Executor):
         # ``mcp__omnigent__`` names the SDK actually advertises (BDP-2204).
         # Without this the model treats a bare ``sys_agent_list`` as a skill
         # and the CLI returns "Unknown skill: sys_agent_list".
+        tool_names = [
+            name
+            for s in tools
+            if isinstance((name := s.get("name")), str) and name
+        ]
         if "omnigent" in mcp_servers:
-            naming_note = _omnigent_tool_naming_note(
-                [s.get("name", "") for s in tools]
+            naming_note = "\n\n".join(
+                note
+                for note in (
+                    _omnigent_tool_naming_note(tool_names),
+                    _omnigent_tool_alias_note(tool_names),
+                )
+                if note
             )
             if naming_note:
                 system_prompt = (
@@ -1894,15 +1945,14 @@ class ClaudeSDKExecutor(Executor):
         # entirely, letting Claude's normal permission flow apply.
         sdk_mcp_tool_names: list[str] = []
         _seen_sdk_mcp_tool_names: set[str] = set()
-        for schema in tools:
-            raw_tname = schema.get("name")
+        for raw_tname in tool_names:
             # Claude SDK names every tool in the generated MCP server as
             # ``mcp__omnigent__<raw-name>``. These generated names must be in
             # ``tools`` or Claude Code treats the MCP server as configured but
             # not callable when ``--tools`` narrows the base tool set.
-            if not isinstance(raw_tname, str) or not raw_tname:
-                continue
-            generated_name = f"mcp__omnigent__{raw_tname}"
+            generated_name = (
+                f"mcp__omnigent__{_claude_sdk_visible_tool_name(raw_tname)}"
+            )
             if generated_name in _seen_sdk_mcp_tool_names:
                 continue
             _seen_sdk_mcp_tool_names.add(generated_name)
