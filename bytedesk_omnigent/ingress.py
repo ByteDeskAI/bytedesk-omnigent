@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import os
 import uuid
 from collections.abc import Callable, Mapping
@@ -155,6 +156,37 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class LinearWebhookAdapter:
+    """Linear issue/project webhook adapter.
+
+    Linear signs the raw JSON body with HMAC-SHA256 in ``Linear-Signature`` and
+    carries the routable event in the payload rather than a header. Omnigent maps
+    ``{"type":"Issue","action":"update"}`` to the binding key
+    ``Issue.update`` so one agent can await specific work-management events while
+    another uses the ``*`` catch-all for broad triage.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "linear-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(
+        self, headers: Mapping[str, str], payload: Mapping[str, object] | None = None
+    ) -> str:
+        if payload is not None:
+            event_type = payload.get("type")
+            action = payload.get("action")
+            if isinstance(event_type, str) and event_type:
+                if isinstance(action, str) and action:
+                    return f"{event_type}.{action}"
+                return event_type
+            if isinstance(action, str) and action:
+                return action
+        return _header(headers, "linear-event") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -165,6 +197,34 @@ def _header(headers: Mapping[str, str], name: str) -> str:
         if key.lower() == lower:
             return value
     return ""
+
+
+def _adapter_match_key(
+    adapter: WebhookSourceAdapter,
+    headers: Mapping[str, str],
+    payload: Mapping[str, object] | None,
+) -> str:
+    """Resolve a route key while preserving the original one-arg adapter ABI.
+
+    Existing source adapters implement ``match_key(headers)``. Payload-routed
+    systems such as Linear need ``match_key(headers, payload)``. Introspect the
+    bound method instead of broad ``TypeError`` handling so adapter bugs still
+    surface during tests.
+    """
+    params = inspect.signature(adapter.match_key).parameters.values()
+    accepts_payload = any(p.kind is inspect.Parameter.VAR_POSITIONAL for p in params)
+    if not accepts_payload:
+        params = inspect.signature(adapter.match_key).parameters.values()
+        positional = [
+            p
+            for p in params
+            if p.kind
+            in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+        ]
+        accepts_payload = len(positional) >= 2
+    if accepts_payload:
+        return adapter.match_key(headers, payload)  # type: ignore[call-arg]
+    return adapter.match_key(headers)
 
 
 def _build_webhook_adapter_registry():
@@ -179,6 +239,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("linear", LinearWebhookAdapter)
     return registry
 
 
@@ -350,7 +411,7 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = _adapter_match_key(adapter, headers, payload)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
