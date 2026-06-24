@@ -1212,3 +1212,532 @@ async def test_elicitation_route_returns_502_when_harness_post_fails() -> None:
 
     assert resp.status_code == 502
     assert resp.json()["error"] == "elicitation_failed"
+
+
+# ── Summarize auth fallback branches ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_summarize_uses_global_api_key_when_spec_has_no_auth(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="no-auth-agent",
+        executor=ExecutorSpec(type="omnigent", model="gpt-4o-mini", config={"harness": "openai-agents"}),
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakeResponses:
+        @staticmethod
+        async def create(**kwargs: Any) -> Any:
+            captured["connection"] = kwargs.get("connection_params")
+            return SimpleNamespace(
+                output=[SimpleNamespace(content=[SimpleNamespace(text="global summary")])],
+            )
+
+    monkeypatch.setattr(
+        "omnigent.runner.app._get_runner_llm_client",
+        lambda: SimpleNamespace(responses=_FakeResponses()),
+    )
+    monkeypatch.setattr(
+        "omnigent.runtime.workflow._load_global_auth",
+        lambda: ApiKeyAuth(api_key="sk-global", base_url="https://global.example/v1"),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    conv = "conv_summarize_global"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})
+        resp = await client.post(
+            "/v1/summarize",
+            json={
+                "session_id": conv,
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert captured["connection"] == {
+        "api_key": "sk-global",
+        "base_url": "https://global.example/v1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_summarize_uses_legacy_databricks_profile_for_databricks_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="legacy-db-agent",
+        executor=ExecutorSpec(
+            type="omnigent",
+            model="databricks/databricks-gpt-5",
+            config={"harness": "openai-agents", "profile": "oss"},
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakeResponses:
+        @staticmethod
+        async def create(**kwargs: Any) -> Any:
+            captured["connection"] = kwargs.get("connection_params")
+            return SimpleNamespace(
+                output=[SimpleNamespace(content=[SimpleNamespace(text="legacy db")])],
+            )
+
+    monkeypatch.setattr(
+        "omnigent.runner.app._get_runner_llm_client",
+        lambda: SimpleNamespace(responses=_FakeResponses()),
+    )
+    monkeypatch.setattr(
+        "omnigent.runtime.credentials.databricks.resolve_databricks_workspace",
+        lambda profile: SimpleNamespace(host=f"https://{profile}.example", token=f"tok-{profile}"),
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    conv = "conv_summarize_legacy_db"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})
+        resp = await client.post(
+            "/v1/summarize",
+            json={
+                "session_id": conv,
+                "model": "databricks/databricks-gpt-5",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert captured["connection"]["api_key"] == "tok-oss"
+
+
+@pytest.mark.asyncio
+async def test_summarize_provider_resolution_returns_none_when_provider_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="missing-provider",
+        executor=ExecutorSpec(
+            type="omnigent",
+            model="gpt-4o-mini",
+            auth=ProviderAuth(name="missing-provider"),
+        ),
+    )
+    captured: dict[str, Any] = {}
+
+    class _FakeResponses:
+        @staticmethod
+        async def create(**kwargs: Any) -> Any:
+            captured["connection"] = kwargs.get("connection_params")
+            return SimpleNamespace(
+                output=[SimpleNamespace(content=[SimpleNamespace(text="no conn")])],
+            )
+
+    monkeypatch.setattr(
+        "omnigent.runner.app._get_runner_llm_client",
+        lambda: SimpleNamespace(responses=_FakeResponses()),
+    )
+    monkeypatch.setattr("omnigent.onboarding.provider_config.load_config", lambda: {})
+    monkeypatch.setattr("omnigent.onboarding.provider_config.load_providers", lambda _cfg: {})
+    monkeypatch.setattr(
+        "omnigent.onboarding.detected.effective_config_with_detected",
+        lambda cfg: cfg,
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    conv = "conv_summarize_missing_provider"
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})
+        resp = await client.post(
+            "/v1/summarize",
+            json={
+                "session_id": conv,
+                "model": "gpt-4o-mini",
+                "messages": [{"role": "user", "content": "hello"}],
+            },
+        )
+
+    assert resp.status_code == 200
+    assert captured["connection"] is None
+
+
+# ── Cancellation + compaction persist failures ────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_interrupt_persist_failure_is_logged_not_raised(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    from tests.runner.test_app_sessions_native import _build_interrupt_app, _runner_client
+
+    class _FailingPersistClient(NullServerClient):
+        async def post(self, url: str, **kwargs: Any) -> NullServerClient._Response:
+            payload = kwargs.get("json") or {}
+            if payload.get("type") == "external_conversation_item":
+                raise httpx.ConnectError("persist down")
+            return await super().post(url, **kwargs)
+
+    gate = asyncio.Event()
+    app, _pm, _hc = _build_interrupt_app(gate)
+    # Rebuild app with failing server client — _build_interrupt_app hardcodes NullServerClient.
+    spec = AgentSpec(spec_version=1, name="t")
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=_pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=_FailingPersistClient(),  # type: ignore[arg-type]
+    )
+
+    caplog.set_level(logging.WARNING, logger="omnigent.runner.app")
+    async with _runner_client(app) as client:
+        conv_id = "conv_persist_fail"
+        resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={
+                "type": "message",
+                "role": "user",
+                "model": "test-agent",
+                "content": [{"type": "input_text", "text": "do something"}],
+                "harness": "openai-agents",
+            },
+        )
+        assert resp.status_code == 202
+        await asyncio.sleep(0.1)
+        int_resp = await client.post(
+            f"/v1/sessions/{conv_id}/events",
+            json={"type": "interrupt"},
+        )
+        assert int_resp.status_code in (200, 204)
+        gate.set()
+        await asyncio.sleep(0.3)
+
+    assert "Failed to persist cancellation item" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_proactive_compaction_persist_failure_is_logged(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    import logging
+
+    conv = "conv_compact_persist_fail"
+    spec = AgentSpec(
+        spec_version=1,
+        name="compact-agent",
+        compaction=CompactionConfig(trigger_threshold=0.5, recent_window=0),
+        executor=ExecutorSpec(type="omnigent", model="gpt-4o-mini", config={"harness": "openai-agents"}),
+    )
+    sse_frames = [
+        _sse({"type": "response.created", "response": {"id": "resp_cpf"}}),
+        _sse({"type": "response.completed", "response": {"id": "resp_cpf"}}),
+    ]
+    harness_client = _ScriptedHarnessClient(sse_frames)
+    pm = _FakeProcessManager(harness_client)
+
+    class _FailingCompactionClient(_PaginatedServerClient):
+        def __init__(self) -> None:
+            super().__init__([{"id": "item_cpf", "type": "message", "role": "user", "content": []}])
+
+        async def post(self, url: str, **kwargs: Any) -> Any:
+            payload = kwargs.get("json") or {}
+            if payload.get("type") == "compaction":
+                raise httpx.ConnectError("compaction persist down")
+            return await NullServerClient().post(url, **kwargs)
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    app = create_runner_app(
+        process_manager=pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=_FailingCompactionClient(),  # type: ignore[arg-type]
+    )
+    _session_histories_ref[conv] = [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "x"}]},
+    ] * 60
+
+    monkeypatch.setattr("omnigent.runtime.compaction.count_tokens", lambda msgs, model: 70000)
+
+    async def _fake_compact(*_args: Any, **_kwargs: Any) -> CompactionResult:
+        return CompactionResult(
+            messages=[{"type": "message", "role": "user", "content": "c"}],
+            summary_metadata=SummaryMetadata(
+                text="summary",
+                last_item_id="item_cpf",
+                model="gpt-4o-mini",
+                token_count=1,
+            ),
+            total_tokens=1,
+        )
+
+    monkeypatch.setattr("omnigent.runtime.compaction.compact", _fake_compact)
+    monkeypatch.setattr("omnigent.runner.app._get_runner_llm_client", lambda: MagicMock())
+
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    _session_event_queues_ref[conv] = queue
+    caplog.set_level(logging.WARNING, logger="omnigent.runner.app")
+
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+            await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})
+            await client.post(
+                f"/v1/sessions/{conv}/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "model": "gpt-4o-mini",
+                    "content": [{"type": "input_text", "text": "go"}],
+                },
+            )
+            for _ in range(300):
+                if "Failed to persist compaction item" in caplog.text:
+                    break
+                await asyncio.sleep(0.01)
+    finally:
+        _session_histories_ref.pop(conv, None)
+        _session_event_queues_ref.pop(conv, None)
+
+    assert "Failed to persist compaction item" in caplog.text
+
+
+# ── Native terminal ensure routes ─────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_codex_ensure_returns_409_when_stale_terminal_cannot_close(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.entities.session_resources import SessionResourceView, terminal_resource_id
+    from omnigent.runner.resource_registry import SessionResourceRegistry
+    from omnigent.terminals import TerminalRegistry
+
+    sid = "conv_codex_conflict"
+    existing = SessionResourceView(
+        id=terminal_resource_id("codex", "main"),
+        type="terminal",
+        session_id=sid,
+        name="bash-shell",
+    )
+
+    async def _stub_get_terminal(
+        self: object,
+        session_id: str,
+        terminal_id: str,
+    ) -> SessionResourceView | None:
+        del self
+        if session_id == sid and terminal_id == existing.id:
+            return existing
+        return None
+
+    async def _stub_close_terminal(self: object, session_id: str, terminal_id: str) -> bool:
+        del self, session_id, terminal_id
+        return False
+
+    monkeypatch.setattr(SessionResourceRegistry, "get_terminal_resource", _stub_get_terminal)
+    monkeypatch.setattr(SessionResourceRegistry, "close_terminal", _stub_close_terminal)
+    def _no_role(self: object, session_id: str, terminal_id: str) -> None:
+        del self, session_id, terminal_id
+        return None
+
+    monkeypatch.setattr(SessionResourceRegistry, "terminal_resource_role", _no_role)
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+        terminal_registry=TerminalRegistry(),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        resp = await client.post(
+            f"/v1/sessions/{sid}/resources/terminals",
+            json={"terminal": "codex", "session_key": "main", "ensure_native_terminal": True},
+        )
+
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "terminal_conflict"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal_name", "auto_create_attr"),
+    [
+        ("pi", "_auto_create_pi_terminal"),
+        ("grok", "_auto_create_grok_terminal"),
+    ],
+)
+async def test_native_terminal_ensure_creates_pi_and_grok(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_name: str,
+    auto_create_attr: str,
+) -> None:
+    from omnigent.entities.session_resources import SessionResourceView, terminal_resource_id
+    from omnigent.runner import app as runner_app_mod
+    from omnigent.runner.resource_registry import SessionResourceRegistry
+    from omnigent.terminals import TerminalRegistry
+
+    sid = f"conv_{terminal_name}_ensure"
+    created: list[str] = []
+
+    async def _stub_auto_create(
+        session_id: str,
+        resource_registry: object,
+        publish_event: object,
+        **kwargs: object,
+    ) -> SessionResourceView:
+        del resource_registry, publish_event, kwargs
+        created.append(session_id)
+        return SessionResourceView(
+            id=terminal_resource_id(terminal_name, "main"),
+            type="terminal",
+            session_id=session_id,
+            name=f"auto-{terminal_name}",
+        )
+
+    async def _no_terminal(self: object, session_id: str, terminal_id: str) -> None:
+        del self, session_id, terminal_id
+        return None
+
+    monkeypatch.setattr(runner_app_mod, auto_create_attr, _stub_auto_create)
+    monkeypatch.setattr(SessionResourceRegistry, "get_terminal_resource", _no_terminal)
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+        terminal_registry=TerminalRegistry(),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        resp = await client.post(
+            f"/v1/sessions/{sid}/resources/terminals",
+            json={
+                "terminal": terminal_name,
+                "session_key": "main",
+                "ensure_native_terminal": True,
+            },
+        )
+
+    assert resp.status_code == 200
+    assert resp.json()["name"] == f"auto-{terminal_name}"
+    assert created == [sid]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("terminal_name", "auto_create_attr"),
+    [
+        ("pi", "_auto_create_pi_terminal"),
+        ("grok", "_auto_create_grok_terminal"),
+    ],
+)
+async def test_native_terminal_ensure_failure_returns_start_error(
+    monkeypatch: pytest.MonkeyPatch,
+    terminal_name: str,
+    auto_create_attr: str,
+) -> None:
+    from omnigent.runner import app as runner_app_mod
+    from omnigent.runner.resource_registry import SessionResourceRegistry
+    from omnigent.terminals import TerminalRegistry
+
+    sid = f"conv_{terminal_name}_ensure_fail"
+
+    async def _boom(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError(f"{terminal_name} launch failed")
+
+    async def _no_terminal(self: object, session_id: str, terminal_id: str) -> None:
+        del self, session_id, terminal_id
+        return None
+
+    monkeypatch.setattr(runner_app_mod, auto_create_attr, _boom)
+    monkeypatch.setattr(SessionResourceRegistry, "get_terminal_resource", _no_terminal)
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(_ScriptedHarnessClient([])),  # type: ignore[arg-type]
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+        terminal_registry=TerminalRegistry(),
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        resp = await client.post(
+            f"/v1/sessions/{sid}/resources/terminals",
+            json={
+                "terminal": terminal_name,
+                "session_key": "main",
+                "ensure_native_terminal": True,
+            },
+        )
+
+    assert resp.status_code == 500
+    err = resp.json()["error"]
+    assert err["code"] == "native_terminal_start_failed"
+    assert terminal_name.capitalize() in err["message"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_execute_tools_call_resolves_spec_via_resolver_when_cache_cold() -> None:
+    spec = AgentSpec(spec_version=1, name="mcp-resolver-call")
+    mcp = _FakeMcpManager(call_output="resolver-call-ok")
+    app = _make_app(mcp_manager=mcp, spec=spec)
+    conv = "conv_mcp_call_resolver"
+    _session_agent_ids_ref[conv] = "ag_mcp"
+
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+            resp = await client.post(
+                f"/v1/sessions/{conv}/mcp/execute",
+                json={
+                    "method": "tools/call",
+                    "params": {"name": "srv__search", "arguments": {"q": "z"}},
+                },
+            )
+    finally:
+        _session_agent_ids_ref.pop(conv, None)
+
+    assert resp.status_code == 200
+    assert resp.json()["result"]["output"] == "resolver-call-ok"
