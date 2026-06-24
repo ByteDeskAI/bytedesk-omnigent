@@ -129,8 +129,10 @@ class WebhookSourceAdapter(Protocol):
         """Return whether *raw_body* is authentic for *secret* given *headers*."""
         ...
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
-        """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
+    def match_key(
+        self, headers: Mapping[str, str], payload: Mapping[str, object] | None = None
+    ) -> str:
+        """The binding match key (event name) carried by *headers* or *payload*."""
         ...
 
 
@@ -151,8 +153,39 @@ class GitHubWebhookAdapter:
             return False
         return verify_hmac_signature(raw_body, secret, provided)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(
+        self, headers: Mapping[str, str], payload: Mapping[str, object] | None = None
+    ) -> str:
+        _ = payload
         return _header(headers, "x-omnigent-event") or "*"
+
+
+class JiraWebhookAdapter:
+    """Jira Cloud webhook adapter for issue/project automation events.
+
+    Jira's durable event name is carried in the JSON body as ``webhookEvent``
+    (for example ``jira:issue_created``), not a standard event header. This
+    built-in adapter lets Omnigent bind Jira events directly to parked agent
+    sessions while retaining the default HMAC-SHA256 shared-secret verification
+    expected by Omnigent ingress deployments and API gateways.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-omnigent-signature") or _header(
+            headers, "x-hub-signature-256"
+        )
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(
+        self, headers: Mapping[str, str], payload: Mapping[str, object] | None = None
+    ) -> str:
+        if payload is not None:
+            event = payload.get("webhookEvent")
+            if isinstance(event, str) and event:
+                return event
+        return _header(headers, "x-atlassian-event") or _header(headers, "x-omnigent-event") or "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -176,10 +209,32 @@ def _build_webhook_adapter_registry():
     """
     from omnigent.pluggable import PluggableRegistry
 
-    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
-        "webhook_source", default=("github", GitHubWebhookAdapter)
+    default: tuple[str, Callable[[], WebhookSourceAdapter]] = (
+        "github",
+        GitHubWebhookAdapter,
     )
+    registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
+        "webhook_source", default=default
+    )
+    registry.register("jira", JiraWebhookAdapter)
     return registry
+
+
+def _adapter_match_key(
+    adapter: WebhookSourceAdapter,
+    headers: Mapping[str, str],
+    payload: Mapping[str, object] | None,
+) -> str:
+    """Resolve an adapter match key with payload-aware adapters.
+
+    Registered third-party adapters may still implement the original one-arg
+    ``match_key(headers)`` shape, so keep them compatible while allowing built-in
+    body-aware adapters (Jira, Notion, Intercom) to route from JSON payloads.
+    """
+    try:
+        return adapter.match_key(headers, payload)
+    except TypeError:
+        return adapter.match_key(headers)  # type: ignore[call-arg]
 
 
 # Lazily-built singleton so a deployment can register adapters once at import.
@@ -350,7 +405,7 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    match_key = _adapter_match_key(adapter, headers, payload)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
