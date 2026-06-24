@@ -17,6 +17,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 import websockets.asyncio.client
 from websockets.exceptions import InvalidStatus, InvalidURI
 
@@ -66,6 +67,11 @@ from omnigent.runner.transports.ws_tunnel.frames import (
 )
 
 _logger = logging.getLogger(__name__)
+
+HOST_AUTH_TOKEN_ENV_VAR = "OMNIGENT_HOST_AUTH_TOKEN"
+HOST_AUTH_USERNAME_ENV_VAR = "OMNIGENT_HOST_AUTH_USERNAME"
+HOST_AUTH_PASSWORD_ENV_VAR = "OMNIGENT_HOST_AUTH_PASSWORD"
+_HOST_AUTH_LOGIN_TIMEOUT_S = 10.0
 
 
 def _runner_log_dir() -> Path:
@@ -1293,6 +1299,13 @@ class HostProcess:
         present it is sent on its dedicated header and the user-token
         path is skipped entirely (a sandbox has no user credentials).
 
+        Static hosts can authenticate to accounts/OIDC deployments with a
+        provider bearer in :envvar:`OMNIGENT_HOST_AUTH_TOKEN`. Accounts
+        deployments can also provide :envvar:`OMNIGENT_HOST_AUTH_USERNAME`
+        and :envvar:`OMNIGENT_HOST_AUTH_PASSWORD`; the host logs in via
+        ``/auth/login`` on each tunnel connection and uses the returned
+        session JWT as its bearer.
+
         Otherwise mints a fresh Databricks bearer token via the runner's
         auth factory (refreshed every reconnect so long-lived hosts
         survive token expiry). Token acquisition failures are swallowed —
@@ -1316,6 +1329,14 @@ class HostProcess:
         if managed_token:
             headers[MANAGED_HOST_TOKEN_HEADER] = managed_token
             return headers
+
+        host_auth_configured, host_auth_token = self._host_auth_token_from_env()
+        if host_auth_token:
+            headers["Authorization"] = f"Bearer {host_auth_token}"
+            return headers
+        if host_auth_configured:
+            return headers
+
         try:
             from omnigent.runner._entry import _make_auth_token_factory
 
@@ -1331,6 +1352,69 @@ class HostProcess:
         except Exception:  # noqa: BLE001
             _logger.debug("Could not obtain auth token", exc_info=True)
         return headers
+
+    def _host_auth_token_from_env(self) -> tuple[bool, str | None]:
+        """Resolve static-host auth configured through environment variables.
+
+        :returns: ``(configured, token)``. ``configured`` is true when any
+            static-host auth env var is present, even if the token could not
+            be minted. In that case callers should not fall through to an
+            unrelated ambient auth source that might bind the host under the
+            wrong owner.
+        """
+        configured = any(
+            os.environ.get(name)
+            for name in (
+                HOST_AUTH_TOKEN_ENV_VAR,
+                HOST_AUTH_USERNAME_ENV_VAR,
+                HOST_AUTH_PASSWORD_ENV_VAR,
+            )
+        )
+        raw_token = os.environ.get(HOST_AUTH_TOKEN_ENV_VAR, "").strip()
+        if raw_token:
+            return True, raw_token
+
+        username = os.environ.get(HOST_AUTH_USERNAME_ENV_VAR, "").strip()
+        password = os.environ.get(HOST_AUTH_PASSWORD_ENV_VAR)
+        if not username and not password:
+            return configured, None
+        if not username or password is None:
+            _logger.warning(
+                "static host auth is incomplete: set both %s and %s",
+                HOST_AUTH_USERNAME_ENV_VAR,
+                HOST_AUTH_PASSWORD_ENV_VAR,
+            )
+            return True, None
+
+        try:
+            resp = httpx.post(
+                f"{self._server_url}/auth/login",
+                json={"username": username, "password": password},
+                timeout=_HOST_AUTH_LOGIN_TIMEOUT_S,
+            )
+        except httpx.HTTPError:
+            _logger.warning("static host auth login failed for %s", username, exc_info=True)
+            return True, None
+        if resp.status_code != 200:
+            _logger.warning(
+                "static host auth login failed for %s: HTTP %s",
+                username,
+                resp.status_code,
+            )
+            return True, None
+        try:
+            payload = resp.json()
+        except ValueError:
+            _logger.warning("static host auth login for %s returned non-JSON response", username)
+            return True, None
+        if not isinstance(payload, dict):
+            _logger.warning("static host auth login for %s returned malformed response", username)
+            return True, None
+        token = payload.get("token")
+        if not isinstance(token, str) or not token.strip():
+            _logger.warning("static host auth login for %s returned no token", username)
+            return True, None
+        return True, token.strip()
 
     async def _serve_frames(self, ws: websockets.asyncio.client.ClientConnection) -> None:
         """Announce readiness, then service host frames until disconnect.
