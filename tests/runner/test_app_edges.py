@@ -56,6 +56,7 @@ from omnigent.runner.app import (
     _publish_tmux_target_for_bridge,
     _required_runner_env,
     _resolve_forwarded_message_content,
+    _session_labels_for_runner_spawn,
     _session_payload_for_host_spawn_check,
     _resolved_spec_workdir,
     _response_body_preview,
@@ -73,6 +74,7 @@ from omnigent.runner.app import (
     _wake_retry_sleep,
     _wrap_as_message_event,
     cancel_timer,
+    create_runner_app,
     get_session_agent_id,
     mark_subagent_work_started,
     mark_subagent_work_terminal,
@@ -468,6 +470,7 @@ def test_response_body_preview_supports_fakes() -> None:
     assert _response_body_preview(_FakeResp()) == "hello bytes"
     assert _response_body_preview(SimpleNamespace(text="plain")) == "plain"
     assert _response_body_preview(SimpleNamespace(content="str-content")) == "str-content"
+    assert _response_body_preview(SimpleNamespace(content=123)) == ""
     assert _response_body_preview(object()) == ""
 
 
@@ -628,6 +631,7 @@ def test_apply_advisor_to_body_and_wrap_as_message_event() -> None:
         ("context_length_exceeded: 150000 > 128000", (128000, 150000)),
         ("maximum context length is 12000 tokens", (12000, 12001)),
         ("context window exceeded at 9000", (9000, 9001)),
+        ("context window limit 8000 tokens used 12000", (8000, 12000)),
         ("context window oops", (128000, 128001)),
         ("totally unrelated", None),
     ],
@@ -1028,6 +1032,11 @@ async def test_session_payload_for_host_spawn_check_branches() -> None:
 
 
 @pytest.mark.asyncio
+async def test_fetch_cost_control_mode_override_none_when_payload_missing() -> None:
+    assert await _fetch_cost_control_mode_override(None, "conv_missing") is None
+
+
+@pytest.mark.asyncio
 async def test_fetch_cost_control_mode_override_reads_session_field() -> None:
     async def _get(url: str, timeout: float = 10.0) -> _Resp:
         del url, timeout
@@ -1355,6 +1364,72 @@ async def test_deliver_subagent_wake_post_returns_false_after_exhausted_retries(
     monkeypatch.setattr("omnigent.runner.app._wake_retry_sleep", AsyncMock())
     client = SimpleNamespace(post=AsyncMock(side_effect=_post))
     assert await _deliver_subagent_wake_post(client, "conv_parent", "notice") is False  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_deliver_subagent_wake_post_returns_false_when_no_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("omnigent.runner.app._WAKE_POST_MAX_ATTEMPTS", 0)
+    client = SimpleNamespace(post=AsyncMock())
+    assert await _deliver_subagent_wake_post(client, "conv_parent", "notice") is False  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_session_labels_for_runner_spawn_http_error_returns_empty(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _boom(url: str, **kwargs: Any) -> httpx.Response:
+        del url, kwargs
+        raise httpx.ConnectError("ap down")
+
+    client = SimpleNamespace(get=AsyncMock(side_effect=_boom))
+    with caplog.at_level(logging.WARNING, logger="omnigent.runner.app"):
+        labels = await _session_labels_for_runner_spawn(
+            server_client=client,  # type: ignore[arg-type]
+            session_id="conv_labels_err",
+        )
+    assert labels == {}
+    assert "Failed to resolve session labels" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_session_labels_for_runner_spawn_non_200_returns_empty(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _get(url: str, **kwargs: Any) -> httpx.Response:
+        del kwargs
+        return httpx.Response(503, request=httpx.Request("GET", url))
+
+    client = SimpleNamespace(get=AsyncMock(side_effect=_get))
+    with caplog.at_level(logging.WARNING, logger="omnigent.runner.app"):
+        labels = await _session_labels_for_runner_spawn(
+            server_client=client,  # type: ignore[arg-type]
+            session_id="conv_labels_503",
+        )
+    assert labels == {}
+    assert "status=503" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_runner_auth_tunnel_client_exempt() -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    inner_app = create_runner_app(
+        auth_token="tunnel-secret",
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    async def _tunnel_scope_app(scope: dict[str, Any], receive: Any, send: Any) -> None:
+        scope = {**scope, "client": ("tunnel", 0)}
+        await inner_app(scope, receive, send)
+
+    async with AsyncClient(
+        transport=ASGITransport(app=_tunnel_scope_app),
+        base_url="http://runner",
+    ) as client:
+        resp = await client.get("/v1/sessions/nonexistent")
+        assert resp.status_code != 401
 
 
 @pytest.mark.asyncio
