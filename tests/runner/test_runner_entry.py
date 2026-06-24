@@ -23,6 +23,7 @@ from omnigent.runner._entry import (
     _resolve_agent_spec_from_server,
     _run_inactivity_monitor,
     _run_parent_death_killer,
+    _runner_identity_headers,
     _runner_parent_pid_from_env,
     _runner_tunnel_binding_token_from_env,
     _runner_workspace_from_env,
@@ -521,6 +522,40 @@ def test_runner_tunnel_binding_token_from_env_strips_value(
     monkeypatch.setenv("OMNIGENT_RUNNER_TUNNEL_BINDING_TOKEN", " bind-token ")
 
     assert _runner_tunnel_binding_token_from_env() == "bind-token"
+
+
+def test_runner_identity_headers_carry_tunnel_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The server-callback client sends the binding token as the runner header.
+
+    Single-header contract (BDP-2437): the token rides in
+    ``X-Omnigent-Runner-Tunnel-Token`` ONLY, never ``Authorization``.
+
+    :param monkeypatch: Pytest environment patch fixture.
+    :returns: None.
+    """
+    from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
+
+    monkeypatch.setenv("OMNIGENT_RUNNER_TUNNEL_BINDING_TOKEN", " bind-token ")
+
+    headers = _runner_identity_headers()
+
+    assert headers == {RUNNER_TUNNEL_TOKEN_HEADER: "bind-token"}
+    assert "Authorization" not in headers
+
+
+def test_runner_identity_headers_empty_without_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pure local loopback runner carries no binding token → no header.
+
+    :param monkeypatch: Pytest environment patch fixture.
+    :returns: None.
+    """
+    monkeypatch.delenv("OMNIGENT_RUNNER_TUNNEL_BINDING_TOKEN", raising=False)
+
+    assert _runner_identity_headers() == {}
 
 
 def test_runner_parent_pid_from_env_returns_none_without_pid(

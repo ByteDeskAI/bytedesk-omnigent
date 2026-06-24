@@ -266,3 +266,150 @@ def test_extension_principal_resolvers_collected(monkeypatch: pytest.MonkeyPatch
 
     monkeypatch.setattr(ext_mod, "discover_extensions", lambda: [_ExtWithHook()])
     assert ext_mod.extension_principal_resolvers() == [resolver]
+
+
+# ── CompositeAuthProvider tail_resolvers (BDP-2437) ───────────────────
+
+
+def test_composite_tail_resolver_runs_after_base() -> None:
+    # tail_resolvers run strictly AFTER the base, so the base (user cookie)
+    # always wins when it resolves an identity.
+    base = _StubProvider("base-user")
+    tail = _StubProvider("tail-user")
+    composite = CompositeAuthProvider(base, tail_resolvers=[tail])
+    assert composite.get_user_id(_conn()) == "base-user"
+    assert composite.get_principal(_conn()) == Principal(user_id="base-user")
+
+
+def test_composite_tail_resolver_is_fallback_when_base_silent() -> None:
+    # When the base yields nothing, a tail resolver is the fallback.
+    base = _StubProvider(None)
+    tail = _StubProvider("tail-user")
+    composite = CompositeAuthProvider(base, tail_resolvers=[tail])
+    assert composite.get_user_id(_conn()) == "tail-user"
+    assert composite.get_principal(_conn()) == Principal(user_id="tail-user")
+
+
+def test_composite_tail_resolver_after_head_resolvers_and_base() -> None:
+    # Full chain order: head resolvers, then base, then tail resolvers.
+    head = _StubProvider(None)
+    base = _StubProvider(None)
+    tail = _StubProvider("tail-user")
+    composite = CompositeAuthProvider(base, [head], tail_resolvers=[tail])
+    assert composite.get_user_id(_conn()) == "tail-user"
+
+
+def test_composite_unwrap_auth_base_still_returns_base_with_tail() -> None:
+    # The Finding-1 regression: a tail resolver must NOT occupy the `_base`
+    # slot, so unwrap_auth_base still returns the configured accounts provider.
+    base = UnifiedAuthProvider(source="accounts", local_single_user=False)
+    composite = CompositeAuthProvider(
+        base,
+        [_StubProvider(None)],
+        tail_resolvers=[_StubProvider("tail-user")],
+    )
+    assert unwrap_auth_base(composite) is base
+    assert accounts_provider(composite) is base
+    assert getattr(unwrap_auth_base(composite), "login_url", None) == "/login"
+
+
+# ── RunnerTokenAuthProvider (BDP-2437) ────────────────────────────────
+
+
+def _runner_token_conn(token: str | None) -> HTTPConnection:
+    """Build a connection carrying the runner tunnel token header."""
+    from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
+
+    headers = {RUNNER_TUNNEL_TOKEN_HEADER: token} if token is not None else {}
+    return _conn(headers)
+
+
+def test_runner_token_provider_resolves_launch_owner() -> None:
+    # A runner request with a valid token bound to a recorded launch owner
+    # authenticates AS that owner.
+    from omnigent.runner.identity import token_bound_runner_id
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = TunnelRegistry()
+    token = "runner-binding-token-abc"
+    runner_id = token_bound_runner_id(token)
+    registry.record_launch_owner(runner_id, "alice@example.com")
+
+    provider = RunnerTokenAuthProvider(registry)
+    assert provider.get_user_id(_runner_token_conn(token)) == "alice@example.com"
+    assert provider.get_principal(_runner_token_conn(token)) == Principal(
+        user_id="alice@example.com"
+    )
+
+
+def test_runner_token_provider_forged_token_rejected() -> None:
+    # SECURITY: a token the server never launched has NO launch record, so the
+    # provider must NOT authenticate it (fall through → 401).
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = TunnelRegistry()
+    provider = RunnerTokenAuthProvider(registry)
+    forged = _runner_token_conn("attacker-chosen-token")
+    assert provider.get_user_id(forged) is None
+    assert provider.get_principal(forged) is None
+
+
+def test_runner_token_provider_no_header_is_none() -> None:
+    # A normal user request (no runner token header) yields no identity.
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = TunnelRegistry()
+    provider = RunnerTokenAuthProvider(registry)
+    assert provider.get_user_id(_runner_token_conn(None)) is None
+    assert provider.get_principal(_runner_token_conn(None)) is None
+
+
+def test_runner_token_provider_empty_header_is_none() -> None:
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = TunnelRegistry()
+    provider = RunnerTokenAuthProvider(registry)
+    assert provider.get_user_id(_runner_token_conn("   ")) is None
+
+
+def test_runner_token_provider_ignores_authorization_bearer() -> None:
+    # Single-header contract (BDP-2437): the runner token is read ONLY from
+    # X-Omnigent-Runner-Tunnel-Token, never from Authorization: Bearer (which
+    # the accounts provider owns for session JWTs).
+    from omnigent.runner.identity import token_bound_runner_id
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = TunnelRegistry()
+    token = "runner-binding-token-xyz"
+    registry.record_launch_owner(token_bound_runner_id(token), "bob@example.com")
+
+    provider = RunnerTokenAuthProvider(registry)
+    bearer_only = _conn({"Authorization": f"Bearer {token}"})
+    assert provider.get_user_id(bearer_only) is None
+
+
+def test_runner_token_provider_owner_read_live_not_cached() -> None:
+    # The token→runner_id derivation may be memoized, but the owner must always
+    # be re-read from the registry so eviction/relaunch is reflected.
+    from omnigent.runner.identity import token_bound_runner_id
+    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = TunnelRegistry()
+    token = "runner-binding-token-live"
+    runner_id = token_bound_runner_id(token)
+    provider = RunnerTokenAuthProvider(registry)
+
+    # No record yet → None.
+    assert provider.get_user_id(_runner_token_conn(token)) is None
+    # Record appears → resolves.
+    registry.record_launch_owner(runner_id, "carol@example.com")
+    assert provider.get_user_id(_runner_token_conn(token)) == "carol@example.com"
+    # Re-record with a new owner → reflected live.
+    registry.record_launch_owner(runner_id, "dave@example.com")
+    assert provider.get_user_id(_runner_token_conn(token)) == "dave@example.com"

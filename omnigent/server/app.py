@@ -828,18 +828,19 @@ def create_app(
     if permission_store is not None and auth_provider is None:
         raise ValueError("auth_provider is required when permission_store is provided")
 
-    # Wrap the configured provider in the principal Chain of Responsibility so
-    # extension-contributed resolvers can supply identity ahead of it (BDP-2388).
-    # With no extension resolver the composite is behavior-identical to the base
-    # provider alone, so this is a zero-behavior-change seam. Skipped when auth is
-    # disabled (None) — there is nothing to resolve through.
+    # Head resolvers for the principal Chain of Responsibility — extension-
+    # contributed resolvers that may supply identity AHEAD of the configured
+    # provider (BDP-2388). Collected here but the composite is NOT built yet:
+    # the runner-token tail resolver (BDP-2437) needs the tunnel_registry, which
+    # is constructed further below, so the single composite is assembled there
+    # (search "BDP-2437: assemble the principal composite"). Until then
+    # ``auth_provider`` stays the raw configured provider so the accounts
+    # bootstrap immediately below sees it directly.
+    _principal_head_resolvers: list[object] = []
     if auth_provider is not None:
         from omnigent.extensions import extension_principal_resolvers
-        from omnigent.server.auth import CompositeAuthProvider
 
-        _principal_resolvers = extension_principal_resolvers()
-        if _principal_resolvers:
-            auth_provider = CompositeAuthProvider(auth_provider, _principal_resolvers)
+        _principal_head_resolvers = list(extension_principal_resolvers())
 
     # First-boot admin bootstrap for the accounts auth provider.
     # Runs before any route is mounted so the login page is never
@@ -922,6 +923,28 @@ def create_app(
         _mcp_pool = ServerMcpPool()
         server_metrics = ServerPerformanceMetrics()
         server_metrics_otel = ServerMetricsOtelPublisher()
+
+    # BDP-2437: assemble the principal composite now that ``tunnel_registry``
+    # exists. The configured provider stays the ``_base`` (so
+    # ``unwrap_auth_base`` / ``accounts_provider`` keep seeing the accounts/OIDC
+    # provider — never displaced); extension resolvers run ahead of it; the
+    # runner-token resolver runs strictly AFTER it as a tail fallback for system
+    # callers (a runner spawned on a host pod presents only its server-issued
+    # binding token, no user cookie). Because it is a tail resolver it can never
+    # shadow a real logged-in user. With no extension resolvers AND auth enabled,
+    # the composite is still built solely for the runner-token tail — that is the
+    # whole point of BDP-2437. Skipped only when auth is disabled (None).
+    if auth_provider is not None:
+        from omnigent.server.auth import (
+            CompositeAuthProvider,
+            RunnerTokenAuthProvider,
+        )
+
+        auth_provider = CompositeAuthProvider(
+            auth_provider,
+            _principal_head_resolvers,  # type: ignore[arg-type]
+            tail_resolvers=[RunnerTokenAuthProvider(tunnel_registry)],
+        )
 
     @asynccontextmanager
     async def _lifespan(
@@ -1184,6 +1207,12 @@ def create_app(
     # and WSTunnelTransport to the same session registry.
     app.state.tunnel_registry = tunnel_registry
     app.state.runner_router = runner_router
+    # The fully-assembled principal composite (BDP-2437) — the runner-token tail
+    # resolver is wired ahead of route registration. Exposed for diagnostics and
+    # tests that assert the configured accounts/OIDC provider still sits in the
+    # ``_base`` slot (``unwrap_auth_base`` / ``accounts_provider``), i.e. the tail
+    # resolver never displaced it.
+    app.state.auth_provider = auth_provider
     # BDP-2424 P2: signer for the internal ``X-Omnigent-Acting-Identity`` carrier
     # the MCP proxy attaches on runner dispatch (mirrors the runner's
     # ``app.state.assertion_verifier``). Unset secret ⇒ no token ⇒ unchanged.

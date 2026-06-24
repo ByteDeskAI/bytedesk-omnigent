@@ -388,6 +388,22 @@ def _runner_tunnel_binding_token_from_env() -> str | None:
     return token.strip()
 
 
+def _runner_identity_headers() -> dict[str, str]:
+    """Default headers proving runner identity on server callbacks (BDP-2437).
+
+    :returns: ``{X-Omnigent-Runner-Tunnel-Token: <token>}`` when the runner
+        process carries its tunnel binding token (set by every CLI / host-daemon
+        spawn path), else ``{}`` — a pure local loopback runner carries no
+        binding token and the local server accepts the callback without it.
+    """
+    from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
+
+    token = _runner_tunnel_binding_token_from_env()
+    if token is None:
+        return {}
+    return {RUNNER_TUNNEL_TOKEN_HEADER: token}
+
+
 def _runner_parent_pid_from_env() -> int | None:
     """Return the optional parent process id from the environment.
 
@@ -674,6 +690,16 @@ def create_app(
     server_client = httpx.AsyncClient(
         base_url=server_url,
         auth=_RunnerDatabricksAuth(auth_token_factory),
+        # BDP-2437: send the server-issued binding token on every callback so
+        # the server's runner-token auth provider can resolve this runner's
+        # launch owner under accounts mode (where there is no Databricks/OIDC
+        # bearer and no user cookie). The token rides ONLY in
+        # ``X-Omnigent-Runner-Tunnel-Token`` — the same first-party scheme as
+        # the WS tunnel (serve.py) and ``cost_advisor._runner_identity_headers``
+        # — and deliberately NOT in ``Authorization``, which ``_RunnerDatabricksAuth``
+        # owns and which the accounts provider reads as a session JWT. No header
+        # is sent when the runner carries no binding token (pure local loopback).
+        headers=_runner_identity_headers(),
         timeout=httpx.Timeout(5.0, read=None),
         # NOTE: ``follow_redirects`` deliberately stays False.
         # ``_RunnerDatabricksAuth.auth_flow`` needs to *see* the
