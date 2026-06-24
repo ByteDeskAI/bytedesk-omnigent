@@ -42,6 +42,7 @@ from omnigent.server._elicitation_registry import (
 )
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_PUBLIC
 from omnigent.server.routes import sessions as sessions_mod
+from omnigent.runtime import pending_inputs
 from omnigent.stores.conversation_store import NameAlreadyExistsError
 from omnigent.server.routes.sessions import (
     SessionLiveness,
@@ -138,6 +139,7 @@ from omnigent.server.routes.sessions import (
     _parse_session_create_metadata,
     _persist_external_assistant_message,
     _persist_external_codex_subagent_start,
+    _persist_external_conversation_item,
     _persist_external_subagent_start,
     _persist_external_model_change,
     _persist_external_session_usage,
@@ -3788,6 +3790,7 @@ class _ExternalUsageStore:
                 status="completed",
                 response_id=item.response_id,
                 data=item.data,
+                created_by=item.created_by,
             )
             for item in items
         ]
@@ -4937,3 +4940,191 @@ async def test_persist_external_codex_subagent_start_creates_child_with_labels(
     assert labels[_CLAUDE_NATIVE_WRAPPER_LABEL_KEY] == _CODEX_NATIVE_SUBAGENT_WRAPPER_LABEL_VALUE
     assert len(published) == 1
     assert published[0][1]["type"] == "session.created"
+
+
+# ── batch 58: _persist_external_conversation_item ─────────────────────────────
+
+
+class _ExternalItemPersistStore(_ExternalUsageStore):
+    """Extends usage store with title updates for title-seeding tests."""
+
+    def update_conversation(self, session_id: str, **kwargs: object) -> Conversation | None:
+        conv = self._convs.get(session_id)
+        if conv is None:
+            return None
+        if "title" in kwargs:
+            conv.title = str(kwargs["title"])
+        self.updated.append((session_id, kwargs))
+        return conv
+
+
+@pytest.fixture(autouse=True)
+def _reset_pending_inputs() -> Any:
+    pending_inputs.reset_for_tests()
+    yield
+    pending_inputs.reset_for_tests()
+
+
+def _external_user_item_body(**item_data: object) -> SessionEventInput:
+    data: dict[str, object] = {
+        "item_type": "message",
+        "item_data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello from terminal"}],
+        },
+        "response_id": "resp_user_ext",
+    }
+    if item_data:
+        merged = dict(data["item_data"])  # type: ignore[arg-type]
+        merged.update(item_data)
+        data["item_data"] = merged
+    return SessionEventInput(type="external_conversation_item", data=data)
+
+
+@pytest.mark.asyncio
+async def test_persist_external_conversation_item_persists_assistant_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_item_ext",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_item_ext",
+        agent_id="ag_claude",
+        title="existing",
+    )
+    store = _ExternalItemPersistStore(conv)
+    body = SessionEventInput(
+        type="external_conversation_item",
+        data={
+            "item_type": "message",
+            "item_data": {
+                "role": "assistant",
+                "agent": "claude-native",
+                "content": [{"type": "output_text", "text": "reply"}],
+            },
+            "response_id": "resp_asst_ext",
+        },
+    )
+    item_id = await _persist_external_conversation_item(
+        "conv_item_ext",
+        conv,
+        body,
+        store,  # type: ignore[arg-type]
+    )
+    assert item_id == "item_0"
+    assert len(published) == 1
+    assert published[0]["type"] == "response.output_item.done"
+    assert published[0]["item"]["id"] == "item_0"
+
+
+@pytest.mark.asyncio
+async def test_persist_external_conversation_item_drains_pending_and_merges_files(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    pending_id = pending_inputs.record(
+        "conv_pending",
+        [
+            {"type": "input_image", "file_id": "file_img1", "filename": "shot.png"},
+            {"type": "input_text", "text": "see this"},
+        ],
+        created_by="alice@example.com",
+    )
+    conv = Conversation(
+        id="conv_pending",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_pending",
+        agent_id="ag_claude",
+        title="titled",
+    )
+    store = _ExternalItemPersistStore(conv)
+    item_id = await _persist_external_conversation_item(
+        "conv_pending",
+        conv,
+        _external_user_item_body(
+            content=[{"type": "input_text", "text": "see this"}],
+        ),
+        store,  # type: ignore[arg-type]
+    )
+    assert item_id == "item_0"
+    persisted = store.appended[0][1][0]
+    assert isinstance(persisted.data, MessageData)
+    assert persisted.data.content[0]["type"] == "input_image"
+    assert persisted.data.content[0]["file_id"] == "file_img1"
+    assert persisted.created_by == "alice@example.com"
+    assert published[0]["type"] == "session.input.consumed"
+    assert published[0]["data"]["cleared_pending_id"] == pending_id
+
+
+@pytest.mark.asyncio
+async def test_persist_external_conversation_item_stamps_created_by_without_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    conv = Conversation(
+        id="conv_direct",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_direct",
+        agent_id="ag_claude",
+        title="titled",
+    )
+    store = _ExternalItemPersistStore(conv)
+    await _persist_external_conversation_item(
+        "conv_direct",
+        conv,
+        _external_user_item_body(),
+        store,  # type: ignore[arg-type]
+        created_by="bob@example.com",
+    )
+    persisted = store.appended[0][1][0]
+    assert persisted.created_by == "bob@example.com"
+    assert published[0]["type"] == "session.input.consumed"
+
+
+@pytest.mark.asyncio
+async def test_persist_external_conversation_item_seeds_title_for_untitled_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, _payload: None,
+    )
+    conv = Conversation(
+        id="conv_untitled",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_untitled",
+        agent_id="ag_claude",
+        title=None,
+    )
+    store = _ExternalItemPersistStore(conv)
+    await _persist_external_conversation_item(
+        "conv_untitled",
+        conv,
+        _external_user_item_body(
+            content=[{"type": "input_text", "text": "debate kafka vs sqs"}],
+        ),
+        store,  # type: ignore[arg-type]
+    )
+    assert conv.title is not None
+    assert "kafka" in conv.title.lower() or "sqs" in conv.title.lower()
