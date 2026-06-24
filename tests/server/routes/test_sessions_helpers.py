@@ -16,7 +16,10 @@ from starlette.requests import Request
 from omnigent._wrapper_labels import CLAUDE_NATIVE_WRAPPER_VALUE
 from omnigent.entities import Conversation, StoredFile
 from omnigent.entities.conversation import MessageData, NewConversationItem
+from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import SessionPermission
+from omnigent.server.schemas import SessionEventInput
+from omnigent.spec.types import AgentSpec, ExecutorSpec
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.policies.types import Phase
 from omnigent.server._elicitation_registry import _PreResolvedHarnessElicitation
@@ -34,9 +37,24 @@ from omnigent.server.routes.sessions import (
     _add_model_usage_delta,
     _allow_all_edits_eligible,
     _ancestor_session_ids,
+    _announce_session_added,
     _attachment_disposition,
     _build_actor,
     _build_evaluation_context,
+    _build_skill_slash_command_policy_body,
+    _descendant_sessions,
+    _derive_terminal_launch_args_from_spec,
+    _enforce_tenant_scope,
+    _extract_assistant_text_from_event,
+    _extract_user_text_from_event,
+    _handle_external_session_todos,
+    _mcp_error_response,
+    _mcp_ok_response,
+    _native_ask_gate_lock,
+    _parse_skill_slash_command,
+    _resilient_stream_payload,
+    _spec_config_flag_enabled,
+    _spec_harness,
     _client_supplied_hook_elicitation_id,
     _codex_subagent_display_tool,
     _codex_subagent_labels_from_body,
@@ -827,3 +845,264 @@ def test_build_evaluation_context_maps_tool_and_request_phases() -> None:
         actor=actor,
     )
     assert request_ctx.content == "hello"
+
+
+# ── batch42: discovery, tenant scope, descendants, MCP, skills ───────────────
+
+
+@pytest.fixture(autouse=True)
+def _clear_todos_cache() -> None:
+    sessions_mod._session_todos_cache.clear()
+    yield
+    sessions_mod._session_todos_cache.clear()
+
+
+def test_announce_session_added_publishes_discovery_and_event(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stream_calls: list[tuple[str, dict[str, Any]]] = []
+    hub_calls: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        sessions_mod.user_session_stream,
+        "publish",
+        lambda key, payload: stream_calls.append((key, payload)),
+    )
+    monkeypatch.setattr(
+        sessions_mod.event_hub,
+        "publish",
+        lambda key, payload: hub_calls.append((key, payload)),
+    )
+    _announce_session_added("alice@example.com", "conv_new")
+    assert stream_calls == [("alice@example.com", {"type": "session_added", "session_id": "conv_new"})]
+    assert hub_calls == [("alice@example.com", {"type": "session.created", "session_id": "conv_new"})]
+
+
+def test_native_ask_gate_lock_returns_shared_lock_per_key() -> None:
+    lock_a1 = _native_ask_gate_lock("conv_1", "cost_guard")
+    lock_a2 = _native_ask_gate_lock("conv_1", "cost_guard")
+    lock_b = _native_ask_gate_lock("conv_1", "other_policy")
+    assert lock_a1 is lock_a2
+    assert lock_a1 is not lock_b
+
+
+def test_resilient_stream_payload_validates_known_events() -> None:
+    event = {"type": "session.usage", "conversation_id": "conv_1", "total_cost_usd": 1.5}
+    normalized = _resilient_stream_payload(event, "conv_1")
+    assert normalized["type"] == "session.usage"
+    assert normalized["total_cost_usd"] == 1.5
+
+
+def test_resilient_stream_payload_forwards_invalid_events() -> None:
+    bad = {"type": "response.failed"}
+    assert _resilient_stream_payload(bad, "conv_x") is bad
+
+
+def test_enforce_tenant_scope_raises_not_found_on_mismatch() -> None:
+    conv = Conversation(
+        id="conv_a",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_a",
+        tenant_id="tenant_b",
+    )
+    with pytest.raises(OmnigentError) as exc:
+        _enforce_tenant_scope("tenant_a", conv)
+    assert exc.value.code == ErrorCode.NOT_FOUND
+
+
+def test_enforce_tenant_scope_allows_matching_or_legacy_rows() -> None:
+    conv = Conversation(
+        id="conv_a",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_a",
+        tenant_id="tenant_a",
+    )
+    _enforce_tenant_scope("tenant_a", conv)
+    _enforce_tenant_scope(None, conv)
+    _enforce_tenant_scope("tenant_a", None)
+
+
+class _DescendantStore:
+    def __init__(self, children_by_parent: dict[str, list[Conversation]]) -> None:
+        self._children = children_by_parent
+
+    def list_conversations(
+        self,
+        *,
+        kind: str | None = None,
+        parent_conversation_id: str | None = None,
+        limit: int = 100,
+        after: str | None = None,
+        **_: Any,
+    ) -> PagedList[Conversation]:
+        assert kind == "sub_agent"
+        assert parent_conversation_id is not None
+        kids = self._children.get(parent_conversation_id, [])
+        if after is not None:
+            ids = [c.id for c in kids]
+            if after not in ids:
+                return PagedList()
+            kids = kids[ids.index(after) + 1 :]
+        page = kids[:limit]
+        return PagedList(
+            data=page,
+            first_id=page[0].id if page else None,
+            last_id=page[-1].id if page else None,
+            has_more=len(kids) > limit,
+        )
+
+
+def test_descendant_sessions_walks_sub_agent_tree() -> None:
+    root = Conversation(
+        id="conv_root", created_at=0, updated_at=0, root_conversation_id="conv_root"
+    )
+    child = Conversation(
+        id="conv_child",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_root",
+        kind="sub_agent",
+    )
+    grandchild = Conversation(
+        id="conv_grand",
+        created_at=0,
+        updated_at=0,
+        root_conversation_id="conv_root",
+        parent_conversation_id="conv_child",
+        kind="sub_agent",
+    )
+    store = _DescendantStore({"conv_root": [child], "conv_child": [grandchild]})
+    descendants = _descendant_sessions(store, "conv_root")  # type: ignore[arg-type]
+    assert [d.id for d in descendants] == ["conv_child", "conv_grand"]
+
+
+def test_parse_skill_slash_command_unpacks_name_and_arguments() -> None:
+    body = SessionEventInput(
+        type="slash_command",
+        data={"kind": "skill", "name": "grill-me", "arguments": "review plan"},
+    )
+    assert _parse_skill_slash_command(body) == ("grill-me", "review plan")
+
+
+def test_parse_skill_slash_command_rejects_non_skill_kind() -> None:
+    body = SessionEventInput(type="slash_command", data={"kind": "compact"})
+    with pytest.raises(OmnigentError):
+        _parse_skill_slash_command(body)
+
+
+def test_build_skill_slash_command_policy_body_projects_user_text() -> None:
+    body = SessionEventInput(
+        type="slash_command",
+        data={"name": "grill-me", "arguments": "review plan"},
+    )
+    projected = _build_skill_slash_command_policy_body(body)
+    assert projected.type == "message"
+    assert projected.data["role"] == "user"
+    assert projected.data["content"][0]["text"] == "/grill-me review plan"
+
+
+def test_extract_user_and_assistant_text_from_events() -> None:
+    user = SessionEventInput(
+        type="message",
+        data={"role": "user", "content": [{"type": "input_text", "text": "hello"}]},
+    )
+    assert _extract_user_text_from_event(user) == "hello"
+    assistant = SessionEventInput(
+        type="message",
+        data={"role": "assistant", "content": [{"type": "output_text", "text": "hi"}]},
+    )
+    assert _extract_assistant_text_from_event(assistant) == "hi"
+
+
+def test_handle_external_session_todos_filters_and_publishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    body = SessionEventInput(
+        type="external_session_todos",
+        data={
+            "todos": [
+                {
+                    "content": "Fix bug",
+                    "status": "in_progress",
+                    "activeForm": "Fixing bug",
+                },
+                {"content": "bad", "status": "bogus", "activeForm": "x"},
+            ],
+        },
+    )
+    _handle_external_session_todos("conv_todos", body)
+    assert sessions_mod._session_todos_cache["conv_todos"] == [
+        {"content": "Fix bug", "status": "in_progress", "activeForm": "Fixing bug"},
+    ]
+    assert published[0]["type"] == "session.todos"
+    assert published[0]["todos"][0]["content"] == "Fix bug"
+
+
+def test_handle_external_session_todos_requires_list() -> None:
+    body = SessionEventInput(type="external_session_todos", data={"todos": "nope"})
+    with pytest.raises(OmnigentError):
+        _handle_external_session_todos("conv_x", body)
+
+
+def test_mcp_json_rpc_responses_wrap_payloads() -> None:
+    ok = _mcp_ok_response(1, {"tools": []})
+    assert json.loads(ok.body) == {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
+    err = _mcp_error_response(2, -32601, "not found")
+    assert json.loads(err.body)["error"]["code"] == -32601
+
+
+def _minimal_spec(*, harness: str, config: dict[str, str] | None = None) -> AgentSpec:
+    return AgentSpec(
+        spec_version=1,
+        name="worker",
+        executor=ExecutorSpec(type="omnigent", config={"harness": harness, **(config or {})}),
+    )
+
+
+def test_spec_harness_canonicalizes_executor_config() -> None:
+    assert _spec_harness(_minimal_spec(harness="codex-native")) == "codex-native"
+
+
+@pytest.mark.parametrize(
+    ("config", "expected"),
+    [
+        ({"yolo": True}, True),
+        ({"yolo": "true"}, True),
+        ({"yolo": "True"}, True),
+        ({"yolo": "false"}, False),
+        ({}, False),
+    ],
+)
+def test_spec_config_flag_enabled_coerces_yaml_strings(
+    config: dict[str, object], expected: bool
+) -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="worker",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "codex-native", **config}),
+    )
+    assert _spec_config_flag_enabled(spec, "yolo") is expected
+
+
+def test_derive_terminal_launch_args_codex_yolo() -> None:
+    spec = _minimal_spec(harness="codex-native", config={"yolo": "true"})
+    args = _derive_terminal_launch_args_from_spec(spec)
+    assert args == ["--dangerously-bypass-approvals-and-sandbox"]
+
+
+def test_derive_terminal_launch_args_claude_permission_mode() -> None:
+    spec = _minimal_spec(harness="claude-native", config={"permission_mode": "bypassPermissions"})
+    args = _derive_terminal_launch_args_from_spec(spec)
+    assert args == ["--permission-mode", "bypassPermissions"]
+
+
+def test_derive_terminal_launch_args_non_native_returns_none() -> None:
+    assert _derive_terminal_launch_args_from_spec(_minimal_spec(harness="claude-sdk")) is None
