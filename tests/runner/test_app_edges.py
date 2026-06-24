@@ -23,23 +23,30 @@ from omnigent.inner.terminal import TerminalInstance
 from omnigent.runner.app import (
     ResolvedSpec,
     _AUTO_FORWARDER_TASKS,
+    _PiNativeLaunchConfig,
     _SUBAGENT_DELIVERY_ALREADY_DELIVERED,
     _SUBAGENT_DELIVERY_DELIVERED,
     _SUBAGENT_DELIVERY_MISSING_PARENT_INBOX,
     _SUBAGENT_DELIVERY_MISSING_WORK_ENTRY,
     _SUBAGENT_DELIVERY_UNTRACKED,
     _apply_advisor_to_body,
+    _auto_create_grok_terminal,
+    _auto_create_pi_terminal,
     _build_pi_native_args,
     _cancel_auto_forwarder_task,
     _client_safe_error_detail,
+    _codex_native_model_from_spec,
     _codex_session_workspace,
+    _deliver_subagent_completion,
     _deliver_subagent_wake_post,
     _encode_sse_event,
     _evaluate_policy_via_omnigent,
+    _fetch_cost_control_mode_override,
     _format_subagent_wake_notice,
     _forward_harness_response,
     _get_runner_llm_client,
     _is_context_overflow_error,
+    _is_runner_owned_codex_terminal,
     _merge_advisor_note,
     _normalize_turn_error,
     _pi_args_have_provider,
@@ -49,6 +56,7 @@ from omnigent.runner.app import (
     _publish_tmux_target_for_bridge,
     _required_runner_env,
     _resolve_forwarded_message_content,
+    _session_payload_for_host_spawn_check,
     _resolved_spec_workdir,
     _response_body_preview,
     _response_failed_event,
@@ -75,9 +83,14 @@ from omnigent.runner.app import (
     unregister_timer,
 )
 from omnigent.runner.cost_advisor import AdvisorTurnResult
-from omnigent.runner.resource_registry import SessionResourceRegistry
+from omnigent.runner.resource_registry import (
+    CODEX_NATIVE_TERMINAL_ROLE,
+    SessionResourceRegistry,
+)
+from omnigent.entities.session_resources import SessionResourceView
 from omnigent.runner.subagent_status import SubagentWorkStatus
-from omnigent.spec.types import AgentSpec, LocalToolInfo
+from omnigent.spec.types import AgentSpec, ExecutorSpec, LocalToolInfo
+from tests.runner.helpers import NullServerClient
 from omnigent.terminals import TerminalRegistry
 
 
@@ -972,3 +985,407 @@ def test_normalize_turn_error_shapes() -> None:
 
 def test_truncate_child_preview_short_path() -> None:
     assert _truncate_child_preview("ok") == "ok"
+
+
+# ── session payload / cost override / codex helpers ───────────────────
+
+
+@pytest.mark.asyncio
+async def test_session_payload_for_host_spawn_check_branches() -> None:
+    assert await _session_payload_for_host_spawn_check(None, "conv_x") is None
+
+    async def _boom(url: str, timeout: float = 10.0) -> _Resp:
+        del url, timeout
+        raise httpx.ConnectError("down")
+
+    down_client = SimpleNamespace(get=AsyncMock(side_effect=_boom))
+    assert await _session_payload_for_host_spawn_check(down_client, "conv_x") is None  # type: ignore[arg-type]
+
+    async def _get(url: str, timeout: float = 10.0) -> _Resp:
+        del url, timeout
+        return _Resp(404, None)
+
+    not_found = SimpleNamespace(get=AsyncMock(side_effect=_get))
+    assert await _session_payload_for_host_spawn_check(not_found, "conv_x") is None  # type: ignore[arg-type]
+
+    async def _bad_json(url: str, timeout: float = 10.0) -> _Resp:
+        del url, timeout
+        return _Resp(200, None, json_raises=True)
+
+    bad_json = SimpleNamespace(get=AsyncMock(side_effect=_bad_json))
+    assert await _session_payload_for_host_spawn_check(bad_json, "conv_x") is None  # type: ignore[arg-type]
+
+    async def _array(url: str, timeout: float = 10.0) -> _Resp:
+        del url, timeout
+        return _Resp(200, [])
+
+    array_client = SimpleNamespace(get=AsyncMock(side_effect=_array))
+    assert await _session_payload_for_host_spawn_check(array_client, "conv_x") is None  # type: ignore[arg-type]
+
+    payload = {"host_id": "host_1", "cost_control_mode_override": "on"}
+    ok_client = SimpleNamespace(get=AsyncMock(return_value=_Resp(200, payload)))
+    assert await _session_payload_for_host_spawn_check(ok_client, "conv_ok") == payload  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_fetch_cost_control_mode_override_reads_session_field() -> None:
+    async def _get(url: str, timeout: float = 10.0) -> _Resp:
+        del url, timeout
+        return _Resp(200, {"cost_control_mode_override": "off"})
+
+    client = SimpleNamespace(get=AsyncMock(side_effect=_get))
+    assert await _fetch_cost_control_mode_override(client, "conv_cc") == "off"  # type: ignore[arg-type]
+
+    async def _non_string(url: str, timeout: float = 10.0) -> _Resp:
+        del url, timeout
+        return _Resp(200, {"cost_control_mode_override": 1})
+
+    client2 = SimpleNamespace(get=AsyncMock(side_effect=_non_string))
+    assert await _fetch_cost_control_mode_override(client2, "conv_cc") is None  # type: ignore[arg-type]
+
+
+def test_codex_native_model_from_spec_reads_executor_config() -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="codex-agent",
+        executor=ExecutorSpec(type="omnigent", config={"model": "gpt-5.4-mini"}),
+    )
+    assert _codex_native_model_from_spec(spec) == "gpt-5.4-mini"
+    assert _codex_native_model_from_spec(ResolvedSpec(spec=spec, workdir=Path("/tmp"))) == "gpt-5.4-mini"
+    assert _codex_native_model_from_spec(None) is None
+    bare = AgentSpec(spec_version=1, name="bare", executor=ExecutorSpec(type="omnigent", config={}))
+    assert _codex_native_model_from_spec(bare) is None
+
+
+def test_is_runner_owned_codex_terminal_checks_private_role() -> None:
+    view = SessionResourceView(
+        id="terminal_codex_main",
+        type="terminal",
+        session_id="conv_codex",
+        name="codex:main",
+        metadata={},
+    )
+
+    class _RoleRegistry(SessionResourceRegistry):
+        def terminal_resource_role(self, session_id: str, terminal_id: str) -> str | None:
+            del session_id, terminal_id
+            return CODEX_NATIVE_TERMINAL_ROLE
+
+    assert _is_runner_owned_codex_terminal(_RoleRegistry(), view) is True
+    assert _is_runner_owned_codex_terminal(SessionResourceRegistry(), view) is False
+
+
+# ── native terminal auto-create (grok / pi provider) ────────────────────
+
+
+@pytest.mark.asyncio
+async def test_auto_create_grok_terminal_launches_and_publishes_tmux(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session_id = "conv_grok_edges"
+    monkeypatch.setenv("HARNESS_GROK_BIN", "grok-test")
+    monkeypatch.setattr(
+        "omnigent.grok_native_bridge.grok_leader_socket_for_session",
+        lambda sid: tmp_path / f"{sid}.sock",
+    )
+
+    captured: dict[str, Any] = {}
+    tmux_writes: list[tuple[Path, str, str]] = []
+
+    class _FakeTerminalRegistry:
+        def get(self, sid: str, name: str, key: str) -> TerminalInstance | None:
+            del sid, name, key
+            return TerminalInstance(
+                name="grok",
+                session_key="main",
+                socket_path=tmp_path / "tmux.sock",
+                private_dir=tmp_path,
+                running=True,
+            )
+
+    class _FakeResourceRegistry:
+        terminal_registry = _FakeTerminalRegistry()
+
+        async def launch_required_terminal(self, **kwargs: Any) -> SessionResourceView:
+            captured.update(kwargs)
+            return SessionResourceView(
+                id="terminal_grok_main",
+                type="terminal",
+                session_id=session_id,
+                name="grok:main",
+                metadata={"terminal_name": "grok", "session_key": "main", "running": True},
+            )
+
+    async def _server_get(url: str, timeout: float = 10.0) -> httpx.Response:
+        del timeout
+        return httpx.Response(200, json={"session": {"workspace": str(tmp_path / "ws")}})
+
+    server_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(
+                200,
+                json={"session": {"workspace": str(tmp_path / "ws")}},
+                request=req,
+            )
+        ),
+        base_url="http://srv",
+    )
+
+    def _fake_write(bridge_dir: Path, *, socket_path: Path, tmux_target: str) -> None:
+        tmux_writes.append((bridge_dir, str(socket_path), tmux_target))
+
+    monkeypatch.setattr(
+        "omnigent.grok_native_bridge.write_tmux_target",
+        _fake_write,
+    )
+    monkeypatch.setattr(
+        "omnigent.grok_native_bridge.bridge_dir_for_session_id",
+        lambda sid: tmp_path / sid,
+    )
+
+    published: list[dict[str, Any]] = []
+    try:
+        view = await _auto_create_grok_terminal(
+            session_id,
+            _FakeResourceRegistry(),  # type: ignore[arg-type]
+            lambda _sid, evt: published.append(evt),
+            server_client=server_client,
+        )
+    finally:
+        await server_client.aclose()
+
+    assert view.id == "terminal_grok_main"
+    assert captured["terminal_name"] == "grok"
+    assert captured["spec"].command == "grok-test"
+    assert captured["spec"].args[:2] == ["--leader-socket", str(tmp_path / f"{session_id}.sock")]
+    assert any(evt.get("type") == "session.resource.created" for evt in published)
+    assert tmux_writes == [(tmp_path / session_id, str(tmp_path / "tmux.sock"), "main")]
+
+
+@pytest.mark.asyncio
+async def test_auto_create_grok_terminal_tmux_publish_failure_is_best_effort(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "omnigent.grok_native_bridge.grok_leader_socket_for_session",
+        lambda sid: tmp_path / f"{sid}.sock",
+    )
+
+    class _FakeTerminalRegistry:
+        def get(self, sid: str, name: str, key: str) -> TerminalInstance:
+            del sid, name, key
+            return TerminalInstance(
+                name="grok",
+                session_key="main",
+                socket_path=tmp_path / "sock",
+                private_dir=tmp_path,
+                running=True,
+            )
+
+    class _FakeResourceRegistry:
+        terminal_registry = _FakeTerminalRegistry()
+
+        async def launch_required_terminal(self, **kwargs: Any) -> SessionResourceView:
+            del kwargs
+            return SessionResourceView(
+                id="terminal_grok_main",
+                type="terminal",
+                session_id="conv_grok_tmux_fail",
+                name="grok:main",
+                metadata={},
+            )
+
+    def _boom(*_a: Any, **_k: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("omnigent.grok_native_bridge.write_tmux_target", _boom)
+    monkeypatch.setattr(
+        "omnigent.grok_native_bridge.bridge_dir_for_session_id",
+        lambda sid: tmp_path / sid,
+    )
+
+    view = await _auto_create_grok_terminal(
+        "conv_grok_tmux_fail",
+        _FakeResourceRegistry(),  # type: ignore[arg-type]
+        lambda *_a, **_k: None,
+        server_client=None,
+    )
+    assert view.id == "terminal_grok_main"
+
+
+@pytest.mark.asyncio
+async def test_auto_create_grok_terminal_tolerates_server_lookup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "omnigent.grok_native_bridge.grok_leader_socket_for_session",
+        lambda sid: Path(f"/tmp/{sid}.sock"),
+    )
+
+    class _FakeResourceRegistry:
+        terminal_registry = None
+
+        async def launch_required_terminal(self, **kwargs: Any) -> SessionResourceView:
+            del kwargs
+            return SessionResourceView(
+                id="terminal_grok_main",
+                type="terminal",
+                session_id="conv_grok_fail",
+                name="grok:main",
+                metadata={},
+            )
+
+    async def _boom(url: str, timeout: float = 10.0) -> httpx.Response:
+        del url, timeout
+        raise httpx.ConnectError("down")
+
+    server_client = SimpleNamespace(get=AsyncMock(side_effect=_boom))
+    view = await _auto_create_grok_terminal(
+        "conv_grok_fail",
+        _FakeResourceRegistry(),  # type: ignore[arg-type]
+        lambda *_a, **_k: None,
+        server_client=server_client,  # type: ignore[arg-type]
+    )
+    assert view.id == "terminal_grok_main"
+
+
+@pytest.mark.asyncio
+async def test_auto_create_pi_terminal_injects_provider_credentials(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import omnigent.pi_native as pi_native
+    import omnigent.pi_native_bridge as pi_native_bridge
+    import omnigent.pi_native_credentials as pi_native_credentials
+
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8000")
+    monkeypatch.setattr(pi_native_bridge, "_BRIDGE_ROOT", tmp_path / "pi-bridge")
+    monkeypatch.setattr(pi_native, "resolve_pi_executable", lambda: "pi")
+
+    provider = pi_native_credentials.PiProviderConfig(
+        provider_id="omnigent",
+        base_url="https://api.example.com",
+        api="anthropic-messages",
+        model="claude-sonnet-4-6",
+        api_key="sk-test",
+        auth_header=False,
+    )
+    monkeypatch.setattr(pi_native_credentials, "resolve_pi_native_provider", lambda: provider)
+
+    async def _fake_launch_config(**_kwargs: Any) -> _PiNativeLaunchConfig:
+        return _PiNativeLaunchConfig(
+            workspace=tmp_path,
+            server_url="http://127.0.0.1:8000",
+            terminal_launch_args=None,
+            external_session_id=None,
+        )
+
+    monkeypatch.setattr("omnigent.runner.app._pi_native_launch_config", _fake_launch_config)
+
+    captured: dict[str, Any] = {}
+
+    class _FakeResourceRegistry:
+        terminal_registry = None
+
+        async def launch_required_terminal(self, **kwargs: Any) -> SessionResourceView:
+            captured.update(kwargs)
+            return SessionResourceView(
+                id="terminal_pi_main",
+                type="terminal",
+                session_id="conv_pi_prov",
+                name="pi:main",
+                metadata={},
+            )
+
+    await _auto_create_pi_terminal(
+        "conv_pi_prov",
+        _FakeResourceRegistry(),  # type: ignore[arg-type]
+        lambda *_a, **_k: None,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    spec = captured["spec"]
+    assert spec.env[pi_native_credentials.PI_CODING_AGENT_DIR_ENV_VAR]
+    assert "--provider" in spec.args
+    assert "--model" in spec.args
+
+
+# ── additional subagent / file / timer edges ───────────────────────────
+
+
+def test_deliver_subagent_completion_short_circuits_when_already_delivered() -> None:
+    entry = register_subagent_work(
+        parent_session_id="conv_parent_del",
+        child_session_id="conv_child_del",
+        agent="w",
+        title="t",
+    )
+    try:
+        entry.delivered = True
+        ack = _deliver_subagent_completion(entry)
+        assert ack.reason == _SUBAGENT_DELIVERY_ALREADY_DELIVERED
+        assert ack.delivered_now is False
+    finally:
+        unregister_subagent_work("conv_child_del")
+
+
+def test_unregister_subagent_work_when_parent_index_missing() -> None:
+    child = "conv_child_orphan"
+    entry = register_subagent_work(
+        parent_session_id="conv_parent_orphan",
+        child_session_id=child,
+        agent="w",
+        title="t",
+    )
+    _subagent_work_by_parent.pop("conv_parent_orphan", None)
+    unregister_subagent_work(child, work_id=entry.work_id)
+    assert child not in _subagent_work_by_child
+
+
+@pytest.mark.asyncio
+async def test_deliver_subagent_wake_post_returns_false_after_exhausted_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _post(url: str, **kwargs: Any) -> httpx.Response:
+        del kwargs
+        return httpx.Response(503, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr("omnigent.runner.app._wake_retry_sleep", AsyncMock())
+    client = SimpleNamespace(post=AsyncMock(side_effect=_post))
+    assert await _deliver_subagent_wake_post(client, "conv_parent", "notice") is False  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_resolve_forwarded_message_content_non_string_content_type(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    async def _handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/content"):
+            return httpx.Response(200, content=b"X", headers={"content-type": "text/plain"})
+        return httpx.Response(200, json={"content_type": 123})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(_handler), base_url="http://srv")
+    try:
+        resolved = await _resolve_forwarded_message_content(
+            [{"type": "input_file", "file_id": "f1"}],
+            session_id="conv_ct",
+            server_client=client,
+        )
+    finally:
+        await client.aclose()
+    assert resolved[0]["file_data"].startswith("data:application/octet-stream;base64,")
+
+
+def test_cancel_timer_returns_false_when_session_has_no_timers() -> None:
+    assert cancel_timer("conv_no_timers", "timer_x") is False
+
+
+def test_spec_with_workdir_paths_no_relative_change_returns_same_spec(tmp_path: Path) -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="abs-only",
+        local_tools=[LocalToolInfo(name="t", path="/abs/tool.py", language="python")],
+    )
+    assert _spec_with_workdir_paths(spec, tmp_path) is spec
