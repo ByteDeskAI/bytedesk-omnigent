@@ -47,6 +47,29 @@ def test_install_extensions_mounts_routers_under_v1() -> None:
     assert resp.json() == {"ok": True}
 
 
+def test_install_extensions_passes_permission_store_to_router_factories() -> None:
+    captured: dict[str, object | None] = {}
+
+    class _AdminExt:
+        name = "admin"
+
+        def routers(self, auth_provider=None, permission_store=None):  # type: ignore[no-untyped-def]
+            captured["auth_provider"] = auth_provider
+            captured["permission_store"] = permission_store
+            return []
+
+    auth = object()
+    permissions = object()
+
+    assert install_extensions(
+        FastAPI(),
+        extensions=[_AdminExt()],
+        auth_provider=auth,
+        permission_store=permissions,
+    ) == ["admin"]
+    assert captured == {"auth_provider": auth, "permission_store": permissions}
+
+
 def test_install_extensions_with_none_is_noop() -> None:
     assert install_extensions(FastAPI(), extensions=[]) == []
 

@@ -539,6 +539,7 @@ function renderLanding(infoOverrides: Partial<ServerInfo> = {}) {
     databricks_features: false,
     managed_sandboxes_enabled: false,
     sandbox_provider: null,
+    omni_cli_terminal_enabled: false,
     ...infoOverrides,
   };
   return render(

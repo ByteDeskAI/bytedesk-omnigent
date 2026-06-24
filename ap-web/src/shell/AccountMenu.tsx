@@ -1,11 +1,10 @@
 /**
- * Account-status footer for the sidebar.
+ * Account/operator footer for the sidebar.
  *
- * Renders only when the accounts auth provider is active —
- * gated FIRST on the ``/v1/info`` capabilities probe (so the
- * component is a no-op in any non-accounts deploy without
- * ever hitting ``/auth/me``), THEN on a successful ``/auth/me``
- * call. Inside, shows:
+ * In accounts mode, renders only after the ``/v1/info`` capabilities
+ * probe reports accounts support and ``/auth/me`` resolves. In non-accounts
+ * mode, renders only when the standalone Omni CLI terminal is enabled.
+ * Inside, shows:
  *
  * - The signed-in username, with an "Admin" badge when applicable.
  * - A link to ``/members`` (only for admins).
@@ -15,8 +14,7 @@
  * Sits at the bottom of the left sidebar as a full-width row in its
  * own bordered footer block, with the dropdown opening upward. It
  * owns that footer chrome on purpose — the whole thing (border +
- * padding included) disappears when the component gates out, so
- * non-accounts deploys never see an empty bar.
+ * padding included) disappears when the component gates out.
  */
 
 import { useCallback, useEffect, useState } from "react";
@@ -26,6 +24,7 @@ import {
   LogOutIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SquareTerminalIcon,
   UserCogIcon,
   UsersIcon,
 } from "lucide-react";
@@ -53,6 +52,7 @@ import { useServerInfo } from "@/lib/CapabilitiesContext";
 export function AccountMenu() {
   const info = useServerInfo();
   const accountsEnabled = info !== "loading" && info.accounts_enabled;
+  const terminalEnabled = info !== "loading" && info.omni_cli_terminal_enabled;
 
   const [me, setMe] = useState<CurrentAccount | null | "unknown">("unknown");
 
@@ -109,10 +109,12 @@ export function AccountMenu() {
     }
   }, [oldPw, newPw, confirmPw]);
 
-  // First gate: not in accounts mode → never render. This is the
-  // single switch that keeps the chrome identical to a pre-PR-2008
-  // build for header / OIDC deploys.
-  if (!accountsEnabled) return null;
+  // First gate: not in accounts mode. Account actions stay off, but the
+  // standalone Omni CLI terminal can still be exposed in local/header deploys.
+  if (!accountsEnabled) {
+    if (!terminalEnabled) return null;
+    return <LocalOperatorMenu />;
+  }
   // Second gate: probe in flight or failed → render nothing
   // (matches the pre-context-aware behavior).
   if (me === "unknown") return null;
@@ -176,6 +178,13 @@ export function AccountMenu() {
                   <SettingsIcon /> Configuration
                 </Link>
               </DropdownMenuItem>
+              {terminalEnabled && (
+                <DropdownMenuItem asChild>
+                  <Link to="/terminal" className="flex items-center gap-2">
+                    <SquareTerminalIcon /> Terminal
+                  </Link>
+                </DropdownMenuItem>
+              )}
             </>
           )}
           <DropdownMenuItem
@@ -273,6 +282,30 @@ export function AccountMenu() {
           )}
         </DialogContent>
       </Dialog>
+    </div>
+  );
+}
+
+function LocalOperatorMenu() {
+  return (
+    <div className="shrink-0">
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="ghost" size="sm" className="h-auto w-full justify-start gap-2 px-3 py-2">
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border">
+              <UserCogIcon className="size-3.5" />
+            </span>
+            <span className="min-w-0 flex-1 truncate text-left">Omnigent</span>
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" side="top" className="mx-2 w-auto min-w-48">
+          <DropdownMenuItem asChild>
+            <Link to="/terminal" className="flex items-center gap-2">
+              <SquareTerminalIcon /> Terminal
+            </Link>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

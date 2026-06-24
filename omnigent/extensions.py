@@ -52,12 +52,18 @@ class OmnigentExtension(Protocol):
 
     name: str
 
-    def routers(self, auth_provider: object | None = ...) -> list[APIRouter]:
+    def routers(
+        self,
+        auth_provider: object | None = ...,
+        permission_store: object | None = ...,
+    ) -> list[APIRouter]:
         """FastAPI routers to mount under ``/v1`` (empty list if none).
 
         ``auth_provider`` is passed by :func:`install_extensions` for routes
-        that need it; an extension whose ``routers`` takes no argument is still
-        accepted (back-compat, handled by the install-time ``TypeError`` retry).
+        that need it. ``permission_store`` is passed for admin-gated extension
+        routes that need the same server-wide admin flag as core routes. An
+        extension whose ``routers`` takes fewer arguments is still accepted
+        (back-compat, handled by the install-time ``TypeError`` retry).
         """
         ...
 
@@ -164,6 +170,7 @@ def install_extensions(
     *,
     extensions: list[OmnigentExtension] | None = None,
     auth_provider: object | None = None,
+    permission_store: object | None = None,
 ) -> list[str]:
     """Mount each extension's routers under ``/v1``; return the installed names.
 
@@ -172,14 +179,22 @@ def install_extensions(
     :param auth_provider: passed to ``ext.routers(auth_provider=...)`` for
         extensions whose routes need it; extensions whose ``routers()`` takes no
         argument are called without it (back-compat).
+    :param permission_store: passed to extension routers that need admin or
+        permission checks; older extensions are retried without it.
     """
     exts = discover_extensions() if extensions is None else extensions
     installed: list[str] = []
     for ext in exts:
         try:
-            routers = ext.routers(auth_provider=auth_provider)
+            routers = ext.routers(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            )
         except TypeError:
-            routers = ext.routers()
+            try:
+                routers = ext.routers(auth_provider=auth_provider)
+            except TypeError:
+                routers = ext.routers()
         for router in routers:
             app.include_router(router, prefix="/v1")
         installed.append(ext.name)

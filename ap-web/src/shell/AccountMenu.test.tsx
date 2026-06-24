@@ -1,11 +1,9 @@
 // Tests for AccountMenu's accounts-mode gating and dropdown surface.
 //
-// AccountMenu renders nothing unless (1) /v1/info reports accounts_enabled and
-// (2) /auth/me resolves to an account. When both hold it shows the signed-in
-// id, an "(admin)" marker + Members/Policies links for admins, and the
-// Change-password / Sign-out actions. None of that had coverage: the component
-// is mocked to null in every Sidebar test, so these pin the gating booleans and
-// the menu items directly.
+// AccountMenu renders account actions only when (1) /v1/info reports
+// accounts_enabled and (2) /auth/me resolves to an account. In non-accounts
+// mode it can still render the standalone Omni CLI terminal entry when the
+// server advertises that capability.
 //
 // useServerInfo and the accountsApi calls (getMe/changePassword/logout) are
 // mocked so the component runs without a server; Link needs a router context.
@@ -33,6 +31,7 @@ const ACCOUNTS_ON: ServerInfo = {
   databricks_features: false,
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
+  omni_cli_terminal_enabled: true,
 };
 const ACCOUNTS_OFF: ServerInfo = { ...ACCOUNTS_ON, accounts_enabled: false, login_url: null };
 
@@ -66,10 +65,23 @@ afterEach(() => {
 });
 
 describe("AccountMenu gating", () => {
-  it("renders nothing when accounts mode is off (and never calls /auth/me)", () => {
-    vi.mocked(useServerInfo).mockReturnValue(ACCOUNTS_OFF);
+  it("renders nothing when accounts mode and terminal mode are off", () => {
+    vi.mocked(useServerInfo).mockReturnValue({
+      ...ACCOUNTS_OFF,
+      omni_cli_terminal_enabled: false,
+    });
     const { container } = renderMenu();
     expect(container).toBeEmptyDOMElement();
+    expect(accountsApi.getMe).not.toHaveBeenCalled();
+  });
+
+  it("shows a local terminal menu when accounts mode is off and terminal mode is on", async () => {
+    vi.mocked(useServerInfo).mockReturnValue(ACCOUNTS_OFF);
+    renderMenu();
+
+    await openMenu(/Omnigent/);
+
+    expect(await screen.findByRole("menuitem", { name: /Terminal/ })).toBeInTheDocument();
     expect(accountsApi.getMe).not.toHaveBeenCalled();
   });
 
@@ -104,14 +116,30 @@ describe("AccountMenu dropdown surface", () => {
     expect(screen.queryByRole("menuitem", { name: /Policies/ })).not.toBeInTheDocument();
   });
 
-  it("shows Members + Policies links and the (admin) marker for an admin", async () => {
+  it("shows admin links and the (admin) marker for an admin", async () => {
     vi.mocked(accountsApi.getMe).mockResolvedValue(account({ id: "root", is_admin: true }));
     renderMenu();
     await openMenu(/root/);
 
     expect(await screen.findByRole("menuitem", { name: /Members/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Policies/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Configuration/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Terminal/ })).toBeInTheDocument();
     expect(screen.getByText("(admin)")).toBeInTheDocument();
+  });
+
+  it("hides the admin Terminal link when the terminal capability is off", async () => {
+    vi.mocked(useServerInfo).mockReturnValue({
+      ...ACCOUNTS_ON,
+      omni_cli_terminal_enabled: false,
+    });
+    vi.mocked(accountsApi.getMe).mockResolvedValue(account({ id: "root", is_admin: true }));
+
+    renderMenu();
+    await openMenu(/root/);
+
+    expect(await screen.findByRole("menuitem", { name: /Members/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Terminal/ })).not.toBeInTheDocument();
   });
 
   it("Sign out calls logout", async () => {

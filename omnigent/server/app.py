@@ -1662,6 +1662,7 @@ def create_app(
             "databricks_features": databricks_features,
             "managed_sandboxes_enabled": managed_sandboxes_enabled,
             "sandbox_provider": sandbox_provider,
+            "omni_cli_terminal_enabled": env_var_is_truthy("OMNIGENT_OMNI_CLI_TERMINAL_ENABLED"),
         }
 
     @app.get("/v1/me", response_model=None)  # Union return type (dict | JSONResponse)
@@ -1825,7 +1826,11 @@ def create_app(
     # need it. One bad extension is logged and skipped, never fatal.
     from omnigent.extensions import install_extensions
 
-    install_extensions(app, auth_provider=auth_provider)
+    install_extensions(
+        app,
+        auth_provider=auth_provider,
+        permission_store=permission_store,
+    )
 
     # ── Tunnel lifecycle callbacks (Step 8.5 crash recovery) ───
     async def _on_runner_disconnect(runner_id: str) -> None:
