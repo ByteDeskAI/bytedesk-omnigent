@@ -36,3 +36,27 @@ def test_cross_tenant_is_denied_as_not_found() -> None:
     with pytest.raises(OmnigentError) as exc:
         _enforce_tenant_scope("tenant-b", _conv("tenant-a"))
     assert exc.value.code == ErrorCode.NOT_FOUND
+
+
+# ── Session-list owner-ACL relaxation for admins (BDP-2438) ──────────
+
+
+def test_non_admin_is_scoped_to_own_sessions() -> None:
+    """A non-admin's list is filtered to sessions they own (``accessible_by``)."""
+    from omnigent.server.routes.sessions import _session_list_accessible_by
+
+    assert _session_list_accessible_by("alice", is_admin=False) == "alice"
+
+
+def test_admin_owner_acl_is_relaxed() -> None:
+    """An admin gets ``None`` (no owner filter) — tenant filter still applies."""
+    from omnigent.server.routes.sessions import _session_list_accessible_by
+
+    assert _session_list_accessible_by("bob", is_admin=True) is None
+
+
+def test_auth_disabled_is_unchanged() -> None:
+    """``None`` caller (auth disabled) already means 'no filter' — unchanged."""
+    from omnigent.server.routes.sessions import _session_list_accessible_by
+
+    assert _session_list_accessible_by(None, is_admin=False) is None
