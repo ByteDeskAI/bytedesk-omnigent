@@ -129,7 +129,7 @@ class WebhookSourceAdapter(Protocol):
         """Return whether *raw_body* is authentic for *secret* given *headers*."""
         ...
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(self, headers: Mapping[str, str], payload: dict | None = None) -> str:
         """The binding match key (event name) carried by *headers* (``"*"`` if none)."""
         ...
 
@@ -151,8 +151,40 @@ class GitHubWebhookAdapter:
             return False
         return verify_hmac_signature(raw_body, secret, provided)
 
-    def match_key(self, headers: Mapping[str, str]) -> str:
+    def match_key(self, headers: Mapping[str, str], payload: dict | None = None) -> str:
+        _ = payload
         return _header(headers, "x-omnigent-event") or "*"
+
+
+class AirtableWebhookAdapter:
+    """Airtable webhook adapter: HMAC-SHA256 plus payload-derived events.
+
+    Airtable notifications are change bundles rather than one GitHub-style event
+    header. For deterministic binding keys, prefer an explicit
+    ``X-Omnigent-Event`` override, then derive coarse events from the payload:
+    ``base.changed`` when a base object is present, ``webhook.changed`` when only
+    webhook metadata is present, else ``"*"`` for catch-all bindings.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-airtable-webhook-signature") or _header(
+            headers, "x-omnigent-signature"
+        )
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str], payload: dict | None = None) -> str:
+        explicit = _header(headers, "x-omnigent-event")
+        if explicit:
+            return explicit
+        if not isinstance(payload, dict):
+            return "*"
+        if isinstance(payload.get("base"), dict):
+            return "base.changed"
+        if isinstance(payload.get("webhook"), dict):
+            return "webhook.changed"
+        return "*"
 
 
 def _header(headers: Mapping[str, str], name: str) -> str:
@@ -179,6 +211,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("airtable", AirtableWebhookAdapter)
     return registry
 
 
@@ -350,7 +383,12 @@ def process_inbound(
         adapter = GitHubWebhookAdapter()
     if not adapter.verify(raw_body, headers, secret):
         return IngressResult(IngressStatus.BAD_SIGNATURE, 401, detail="signature mismatch")
-    match_key = adapter.match_key(headers)
+    try:
+        match_key = adapter.match_key(headers, payload=payload)
+    except TypeError:
+        # Back-compat for deployment-registered adapters that predate the
+        # payload-aware Airtable route key seam.
+        match_key = adapter.match_key(headers)
     binding = store.resolve_binding(source=source, match_key=match_key)
     if binding is None:
         return IngressResult(
