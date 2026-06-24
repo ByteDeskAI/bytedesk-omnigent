@@ -1609,6 +1609,51 @@ def test_structured_ask_user_question_accepts_string_options() -> None:
     assert payload["questions"][0]["options"] == [{"label": "Alpha"}]
 
 
+def test_structured_ask_user_question_skips_malformed_question_entries() -> None:
+    """Non-dict questions and non-list options are ignored without crashing."""
+    payload = _structured_ask_user_question(
+        {
+            "questions": [
+                "not-a-dict",
+                {"question": "Valid?", "options": "not-a-list"},
+                {"question": "Pick", "options": [{"label": "ok"}]},
+            ],
+        }
+    )
+    assert payload is not None
+    assert len(payload["questions"]) == 1
+    assert payload["questions"][0]["question"] == "Pick"
+
+
+def test_publish_and_persist_resource_event_swallows_append_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Persist failures are logged but do not prevent the live SSE publish."""
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    store = MagicMock()
+    store.append.side_effect = RuntimeError("db down")
+    _publish_and_persist_resource_event(
+        "conv_res",
+        "session.resource.deleted",
+        "term_1",
+        "terminal",
+        store,
+    )
+    assert published == [
+        {
+            "type": "session.resource.deleted",
+            "resource_id": "term_1",
+            "resource_type": "terminal",
+            "session_id": "conv_res",
+        }
+    ]
+
+
 class _UsageConversationStore:
     def __init__(self, conv: Conversation) -> None:
         self._conv = conv
