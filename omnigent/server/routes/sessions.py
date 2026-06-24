@@ -239,6 +239,10 @@ from omnigent.server.schemas import (
     SkillSummary,
     UpdateSessionRequest,
 )
+from omnigent.server.subject_token_stash import (
+    evict_subject_token,
+    stash_subject_token_from_headers,
+)
 from omnigent.session_lifecycle import (
     is_session_closed,
     labels_with_closed_status,
@@ -11455,6 +11459,7 @@ def _mint_acting_identity_header(
     request: Request | None,
     auth_provider: AuthProvider | None,
     agent_id: str | None,
+    session_id: str | None = None,
 ) -> dict[str, str] | None:
     """BDP-2424 P2 — mint the signed ``X-Omnigent-Acting-Identity`` header for a
     runner dispatch, or ``None`` (⇒ no header ⇒ today's behaviour).
@@ -11463,6 +11468,11 @@ def _mint_acting_identity_header(
     principal, or no configured signer — the same degrade-to-default rule the
     runner-side decode (Path A) relies on. ``get_principal`` is the canonical
     auth-chain Adapter (BDP-2388 / ADR-0149).
+
+    BDP-2434: folds the per-session ``subject_token`` Office stashed on the
+    inbound ``create_session`` / ``post_event`` routes (the ``tools/call`` hop
+    that mints this carrier does NOT carry ``X-Bytedesk-Subject-Token``), so a
+    ByteDesk.Mcp egress can present an on-behalf-of bearer. Absent ⇒ unchanged.
     """
     if request is None or auth_provider is None:
         return None
@@ -11474,9 +11484,14 @@ def _mint_acting_identity_header(
         return None
     from omnigent.identity.identity import ActingIdentity
     from omnigent.identity.signer import HEADER_NAME, encode_acting_identity
+    from omnigent.server.subject_token_stash import get_subject_token
 
+    subject_token = (
+        get_subject_token(request.app.state, session_id) if session_id is not None else None
+    )
     token = encode_acting_identity(
-        ActingIdentity(principal=principal, agent_id=agent_id), signer
+        ActingIdentity(principal=principal, agent_id=agent_id, subject_token=subject_token),
+        signer,
     )
     return {HEADER_NAME: token} if token else None
 
@@ -11570,7 +11585,9 @@ async def _handle_mcp_tools_call(
 
     # BDP-2424 P2: mint the per-agent acting-identity carrier once (degrades to
     # ``None`` ⇒ unchanged) and attach it on every runner dispatch below.
-    acting_headers = _mint_acting_identity_header(request, auth_provider, conv.agent_id)
+    acting_headers = _mint_acting_identity_header(
+        request, auth_provider, conv.agent_id, session_id=session_id
+    )
 
     # Build the policy engine once — used for both TOOL_CALL (first call
     # only) and TOOL_RESULT (both paths). Engine construction reads
@@ -12104,6 +12121,11 @@ def create_sessions_router(
             if race_hit is not None:
                 return race_hit
             raise
+        # BDP-2434: stash the user's MCP access token (if Office sent one on this
+        # inbound create) keyed by the new session, so the later ``tools/call``
+        # mint can fold it into the acting-identity carrier for OBO egress.
+        # No-op when the header is absent (degrade-to-default).
+        stash_subject_token_from_headers(request.app.state, resp.id, request.headers)
         # Notify the runner about the new session so it can resolve
         # the spec and cache sub_agent_name before the first turn.
         # Without this, the runner doesn't know this session exists
@@ -15931,6 +15953,11 @@ def create_sessions_router(
                     "Session not found",
                     code=ErrorCode.NOT_FOUND,
                 )
+        # BDP-2434: refresh the per-session OBO subject_token from this inbound
+        # event (Office re-sends ``X-Bytedesk-Subject-Token`` on each post), so a
+        # later ``tools/call`` mint presents a fresh on-behalf-of bearer. No-op
+        # when the header is absent (degrade-to-default).
+        stash_subject_token_from_headers(request.app.state, session_id, request.headers)
         # Validate event type at the route boundary. Anything not in
         # ``_ALLOWED_EVENT_TYPES`` is a client mistake — failing here
         # is far better than silently persisting an item the agent
@@ -17210,6 +17237,8 @@ def create_sessions_router(
         # failed-launch session would leak one entry for the process
         # lifetime.
         _session_sandbox_status_cache.pop(session_id, None)
+        # BDP-2434: drop any stashed OBO subject_token for the deleted session.
+        evict_subject_token(request.app.state, session_id)
         # Same for the tracker's entry — a deleted session's launch can
         # never be rendezvoused again (access checks 404 first), so a
         # retained failure is dead weight. ``finish`` also settles a

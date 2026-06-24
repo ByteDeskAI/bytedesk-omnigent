@@ -73,14 +73,23 @@ def acting_identity_for(
     principal: Principal | None = None,
     agent_id: str | None = None,
     delegation: Iterable[str] = (),
+    subject_token: str | None = None,
 ) -> ActingIdentity:
     """Resolve the :class:`ActingIdentity` for a request (the actor-resolution seam).
 
     A plain function, not a port: standalone resolution is a pure pass-through of
     the inbound principal + the running agent id. A consumer that needs to map an
     agent to its own platform account replaces the call site, not a registry.
+
+    *subject_token* (default ``None``) is the originating user's outbound access
+    token, carried for an on-behalf-of egress; absent ⇒ today's behaviour.
     """
-    return ActingIdentity(principal=principal, agent_id=agent_id, delegation=tuple(delegation))
+    return ActingIdentity(
+        principal=principal,
+        agent_id=agent_id,
+        delegation=tuple(delegation),
+        subject_token=subject_token,
+    )
 
 
 __all__ = ["OwnerAllowAuthorizer", "StaticSecretProvider", "acting_identity_for"]

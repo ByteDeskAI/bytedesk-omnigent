@@ -52,6 +52,13 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         # OMNIGENT_USE_SERVICE_REGISTRY default OFF — never set at runtime when off,
         # but the AST scan sees the source-level assignment).
         "service_registry",
+        # The DI container, exposed on app.state for resolution (app.py).
+        "di_container",
+        # BDP-2424 P2: the acting-identity carrier signer (app.py) — the inbound
+        # mirror of the runner's assertion_verifier; minted from env, unset
+        # secret ⇒ no token. Added to the pinned set in this PR (the P2 change
+        # that introduced the write predates this contract update).
+        "assertion_signer",
     }
 )
 # ── Phase 3 anchor: the one app.state key set inside _lifespan (app.py:915). ──

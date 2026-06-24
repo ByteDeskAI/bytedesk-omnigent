@@ -164,17 +164,22 @@ class BytedeskExtension:
         return []
 
     # ── identity ports (adr-omnigent-pluggable-identity) ──────────────
-    # ByteDesk contributes no identity provider yet: the inbound trust uses the
-    # core HMAC verifier (via ByteDeskPrincipalResolver) and outbound/authz keep
-    # the core defaults. The Office-backed JWKS verifier / token-exchange (OBO)
-    # credential provider / capability authorizer are the deferred consumer layer.
-    # These return ``{}`` so the extension satisfies the full OmnigentExtension
-    # Protocol while contributing nothing — the seams stay swappable.
+    # ByteDesk's inbound trust uses the core HMAC/RSA verifier (via
+    # ByteDeskPrincipalResolver) and authz keeps the core default. The OBO
+    # token-exchange credential provider (BDP-2434) is the consumer layer for the
+    # outbound seam — it only fires when an acting identity carries a
+    # subject_token, else it returns None and the registry falls back to the core
+    # static-secret default (degrade-to-default). The Office-backed JWKS verifier
+    # / capability authorizer remain deferred (empty hooks below stay swappable).
     def assertion_verifiers(self) -> dict[str, Callable[[], object]]:
         return {}
 
     def outbound_credential_providers(self) -> dict[str, Callable[[], object]]:
-        return {}
+        from bytedesk_omnigent.auth.obo_credential_provider import (
+            OnBehalfOfCredentialProvider,
+        )
+
+        return {"token_exchange_obo": OnBehalfOfCredentialProvider}
 
     def authorization_providers(self) -> dict[str, Callable[[], object]]:
         return {}

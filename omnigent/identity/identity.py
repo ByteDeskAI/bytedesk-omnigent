@@ -32,8 +32,13 @@ class ActingIdentity:
         turn (e.g. tests).
     :param delegation: On-behalf-of chain (outermost first). Empty in standalone
         mode; populated only by a consumer that implements real delegation.
+    :param subject_token: The originating user's outbound access token (e.g. their
+        OpenIddict MCP access token), carried to the point of action so an
+        on-behalf-of (RFC 8693 token-exchange) egress can act *as* the user.
+        ``None`` standalone / when the caller sent none — degrade-to-default.
     """
 
     principal: Principal | None = None
     agent_id: str | None = None
     delegation: tuple[str, ...] = ()
+    subject_token: str | None = None
