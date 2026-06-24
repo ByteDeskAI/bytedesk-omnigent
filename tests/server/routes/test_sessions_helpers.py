@@ -16,10 +16,13 @@ from unittest.mock import MagicMock
 import pytest
 from starlette.requests import Request
 
-from omnigent._wrapper_labels import CLAUDE_NATIVE_WRAPPER_VALUE
+from omnigent._wrapper_labels import (
+    CLAUDE_NATIVE_WRAPPER_VALUE,
+)
 from omnigent.entities import Agent, CommentsFingerprint, Conversation, LoadedAgent, StoredFile
 from omnigent.entities.conversation import (
     ConversationItem,
+    ErrorData,
     FunctionCallData,
     FunctionCallOutputData,
     MessageData,
@@ -71,8 +74,11 @@ from omnigent.server.routes.sessions import (
     _ancestor_session_ids,
     _announce_session_added,
     _attachment_disposition,
+    _agent_is_native,
+    _agent_provider_family,
     _build_actor,
     _build_evaluation_context,
+    _build_new_item,
     _build_skill_slash_command_policy_body,
     _descendant_sessions,
     _derive_terminal_launch_args_from_spec,
@@ -100,7 +106,20 @@ from omnigent.server.routes.sessions import (
     _is_codex_native_subagent,
     _is_native_terminal_session,
     _last_task_error_from_labels,
+    _latest_message_preview,
     _merge_pending_file_blocks,
+    _persist_session_status_error_labels,
+    _presentation_labels_for_agent,
+    _publish_changed_files_invalidated,
+    _publish_error_event,
+    _publish_interrupted,
+    _publish_policy_deny,
+    _publish_runner_recovered_status,
+    _publish_runner_skills,
+    _publish_sandbox_status,
+    _registered_runner_id,
+    _same_provider_family,
+    _title_content_from_item,
     _message_text,
     _multipart_missing_detail,
     _native_terminal_name_for_harness,
@@ -155,8 +174,12 @@ def _request(
 def _clear_status_cache() -> None:
     """Isolate status-cache helper tests from other suites."""
     sessions_mod._session_status_cache.clear()
+    sessions_mod._session_terminal_pending_cache.clear()
+    sessions_mod._session_sandbox_status_cache.clear()
     yield
     sessions_mod._session_status_cache.clear()
+    sessions_mod._session_terminal_pending_cache.clear()
+    sessions_mod._session_sandbox_status_cache.clear()
 
 
 # ── _allow_all_edits_eligible ────────────────────────────────────────────────
@@ -2347,3 +2370,317 @@ def test_publish_session_created_emits_parent_stream_event(
     assert payload["child_session_id"] == "conv_child"
     assert payload["agent_id"] == "ag_parent"
     assert payload["parent_session_id"] == "conv_parent"
+
+
+# ── batch 47: publish helpers + agent classification ────────────────────────
+
+
+def test_publish_runner_recovered_status_clears_sticky_failed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+    sessions_mod._session_status_cache["conv_recover"] = "failed"
+
+    _publish_runner_recovered_status("conv_recover")
+    assert sessions_mod._session_status_cache["conv_recover"] == "idle"
+    assert published[-1]["status"] == "idle"
+
+    _publish_runner_recovered_status("conv_other")
+    assert "conv_other" not in sessions_mod._session_status_cache
+
+
+def test_publish_terminal_pending_updates_cache_and_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from omnigent.server.routes.sessions import _publish_terminal_pending
+
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    _publish_terminal_pending("conv_term", True)
+    assert sessions_mod._session_terminal_pending_cache["conv_term"] is True
+    assert published[-1]["pending"] is True
+
+    _publish_terminal_pending("conv_term", False)
+    assert "conv_term" not in sessions_mod._session_terminal_pending_cache
+    assert published[-1]["pending"] is False
+
+
+def test_publish_sandbox_status_tracks_stage_and_clears_on_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    _publish_sandbox_status("conv_sbx", "provisioning")
+    assert sessions_mod._session_sandbox_status_cache["conv_sbx"].stage == "provisioning"
+
+    _publish_sandbox_status("conv_sbx", "failed", error="quota exceeded")
+    assert sessions_mod._session_sandbox_status_cache["conv_sbx"].error == "quota exceeded"
+
+    _publish_sandbox_status("conv_sbx", "ready")
+    assert "conv_sbx" not in sessions_mod._session_sandbox_status_cache
+    assert published[-1]["stage"] == "ready"
+
+
+def test_publish_runner_skills_and_changed_files_events(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    _publish_runner_skills("conv_skills")
+    assert published[-1]["type"] == "session.skills"
+
+    _publish_changed_files_invalidated("conv_files", environment_id="env_a")
+    assert published[-1]["type"] == "session.changed_files.invalidated"
+    assert published[-1]["environment_id"] == "env_a"
+
+
+def test_publish_interrupted_omits_response_id_when_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    _publish_interrupted("conv_int")
+    assert published[-1]["type"] == "session.interrupted"
+    data = published[-1]["data"]
+    assert isinstance(data, dict)
+    assert "response_id" not in data
+
+    _publish_interrupted("conv_int", response_id="resp_codex")
+    data_with_id = published[-1]["data"]
+    assert isinstance(data_with_id, dict)
+    assert data_with_id["response_id"] == "resp_codex"
+
+
+def test_publish_error_event_and_policy_deny_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    published: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        sessions_mod.session_stream,
+        "publish",
+        lambda _sid, payload: published.append(payload),
+    )
+
+    _publish_error_event(
+        "conv_err",
+        ErrorData(source="execution", code="native_terminal_start_failed", message="boom"),
+    )
+    assert published[-1]["type"] == "response.error"
+    assert published[-1]["error"]["code"] == "native_terminal_start_failed"
+
+    _publish_policy_deny("conv_deny", "blocked by guardrail")
+    assert published[-1]["type"] == "response.output_text.delta"
+    assert "[Denied by policy: blocked by guardrail]" in str(published[-1]["delta"])
+    assert str(published[-1]["message_id"]).startswith("deny_")
+
+
+@pytest.mark.asyncio
+async def test_persist_session_status_error_labels_upserts_and_clears() -> None:
+    from omnigent.server.schemas import ErrorDetail
+
+    store = MagicMock()
+    error = ErrorDetail(code="runner_error", message="turn setup failed")
+
+    await _persist_session_status_error_labels("conv_labels", error, store)  # type: ignore[arg-type]
+    store.set_labels.assert_called_with(
+        "conv_labels",
+        {
+            _LAST_TASK_ERROR_CODE_LABEL_KEY: "runner_error",
+            _LAST_TASK_ERROR_MESSAGE_LABEL_KEY: "turn setup failed",
+        },
+    )
+
+    store.reset_mock()
+    await _persist_session_status_error_labels("conv_labels", None, store)  # type: ignore[arg-type]
+    store.set_labels.assert_called_with(
+        "conv_labels",
+        {
+            _LAST_TASK_ERROR_CODE_LABEL_KEY: "",
+            _LAST_TASK_ERROR_MESSAGE_LABEL_KEY: "",
+        },
+    )
+
+
+def _agent_with_harness(agent_id: str, harness: str) -> Agent:
+    return Agent(id=agent_id, created_at=1, name=agent_id, bundle_location=f"{agent_id}/x")
+
+
+def _patch_agent_cache(
+    monkeypatch: pytest.MonkeyPatch,
+    harness: str,
+    *,
+    harness_by_agent_id: dict[str, str] | None = None,
+) -> None:
+    def _loaded(agent_id: str, harness_value: str) -> LoadedAgent:
+        spec = AgentSpec(
+            spec_version=1,
+            name="t",
+            executor=ExecutorSpec(type="omnigent", config={"harness": harness_value}),
+        )
+        return LoadedAgent(spec=spec, workdir=Path("/tmp/t"))
+
+    cache = MagicMock()
+    if harness_by_agent_id is None:
+        cache.load.return_value = _loaded("default", harness)
+    else:
+        cache.load.side_effect = lambda agent_id, _loc, **_: _loaded(
+            agent_id,
+            harness_by_agent_id[agent_id],
+        )
+    monkeypatch.setattr(sessions_mod, "get_agent_cache", lambda: cache)
+
+
+def test_agent_provider_family_and_native_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _patch_agent_cache(monkeypatch, "claude-native")
+    claude_agent = _agent_with_harness("ag_claude", "claude-native")
+    assert _agent_provider_family(claude_agent) == "anthropic"
+    assert _agent_is_native(claude_agent) is True
+    labels = _presentation_labels_for_agent(claude_agent)
+    assert labels[_CLAUDE_NATIVE_WRAPPER_LABEL_KEY] == CLAUDE_NATIVE_WRAPPER_VALUE
+
+    _patch_agent_cache(monkeypatch, "codex-native")
+    codex_agent = _agent_with_harness("ag_codex", "codex-native")
+    assert _agent_provider_family(codex_agent) == "openai"
+
+    _patch_agent_cache(
+        monkeypatch,
+        "unused",
+        harness_by_agent_id={
+            "ag_claude": "claude-native",
+            "ag_codex": "codex-native",
+        },
+    )
+    assert _same_provider_family(claude_agent, codex_agent) is False
+
+    _patch_agent_cache(monkeypatch, "claude-sdk")
+    sdk_agent = _agent_with_harness("ag_sdk", "claude-sdk")
+    assert _agent_is_native(sdk_agent) is False
+    assert _presentation_labels_for_agent(sdk_agent) == {}
+
+
+def test_same_provider_family_requires_both_known(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    a = _agent_with_harness("ag_a", "claude-sdk")
+    b = _agent_with_harness("ag_b", "claude-sdk")
+    _patch_agent_cache(monkeypatch, "claude-sdk")
+    assert _same_provider_family(a, b) is True
+
+    cache = MagicMock()
+    cache.load.side_effect = OSError("missing bundle")
+    monkeypatch.setattr(sessions_mod, "get_agent_cache", lambda: cache)
+    assert _same_provider_family(a, b) is False
+
+
+def test_registered_runner_id_validates_registry_and_ownership() -> None:
+    router = MagicMock()
+    router.runner_is_online.return_value = True
+    router.runner_owner.return_value = "alice@example.com"
+
+    assert _registered_runner_id(router, " runner_1 ", user_id="alice@example.com") == "runner_1"
+
+    with pytest.raises(OmnigentError) as forbidden:
+        _registered_runner_id(router, "runner_1", user_id="bob@example.com")
+    assert forbidden.value.code == ErrorCode.FORBIDDEN
+
+    with pytest.raises(OmnigentError):
+        _registered_runner_id(None, "runner_1")
+
+
+def test_latest_message_preview_skips_meta_and_truncates() -> None:
+    items = [
+        ConversationItem(
+            id="msg_meta",
+            type="message",
+            status="completed",
+            response_id="resp_1",
+            created_at=0,
+            data=MessageData(
+                role="assistant",
+                agent="native",
+                content=[{"type": "output_text", "text": "hidden meta"}],
+                is_meta=True,
+            ),
+        ),
+        ConversationItem(
+            id="msg_long",
+            type="message",
+            status="completed",
+            response_id="resp_1",
+            created_at=1,
+            data=MessageData(
+                role="assistant",
+                agent="native",
+                content=[{"type": "output_text", "text": "word " * 40}],
+            ),
+        ),
+    ]
+    preview = _latest_message_preview(items, limit_chars=20)
+    assert preview is not None
+    assert preview.endswith("…")
+    assert len(preview) == 20
+
+
+def test_title_content_from_item_only_returns_user_message_blocks() -> None:
+    user_item = NewConversationItem(
+        type="message",
+        response_id="resp_title",
+        data=MessageData(
+            role="user",
+            content=[{"type": "input_text", "text": "Plan the refactor"}],
+        ),
+    )
+    assert _title_content_from_item(user_item) == user_item.data.content
+
+    assistant_item = NewConversationItem(
+        type="message",
+        response_id="resp_title",
+        data=MessageData(
+            role="assistant",
+            agent="claude",
+            content=[{"type": "output_text", "text": "Done"}],
+        ),
+    )
+    assert _title_content_from_item(assistant_item) == []
+
+
+def test_build_new_item_wraps_validated_event_data() -> None:
+    body = SessionEventInput(
+        type="message",
+        data={
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hello"}],
+        },
+    )
+    item = _build_new_item(body, "resp_new", created_by="alice@example.com")
+    assert item.type == "message"
+    assert item.response_id == "resp_new"
+    assert item.created_by == "alice@example.com"
+    assert item.data.role == "user"  # type: ignore[attr-defined]
