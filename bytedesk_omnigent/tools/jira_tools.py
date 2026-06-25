@@ -134,7 +134,7 @@ class _JiraClient:
     def search(self, jql: str, max_results: int) -> list[dict[str, Any]]:
         resp = self._request(
             "POST",
-            "/rest/api/3/search",
+            "/rest/api/3/search/jql",
             json={
                 "jql": jql,
                 "maxResults": max_results,
