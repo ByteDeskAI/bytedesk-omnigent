@@ -43,6 +43,19 @@ patches:
             secretsScope:
               envSlug: production
   - target:
+      kind: InfisicalSecret
+      name: omnigent-github-mcp-config
+    patch: |
+      apiVersion: secrets.infisical.com/v1alpha1
+      kind: InfisicalSecret
+      metadata:
+        name: omnigent-github-mcp-config
+      spec:
+        authentication:
+          universalAuth:
+            secretsScope:
+              envSlug: production
+  - target:
       kind: Deployment
       name: omnigent-server
     patch: |
@@ -57,6 +70,22 @@ patches:
               - name: harbor-prod-pull-secret
             containers:
               - name: server
+                imagePullPolicy: Always
+  - target:
+      kind: Deployment
+      name: github-mcp
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: github-mcp
+      spec:
+        template:
+          spec:
+            imagePullSecrets:
+              - name: harbor-prod-pull-secret
+            containers:
+              - name: github-mcp
                 imagePullPolicy: Always
   - target:
       kind: StatefulSet

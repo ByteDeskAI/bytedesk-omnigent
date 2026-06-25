@@ -129,6 +129,10 @@ spec:
             # blocking the whole server.
             - name: BYTEDESK_IDENTITY_TOKEN_URL
               value: http://identity/connect/token
+            # GitHub App-backed MCP endpoint. Secret GitHub App material lives
+            # only in github-mcp; agent images and runners receive this URL.
+            - name: GITHUB_MCP_URL
+              value: http://github-mcp.bytedesk.svc.cluster.local/mcp
             - name: OMNIGENT_MCP_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:

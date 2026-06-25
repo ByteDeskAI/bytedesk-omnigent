@@ -1,0 +1,66 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: github-mcp
+  labels:
+    app.kubernetes.io/name: github-mcp
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  selector:
+    app.kubernetes.io/name: github-mcp
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github-mcp
+  labels:
+    app.kubernetes.io/name: github-mcp
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: github-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: github-mcp
+        app.kubernetes.io/part-of: bytedesk-omnigent
+    spec:
+      containers:
+        - name: github-mcp
+          image: localhost:32000/bytedesk-omnigent-server:local # image-managed
+          imagePullPolicy: Always
+          command: ["python", "-m", "bytedesk_omnigent.github_app_mcp"]
+          envFrom:
+            - secretRef:
+                name: github-mcp-config-secrets
+          env:
+            - name: HOST
+              value: "0.0.0.0"
+            - name: PORT
+              value: "8000"
+          ports:
+            - name: http
+              containerPort: 8000
+          readinessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
