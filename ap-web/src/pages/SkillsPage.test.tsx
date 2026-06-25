@@ -12,6 +12,9 @@ vi.mock("@/hooks/useSkills", () => ({
   useSkillMarketplaces: vi.fn(),
   useSkillRecommendations: vi.fn(),
   useStartSkillsConciergeSession: vi.fn(),
+  useSearchSkills: vi.fn(),
+  useCreateSkillPreview: vi.fn(),
+  useApplySkillPreview: vi.fn(),
 }));
 vi.mock("@/store/chatStore", () => ({
   useChatStore: Object.assign(vi.fn(() => ({})), {
@@ -67,6 +70,18 @@ beforeEach(() => {
     data: EMPLOYEES,
     isLoading: false,
   } as never);
+  vi.mocked(skillsHooks.useSearchSkills).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as never);
+  vi.mocked(skillsHooks.useCreateSkillPreview).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as never);
+  vi.mocked(skillsHooks.useApplySkillPreview).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as never);
   vi.mocked(skillsHooks.useStartSkillsConciergeSession).mockReturnValue({
     mutateAsync: vi.fn(),
   } as never);
@@ -107,6 +122,7 @@ describe("SkillsPage", () => {
     expect(screen.getByRole("button", { name: /Engineering/ })).toBeInTheDocument();
     expect(screen.getByTestId("agent-conversation")).toBeInTheDocument();
     expect(screen.getByText("ByteDesk Catalog")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search ByteDesk catalog")).toBeInTheDocument();
     expect(screen.getByText("platform-dev")).toBeInTheDocument();
     expect(screen.getByText("Installed Skills")).toBeInTheDocument();
     expect(screen.getByText("deep-search")).toBeInTheDocument();
