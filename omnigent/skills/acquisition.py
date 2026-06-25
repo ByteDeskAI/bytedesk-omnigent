@@ -62,6 +62,10 @@ _SOURCE_COMMAND_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 }
 _GITHUB_TOKEN_SECRET_NAMES = ("GITHUB_TOKEN", "BYTEDESK_GITHUB_TOKEN", "GITHUB_TOKEN_FALLBACK")
 _GITHUB_ARCHIVE_NAME = "github-source.tgz"
+_GITHUB_MARKETPLACE_CATALOG_PATH = ".claude-plugin/marketplace.json"
+_GITHUB_MARKETPLACE_DEFAULT_REPOS: tuple[str, ...] = ("ByteDeskAI/bytedesk-marketplace",)
+_GITHUB_MARKETPLACE_DEFAULT_REF = "main"
+_GITHUB_MARKETPLACE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 #: Supercharge Claude Code marketplace (https://superchargeclaudecode.com).
 #: The public discovery/download GETs are no-auth; see the bundled
@@ -327,6 +331,14 @@ class SkillAcquisitionService:
                 "high_risk": False,
             },
             {
+                "id": "github_marketplace",
+                "label": "GitHub Marketplace",
+                "kind": "named_adapter",
+                "supports_search": True,
+                "supports_preview": True,
+                "high_risk": False,
+            },
+            {
                 "id": "configured",
                 "label": "Configured Command",
                 "kind": "command_template",
@@ -370,6 +382,8 @@ class SkillAcquisitionService:
                     hits.extend(self._search_npm(query, limit=limit))
                 elif source == "supercharge":
                     hits.extend(self._search_supercharge(query, limit=limit))
+                elif source == "github_marketplace":
+                    hits.extend(self._search_github_marketplace(query, limit=limit))
                 elif source in {"freeform", "configured"} and command is not None:
                     hits.extend(self._search_freeform(query, command, source=source, limit=limit))
                 else:
@@ -751,6 +765,81 @@ class SkillAcquisitionService:
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(body)
 
+    def _search_github_marketplace(
+        self,
+        query: str,
+        *,
+        limit: int,
+        repos: tuple[str, ...] | None = None,
+    ) -> list[SkillSearchHit]:
+        """Search Claude-format GitHub marketplace catalogs (``.claude-plugin/marketplace.json``)."""
+        selected_repos = repos or _GITHUB_MARKETPLACE_DEFAULT_REPOS
+        query_lower = query.lower().strip()
+        hits: list[SkillSearchHit] = []
+        for repo_spec in selected_repos:
+            owner, repo = _parse_github_marketplace_repo_spec(repo_spec)
+            catalog = _fetch_github_marketplace_catalog(owner, repo, _GITHUB_MARKETPLACE_DEFAULT_REF)
+            plugins = catalog.get("plugins") if isinstance(catalog, dict) else None
+            if not isinstance(plugins, list):
+                continue
+            for item in plugins:
+                if not isinstance(item, dict):
+                    continue
+                plugin_name = item.get("name")
+                if not plugin_name:
+                    continue
+                description = item.get("description")
+                version = item.get("version")
+                haystack = " ".join(
+                    [
+                        str(plugin_name),
+                        str(description or ""),
+                        str(catalog.get("name") or ""),
+                        str(catalog.get("description") or ""),
+                    ]
+                ).lower()
+                if query_lower and not _github_marketplace_query_matches(haystack, query_lower):
+                    continue
+                source_ref = f"{owner}/{repo}@{plugin_name}"
+                hits.append(
+                    SkillSearchHit(
+                        source="github_marketplace",
+                        name=str(plugin_name),
+                        description=str(description) if description else None,
+                        source_ref=source_ref,
+                        version=str(version) if version else None,
+                        url=f"https://github.com/{owner}/{repo}/tree/{_GITHUB_MARKETPLACE_DEFAULT_REF}/{plugin_name}",
+                    )
+                )
+                if len(hits) >= limit:
+                    return hits
+        return hits
+
+    def _resolve_github_marketplace(self, source_ref: str, workspace: Path) -> CommandEvidence:
+        """Download a marketplace plugin subtree via ``gh`` archive + materialize skills."""
+        if shutil.which("gh") is None:
+            raise OmnigentError(
+                "github_marketplace preview requires the gh CLI",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        owner, repo, plugin_path, skill_name, git_ref = _parse_github_marketplace_source_ref(
+            source_ref
+        )
+        _github_marketplace_validate_repo_allowed(owner, repo)
+        evidence = self._runner.run(
+            _github_archive_command(f"{owner}/{repo}#{git_ref}"),
+            workspace,
+        )
+        if evidence.exit_code != 0:
+            return evidence
+        _extract_github_archive(workspace)
+        _materialize_github_marketplace_plugin(
+            workspace,
+            plugin_path=plugin_path,
+            skill_name=skill_name,
+        )
+        return evidence
+
     def _resolve_source(
         self,
         *,
@@ -856,6 +945,13 @@ class SkillAcquisitionService:
                 )
             self._resolve_supercharge(source_ref, workspace)
             return None
+        if source == "github_marketplace":
+            if not source_ref:
+                raise OmnigentError(
+                    "github_marketplace preview requires source_ref",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            return self._resolve_github_marketplace(source_ref, workspace)
         raise OmnigentError(f"unknown skill source: {source}", code=ErrorCode.INVALID_INPUT)
 
     def _build_target_actions(
@@ -1116,6 +1212,213 @@ def _command_name(spec: SkillCommandSpec) -> str | None:
     if spec.argv is not None and spec.argv:
         return spec.argv[0]
     return None
+
+
+def _github_marketplace_query_matches(haystack: str, query: str) -> bool:
+    """Return True when every whitespace token in *query* appears in *haystack*."""
+    tokens = [part for part in query.split() if part]
+    if not tokens:
+        return True
+    return all(token in haystack for token in tokens)
+
+
+def _cleanup_github_marketplace_staging(workspace: Path) -> None:
+    """Drop extracted archive trees so discovery only sees materialized skills."""
+    github_root = workspace / "github"
+    if github_root.is_dir():
+        shutil.rmtree(github_root)
+    archive = workspace / _GITHUB_ARCHIVE_NAME
+    if archive.is_file():
+        archive.unlink()
+
+
+def _github_marketplace_query_matches(haystack: str, query: str) -> bool:
+    """Return True when every whitespace token in *query* appears in *haystack*."""
+    tokens = [part for part in query.split() if part]
+    if not tokens:
+        return True
+    return all(token in haystack for token in tokens)
+
+
+def _cleanup_github_marketplace_staging(workspace: Path) -> None:
+    """Drop extracted archive trees so discovery only sees materialized skills."""
+    github_root = workspace / "github"
+    if github_root.is_dir():
+        shutil.rmtree(github_root)
+    archive = workspace / _GITHUB_ARCHIVE_NAME
+    if archive.is_file():
+        archive.unlink()
+
+
+def _github_marketplace_catalog_url(owner: str, repo: str, git_ref: str) -> str:
+    return (
+        f"https://raw.githubusercontent.com/{owner}/{repo}/{git_ref}/"
+        f"{_GITHUB_MARKETPLACE_CATALOG_PATH}"
+    )
+
+
+def _parse_github_marketplace_repo_spec(repo_spec: str) -> tuple[str, str]:
+    parts = [part for part in repo_spec.strip().split("/") if part]
+    if len(parts) != 2:
+        raise OmnigentError(
+            "github_marketplace repo must be 'owner/repo'",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    owner, repo = parts
+    _github_marketplace_validate_segments(owner, field="owner")
+    _github_marketplace_validate_segments(repo, field="repo")
+    return owner, repo
+
+
+def _github_marketplace_validate_repo_allowed(owner: str, repo: str) -> None:
+    spec = f"{owner}/{repo}"
+    if spec not in _GITHUB_MARKETPLACE_DEFAULT_REPOS:
+        raise OmnigentError(
+            f"github_marketplace repo is not allowlisted: {spec}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+
+
+def _parse_github_marketplace_source_ref(
+    source_ref: str,
+) -> tuple[str, str, str, str | None, str]:
+    """Parse ``owner/repo@plugin`` or ``owner/repo/plugin/skill#ref``."""
+    ref = source_ref.strip()
+    if not ref:
+        raise OmnigentError(
+            "github_marketplace preview requires source_ref",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    git_ref = _GITHUB_MARKETPLACE_DEFAULT_REF
+    if "#" in ref:
+        ref, _, git_ref = ref.partition("#")
+    parts = [part for part in ref.strip("/").split("/") if part]
+    if len(parts) < 2:
+        raise OmnigentError(
+            "github_marketplace source_ref must be 'owner/repo@plugin' or "
+            "'owner/repo/plugin/skill'",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    owner = parts[0]
+    if len(parts) == 2:
+        repo_part = parts[1]
+        if "@" not in repo_part:
+            raise OmnigentError(
+                "github_marketplace source_ref must include '@plugin'",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        repo, _, plugin_path = repo_part.partition("@")
+        skill_name = None
+    else:
+        repo = parts[1]
+        plugin_path = parts[2]
+        skill_name = parts[3] if len(parts) > 3 else None
+    _github_marketplace_validate_segments(owner, field="owner")
+    _github_marketplace_validate_segments(repo, field="repo")
+    _github_marketplace_validate_segments(plugin_path, field="plugin path")
+    if skill_name is not None:
+        _github_marketplace_validate_segments(skill_name, field="skill name")
+    if not re.fullmatch(r"[A-Za-z0-9_./-]+", git_ref):
+        raise OmnigentError(
+            "github_marketplace source_ref contains an invalid git ref",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    _github_marketplace_validate_repo_allowed(owner, repo)
+    return owner, repo, plugin_path, skill_name, git_ref
+
+
+def _github_marketplace_validate_segments(value: str, *, field: str) -> None:
+    for part in value.split("/"):
+        if not part or part in {".", ".."} or not _GITHUB_MARKETPLACE_SEGMENT_RE.match(part):
+            raise OmnigentError(
+                f"github_marketplace {field} has an invalid path segment: {value!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+
+
+def _fetch_github_marketplace_catalog(owner: str, repo: str, git_ref: str) -> dict[str, object]:
+    _github_marketplace_validate_repo_allowed(owner, repo)
+    url = _github_marketplace_catalog_url(owner, repo, git_ref)
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "User-Agent": "omnigent-skill-acquisition",
+        },
+    )
+    try:
+        with urlopen(request, timeout=_SUPERCHARGE_TIMEOUT_SECONDS) as response:
+            body = response.read(_MAX_SKILL_BYTES + 1)
+    except (URLError, OSError) as exc:
+        raise OmnigentError(
+            f"github_marketplace catalog request failed: {url}: {exc}",
+            code=ErrorCode.INVALID_INPUT,
+        ) from exc
+    if len(body) > _MAX_SKILL_BYTES:
+        raise OmnigentError(
+            f"github_marketplace catalog exceeds max size ({_MAX_SKILL_BYTES} bytes): {url}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except json.JSONDecodeError as exc:
+        raise OmnigentError(
+            f"github_marketplace catalog is not valid JSON: {url}",
+            code=ErrorCode.INVALID_INPUT,
+        ) from exc
+    if not isinstance(data, dict):
+        raise OmnigentError(
+            f"github_marketplace catalog must be a JSON object: {url}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return data
+
+
+def _materialize_github_marketplace_plugin(
+    workspace: Path,
+    *,
+    plugin_path: str,
+    skill_name: str | None,
+) -> None:
+    github_root = workspace / "github"
+    if not github_root.is_dir():
+        raise OmnigentError(
+            "github_marketplace archive did not extract",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    extracted_dirs = [path for path in github_root.iterdir() if path.is_dir()]
+    if len(extracted_dirs) != 1:
+        raise OmnigentError(
+            "github_marketplace archive must contain exactly one top-level directory",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    plugin_root = extracted_dirs[0] / plugin_path
+    if not plugin_root.is_dir():
+        raise OmnigentError(
+            f"github_marketplace plugin path not found: {plugin_path}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    skills_src = plugin_root / "skills"
+    if not skills_src.is_dir():
+        raise OmnigentError(
+            f"github_marketplace plugin has no skills directory: {plugin_path}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    if skill_name is not None:
+        one_skill = skills_src / skill_name
+        if not one_skill.is_dir():
+            raise OmnigentError(
+                f"github_marketplace skill not found: {skill_name}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        dest = workspace / "skills" / skill_name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(one_skill, dest, dirs_exist_ok=True)
+        _cleanup_github_marketplace_staging(workspace)
+        return
+    dest = workspace / "skills"
+    shutil.copytree(skills_src, dest, dirs_exist_ok=True)
+    _cleanup_github_marketplace_staging(workspace)
 
 
 def _github_archive_command(source_ref: str) -> SkillCommandSpec:
