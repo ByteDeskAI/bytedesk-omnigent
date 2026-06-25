@@ -40,8 +40,8 @@ metadata:
     app.kubernetes.io/name: omnigent-host
     app.kubernetes.io/part-of: bytedesk-omnigent
 spec:
-  # SCALABLE HOST POOL with DETERMINISTIC identity (BDP-2398). A StatefulSet
-  # gives each replica a STABLE ordinal pod name (omnigent-host-0, -1, …) that
+  # Host pool with DETERMINISTIC identity (BDP-2398). A StatefulSet gives each
+  # replica a STABLE ordinal pod name (omnigent-host-0, -1, ...) that
   # survives restarts/rollouts — unlike a Deployment, whose random pod-name
   # suffix changed every rollout and made each replica register as a NEW
   # (owner, name) row, growing the host picker without bound.
@@ -52,12 +52,14 @@ spec:
   #   - scale with `kubectl -n bytedesk scale statefulset/omnigent-host --replicas=N`
   # Scaling DOWN leaves the high-ordinal rows behind as offline (expected;
   # scaling back up reclaims them). All replicas share ONE LLM-credential
-  # Secret (envFrom below). Fungible workers → Parallel management + RollingUpdate.
+  # Secret (envFrom below). Codex ChatGPT OAuth auth.json is single-consumer
+  # refresh state, so the default Codex-capable pool is one host; scaling it
+  # requires per-host auth sources or an enterprise Codex access-token flow.
   serviceName: omnigent-host
   podManagementPolicy: Parallel
   updateStrategy:
     type: RollingUpdate
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app.kubernetes.io/name: omnigent-host
@@ -97,13 +99,16 @@ spec:
               # `apt install bubblewrap`) — this startup install is the stopgap for the
               # public image only.
               command -v bwrap >/dev/null 2>&1 || { echo "[host] installing bubblewrap"; apt-get update -qq && apt-get install -y -qq bubblewrap; }
-              # Codex OAuth: stage the codex-CLI auth.json (from `codex login`) into a
-              # WRITABLE ~/.codex so the codex CLI can refresh its token in place. The
-              # runner inherits HOME, so it reads ~/.codex/auth.json. Omnigent strips
-              # OPENAI_API_KEY (codex_executor _CODEX_ENV_DENY_EXACT) to force this
-              # subscription auth instead of an API key.
-              if [ -f /etc/codex-auth/auth.json ]; then
-                mkdir -p "$HOME/.codex" && cp /etc/codex-auth/auth.json "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json" && echo "[host] codex auth.json staged into ~/.codex (subscription OAuth)";
+              # Codex OAuth: Codex reads its login state from ~/.codex/auth.json.
+              # Keep that file in the host's persistent HOME so token refreshes
+              # update the source of truth. The codex-auth Secret is a bootstrap
+              # source only; never overwrite an existing ~/.codex/auth.json.
+              mkdir -p "$HOME/.codex"
+              if [ -f "$HOME/.codex/auth.json" ]; then
+                chmod 600 "$HOME/.codex/auth.json" || true
+                echo "[host] using existing codex auth.json from ~/.codex (subscription OAuth)";
+              elif [ -f /etc/codex-auth/auth.json ]; then
+                cp /etc/codex-auth/auth.json "$HOME/.codex/auth.json" && chmod 600 "$HOME/.codex/auth.json" && echo "[host] bootstrapped codex auth.json into ~/.codex (subscription OAuth)";
               else
                 echo "[host] no codex auth.json mounted — codex harness unavailable until the codex-auth Secret is provided";
               fi
@@ -142,12 +147,10 @@ spec:
             - name: IS_SANDBOX
               value: "1"
             # Deterministic host identity (BDP-2398) derived from the StatefulSet's
-            # stable ordinal pod name (omnigent-host-0, -1, …). omni-home is an
-            # emptyDir, so config.yaml (which would persist host_id/name) is wiped
-            # every restart; without these the host falls through to host_{uuid4} +
-            # socket.gethostname() and registers a NEW (owner, name) row each time.
-            # The env-override path (omnigent/host/identity.py) returns this identity
-            # directly without touching config.yaml, so each ordinal reuses one row.
+            # stable ordinal pod name (omnigent-host-0, -1, ...). omni-home is
+            # persistent so auth/config refreshes survive restarts, but the env-
+            # override path (omnigent/host/identity.py) remains the canonical host
+            # identity so each ordinal reuses one row even before HOME is populated.
             # Both vars must be set together. $(POD_NAME) expands from the env var
             # defined just above (k8s dependent-env interpolation).
             - name: POD_NAME
@@ -252,7 +255,7 @@ spec:
               # in-flight runner/turn — so long delegations never completed and
               # turns failed silently. 8Gi fits an orchestrator + spawned
               # children + their in-pod tool subprocesses. Node has ample RAM
-              # and there is no namespace ResourceQuota, so 2 replicas x 8Gi is
+              # and there is no namespace ResourceQuota, so the default 1 x 8Gi is
               # comfortably schedulable.
               memory: 8Gi
           volumeMounts:
@@ -267,8 +270,6 @@ spec:
               mountPath: /etc/grok-auth
               readOnly: true
       volumes:
-        - name: omni-home
-          emptyDir: {}
         - name: codex-auth
           secret:
             secretName: codex-auth
@@ -277,3 +278,11 @@ spec:
           secret:
             secretName: grok-auth
             optional: true
+  volumeClaimTemplates:
+    - metadata:
+        name: omni-home
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
