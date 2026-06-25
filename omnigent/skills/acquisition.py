@@ -25,7 +25,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal
+from urllib.error import URLError
 from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 from uuid import uuid4
 
 import yaml
@@ -60,6 +62,20 @@ _SOURCE_COMMAND_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 }
 _GITHUB_TOKEN_SECRET_NAMES = ("GITHUB_TOKEN", "BYTEDESK_GITHUB_TOKEN", "GITHUB_TOKEN_FALLBACK")
 _GITHUB_ARCHIVE_NAME = "github-source.tgz"
+
+#: Supercharge Claude Code marketplace (https://superchargeclaudecode.com).
+#: The public discovery/download GETs are no-auth; see the bundled
+#: ``supercharge-api.md`` contract in the skills-concierge ``skills-install``
+#: skill for the endpoint reference this adapter is generated from.
+_SUPERCHARGE_BASE = (
+    os.environ.get("OMNIGENT_SUPERCHARGE_BASE_URL") or "https://superchargeclaudecode.com"
+).rstrip("/")
+#: A slug / file-path segment must be a safe filename — no scheme, no host, no
+#: ``.``/``..`` traversal. The adapter only ever builds URLs against
+#: ``_SUPERCHARGE_BASE`` (the request may 302 to S3, which urllib follows), so
+#: there is no user-controlled egress host.
+_SUPERCHARGE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_SUPERCHARGE_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -303,6 +319,14 @@ class SkillAcquisitionService:
                 "high_risk": False,
             },
             {
+                "id": "supercharge",
+                "label": "Supercharge Claude Code",
+                "kind": "named_adapter",
+                "supports_search": True,
+                "supports_preview": True,
+                "high_risk": False,
+            },
+            {
                 "id": "configured",
                 "label": "Configured Command",
                 "kind": "command_template",
@@ -344,6 +368,8 @@ class SkillAcquisitionService:
                     hits.extend(self._search_skills_cli(query, limit=limit))
                 elif source == "npm":
                     hits.extend(self._search_npm(query, limit=limit))
+                elif source == "supercharge":
+                    hits.extend(self._search_supercharge(query, limit=limit))
                 elif source in {"freeform", "configured"} and command is not None:
                     hits.extend(self._search_freeform(query, command, source=source, limit=limit))
                 else:
@@ -486,9 +512,9 @@ class SkillAcquisitionService:
     ) -> list[SkillApplyResult]:
         """Apply an existing preview to its target agents."""
         preview = self.get_preview(preview_id)
-        selected_ids = set(agent_ids) if agent_ids else {
-            action.agent_id for action in preview.target_actions
-        }
+        selected_ids = (
+            set(agent_ids) if agent_ids else {action.agent_id for action in preview.target_actions}
+        )
         results: list[SkillApplyResult] = []
         actions_by_agent: dict[str, list[SkillTargetAction]] = {}
         for action in preview.target_actions:
@@ -623,6 +649,108 @@ class SkillAcquisitionService:
             if query_lower in (hit.name + " " + (hit.description or "")).lower()
         ][:limit]
 
+    def _search_supercharge(self, query: str, *, limit: int) -> list[SkillSearchHit]:
+        """Search the Supercharge marketplace catalog (``GET /api/plugins``).
+
+        Only skill-shaped plugins (those carrying a ``SKILL.md``) are returned,
+        since those are what omnigent can stage into an agent bundle. Each hit's
+        ``source_ref`` is the marketplace ``slug`` to pass to the preview.
+        """
+        data = _supercharge_get_json("/api/plugins")
+        items = data if isinstance(data, list) else []
+        query_lower = query.lower().strip()
+        hits: list[SkillSearchHit] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            slug = item.get("slug")
+            if not slug:
+                continue
+            file_names = [
+                str(entry.get("fileName", ""))
+                for entry in (item.get("files") or [])
+                if isinstance(entry, dict)
+            ]
+            if not any(name.rsplit("/", 1)[-1] == "SKILL.md" for name in file_names):
+                continue
+            description = item.get("description") or item.get("shortDesc")
+            tags = item.get("tags") or []
+            haystack = " ".join(
+                [
+                    str(slug),
+                    str(item.get("name") or ""),
+                    str(description or ""),
+                    " ".join(str(tag) for tag in tags),
+                ]
+            ).lower()
+            if query_lower and query_lower not in haystack:
+                continue
+            hits.append(
+                SkillSearchHit(
+                    source="supercharge",
+                    name=str(slug),
+                    description=str(description) if description else None,
+                    source_ref=str(slug),
+                    version=str(item.get("version")) if item.get("version") else None,
+                    url=str(item.get("repositoryUrl")) if item.get("repositoryUrl") else None,
+                )
+            )
+            if len(hits) >= limit:
+                break
+        return hits
+
+    def _resolve_supercharge(self, slug: str, workspace: Path) -> None:
+        """Download a marketplace plugin's files into *workspace*.
+
+        Reads the file manifest (``GET /api/plugins/{slug}``) then fetches each
+        file through the pinned ``GET /api/plugins/{slug}/{path}`` endpoint
+        (which 302-redirects to S3) and writes it preserving its relative path.
+        ``discover_skill_packages`` then finds the ``skills/<name>/SKILL.md``
+        subtree; non-skill scaffolding outside a skill dir is simply ignored.
+        """
+        slug = slug.strip()
+        _supercharge_validate_segments(slug, field="slug")
+        if "/" in slug:
+            raise OmnigentError(
+                "supercharge slug must be a single path segment",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        data = _supercharge_get_json(f"/api/plugins/{slug}")
+        raw_files = data.get("files") if isinstance(data, dict) else None
+        if not isinstance(raw_files, list) or not raw_files:
+            raise OmnigentError(
+                f"supercharge plugin has no files: {slug}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        written = 0
+        total_bytes = 0
+        for entry in raw_files:
+            if isinstance(entry, str):
+                rel = entry
+            elif isinstance(entry, dict):
+                rel = str(entry.get("fileName") or "")
+            else:
+                rel = ""
+            if not rel:
+                continue
+            _supercharge_validate_segments(rel, field="file path")
+            body = _supercharge_request(f"/api/plugins/{slug}/{rel}")
+            written += 1
+            total_bytes += len(body)
+            if written > _MAX_SKILL_FILES:
+                raise OmnigentError(
+                    f"supercharge plugin exceeds max file count ({_MAX_SKILL_FILES}): {slug}",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            if total_bytes > _MAX_SKILL_BYTES:
+                raise OmnigentError(
+                    f"supercharge plugin exceeds max size ({_MAX_SKILL_BYTES} bytes): {slug}",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            dest = workspace / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(body)
+
     def _resolve_source(
         self,
         *,
@@ -720,6 +848,14 @@ class SkillAcquisitionService:
             if evidence.exit_code == 0:
                 _extract_npm_tgz(workspace)
             return evidence
+        if source == "supercharge":
+            if not source_ref:
+                raise OmnigentError(
+                    "supercharge preview requires source_ref",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            self._resolve_supercharge(source_ref, workspace)
+            return None
         raise OmnigentError(f"unknown skill source: {source}", code=ErrorCode.INVALID_INPUT)
 
     def _build_target_actions(
@@ -1028,9 +1164,7 @@ def _parse_github_source_ref(source_ref: str) -> tuple[str, str, str | None]:
     owner, repo = parts[0], parts[1]
     if repo.endswith(".git"):
         repo = repo[: -len(".git")]
-    if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(
-        r"[A-Za-z0-9_.-]+", repo
-    ):
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(r"[A-Za-z0-9_.-]+", repo):
         raise OmnigentError(
             "github source_ref contains an invalid owner or repo",
             code=ErrorCode.INVALID_INPUT,
@@ -1069,11 +1203,71 @@ def _github_token_from_secret_backend() -> str:
     return ""
 
 
+def _supercharge_validate_segments(ref: str, *, field: str) -> None:
+    """Reject any slug / file path that escapes the staging workspace.
+
+    Each ``/``-separated part must be a safe filename — not ``.``/``..`` and
+    matching :data:`_SUPERCHARGE_SEGMENT_RE` (no scheme, host, or NUL).
+    """
+    parts = [part for part in ref.split("/") if part]
+    if not parts:
+        raise OmnigentError(f"supercharge {field} is empty", code=ErrorCode.INVALID_INPUT)
+    for part in parts:
+        if part in {".", ".."} or not _SUPERCHARGE_SEGMENT_RE.match(part):
+            raise OmnigentError(
+                f"supercharge {field} has an invalid path segment: {ref!r}",
+                code=ErrorCode.INVALID_INPUT,
+            )
+
+
+def _supercharge_request(path: str) -> bytes:
+    """GET ``{_SUPERCHARGE_BASE}{path}`` and return up to the size cap of bytes."""
+    url = f"{_SUPERCHARGE_BASE}{path}"
+    request = Request(
+        url,
+        headers={
+            "Accept": "application/json, text/plain, */*",
+            "User-Agent": "omnigent-skill-acquisition",
+        },
+    )
+    try:
+        with urlopen(request, timeout=_SUPERCHARGE_TIMEOUT_SECONDS) as response:
+            body = response.read(_MAX_SKILL_BYTES + 1)
+    except (URLError, OSError) as exc:
+        raise OmnigentError(
+            f"supercharge request failed: {url}: {exc}",
+            code=ErrorCode.INVALID_INPUT,
+        ) from exc
+    if len(body) > _MAX_SKILL_BYTES:
+        raise OmnigentError(
+            f"supercharge response exceeds max size ({_MAX_SKILL_BYTES} bytes): {url}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return body
+
+
+def _supercharge_get_json(path: str) -> object:
+    """GET *path* and unwrap the ``{success, data, error}`` envelope to ``data``."""
+    raw = _supercharge_request(path)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise OmnigentError(
+            f"supercharge returned invalid JSON for {path}: {exc}",
+            code=ErrorCode.INVALID_INPUT,
+        ) from exc
+    if not isinstance(payload, dict) or not payload.get("success"):
+        error = payload.get("error") if isinstance(payload, dict) else None
+        raise OmnigentError(
+            f"supercharge request was not successful for {path}: {error or 'unknown error'}",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return payload.get("data")
+
+
 def _source_availability(source: str) -> tuple[bool, str | None]:
     missing = [
-        cmd
-        for cmd in _SOURCE_COMMAND_REQUIREMENTS.get(source, ())
-        if shutil.which(cmd) is None
+        cmd for cmd in _SOURCE_COMMAND_REQUIREMENTS.get(source, ()) if shutil.which(cmd) is None
     ]
     if not missing:
         return True, None

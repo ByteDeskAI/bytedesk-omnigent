@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import tarfile
 from pathlib import Path
 
 import pytest
 
 from omnigent.errors import OmnigentError
+from omnigent.skills import acquisition as acq
 from omnigent.skills.acquisition import (
     CommandEvidence,
     SkillAcquisitionService,
@@ -202,3 +204,144 @@ def test_github_source_uses_gh_archive_and_secret_backend_fallback_token(
     assert runner.spec.env["GH_TOKEN"] == "infisical-token"
     assert runner.spec.env["GITHUB_TOKEN"] == "infisical-token"
     assert [package.name for package in discover_skill_packages(workspace)] == ["repo-skill"]
+
+
+class _FakeResponse:
+    """Minimal context-manager stand-in for an ``http.client`` response."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self) -> _FakeResponse:
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+    def read(self, amt: int | None = None) -> bytes:
+        return self._body if amt is None else self._body[:amt]
+
+
+def _fake_urlopen(routes: dict[str, bytes]):
+    def _open(request, timeout=None):
+        url = request.full_url
+        if url not in routes:
+            raise AssertionError(f"unexpected supercharge URL: {url}")
+        return _FakeResponse(routes[url])
+
+    return _open
+
+
+def _supercharge_service(tmp_path: Path) -> SkillAcquisitionService:
+    return SkillAcquisitionService(
+        agent_store=None,  # type: ignore[arg-type]
+        agent_cache=None,  # type: ignore[arg-type]
+        artifact_store=None,
+        stage_root=tmp_path,
+    )
+
+
+_SUPERCHARGE_PLUGINS = {
+    "success": True,
+    "data": [
+        {
+            "slug": "dogfood",
+            "name": "dogfood",
+            "description": "Verify any change at the outermost layer.",
+            "tags": ["test", "verify"],
+            "version": "1.0.0",
+            "repositoryUrl": "https://github.com/example/dogfood",
+            "files": [{"fileName": "skills/dogfood/SKILL.md", "s3Url": "https://s3/x"}],
+        },
+        {
+            # No SKILL.md → not installable into an omnigent agent → filtered out.
+            "slug": "tasks",
+            "name": "tasks",
+            "description": "Hooks-only plugin.",
+            "tags": [],
+            "files": [{"fileName": "hooks.json"}],
+        },
+    ],
+}
+
+
+def test_supercharge_source_listed_and_always_available(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # supercharge has no external-command requirement, so it stays available
+    # even when no CLI tools are installed (unlike skills/npm/github).
+    monkeypatch.setattr("omnigent.skills.acquisition.shutil.which", lambda _cmd: None)
+    sources = {source["id"]: source for source in _supercharge_service(tmp_path).sources()}
+
+    assert "supercharge" in sources
+    assert sources["supercharge"]["available"] is True
+    assert sources["supercharge"]["supports_search"] is True
+
+
+def test_search_supercharge_filters_to_skill_shaped_plugins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routes = {f"{acq._SUPERCHARGE_BASE}/api/plugins": json.dumps(_SUPERCHARGE_PLUGINS).encode()}
+    monkeypatch.setattr(acq, "urlopen", _fake_urlopen(routes))
+
+    hits = _supercharge_service(tmp_path)._search_supercharge("verify", limit=20)
+
+    assert [hit.name for hit in hits] == ["dogfood"]  # 'tasks' has no SKILL.md
+    assert hits[0].source == "supercharge"
+    assert hits[0].source_ref == "dogfood"
+    assert hits[0].version == "1.0.0"
+
+
+def test_search_supercharge_empty_query_excludes_non_skill_plugins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    routes = {f"{acq._SUPERCHARGE_BASE}/api/plugins": json.dumps(_SUPERCHARGE_PLUGINS).encode()}
+    monkeypatch.setattr(acq, "urlopen", _fake_urlopen(routes))
+
+    hits = _supercharge_service(tmp_path)._search_supercharge("", limit=20)
+
+    assert [hit.name for hit in hits] == ["dogfood"]
+
+
+def test_resolve_supercharge_downloads_files_and_discovers_skill(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    skill_md = b"---\nname: dogfood\ndescription: Verify at the outermost layer.\n---\nUse it.\n"
+    base = acq._SUPERCHARGE_BASE
+    routes = {
+        f"{base}/api/plugins/dogfood": json.dumps(
+            {"success": True, "data": {"name": "dogfood", "files": ["skills/dogfood/SKILL.md"]}}
+        ).encode(),
+        f"{base}/api/plugins/dogfood/skills/dogfood/SKILL.md": skill_md,
+    }
+    monkeypatch.setattr(acq, "urlopen", _fake_urlopen(routes))
+    service = _supercharge_service(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    assert service._resolve_supercharge("dogfood", workspace) is None
+    assert (workspace / "skills" / "dogfood" / "SKILL.md").read_bytes() == skill_md
+    assert [package.name for package in discover_skill_packages(workspace)] == ["dogfood"]
+
+
+def test_resolve_supercharge_rejects_path_traversal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    base = acq._SUPERCHARGE_BASE
+    routes = {
+        f"{base}/api/plugins/evil": json.dumps(
+            {"success": True, "data": {"files": ["../escape.txt"]}}
+        ).encode(),
+    }
+    monkeypatch.setattr(acq, "urlopen", _fake_urlopen(routes))
+    service = _supercharge_service(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    with pytest.raises(OmnigentError, match="invalid path segment"):
+        service._resolve_supercharge("evil", workspace)
