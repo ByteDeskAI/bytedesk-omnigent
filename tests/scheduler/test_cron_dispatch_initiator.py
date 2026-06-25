@@ -10,12 +10,12 @@ actually initiate a session for the owning agent with the trigger payload, and
 the trigger's ``next_fire_at`` must still advance exactly-once. They also pin the
 env-driven self-call initiator + its fail-closed factory.
 """
+
 from __future__ import annotations
 
 import time
 
 import httpx
-import pytest
 
 from bytedesk_omnigent.scheduler import SqlAlchemyCronScheduler, run_cron_scheduler_tick
 from bytedesk_omnigent.sessions import (
@@ -108,6 +108,7 @@ def test_self_call_initiator_creates_session_then_posts_message() -> None:
         prompt="Run the morning ops review.",
         source="cron:morning-ops-review",
         metadata={"trigger_key": "morning-ops-review"},
+        external_key="cron:morning-ops-review:123",
     )
 
     assert session_id == "conv_xyz"
@@ -116,6 +117,7 @@ def test_self_call_initiator_creates_session_then_posts_message() -> None:
 
     create_body = seen[0][1]
     assert create_body["agent_id"] == "maya"
+    assert create_body["external_key"] == "cron:morning-ops-review:123"
 
     event_body = seen[1][1]
     assert event_body["type"] == "message"

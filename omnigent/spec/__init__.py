@@ -187,8 +187,8 @@ def load(
         is a tarball or bytes, ignored when *source* is a directory
         or omnigent YAML.
     :param expand_env: Whether to expand ``${VAR}`` references in
-        connection blocks, MCP headers, and MCP ``env`` against the
-        current process environment. ``True`` (the default) is for
+        connection blocks, MCP URLs/headers, and MCP ``env`` against
+        the current process environment. ``True`` (the default) is for
         operator-authored specs whose author is the process owner
         (local ``omnigent run``, ``--agent`` preregistration). It
         MUST be ``False`` for tenant-supplied / HTTP-uploaded

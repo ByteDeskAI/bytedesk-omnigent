@@ -44,6 +44,7 @@ class SessionInitiator(Protocol):
         prompt: str,
         source: str,
         metadata: dict | None = None,
+        external_key: str | None = None,
     ) -> str:
         """Initiate a root session for ``agent_id`` seeded with ``prompt``.
 
@@ -163,14 +164,18 @@ class HttpSelfCallInitiator:
         prompt: str,
         source: str,
         metadata: dict | None = None,
+        external_key: str | None = None,
     ) -> str:
         labels = {"source": source}
         if metadata:
             labels.update({k: str(v) for k, v in metadata.items()})
+        create_body = {"agent_id": agent_id, "labels": labels}
+        if external_key:
+            create_body["external_key"] = external_key
         with self._client() as client:
             create = client.post(
                 "/v1/sessions",
-                json={"agent_id": agent_id, "labels": labels},
+                json=create_body,
             )
             create.raise_for_status()
             session_id = create.json()["id"]
@@ -198,7 +203,5 @@ def build_self_call_initiator_from_env() -> HttpSelfCallInitiator | None:
     base_url = os.environ.get(_SELF_BASE_URL_ENV, "").strip()
     if not base_url:
         return None
-    identity = (
-        os.environ.get(_DISPATCH_IDENTITY_ENV, "").strip() or _DEFAULT_DISPATCH_IDENTITY
-    )
+    identity = os.environ.get(_DISPATCH_IDENTITY_ENV, "").strip() or _DEFAULT_DISPATCH_IDENTITY
     return HttpSelfCallInitiator(base_url=base_url, identity_email=identity)

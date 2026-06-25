@@ -3930,6 +3930,43 @@
         "summary": "Ext Health"
       }
     },
+    "/v1/admin/omni-cli/terminal": {
+      "get": {
+        "operationId": "get_omni_cli_terminal_v1_admin_omni_cli_terminal_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Omni Cli Terminal V1 Admin Omni Cli Terminal Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Omni Cli Terminal"
+      }
+    },
+    "/v1/agentic-inbox/events": {
+      "post": {
+        "description": "Receive a signed Agentic Inbox ``email.received`` event.",
+        "operationId": "receive_email_event_v1_agentic_inbox_events_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Receive Email Event"
+      }
+    },
     "/v1/agents": {
       "get": {
         "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:returns: A :class:`PaginatedList` of built-in agents.",

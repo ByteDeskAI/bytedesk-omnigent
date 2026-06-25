@@ -141,9 +141,9 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
     :param root: Path to the agent image directory. Must contain
         ``config.yaml``.
     :param expand_env: Whether to expand ``${VAR}`` references in
-        connection blocks and MCP headers. ``True`` (default) for
-        deploy/runtime — raises on unresolved vars. ``False`` for
-        scaffolding/validation where env vars may not yet be set.
+        connection blocks and MCP URLs/headers. ``True`` (default)
+        for deploy/runtime — raises on unresolved vars. ``False``
+        for scaffolding/validation where env vars may not yet be set.
     :returns: A fully populated :class:`AgentSpec` (not yet
         validated).
     :raises OmnigentError: If ``config.yaml`` is not valid YAML,
@@ -2447,7 +2447,7 @@ def _parse_inline_mcp_servers(
         in config.yaml. ``None`` or a non-dict value returns an empty
         list without raising.
     :param expand_env: Whether to expand ``${VAR}`` references in
-        ``headers`` and ``env`` values. ``True`` (default) for
+        ``url``, ``headers``, and ``env`` values. ``True`` (default) for
         deploy/runtime; ``False`` for scaffolding/validation.
     :returns: A list of :class:`MCPServerConfig` objects, one per
         inline MCP entry, in YAML key order.
@@ -2481,6 +2481,13 @@ def _parse_inline_mcp_servers(
                 f"Inline MCP server {name!r} 'headers' must be a mapping",
                 code=ErrorCode.INVALID_INPUT,
             )
+        resolved_url = (
+            expand_env_vars({"url": str(url)})["url"]
+            if expand_env and url is not None
+            else str(url)
+            if url is not None
+            else None
+        )
         headers = expand_env_vars(raw_headers) if expand_env and raw_headers else raw_headers
         raw_env = val.get("env", {})
         if raw_env and not isinstance(raw_env, dict):
@@ -2516,8 +2523,7 @@ def _parse_inline_mcp_servers(
             for req in ("token_url", "client_id"):
                 if not scalars.get(req):
                     raise OmnigentError(
-                        f"Inline MCP server {name!r} auth type 'oauth' requires a "
-                        f"'{req}' field",
+                        f"Inline MCP server {name!r} auth type 'oauth' requires a '{req}' field",
                         code=ErrorCode.INVALID_INPUT,
                     )
             raw_scopes = raw_auth.get("scopes") or []
@@ -2537,7 +2543,7 @@ def _parse_inline_mcp_servers(
                 description=str(raw_desc)
                 if (raw_desc := val.get("description")) is not None
                 else None,
-                url=str(url) if url is not None else None,
+                url=resolved_url,
                 command=str(command) if command is not None else None,
                 args=args,
                 headers=headers,
@@ -2638,7 +2644,7 @@ def _parse_http_mcp_server(
     """
     Parse an HTTP (SSE) MCP server YAML into an :class:`MCPServerConfig`.
 
-    HTTP transport requires ``url``; ``headers`` is optional and
+    HTTP transport requires ``url``; ``url`` and ``headers`` are
     expanded via :func:`expand_env_vars` when *expand_env* is True.
     Stdio-only fields (``command``, ``args``, ``env``, ``sandbox``)
     are rejected loud — mixing transports silently would hide bugs
@@ -2650,7 +2656,7 @@ def _parse_http_mcp_server(
         ``{"name": "github", "transport": "http", "url": "..."}``.
     :param yaml_file: Path to the source file — used in error messages.
     :param expand_env: Whether to expand ``${VAR}`` references in
-        ``headers``.
+        ``url`` and ``headers``.
     :returns: A fully populated :class:`MCPServerConfig` with
         ``transport == "http"``.
     :raises OmnigentError: If ``url`` is missing or a stdio-only
@@ -2669,10 +2675,11 @@ def _parse_http_mcp_server(
             f"MCP server {name!r} missing required field 'url': {yaml_file}",
             code=ErrorCode.INVALID_INPUT,
         )
+    resolved_url = expand_env_vars({"url": str(url)})["url"] if expand_env else str(url)
     return MCPServerConfig(
         name=str(name),
         transport="http",
-        url=str(url),
+        url=resolved_url,
         headers=(
             expand_env_vars(raw.get("headers", {})) if expand_env else raw.get("headers", {})
         ),

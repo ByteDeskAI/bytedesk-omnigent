@@ -96,6 +96,48 @@ kubectl apply -k k8s/
 3. `omnigent run deploy/bytedesk/agents/bytedesk-orchestrator ...` → **delegation works** on the gateway alone.
 4. In-cluster `omnigent-runner` Deployment registers as a host (verify the host/auth handshake — alpha).
 
+## Agentic Inbox MCP for persona agents
+
+Persona agent email access is persisted through Omnigent's template-agent image
+API, not by hand-editing seed YAML. The image API rebuilds the agent bundle,
+stores it under the content-addressed artifact store, warm-swaps the cache, and
+marks the row `sot_tier=migrated` so startup seeding will not overwrite it.
+
+Prerequisites:
+
+- The Agentic Inbox dev Worker is reachable at `https://inbox.agents.dev.bytedesk.ai/mcp`.
+- The Cloudflare Access app for that hostname has a service-token policy for
+  Omnigent.
+- The ByteDesk Agent Configuration Infisical project has a `/agentic-inbox`
+  folder in the correct environment. For dev this is env `development`; prod
+  uses env `production`.
+- The `/agentic-inbox` folder contains `AGENTIC_INBOX_MCP_URL`,
+  `AGENTIC_INBOX_EMAIL_DOMAIN`, `AGENTIC_INBOX_CF_ACCESS_CLIENT_ID`, and
+  `AGENTIC_INBOX_CF_ACCESS_CLIENT_SECRET`. It also contains
+  `OMNIGENT_AGENTIC_INBOX_WEBHOOK_SECRET`, the shared HMAC secret the Omnigent
+  server uses to verify Agentic Inbox `email.received` webhooks. The Infisical
+  operator hydrates these into the `agentic-inbox-config-secrets` Kubernetes
+  Secret.
+- The Agentic Inbox Worker deployment includes
+  `OMNIGENT_AGENTIC_INBOX_WEBHOOK_URL`, e.g.
+  `https://omnigent.dev.bytedesk.ai/v1/agentic-inbox/events` for development.
+  The matching `OMNIGENT_AGENTIC_INBOX_WEBHOOK_SECRET` is configured as a Worker
+  secret with the same value as Infisical.
+
+Apply or re-apply the persisted image update:
+
+```bash
+OMNIGENT_USERNAME=admin \
+OMNIGENT_PASSWORD='<admin-password>' \
+python3 scripts/bytedesk/apply_agentic_inbox.py
+```
+
+The updater filters `GET /v1/agents` to persona agents only
+(`display_name` present and `workflow != true`), sets `params.email` and
+`params.mailboxId`, adds an inline `tools.agentic-inbox` MCP entry whose URL and
+Cloudflare Access headers resolve from `${AGENTIC_INBOX_*}` env vars, and
+appends a prompt note instructing the agent to use its own mailbox ID.
+
 ## Productionize (Fleet/GitOps/TeamCity — platform-repo side)
 
 The fork half is done (`fleet/production/kustomization.yaml`). To make prod
