@@ -12,13 +12,14 @@ front. Two reasons:
   server-side sidesteps the transport entirely — owner is stamped from the
   verified identity, never the model (anti-spoof, ADR-0132/0133/0136).
 * **It's local.** The memory store lives in this process; a runner round-trip back
-  to ``/v1/memory`` would be pure overhead.
+  out to an HTTP route would be pure overhead.
 
 Access is decided by :mod:`bytedesk_omnigent.memory_access` (org = everyone,
 dept = members, agent = private). This module is just the glue: resolve access →
-call the pluggable provider/store → return the tool's JSON result string (the
-exact shape the legacy ``/v1/memory`` route returns, so the model sees no
-difference).
+call the pluggable provider/store → return the tool's JSON result string. It is the
+SOLE memory execution path — the old per-call ``/v1/memory`` HTTP route + its
+httpx-proxy stdio front were removed once this interceptor covered every
+``memory__*`` call; the stdio front now only advertises the tool schemas.
 """
 
 from __future__ import annotations

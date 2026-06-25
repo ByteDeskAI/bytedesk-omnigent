@@ -1,10 +1,18 @@
-"""STDIO MCP front for the unified shared-memory route (BDP-2457/2459, ADR-0132).
+"""STDIO MCP front that ADVERTISES the unified shared-memory tools (BDP-2457/2459/2458).
 
-The agent-memory plane is served as REST handlers on the omnigent server
-(``bytedesk_omnigent/routes/memory.py``), but the LLM only reaches tools through
-**MCP**. This module is the thin MCP front: a stdio MCP server the runner spawns
-as the agent's ``mcp_servers`` command (``python -m bytedesk_omnigent.memory_mcp``).
-Each tool proxies one HTTP call to the matching ``/v1/memory/...`` route.
+The agent-memory plane is executed SERVER-SIDE at the omnigent server's
+``tools/call`` choke point (``_handle_mcp_tools_call`` →
+:mod:`bytedesk_omnigent.memory_tool_intercept`), where the caller's VERIFIED
+identity (``agent_id`` + department) is known, so the compartment owner is stamped
+server-side and never from the model (the anti-spoof invariant, ADR-0132/0133/0136).
+
+The LLM only discovers tools through **MCP**, and tool advertisement is runner-side,
+so this stdio server exists ONLY to declare the ``memory__*`` tool schemas for the
+runner to list. Its tool BODIES are never invoked — the server intercepts every
+``memory__*`` call by name before it would reach the runner — so they are inert
+stubs. (Removing this front entirely needs a server-side tool-advertisement seam;
+tracked as the BDP-2458 follow-up. The old per-call ``/v1/memory`` HTTP route the
+bodies used to proxy to was deleted with this slimming.)
 
 One store, two write modes, one search:
 
@@ -14,54 +22,26 @@ One store, two write modes, one search:
 * ``search`` — semantic + keyword search spanning **both** (kind = all / ambient
   / addressable).
 
-Owner is stamped server-side from the VERIFIED caller identity (never the model —
-the anti-spoof invariant). Three tiers (BDP-2458): ``org:*`` every agent;
-``dept:<id>:*`` members of that department only; ``agent:*`` private to the
-caller. Memory tools are executed server-side at the ``tools/call`` choke point
-(``_handle_mcp_tools_call``), where the caller's verified ``agent_id`` + department
-are known — this stdio front advertises the tool schemas; it does not carry the
-identity, so the per-call route below is a legacy/fallback path. The model sees
+Three tiers (BDP-2458): ``org:*`` every agent; ``dept:<id>:*`` members of that
+department only; ``agent:*`` private to the caller. The model sees
 ``memory__search`` / ``memory__get`` / ``memory__put`` / ``memory__append`` /
 ``memory__list`` / ``memory__unset``.
-
-Base URL: ``OMNIGENT_SELF_BASE_URL`` → ``OMNIGENT_SERVER_URL`` (the host pod
-carries it) → the in-cluster default.
 """
 
 from __future__ import annotations
 
-import os
-from typing import Any
-
-import httpx
 from mcp.server.fastmcp import FastMCP
 
-_DEFAULT_BASE_URL = "http://omnigent-server.bytedesk.svc.cluster.local"
-_HTTP_TIMEOUT_S = 30.0
-
-
-def _base_url() -> str:
-    """Resolve the omnigent server base URL (no trailing slash)."""
-    raw = (
-        os.environ.get("OMNIGENT_SELF_BASE_URL")
-        or os.environ.get("OMNIGENT_SERVER_URL")
-        or _DEFAULT_BASE_URL
-    )
-    return raw.rstrip("/")
-
-
-def _post(path: str, body: dict[str, Any]) -> dict[str, Any]:
-    """POST *body* to ``{base}/v1/memory/{path}`` and return the JSON dict."""
-    url = f"{_base_url()}/v1/memory/{path}"
-    with httpx.Client(timeout=_HTTP_TIMEOUT_S) as client:
-        resp = client.post(url, json=body)
-    try:
-        return resp.json()
-    except ValueError:
-        return {"error": f"memory route {url} returned non-JSON ({resp.status_code})"}
-
-
 mcp = FastMCP("memory")
+
+# Tool bodies are advertisement-only: the omnigent server handles every
+# ``memory__*`` call server-side (by tool name) before the runner would invoke
+# this front, so the bodies are never reached. They return a clear sentinel
+# purely as a tripwire if that invariant is ever broken.
+_SERVER_SIDE_STUB = {
+    "error": "memory tools execute server-side at the tools/call choke point "
+    "(_handle_mcp_tools_call); this advertisement-only stub must not be invoked"
+}
 
 
 @mcp.tool()
@@ -82,9 +62,8 @@ def search(
     initiative = scope='topic', name='initiative:<id>'; your OWN private memory =
     scope='agent' (only you can read it).
     """
-    return _post(
-        "recall", {"query": query, "scope": scope, "name": name, "kind": kind, "limit": limit}
-    )
+    del query, scope, name, kind, limit
+    return dict(_SERVER_SIDE_STUB)
 
 
 @mcp.tool()
@@ -100,7 +79,8 @@ def append(
     department = scope='topic', name='dept:<id>' (members of <id> only); initiative =
     scope='topic', name='initiative:<id>'; private to you = scope='agent'.
     """
-    return _post("append", {"content": content, "scope": scope, "name": name, "weight": weight})
+    del content, scope, name, weight
+    return dict(_SERVER_SIDE_STUB)
 
 
 @mcp.tool()
@@ -118,16 +98,8 @@ def put(
     oncall rota, a private note). Address grammar + who can read it: 'org:<key>' =
     every agent; 'dept:<dept>:<key>' = only members of that department; 'agent:<key>'
     = private to you (no other agent can read it)."""
-    return _post(
-        "put",
-        {
-            "address": address,
-            "content": content,
-            "weight": weight,
-            "confidence": confidence,
-            "source_conversation_id": source_conversation_id,
-        },
-    )
+    del address, content, weight, confidence, source_conversation_id
+    return dict(_SERVER_SIDE_STUB)
 
 
 @mcp.tool()
@@ -136,7 +108,8 @@ def get(address: str) -> dict:
     'dept:engineering:oncall', 'agent:scratchpad'). Deterministic — always THIS slot,
     no fuzzy match, no decay. You may read org (any agent), your own department, and
     your own private 'agent:<key>' slots. Returns {"found": false} if unset."""
-    return _post("get", {"address": address})
+    del address
+    return dict(_SERVER_SIDE_STUB)
 
 
 @mcp.tool(name="list")
@@ -144,14 +117,16 @@ def list_slots(prefix: str = "org") -> dict:
     """List the addressable slots under a prefix ('org', 'dept:<id>', or 'agent' for
     your own private slots) WITHOUT a query — browse what's stored, newest first. The
     fuzzy, meaning-based counterpart is `search`."""
-    return _post("list", {"prefix": prefix})
+    del prefix
+    return dict(_SERVER_SIDE_STUB)
 
 
 @mcp.tool()
 def unset(address: str) -> dict:
     """Clear (retire) the addressable slot at an exact ADDRESS, e.g. 'org:charter'.
     Use when a slot a prompt no longer references should be removed."""
-    return _post("unset", {"address": address})
+    del address
+    return dict(_SERVER_SIDE_STUB)
 
 
 def main() -> None:
