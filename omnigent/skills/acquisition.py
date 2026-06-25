@@ -40,6 +40,10 @@ from omnigent.server.bundles import validate_agent_bundle
 from omnigent.server.routes.agents_write import _MIGRATED_TIER, _require_template
 from omnigent.server.routes.builtin_agents import _to_agent_object
 from omnigent.spec.tar_utils import ExtractionError, build_bundle_bytes, extract_safe
+from omnigent.skills.marketplace_config import (
+    SkillsMarketplaceConfig,
+    load_skills_marketplace_config,
+)
 from omnigent.stores import AgentStore
 from omnigent.stores.artifact_store import ArtifactStore
 
@@ -277,6 +281,7 @@ class SkillAcquisitionService:
         runner: SkillCommandRunner | None = None,
         stage_root: Path | None = None,
         ttl_seconds: int = _DEFAULT_TTL_SECONDS,
+        marketplace_config: SkillsMarketplaceConfig | None = None,
     ) -> None:
         self._agent_store = agent_store
         self._agent_cache = agent_cache
@@ -284,6 +289,7 @@ class SkillAcquisitionService:
         self._runner = runner or SkillCommandRunner()
         self._stage_root = stage_root or Path(tempfile.mkdtemp(prefix="omnigent_skills_"))
         self._ttl_seconds = ttl_seconds
+        self._marketplace_config = marketplace_config or load_skills_marketplace_config()
         self._previews: dict[str, SkillPreview] = {}
         self._previews_lock = threading.RLock()
 
@@ -370,7 +376,7 @@ class SkillAcquisitionService:
         command: SkillCommandSpec | None = None,
     ) -> SkillSearchOutcome:
         """Search configured sources for skills."""
-        selected = sources or ["skills", "npm"]
+        selected = sources or list(self._marketplace_config.default_search_sources)
         hits: list[SkillSearchHit] = []
         errors: list[str] = []
         for source in selected:
@@ -773,12 +779,18 @@ class SkillAcquisitionService:
         repos: tuple[str, ...] | None = None,
     ) -> list[SkillSearchHit]:
         """Search Claude-format GitHub marketplace catalogs (``.claude-plugin/marketplace.json``)."""
-        selected_repos = repos or _GITHUB_MARKETPLACE_DEFAULT_REPOS
+        selected_repos = repos or self._marketplace_config.github_marketplace_repos
+        catalog_ref = self._marketplace_config.github_marketplace_ref
         query_lower = query.lower().strip()
         hits: list[SkillSearchHit] = []
         for repo_spec in selected_repos:
             owner, repo = _parse_github_marketplace_repo_spec(repo_spec)
-            catalog = _fetch_github_marketplace_catalog(owner, repo, _GITHUB_MARKETPLACE_DEFAULT_REF)
+            catalog = _fetch_github_marketplace_catalog(
+                owner,
+                repo,
+                catalog_ref,
+                allowed_repos=selected_repos,
+            )
             plugins = catalog.get("plugins") if isinstance(catalog, dict) else None
             if not isinstance(plugins, list):
                 continue
@@ -808,7 +820,7 @@ class SkillAcquisitionService:
                         description=str(description) if description else None,
                         source_ref=source_ref,
                         version=str(version) if version else None,
-                        url=f"https://github.com/{owner}/{repo}/tree/{_GITHUB_MARKETPLACE_DEFAULT_REF}/{plugin_name}",
+                        url=f"https://github.com/{owner}/{repo}/tree/{catalog_ref}/{plugin_name}",
                     )
                 )
                 if len(hits) >= limit:
@@ -822,10 +834,12 @@ class SkillAcquisitionService:
                 "github_marketplace preview requires the gh CLI",
                 code=ErrorCode.INVALID_INPUT,
             )
+        allowed_repos = self._marketplace_config.github_marketplace_repos
         owner, repo, plugin_path, skill_name, git_ref = _parse_github_marketplace_source_ref(
-            source_ref
+            source_ref,
+            default_ref=self._marketplace_config.github_marketplace_ref,
+            allowed_repos=allowed_repos,
         )
-        _github_marketplace_validate_repo_allowed(owner, repo)
         evidence = self._runner.run(
             _github_archive_command(f"{owner}/{repo}#{git_ref}"),
             workspace,
@@ -1270,9 +1284,15 @@ def _parse_github_marketplace_repo_spec(repo_spec: str) -> tuple[str, str]:
     return owner, repo
 
 
-def _github_marketplace_validate_repo_allowed(owner: str, repo: str) -> None:
+def _github_marketplace_validate_repo_allowed(
+    owner: str,
+    repo: str,
+    *,
+    allowed_repos: tuple[str, ...] | None = None,
+) -> None:
     spec = f"{owner}/{repo}"
-    if spec not in _GITHUB_MARKETPLACE_DEFAULT_REPOS:
+    allowlist = allowed_repos or _GITHUB_MARKETPLACE_DEFAULT_REPOS
+    if spec not in allowlist:
         raise OmnigentError(
             f"github_marketplace repo is not allowlisted: {spec}",
             code=ErrorCode.INVALID_INPUT,
@@ -1281,6 +1301,9 @@ def _github_marketplace_validate_repo_allowed(owner: str, repo: str) -> None:
 
 def _parse_github_marketplace_source_ref(
     source_ref: str,
+    *,
+    default_ref: str | None = None,
+    allowed_repos: tuple[str, ...] | None = None,
 ) -> tuple[str, str, str, str | None, str]:
     """Parse ``owner/repo@plugin`` or ``owner/repo/plugin/skill#ref``."""
     ref = source_ref.strip()
@@ -1289,7 +1312,7 @@ def _parse_github_marketplace_source_ref(
             "github_marketplace preview requires source_ref",
             code=ErrorCode.INVALID_INPUT,
         )
-    git_ref = _GITHUB_MARKETPLACE_DEFAULT_REF
+    git_ref = default_ref or _GITHUB_MARKETPLACE_DEFAULT_REF
     if "#" in ref:
         ref, _, git_ref = ref.partition("#")
     parts = [part for part in ref.strip("/").split("/") if part]
@@ -1323,7 +1346,7 @@ def _parse_github_marketplace_source_ref(
             "github_marketplace source_ref contains an invalid git ref",
             code=ErrorCode.INVALID_INPUT,
         )
-    _github_marketplace_validate_repo_allowed(owner, repo)
+    _github_marketplace_validate_repo_allowed(owner, repo, allowed_repos=allowed_repos)
     return owner, repo, plugin_path, skill_name, git_ref
 
 
@@ -1336,8 +1359,14 @@ def _github_marketplace_validate_segments(value: str, *, field: str) -> None:
             )
 
 
-def _fetch_github_marketplace_catalog(owner: str, repo: str, git_ref: str) -> dict[str, object]:
-    _github_marketplace_validate_repo_allowed(owner, repo)
+def _fetch_github_marketplace_catalog(
+    owner: str,
+    repo: str,
+    git_ref: str,
+    *,
+    allowed_repos: tuple[str, ...] | None = None,
+) -> dict[str, object]:
+    _github_marketplace_validate_repo_allowed(owner, repo, allowed_repos=allowed_repos)
     url = _github_marketplace_catalog_url(owner, repo, git_ref)
     request = Request(
         url,

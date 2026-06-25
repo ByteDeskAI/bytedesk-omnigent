@@ -21,6 +21,15 @@ data:
     # server is a tracked follow-up, not done here. Local cookie-secret /
     # agent-cache dirs still fall back to the container's /data/artifacts.
     artifact_location: nats://omnigent-nats:4222/omnigent-artifacts
+    skills:
+      default_search_sources:
+        - skills
+        - npm
+        - github_marketplace
+      github_marketplace:
+        default_repos:
+          - ByteDeskAI/bytedesk-marketplace
+        default_ref: main
     # When auth is turned on (OIDC against Google Workspace fits ByteDesk), list
     # operator identities here; a listed identity is promoted to admin on login.
     # admins:
