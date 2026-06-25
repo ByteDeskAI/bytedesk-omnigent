@@ -12422,6 +12422,18 @@ def create_sessions_router(
                         harness=resp.harness,
                     )
                 )
+                # Record the trusted launch owner BEFORE the host spawns the
+                # runner, so the runner's tunnel can authenticate the instant it
+                # connects (BDP-2436/BDP-2493) — mirrors the relaunch path
+                # (_launch_runner_on_host). Without this, a create-time runner has
+                # no launch_owner record and its tunnel handshake is rejected 403
+                # in accounts mode (the runner reads as "offline" and the session
+                # stays unbound until a later message relaunches it).
+                _create_tunnel_registry = getattr(
+                    request.app.state, "tunnel_registry", None
+                )
+                if user_id is not None and _create_tunnel_registry is not None:
+                    _create_tunnel_registry.record_launch_owner(runner_id, user_id)
                 host_registry.send_text(conn, launch_frame)
                 try:
                     result = await asyncio.wait_for(future, timeout=30.0)
