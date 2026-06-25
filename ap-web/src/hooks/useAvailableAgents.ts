@@ -22,6 +22,11 @@ export interface AvailableAgent {
   // host-discovered skills only resolve once a runner is bound, so
   // they're absent here. Empty on older servers without the field.
   skills: { name: string; description: string }[];
+  // ByteDesk org metadata projected from params. Employee personas have
+  // department/title; workflow orchestrators carry workflow=true.
+  department?: string | null;
+  title?: string | null;
+  workflow?: boolean;
 }
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -48,6 +53,9 @@ interface BuiltinAgentWire {
   description?: string | null;
   harness?: string | null;
   skills?: { name: string; description: string }[];
+  department?: string | null;
+  title?: string | null;
+  workflow?: boolean;
 }
 
 /** Wire row of the sessions scan, GET /v1/sessions?kind=any. */
@@ -79,6 +87,9 @@ async function fetchBuiltinAgents(): Promise<AvailableAgent[]> {
     description: a.description ?? null,
     harness: a.harness ?? null,
     skills: a.skills ?? [],
+    department: a.department ?? null,
+    title: a.title ?? null,
+    workflow: a.workflow ?? false,
   }));
 }
 
@@ -130,6 +141,9 @@ interface AgentObjectWire {
   description?: string | null;
   harness?: string | null;
   skills?: { name: string; description: string }[];
+  department?: string | null;
+  title?: string | null;
+  workflow?: boolean;
 }
 
 /**
@@ -148,6 +162,9 @@ async function enrichSessionAgent(scanned: ScannedSessionAgent): Promise<Availab
     description: null,
     harness: null,
     skills: [],
+    department: null,
+    title: null,
+    workflow: false,
   };
   try {
     const res = await authenticatedFetch(
@@ -163,6 +180,9 @@ async function enrichSessionAgent(scanned: ScannedSessionAgent): Promise<Availab
       description: json.description ?? null,
       harness: json.harness ?? null,
       skills: json.skills ?? [],
+      department: json.department ?? null,
+      title: json.title ?? null,
+      workflow: json.workflow ?? false,
     };
   } catch {
     // Network-level failure — same best-effort degradation as the

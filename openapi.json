@@ -4125,6 +4125,11 @@
       },
       "SkillSourceObject": {
         "properties": {
+          "available": {
+            "default": true,
+            "title": "Available",
+            "type": "boolean"
+          },
           "high_risk": {
             "title": "High Risk",
             "type": "boolean"
@@ -4148,6 +4153,17 @@
           "supports_search": {
             "title": "Supports Search",
             "type": "boolean"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
           }
         },
         "required": [
@@ -4933,6 +4949,17 @@
         "title": "_GetBody",
         "type": "object"
       },
+      "_ListBody": {
+        "properties": {
+          "prefix": {
+            "default": "org",
+            "title": "Prefix",
+            "type": "string"
+          }
+        },
+        "title": "_ListBody",
+        "type": "object"
+      },
       "_PutBody": {
         "properties": {
           "address": {
@@ -4980,6 +5007,11 @@
       },
       "_RecallBody": {
         "properties": {
+          "kind": {
+            "default": "all",
+            "title": "Kind",
+            "type": "string"
+          },
           "limit": {
             "default": 10,
             "title": "Limit",
@@ -6545,6 +6577,43 @@
           }
         },
         "summary": "Get"
+      }
+    },
+    "/v1/memory/list": {
+      "post": {
+        "description": "Browse addressable slots under a prefix (``org`` or ``dept:<dept>``).\n\nQuery-less discovery of the keyed slots in a compartment \u2014 deterministic,\nnewest first. The fuzzy counterpart is ``/memory/recall`` (kind=all).",
+        "operationId": "list_slots_v1_memory_list_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_ListBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Slots"
       }
     },
     "/v1/memory/put": {

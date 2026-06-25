@@ -59,8 +59,11 @@ async def test_sources_route_lists_framework_adapters(client: httpx.AsyncClient)
     resp = await client.get("/v1/skills/sources")
 
     assert resp.status_code == 200, resp.text
-    ids = {source["id"] for source in resp.json()["data"]}
+    sources = {source["id"]: source for source in resp.json()["data"]}
+    ids = set(sources)
     assert {"skills", "npm", "github", "configured", "freeform"}.issubset(ids)
+    assert all("available" in source for source in sources.values())
+    assert sources["freeform"]["supports_search"] is True
 
 
 async def test_preview_and_apply_installs_full_skill_directory(

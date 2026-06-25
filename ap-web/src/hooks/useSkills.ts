@@ -8,6 +8,8 @@ export interface SkillSource {
   supports_search: boolean;
   supports_preview: boolean;
   high_risk: boolean;
+  available?: boolean;
+  unavailable_reason?: string | null;
 }
 
 export interface InstalledSkillAgent {
