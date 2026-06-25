@@ -37,6 +37,14 @@ go-ahead.
 skill is a no-op (idempotent re-run). Use `replace` only for an explicit
 reinstall/update.
 
+**Sources.** The default search is the skills.sh registry + npm. The
+**superchargeclaudecode.com** marketplace is also searchable — pass
+`sys_skill_search(query, sources=["supercharge"])`; each hit's `name`/`source_ref`
+is the marketplace **slug** (e.g. `dogfood`, NOT an `owner/repo@skill` ref). Stage
+it with `sys_skill_stage_preview(source="supercharge", source_ref=<slug>, ...)`.
+The rest of the saga (apply → verify → rollback) is identical. The endpoint
+contract this source is built from is in `references/supercharge-api.md`.
+
 ## 3. Apply
 
 `sys_skill_apply(preview_id)`. Record exactly which targets the apply
