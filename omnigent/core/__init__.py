@@ -42,28 +42,34 @@ logger = logging.getLogger(__name__)
 # (module_path, class_attr) in Section 9.3 boot dependency order. Each plugin
 # class is zero-arg constructible and carries its ``name`` (set by the SDK
 # ``@extension`` decorator). The order is load-bearing — see module docstring.
+#
+# BDP-2516: ``omnigent.metrics`` and ``omnigent.memory_maintenance`` are NO
+# LONGER in this flag-gated shadow list — they were cut over to the
+# *authoritative* boot path (``create_app`` starts their background loops
+# unconditionally via :func:`firstparty_background_task_extensions`, independent
+# of ``OMNIGENT_USE_FIRSTPARTY_PLUGINS``). Keeping them here too would
+# double-register / double-start them when the flag is on. The other 11 plugins
+# remain flag-gated shadows of the inline ``create_app`` wiring until their own
+# slices are cut over.
 _FIRSTPARTY_PLUGINS: tuple[tuple[str, str], ...] = (
     # db/stores
-    ("omnigent.stores._plugin", "StoresPlugin"),
+    ("omnigent.stores._plugin", "StoresExtension"),
     # identity
-    ("omnigent.identity._plugin", "IdentityPlugin"),
+    ("omnigent.identity._plugin", "IdentityExtension"),
     # coordination
     ("omnigent.coordination._plugin", "CoordinationExtension"),
     # harnesses (requires omnigent.stores)
-    ("omnigent.runtime.harnesses._plugin", "HarnessesPlugin"),
+    ("omnigent.runtime.harnesses._plugin", "HarnessesExtension"),
     # tools
     ("omnigent.tools.builtins._plugin", "BuiltinToolsExtension"),
     # policies
-    ("omnigent.policies._plugin", "PoliciesPlugin"),
+    ("omnigent.policies._plugin", "PoliciesExtension"),
     # spec
-    ("omnigent.spec._plugin", "SpecPlugin"),
+    ("omnigent.spec._plugin", "SpecExtension"),
     # routes (install_extensions → routers())
-    ("omnigent.server.routes._plugin", "RoutesPlugin"),
+    ("omnigent.server.routes._plugin", "RoutesExtension"),
     # secrets
-    ("omnigent.onboarding._plugin_secrets", "SecretsPlugin"),
-    # metrics + memory_maintenance (background_tasks)
-    ("omnigent.server._plugin_metrics", "MetricsExtension"),
-    ("omnigent.runtime._plugin_memory_maintenance", "MemoryMaintenanceExtension"),
+    ("omnigent.onboarding._plugin_secrets", "SecretsExtension"),
     # skills (requires omnigent.spec) + terminals
     ("omnigent.skills._plugin", "SkillsExtension"),
     ("omnigent.terminals._plugin", "TerminalsExtension"),
@@ -135,6 +141,12 @@ def register_firstparty_seams(extensions: list[OmnigentExtension]) -> None:
 
     for seam, accessor, hook in SEAMS:
         try:
+            # WART (BDP-2516, not redesigned this run): several SEAMS accessors
+            # build a FRESH throwaway registry per call (the per-call-registries
+            # leaky seam), so registrations into those are transient — only the
+            # singleton-backed seams (harness, spec_source) persist. Mirrors what
+            # discover_all_extensions already does; a proper fix (one persistent
+            # registry per seam) is out of scope for the safe-slice cutover.
             registry = accessor()
         except Exception:  # noqa: BLE001 — one bad seam must not break the rest
             logger.warning(
@@ -204,8 +216,80 @@ def firstparty_background_factories(
     return factories
 
 
+def firstparty_background_task_extensions(
+    *,
+    server_metrics: object | None = None,
+    server_metrics_otel: object | None = None,
+) -> list[OmnigentExtension]:
+    """Build the AUTHORITATIVE always-on background-task plugins (BDP-2516).
+
+    The lowest-risk first-party slices —  ``omnigent.metrics`` and
+    ``omnigent.memory_maintenance`` — were cut over from the inline
+    ``create_app`` / ``_lifespan`` wiring to this core plugin path. ``create_app``
+    calls this **unconditionally** (independent of
+    ``OMNIGENT_USE_FIRSTPARTY_PLUGINS``) and starts the returned extensions'
+    ``background_tasks()`` factories through the same lifespan task-creation path
+    it already uses for third-party extension loops. Pass the result to
+    :func:`firstparty_background_factories` to obtain the flat factory list.
+
+    Only these two slices are built here — deliberately NOT the full
+    :func:`default_extensions` set — so the cutover is surgical: no stores /
+    identity / routes / etc. plugin is instantiated on the default boot path.
+
+    ``omnigent.metrics`` is constructed with the live ``server_metrics`` /
+    ``server_metrics_otel`` so the publish loop snapshots the SAME tracker the
+    HTTP middleware records into — preserving exact parity with the removed
+    inline ``publish_server_metrics_periodically(server_metrics, ...)`` callsite.
+    ``omnigent.memory_maintenance`` takes no injected dependency (its loop
+    resolves the memory store at run time), matching the removed zero-arg inline
+    ``memory_maintenance_loop()`` callsite byte-for-byte.
+
+    A plugin whose module fails to import or won't construct is logged and
+    skipped (never fatal), exactly like :func:`default_extensions`.
+
+    :param server_metrics: the ``create_app``-constructed live request tracker
+        (``ServerPerformanceMetrics``) the metrics loop must snapshot.
+    :param server_metrics_otel: the ``create_app``-constructed OTel publisher.
+    :returns: ``[MetricsExtension, MemoryMaintenanceExtension]`` (healthy ones),
+        ready for :func:`firstparty_background_factories`.
+    """
+    import importlib
+
+    extensions: list[OmnigentExtension] = []
+
+    try:
+        metrics_mod = importlib.import_module("omnigent.server._plugin_metrics")
+        extensions.append(
+            metrics_mod.MetricsExtension(
+                server_metrics=server_metrics,
+                server_metrics_otel=server_metrics_otel,
+            )
+        )
+    except Exception:  # noqa: BLE001 — a broken plugin must not break boot
+        logger.warning(
+            "authoritative background plugin omnigent.metrics failed to load — "
+            "skipping",
+            exc_info=True,
+        )
+
+    try:
+        memmaint_mod = importlib.import_module(
+            "omnigent.runtime._plugin_memory_maintenance"
+        )
+        extensions.append(memmaint_mod.MemoryMaintenanceExtension())
+    except Exception:  # noqa: BLE001 — a broken plugin must not break boot
+        logger.warning(
+            "authoritative background plugin omnigent.memory_maintenance failed "
+            "to load — skipping",
+            exc_info=True,
+        )
+
+    return extensions
+
+
 __all__ = [
     "default_extensions",
-    "register_firstparty_seams",
     "firstparty_background_factories",
+    "firstparty_background_task_extensions",
+    "register_firstparty_seams",
 ]

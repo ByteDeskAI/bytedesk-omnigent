@@ -558,14 +558,36 @@ class ExtensionBackgroundTasksPhase(LifespanPhase):
     async def startup(self, ctx: LifespanContext) -> None:
         """Start every extension background loop via the extensions seam.
 
+        BDP-2516: also starts the AUTHORITATIVE first-party background loops
+        (``omnigent.metrics`` + ``omnigent.memory_maintenance``) through the SAME
+        task path — unconditionally, no ``OMNIGENT_USE_FIRSTPARTY_PLUGINS`` flag.
+        This replaces the former standalone ``MetricsPublishPhase`` /
+        ``MemoryMaintenancePhase`` (now removed from
+        :func:`build_default_lifespan_phases`), keeping the phase path 1:1 with
+        the monolithic ``_lifespan``. The metrics loop is injected with the live
+        ``ctx.server_metrics`` / ``ctx.server_metrics_otel`` for exact parity.
+
         :param ctx: The shared lifespan context.
         """
+        from omnigent.core import (
+            firstparty_background_factories,
+            firstparty_background_task_extensions,
+        )
         from omnigent.kernel.extensions import extension_background_factories
 
-        ctx.state["ext_bg_tasks"] = [
+        tasks = [
             asyncio.create_task(factory())
             for factory in extension_background_factories()
         ]
+        _bg_task_extensions = firstparty_background_task_extensions(
+            server_metrics=ctx.server_metrics,
+            server_metrics_otel=ctx.server_metrics_otel,
+        )
+        tasks.extend(
+            asyncio.create_task(factory())
+            for factory in firstparty_background_factories(_bg_task_extensions)
+        )
+        ctx.state["ext_bg_tasks"] = tasks
 
     async def shutdown(self, ctx: LifespanContext) -> None:
         """Cancel and await every extension background task.
@@ -648,9 +670,10 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
     The phases are registered in the order whose **reverse is the original
     ``_lifespan`` ``finally`` block** — so the orchestrator's reverse-of-
     startup teardown reproduces the hand-written shutdown sequence
-    statement-for-statement (metrics → memory → ext → managed-launch →
-    notifier → resource → ws-factory → router → harness → terminal →
-    mcp-pool). ``depends_on`` then re-imposes the real startup data
+    statement-for-statement (ext-bg [which since BDP-2516 also covers the
+    metrics + memory-maintenance loops] → managed-launch → notifier →
+    resource → ws-factory → router → harness → terminal → mcp-pool).
+    ``depends_on`` then re-imposes the real startup data
     constraints on top of that order: the subagent notifier and the WS
     factory both require the runner router installed first, and the runner
     router requires the harness process manager. With those edges the
@@ -678,9 +701,13 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
         ResourceRegistryPhase(),
         SubagentBlockNotifierPhase(),
         ManagedLaunchCancelPhase(),
+        # BDP-2516: ExtensionBackgroundTasksPhase now also starts the
+        # authoritative omnigent.metrics + omnigent.memory_maintenance loops, so
+        # the standalone MetricsPublishPhase / MemoryMaintenancePhase are no
+        # longer in the default DAG (they remain as classes for back-compat /
+        # direct use but are unwired). Mirrors the monolithic _lifespan which now
+        # folds those two loops into the single _ext_bg_tasks list.
         ExtensionBackgroundTasksPhase(),
-        MemoryMaintenancePhase(),
-        MetricsPublishPhase(),
         DefaultAgentsPhase(),
         PolicyRegistryPhase(),
         AccountsAutoOpenPhase(),

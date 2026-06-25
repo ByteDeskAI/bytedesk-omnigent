@@ -47,7 +47,7 @@ from omnigent.sdk import extension
 
 
 @extension(name="omnigent.stores")
-class StoresPlugin:
+class StoresExtension:
     """First-party storage plugin: registers the default store providers.
 
     Hand-written seam hooks (the three storage seams have no dedicated SDK
@@ -143,4 +143,4 @@ class StoresPlugin:
         return {"composed": _composed}
 
 
-__all__ = ["StoresPlugin"]
+__all__ = ["StoresExtension"]

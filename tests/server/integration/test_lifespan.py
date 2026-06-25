@@ -80,14 +80,24 @@ async def test_lifespan_starts_periodic_metrics_otel_publisher(
 
     If this wiring regresses, request/resource gauges stop exporting
     even though per-request duration histograms still work.
+
+    BDP-2516: the metrics-publish loop is now started through the
+    authoritative ``omnigent.metrics`` first-party plugin (not the removed
+    inline ``asyncio.create_task(...)`` in ``_lifespan``). The plugin lazily
+    imports ``publish_server_metrics_periodically`` from
+    ``omnigent.server.performance_metrics``, so we patch it there. We also
+    assert the lifespan threaded the SAME live tracker the HTTP middleware
+    records into (``app.state.server_metrics``) — exact parity with the
+    removed inline callsite.
     """
-    from omnigent.server import app as server_app
+    from omnigent.server import performance_metrics as perf
     from omnigent.server.performance_metrics import (
         ServerMetricsOtelPublisher,
         ServerPerformanceMetrics,
     )
 
     publisher_started = asyncio.Event()
+    captured: dict[str, object] = {}
 
     async def fake_publisher(
         metrics: ServerPerformanceMetrics,
@@ -107,14 +117,51 @@ async def test_lifespan_starts_periodic_metrics_otel_publisher(
         assert isinstance(metrics, ServerPerformanceMetrics)
         assert isinstance(otel_publisher, ServerMetricsOtelPublisher)
         assert interval_seconds == 10.0
+        captured["metrics"] = metrics
+        captured["otel"] = otel_publisher
         publisher_started.set()
         await asyncio.Event().wait()
 
     monkeypatch.setattr(
-        server_app,
+        perf,
         "publish_server_metrics_periodically",
         fake_publisher,
     )
 
     async with app.router.lifespan_context(app):
         await asyncio.wait_for(publisher_started.wait(), timeout=1.0)
+        # Authoritative path injects the live tracker, not a fresh one.
+        assert captured["metrics"] is app.state.server_metrics
+        assert captured["otel"] is app.state.server_metrics_otel
+
+
+async def test_lifespan_starts_memory_maintenance_loop(
+    app: FastAPI,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The lifespan starts the memory-maintenance loop (BDP-2516 authoritative).
+
+    Parity with the removed inline ``memory_maintenance_loop()`` callsite: the
+    loop must start on a default boot (no ``OMNIGENT_USE_FIRSTPARTY_PLUGINS``
+    flag), invoked with zero args through the authoritative
+    ``omnigent.memory_maintenance`` first-party plugin. The plugin lazily imports
+    the loop from ``omnigent.runtime.memory_maintenance``, so we patch it there.
+    """
+    from omnigent.runtime import memory_maintenance as mm
+
+    loop_started = asyncio.Event()
+    captured: dict[str, object] = {}
+
+    async def fake_loop(*args: object, **kwargs: object) -> None:
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        loop_started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(mm, "memory_maintenance_loop", fake_loop)
+
+    async with app.router.lifespan_context(app):
+        await asyncio.wait_for(loop_started.wait(), timeout=1.0)
+        # Byte-equivalent to the removed inline zero-arg callsite.
+        assert captured["args"] == ()
+        assert captured["kwargs"] == {}
