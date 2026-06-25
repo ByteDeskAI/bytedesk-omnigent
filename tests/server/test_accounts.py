@@ -289,6 +289,55 @@ def test_accounts_source_reads_valid_cookie() -> None:
     assert provider.get_user_id(request) == "admin"
 
 
+def test_mint_and_verify_ws_ticket_round_trip() -> None:
+    """mint_ws_ticket -> verify_ws_ticket recovers the user id (BDP-2513).
+
+    The embedded-iframe updates WebSocket can't carry the session cookie, so
+    the UI passes a short-TTL ticket on the handshake instead.
+    """
+    provider = UnifiedAuthProvider(source="accounts", accounts_config=_make_accounts_config())
+    ticket = provider.mint_ws_ticket("admin")
+    assert ticket is not None
+    assert provider.verify_ws_ticket(ticket) == "admin"
+
+
+def test_verify_ws_ticket_rejects_long_lived_session_jwt() -> None:
+    """A full session-cookie JWT must NOT pass verify_ws_ticket -- only a
+    kind='ws-ticket' token -- so a ticket leaked via the access-logged
+    ``?ticket=`` query can never replay a long-lived session."""
+    from omnigent.server.oidc import mint_session_cookie
+
+    provider = UnifiedAuthProvider(source="accounts", accounts_config=_make_accounts_config())
+    session_jwt = mint_session_cookie(
+        user_id="admin", cookie_secret=_TEST_COOKIE_SECRET, ttl_hours=8, provider="accounts"
+    )
+    assert provider.verify_ws_ticket(session_jwt) is None
+
+
+def test_verify_ws_ticket_rejects_foreign_secret() -> None:
+    """A ticket minted under a different cookie secret is rejected."""
+    minting = UnifiedAuthProvider(source="accounts", accounts_config=_make_accounts_config())
+    ticket = minting.mint_ws_ticket("admin")
+    assert ticket is not None
+    other_cfg = AccountsConfig(
+        cookie_secret=secrets.token_bytes(32),
+        session_ttl_hours=8,
+        base_url="http://localhost:8000",
+        init_admin_password=None,
+        invite_ttl_seconds=3600,
+        magic_ttl_seconds=600,
+    )
+    verifying = UnifiedAuthProvider(source="accounts", accounts_config=other_cfg)
+    assert verifying.verify_ws_ticket(ticket) is None
+
+
+def test_ws_ticket_unavailable_in_header_mode() -> None:
+    """Header mode has no JWT machinery -> mint/verify both return None."""
+    provider = UnifiedAuthProvider(source="header")
+    assert provider.mint_ws_ticket("admin") is None
+    assert provider.verify_ws_ticket("anything") is None
+
+
 def test_accounts_source_rejects_reserved_user_in_cookie() -> None:
     """Reserved usernames in a cookie's sub claim are rejected.
 

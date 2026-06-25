@@ -206,6 +206,21 @@ class AuthProvider(ABC):
         uid = self.get_user_id(request)
         return Principal(user_id=uid) if uid is not None else None
 
+    def mint_ws_ticket(self, user_id: str, ttl_seconds: int = 60) -> str | None:
+        """Mint a short-TTL WebSocket ticket for *user_id*, or ``None``.
+
+        Default ``None`` — only cookie/JWT-backed providers (accounts/OIDC)
+        can mint one. See :meth:`UnifiedAuthProvider.mint_ws_ticket`.
+        """
+        return None
+
+    def verify_ws_ticket(self, ticket: str) -> str | None:
+        """Verify a WS ticket and return its user id, or ``None``.
+
+        Default ``None``. See :meth:`UnifiedAuthProvider.verify_ws_ticket`.
+        """
+        return None
+
 
 class CompositeAuthProvider(AuthProvider):
     """Chain-of-Responsibility over interchangeable identity resolvers.
@@ -272,6 +287,15 @@ class CompositeAuthProvider(AuthProvider):
         """
         principal = self.get_principal(request)
         return principal.user_id if principal is not None else None
+
+    def mint_ws_ticket(self, user_id: str, ttl_seconds: int = 60) -> str | None:
+        """Delegate ticket minting to the configured base (the cookie/JWT
+        provider); head/tail resolvers don't own session-cookie machinery."""
+        return self._base.mint_ws_ticket(user_id, ttl_seconds)
+
+    def verify_ws_ticket(self, ticket: str) -> str | None:
+        """Delegate ticket verification to the configured base."""
+        return self._base.verify_ws_ticket(ticket)
 
 
 class UnifiedAuthProvider(AuthProvider):
@@ -414,6 +438,54 @@ class UnifiedAuthProvider(AuthProvider):
                 time.monotonic() + remaining,
             )
 
+        return user_id
+
+    def mint_ws_ticket(self, user_id: str, ttl_seconds: int = 60) -> str | None:
+        """Mint a short-TTL WebSocket ticket for *user_id* (BDP-2513).
+
+        The browser drops the third-party session cookie on a cross-site
+        WebSocket handshake (the embedded-iframe ``WS /v1/sessions/updates``)
+        even though it rides every HTTP request. The UI fetches this ticket
+        over the working cookie/HTTP path and passes it as the WS ``?ticket=``
+        so the handshake authenticates. Short TTL + the user's own identity
+        bound: a ticket leaked via the access log is useless within seconds.
+        Accounts/OIDC only (header mode has no JWT) → ``None``.
+        """
+        if self._source not in ("oidc", "accounts"):
+            return None
+        import jwt
+
+        config = self._oidc_config if self._source == "oidc" else self._accounts_config
+        now = int(time.time())
+        return jwt.encode(
+            {"sub": user_id, "iat": now, "exp": now + ttl_seconds, "kind": "ws-ticket"},
+            config.cookie_secret,
+            algorithm="HS256",
+        )
+
+    def verify_ws_ticket(self, ticket: str) -> str | None:
+        """Verify a ticket from :meth:`mint_ws_ticket` → user id, or ``None``.
+
+        Same HS256 + ``cookie_secret`` as the session cookie, but REQUIRES the
+        ``kind == "ws-ticket"`` claim so a long-lived session-cookie JWT can
+        never be replayed through the access-logged ``?ticket=`` query param —
+        only a short-TTL ticket is accepted there. Expiry is enforced by
+        ``jwt.decode``.
+        """
+        if self._source not in ("oidc", "accounts"):
+            return None
+        import jwt
+
+        config = self._oidc_config if self._source == "oidc" else self._accounts_config
+        try:
+            payload = jwt.decode(ticket, config.cookie_secret, algorithms=["HS256"])
+        except jwt.InvalidTokenError:
+            return None
+        if payload.get("kind") != "ws-ticket":
+            return None
+        user_id = payload.get("sub")
+        if not user_id or user_id in _RESERVED_USERS:
+            return None
         return user_id
 
     def _check_header(self, request: HTTPConnection) -> str | None:
