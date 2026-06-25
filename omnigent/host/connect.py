@@ -672,6 +672,19 @@ class HostProcess:
         """
         if status in _RETRYABLE_UPGRADE_STATUSES or not (400 <= status < 500):
             return None
+        # A host that has already completed an upgrade in this process retries
+        # auth/authorization rejections (401/403) instead of failing loud:
+        # once the credentials have worked, a sudden 401/403 is almost always
+        # the server mid-restart — its auth layer isn't ready yet, so it
+        # refuses the host tunnel (a pre-accept WS close that Starlette
+        # surfaces as HTTP 403), not a real de-authorization. Treating that as
+        # permanent made the host exit(1) and crashloop on every
+        # ``omnigent-server`` roll (BDP-2499). Mirrors the login-redirect grace
+        # in _fatal_upgrade_error so a server roll never kills a live host with
+        # running sessions. A never-connected host still fails loud below — a
+        # first-connect 401/403 is a real credential/authorization problem.
+        if status in (401, 403) and self._ever_connected:
+            return None
         if status == 401:
             return HostConnectError(
                 "Authentication failed (HTTP 401): the server rejected the "
