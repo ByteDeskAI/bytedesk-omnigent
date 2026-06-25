@@ -35,13 +35,14 @@ _EXTENSIONS = _REPO_ROOT / "omnigent" / "extensions.py"
 _HANDOFF_DOC = _REPO_ROOT / "docs" / "architecture" / "abstraction-spine-handoff.md"
 
 # ── Phase 1 anchor: the create_app *body* app.state key set (app.py 1052–1066). ──
-# ServiceRegistry.bind(app) must reproduce exactly these 8 keys (assigned via
+# ServiceRegistry.bind(app) must reproduce exactly these keys (assigned via
 # ``app.state.<key> = ...`` in the synchronous factory body). A typo here silently
 # breaks any router that reads request.app.state.<key>.
 _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
     {
         "tunnel_registry",
         "runner_router",
+        "auth_provider",
         "host_registry",
         "host_store",
         "sandbox_config",
@@ -56,13 +57,6 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         # OMNIGENT_USE_SERVICE_REGISTRY default OFF — never set at runtime when off,
         # but the AST scan sees the source-level assignment).
         "service_registry",
-        # The DI container, exposed on app.state for resolution (app.py).
-        "di_container",
-        # BDP-2424 P2: the acting-identity carrier signer (app.py) — the inbound
-        # mirror of the runner's assertion_verifier; minted from env, unset
-        # secret ⇒ no token. Added to the pinned set in this PR (the P2 change
-        # that introduced the write predates this contract update).
-        "assertion_signer",
     }
 )
 # ── Phase 3 anchor: the one app.state key set inside _lifespan (app.py:915). ──
@@ -77,9 +71,10 @@ _EXPECTED_ALL_APP_STATE_KEYS = (
 )
 
 # ── Phase 5 anchor: dispatch elif chain (tool_dispatch.py 3412–3570). ──
-# 16 set-family branches + 3 predicate tails (spec-local-python, UC-function, else).
+# 16 set-family branches + 4 predicate tails
+# (spec-builtin, spec-local-python, UC-function, else).
 _EXPECTED_SET_FAMILY_BRANCHES = 16
-_EXPECTED_PREDICATE_TAILS = 3
+_EXPECTED_PREDICATE_TAILS = 4
 
 # ── Phase 3/lifespan + Phase 1/harness anchors. ──
 _EXPECTED_EXTENSION_GETTERS = frozenset(
@@ -124,7 +119,7 @@ def _assigned_app_state_keys(source: str, *, root_names: set[str]) -> set[str]:
     return keys
 
 
-# ── Phase 1: ServiceRegistry binds exactly the 8 app.state singletons ──
+# ── Phase 1: ServiceRegistry binds exactly the app.state singletons ──
 
 
 def test_app_state_body_singleton_key_set_is_pinned():
@@ -165,7 +160,7 @@ def test_app_state_lifespan_key_is_separate_from_body():
 def test_harness_modules_registry_is_the_provider_source_of_truth():
     """_HARNESS_MODULES is the dict HarnessProvider's default impl returns verbatim."""
     namespace: dict[str, object] = {}
-    exec(  # noqa: S102 — executing first-party module source to read its constant
+    exec(  # executing first-party module source to read its constant
         compile(_read(_HARNESSES_INIT), str(_HARNESSES_INIT), "exec"),
         namespace,
     )
@@ -191,7 +186,7 @@ def test_omnigent_compat_allowlist_consumes_the_same_harness_names():
     to a registered module or a documented alias).
     """
     hm_ns: dict[str, object] = {}
-    exec(  # noqa: S102
+    exec(
         compile(_read(_HARNESSES_INIT), str(_HARNESSES_INIT), "exec"),
         hm_ns,
     )
@@ -226,7 +221,7 @@ def test_omnigent_compat_allowlist_consumes_the_same_harness_names():
     )
 
 
-# ── Phase 4/5: the dispatch elif chain shape (16 set-family + 3 predicate tails) ──
+# ── Phase 4/5: the dispatch elif chain shape (16 set-family + 4 predicate tails) ──
 
 
 def test_dispatch_elif_chain_branch_counts_are_pinned():
@@ -240,13 +235,15 @@ def test_dispatch_elif_chain_branch_counts_are_pinned():
         f"{_EXPECTED_SET_FAMILY_BRANCHES}. A tool family was added/removed — add it to "
         "TOOL_FAMILIES (Phase 5) and re-pin _EXPECTED_SET_FAMILY_BRANCHES + the plan."
     )
-    # Predicate tails the plan enumerates: spec-local-python, UC-function, else-fallback.
+    # Predicate tails the plan enumerates: spec-builtin, spec-local-python,
+    # UC-function, else-fallback.
+    assert "_is_spec_builtin_tool(tool_name, agent_spec)" in src
     assert "_is_spec_local_python_tool(tool_name, agent_spec)" in src
     assert "_is_uc_function_tool(tool_name, agent_spec)" in src
     assert "_execute_spec_callable_tool(tool_name, args, agent_spec=agent_spec)" in src
-    # Total routing branches quoted by the plan (16 + 3 = 19).
+    # Total routing branches quoted by the plan (16 + 4 = 20).
     assert (
-        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 19
+        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 20
     )
 
 
@@ -281,8 +278,8 @@ def test_extension_seam_getters_exist_and_keep_their_names():
 
 def test_handoff_doc_quotes_the_pinned_branch_count():
     doc = _read(_HANDOFF_DOC)
-    # The doc must reference the 19-branch chain (16 + 3), not the earlier overcount.
-    assert "19-branch" in doc
+    # The doc must reference the 20-branch chain (16 + 4).
+    assert "20-branch" in doc
     assert "16 set-family" in doc or "16 set-family branches" in doc
     # And it must name all five sequential phase tickets in order.
     for key in ("BDP-2327", "BDP-2328", "BDP-2329", "BDP-2330", "BDP-2331"):

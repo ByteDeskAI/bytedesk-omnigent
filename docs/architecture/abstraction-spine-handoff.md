@@ -15,7 +15,7 @@ same ~70-line region of `create_app`, so two phases in flight at once collide in
 literal same diff hunk. The sequence below is the contention-safe order.
 
 The invariants this plan leans on (line anchors, `app.state` key set, the four
-harness-registration sites, the 19-branch dispatch chain (16 set-family `elif`s + 3
+harness-registration sites, the 20-branch dispatch chain (16 set-family `elif`s + 4
 predicate tails), the extension-seam getter shape) are **pinned by a contract test** so the plan can't silently drift:
 `tests/extensions/test_abstraction_spine_contract.py`. Re-pin that test (don't delete
 its asserts) whenever a phase intentionally moves an anchor.
@@ -28,9 +28,9 @@ Today `create_app` (`omnigent/server/app.py:734`–`1072`, **2032 lines** in the
 does five jobs inline:
 
 1. constructs the cross-cutting singletons (`TunnelRegistry`, `RunnerRouter`,
-   `HostRegistry`, `ServerMcpPool`, `ServerPerformanceMetrics`, …) and stashes the 8
-   of them set in the factory body on `app.state.*` (`app.py:1052`–`1066`); the 9th
-   write, `app.state.harness_process_manager`, happens later inside `_lifespan`
+   `HostRegistry`, `ServerMcpPool`, `ServerPerformanceMetrics`, …) and stashes the
+   factory-body key set on `app.state.*` (`app.py:1052`–`1066`); the
+   `app.state.harness_process_manager` write happens later inside `_lifespan`
    (`app.py:915`) and is Phase 3's concern;
 2. selects + starts the inner harness process manager inside `_lifespan`
    (`app.py:909`–`916`, `HarnessProcessManager()` + `set_harness_process_manager`);
@@ -39,9 +39,9 @@ does five jobs inline:
    `omnigent/cli.py:2934`–`2940` then forwards at `omnigent/cli.py:3055`;
 4. drives a long `_lifespan` body (`app.py:871`–`1043`) of ordered startup steps and
    a matching teardown `finally`;
-5. routes every runner tool call through the **19-branch `elif` chain** (16
-   set-family branches + 3 predicate tails: spec-local-python, UC-function, and the
-   spec-callable `else` fallback) in
+5. routes every runner tool call through the **20-branch `elif` chain** (16
+   set-family branches + 4 predicate tails: spec-builtin, spec-local-python,
+   UC-function, and the spec-callable `else` fallback) in
    `omnigent/runner/tool_dispatch.py:3412`–`3570`.
 
 Each phase extracts **one** of those jobs behind an abstraction. The abstractions
@@ -80,7 +80,7 @@ and a discovery/install split that stays unit-testable with injected fakes.
 
 | Abstraction | New file | Replaces (inline today) | Shape |
 |---|---|---|---|
-| **ServiceRegistry** | `omnigent/server/spine/services.py` | the factory-body `app.state.*` block `app.py:1052`–`1066` (**8 keys**: `tunnel_registry`, `runner_router`, `host_registry`, `host_store`, `sandbox_config`, `managed_launches`, `server_metrics`, `server_metrics_otel`) — **not** `harness_process_manager`, which is set inside `_lifespan` (`app.py:915`) and belongs to Phase 3 | a dict-like registry of named singletons + a `bind(app)` that copies each into `app.state` (so existing `request.app.state.*` reads are byte-for-byte unchanged) |
+| **ServiceRegistry** | `omnigent/server/spine/services.py` | the factory-body `app.state.*` block `app.py:1052`–`1066` (`tunnel_registry`, `runner_router`, `auth_provider`, `assertion_signer`, `host_registry`, `host_store`, `sandbox_config`, `managed_launches`, `server_metrics`, `server_metrics_otel`, `di_container`, `service_registry`) — **not** `harness_process_manager`, which is set inside `_lifespan` (`app.py:915`) and belongs to Phase 3 | a dict-like registry of named singletons + a `bind(app)` that copies each into `app.state` (so existing `request.app.state.*` reads are byte-for-byte unchanged) |
 | **HarnessProvider** | `omnigent/server/spine/harness_provider.py` | the harness selection/start in `_lifespan` (`app.py:909`–`916`) and the registry read of `_HARNESS_MODULES` (`runtime/harnesses/__init__.py:34`) | `Protocol` with `process_manager() -> HarnessProcessManager` + `modules() -> dict[str,str]`; default impl returns `_HARNESS_MODULES` so behavior is identical |
 | **StoreBootstrapper** | `omnigent/server/spine/store_bootstrapper.py` | the hand construction in `cli.py:2934`–`2940` | a builder that takes `db_uri` + `art_loc` and returns a frozen `StoreBundle` (agent/file/conversation/comment/policy/permission/artifact); `create_app` gains **one** optional `stores: StoreBundle \| None = None` kwarg (additive — the 9 existing params stay for back-compat) |
 
@@ -109,14 +109,15 @@ moving target.
 
 **Feature flag:** `OMNIGENT_SPINE_SERVICES` (default **off**). When off, the old
 inline `app.state.*` assignments run; when on, `ServiceRegistry.bind(app)` runs. Both
-produce the identical 8-key `app.state`. The flag is read once in `create_app` via the
+produce the identical factory-body `app.state` key set. The flag is read once in `create_app` via the
 existing `env_var_is_truthy` helper (already imported in this module,
 `app.py:971`).
 
 **Dual-path test approach:** the contract test asserts that, for both flag values, the
 resulting `app.state` exposes the **same key set** (`{tunnel_registry, runner_router,
-host_registry, host_store, sandbox_config, managed_launches, server_metrics,
-server_metrics_otel}`) and that each value is the same object identity passed in. The
+auth_provider, assertion_signer, host_registry, host_store, sandbox_config,
+managed_launches, server_metrics, server_metrics_otel, di_container,
+service_registry}`) and that each value is the same object identity passed in. The
 registry impl is unit-tested in isolation with injected fakes (no FastAPI app needed
 for the dict semantics) — the `discover/bind` split mirrors
 `omnigent/extensions.py`'s `discover_extensions`/`install_extensions`.
@@ -217,24 +218,24 @@ of step ordering — the highest-risk merge in the whole spine.
 - **Shared edit (additive):** `omnigent/runner/tool_dispatch.py` — `dispatch_tool`
   gains an optional `ctx: ToolExecContext | None = None`; when provided, the existing
   kwargs are derived from `ctx` at the top of the function (one unpack block), leaving
-  the **19-branch `elif` chain (`tool_dispatch.py:3412`–`3570`) byte-for-byte
+  the **20-branch `elif` chain (`tool_dispatch.py:3412`–`3570`) byte-for-byte
   unchanged**. The branches still read the same local names.
 - **Shared edit (additive):** `omnigent/server/app.py` — the `_lifespan`/route wiring
   constructs the `ToolExecContext` once (behind the flag) and passes `ctx=` instead of
   the kwarg list.
 
 **Feature flag:** `OMNIGENT_SPINE_TOOLCTX` (default **off**). Off → callers pass the
-explicit kwargs (unchanged). On → callers pass a single `ctx`. The 19 branches are
+explicit kwargs (unchanged). On → callers pass a single `ctx`. The 20 branches are
 identical on both paths — the context is a **parameter-shape** change only, never a
 behavior change.
 
 **Dual-path test approach:** drive `dispatch_tool` for a representative tool from each
 branch family (`_OS_ENV_TOOLS`, `_REST_TOOLS`, `_FILE_TOOLS`, `_TERMINAL_TOOLS`,
-`_SUBAGENT_TOOLS`, `_POLICY_TOOLS`, spec-local-python, UC-function, spec-callable
-fallback) once with explicit kwargs and once with an equivalent `ToolExecContext`, and
-assert byte-identical tool output. The branch count is pinned (19 = 16 set-family + 3
-predicate tails) by the contract test so a future branch addition that forgets `ctx`
-wiring fails loudly.
+`_SUBAGENT_TOOLS`, `_POLICY_TOOLS`, spec-builtin, spec-local-python, UC-function,
+spec-callable fallback) once with explicit kwargs and once with an equivalent
+`ToolExecContext`, and assert byte-identical tool output. The branch count is pinned
+(20 = 16 set-family + 4 predicate tails) by the contract test so a future branch
+addition that forgets `ctx` wiring fails loudly.
 
 **Why it can't parallel:** it both edits `_lifespan` (post-Phase-3 shape) **and**
 produces the `ctx` object Phase 5's registry dispatch consumes. Running it next to
@@ -243,7 +244,7 @@ Phase 3 re-collides on `_lifespan`; running it next to Phase 5 means 5 wires aga
 
 ---
 
-## Phase 5 — `BDP-2331`: tool-dispatch registry (retire the 19-branch elif)
+## Phase 5 — `BDP-2331`: tool-dispatch registry (retire the 20-branch elif)
 
 **Files touched**
 
@@ -265,7 +266,8 @@ follow-up cleanup task removes it, per fork-discipline (additive first, delete l
 under its own ticket).
 
 **Dual-path test approach:** for **every** tool family (all 16 set-family branches +
-the 3 predicate-based tails: spec-local-python, UC-function, spec-callable), assert the
+the 4 predicate-based tails: spec-builtin, spec-local-python, UC-function,
+spec-callable), assert the
 registry path selects the **same** family the `elif` chain would and returns identical
 output for the same inputs. A precedence test asserts the registry's match order equals
 the `elif` order (the MCP-manager short-circuit at `tool_dispatch.py:3406` stays a
@@ -300,7 +302,7 @@ the same app.py hunk at once.
 
 - **`app.state` read-sites are spread across routers.** Phase 1's `ServiceRegistry`
   must `bind` the identical key names; a typo silently breaks a router that reads
-  `request.app.state.<key>`. The contract test pins the 8-key set as the guard.
+  `request.app.state.<key>`. The contract test pins the factory-body key set as the guard.
 - **`_HARNESS_MODULES` is also read by `_omnigent_compat.OMNIGENT_HARNESSES`**
   (`omnigent/spec/_omnigent_compat.py:75`). HarnessProvider must keep returning the
   same dict identity/content so the validator allowlist doesn't drift. The provider's
@@ -310,7 +312,7 @@ the same app.py hunk at once.
   → runner_router → harness PM → terminal registry → mcp pool, in that order). Phase 3's
   reverse-order driver must reproduce it exactly; the integration parity test asserts
   the full ordered teardown, not just setup.
-- **The 19-branch count is a moving target across releases.** If upstream adds a tool
+- **The 20-branch count is a moving target across releases.** If upstream adds a tool
   family before Phase 5 lands, the contract test's branch-count assert fails first —
   treat that as the signal to add the family to `TOOL_FAMILIES`, not to bump the number
   blindly.
