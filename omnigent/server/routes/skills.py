@@ -8,8 +8,10 @@ from typing import Literal
 from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, model_validator
 
+from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.runner.routing import RunnerRouter
 from omnigent.runtime.agent_cache import AgentCache
-from omnigent.server.auth import AuthProvider
+from omnigent.server.auth import LEVEL_OWNER, AuthProvider
 from omnigent.server.routes._auth_helpers import require_user as _require_user
 from omnigent.skills.acquisition import (
     InstallMode,
@@ -21,8 +23,14 @@ from omnigent.skills.acquisition import (
 )
 from omnigent.skills.recommendations import recommend_skills_for_role
 from omnigent.skills.registry import marketplace_entry_to_dict, skill_marketplace_entries
-from omnigent.stores import AgentStore
+from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
+from omnigent.stores.permission_store import PermissionStore
+
+#: The bundled, internal Skills Concierge agent (deploy/bytedesk/agents/
+#: skills-concierge) the web "Skills" surface chats with. Resolved by stable
+#: name, not its generated ``ag_…`` id.
+_CONCIERGE_AGENT_NAME = "skills-concierge"
 
 #: Skill sources that run an OPERATOR-SUPPLIED command (arbitrary shell in a
 #: staging workspace). They stay authenticated even on the otherwise-anonymous
@@ -206,6 +214,31 @@ class SkillApplyResponse(BaseModel):
     data: list[SkillApplyResultObject]
 
 
+class ConciergeSessionRequest(BaseModel):
+    """Open a Skills Concierge chat scoped to an install target."""
+
+    target_kind: Literal["organization", "department", "employee"]
+    target_id: str
+    target_label: str | None = None
+    target_agent_ids: list[str] | None = None
+
+
+class ConciergeSessionResponse(BaseModel):
+    object: str = "skills_concierge_session"
+    session_id: str
+    agent_id: str
+    agent_name: str
+    title: str
+    prompt: str
+    web_path: str
+
+
+def _scope_phrase(kind: str, target_id: str) -> str:
+    if kind == "organization":
+        return "the whole organization"
+    return f"the {target_id} {kind}"
+
+
 def create_skills_router(
     agent_store: AgentStore,
     agent_cache: AgentCache,
@@ -213,6 +246,9 @@ def create_skills_router(
     *,
     auth_provider: AuthProvider | None = None,
     service: SkillAcquisitionService | None = None,
+    conversation_store: ConversationStore | None = None,
+    runner_router: RunnerRouter | None = None,
+    permission_store: PermissionStore | None = None,
 ) -> APIRouter:
     """Build the routes for the skill acquisition framework."""
     router = APIRouter()
@@ -328,6 +364,100 @@ def create_skills_router(
         )
         return SkillApplyResponse(data=[_apply_result_to_response(result) for result in results])
 
+    @router.post("/skills/concierge/sessions", status_code=201)
+    async def create_concierge_session(
+        request: Request,
+        body: ConciergeSessionRequest,
+    ) -> ConciergeSessionResponse:
+        # Open (or idempotently reuse) a chat with the bundled Skills Concierge
+        # agent, scoped to an install target. The web Skills panel switches to
+        # the returned session and binds a runner client-side (the same proven
+        # new-chat path), so the panel talks to the concierge rather than
+        # whatever agent the shared global chat store last had open.
+        user_id = _require_user(request, auth_provider)
+        if conversation_store is None:
+            raise OmnigentError(
+                "concierge sessions are not configured on this server",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        concierge = await asyncio.to_thread(agent_store.get_by_name, _CONCIERGE_AGENT_NAME)
+        if concierge is None:
+            raise OmnigentError(
+                f"the {_CONCIERGE_AGENT_NAME!r} agent is not registered",
+                code=ErrorCode.NOT_FOUND,
+            )
+
+        label = body.target_label or _scope_phrase(body.target_kind, body.target_id)
+        title = f"Skills — {label}"
+        count = len(body.target_agent_ids or [])
+        prompt = f"Install and verify skills for {label}" + (
+            f" ({count} agent{'s' if count != 1 else ''})." if count else "."
+        )
+
+        # Idempotent per (user, scope): re-opening the same scope returns the
+        # live concierge session instead of spawning a new one on every mount /
+        # scope change (the panel re-runs this on both).
+        external_key = f"skills-concierge:{user_id or 'local'}:{body.target_kind}:{body.target_id}"
+
+        def _response(session_id: str, agent_name: str | None, session_title: str | None):
+            return ConciergeSessionResponse(
+                session_id=session_id,
+                agent_id=concierge.id,
+                agent_name=agent_name or concierge.name,
+                title=session_title or title,
+                prompt=prompt,
+                web_path=f"/c/{session_id}",
+            )
+
+        existing = await asyncio.to_thread(
+            conversation_store.get_conversation_by_external_key, external_key
+        )
+        if existing is not None:
+            return _response(existing.id, concierge.name, existing.title)
+
+        # Lazy import: sessions.py is already loaded at startup (create_sessions_router),
+        # so this is a cached lookup — and keeping it off the module top avoids a
+        # route-module import cycle.
+        from sqlalchemy.exc import IntegrityError
+
+        from omnigent.server.routes.sessions import (
+            _announce_session_added,
+            _create_session_from_existing_agent,
+        )
+        from omnigent.server.schemas import SessionCreateRequest
+
+        create = SessionCreateRequest(
+            agent_id=concierge.id, title=title, external_key=external_key
+        )
+        try:
+            resp = await _create_session_from_existing_agent(
+                conversation_store,
+                agent_store,
+                runner_router,
+                create,
+                request,
+                agent_cache=agent_cache,
+                user_id=user_id,
+                permission_store=permission_store,
+                external_key=external_key,
+            )
+        except IntegrityError:
+            # A concurrent open won the external_key race — return its session.
+            race = await asyncio.to_thread(
+                conversation_store.get_conversation_by_external_key, external_key
+            )
+            if race is not None:
+                return _response(race.id, concierge.name, race.title)
+            raise
+
+        # Grant the creator ownership so the panel's session load / runner bind
+        # (require_user-gated) pass — mirrors POST /v1/sessions.
+        if permission_store is not None and user_id is not None:
+            await asyncio.to_thread(permission_store.ensure_user, user_id)
+            await asyncio.to_thread(permission_store.grant, user_id, resp.id, LEVEL_OWNER)
+        _announce_session_added(user_id, resp.id)
+        return _response(resp.id, resp.agent_name, resp.title)
+
     return router
 
 
@@ -370,9 +500,7 @@ def _preview_to_response(preview: SkillPreview) -> SkillPreviewResponse:
             for action in preview.target_actions
         ],
         command=(
-            SkillCommandEvidenceObject(**preview.command.__dict__)
-            if preview.command
-            else None
+            SkillCommandEvidenceObject(**preview.command.__dict__) if preview.command else None
         ),
         skill_names=list(preview.skill_names),
     )

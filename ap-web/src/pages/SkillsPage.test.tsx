@@ -22,6 +22,8 @@ vi.mock("@/store/chatStore", () => ({
     getState: () => ({ conversationId: "conv_prev", switchTo }),
   }),
 }));
+const { bindOnlyOnlineRunner } = vi.hoisted(() => ({ bindOnlyOnlineRunner: vi.fn() }));
+vi.mock("@/lib/sessionsApi", () => ({ bindOnlyOnlineRunner }));
 // The embedded chat atoms subscribe to the module-level chatStore; stub
 // them so the page test stays a focused structural render.
 vi.mock("@/components/chat", () => ({
@@ -123,6 +125,29 @@ describe("SkillsPage", () => {
     // On close: restore the caller's previous conversation.
     unmount();
     expect(switchTo).toHaveBeenCalledWith("conv_prev");
+  });
+
+  it("binds a runner to the concierge session the backend returns", async () => {
+    // When POST /v1/skills/concierge/sessions returns a session, the panel
+    // switches to it AND binds a runner (the backend creates the session but
+    // leaves runner_id unset) so the concierge can answer on the first send.
+    vi.mocked(skillsHooks.useStartSkillsConciergeSession).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({
+        session_id: "conv_concierge",
+        agent_id: "ag_d5a1b59732f6819ed9b38132d6170412",
+        agent_name: "skills-concierge",
+        title: "Skills",
+        prompt: "",
+        web_path: "/c/conv_concierge",
+      }),
+    } as never);
+
+    renderPage();
+
+    await vi.waitFor(() => {
+      expect(switchTo).toHaveBeenCalledWith("conv_concierge");
+      expect(bindOnlyOnlineRunner).toHaveBeenCalledWith("conv_concierge");
+    });
   });
 
   it("renders the shell, scope selector, conversation, and installed rail", async () => {

@@ -29,6 +29,7 @@ import {
 } from "@/hooks/useSkills";
 import { AgentConversation, AgentComposer } from "@/components/chat";
 import { Link } from "@/lib/routing";
+import { bindOnlyOnlineRunner } from "@/lib/sessionsApi";
 import { useChatStore } from "@/store/chatStore";
 import { cn } from "@/lib/utils";
 
@@ -154,6 +155,11 @@ export function SkillsPage() {
         });
         if (!cancelled) {
           await useChatStore.getState().switchTo(session.session_id);
+          // The endpoint creates the session but does not bind a runner (the
+          // create helper leaves runner_id unset). Bind the single online
+          // runner — the same proven path the main new-chat flow uses — so the
+          // concierge can respond on the first send.
+          await bindOnlyOnlineRunner(session.session_id);
         }
       } catch {
         // Scope seed is best-effort; inline chat still works without it.

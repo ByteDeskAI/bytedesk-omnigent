@@ -1863,6 +1863,11 @@ def create_app(
             agent_cache,
             artifact_store,
             auth_provider=auth_provider,
+            # Lets POST /v1/skills/concierge/sessions open a concierge-bound
+            # session through the same create path as POST /v1/sessions.
+            conversation_store=conversation_store,
+            runner_router=runner_router,
+            permission_store=permission_store,
         ),
         prefix="/v1",
         tags=["skills"],
