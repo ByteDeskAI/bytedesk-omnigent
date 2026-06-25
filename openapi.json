@@ -1232,6 +1232,76 @@
         "title": "IncompleteEvent",
         "type": "object"
       },
+      "InstalledSkillAgentObject": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version"
+        ],
+        "title": "InstalledSkillAgentObject",
+        "type": "object"
+      },
+      "InstalledSkillObject": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/InstalledSkillAgentObject"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "agents"
+        ],
+        "title": "InstalledSkillObject",
+        "type": "object"
+      },
+      "InstalledSkillsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/InstalledSkillObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "installed_skill.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "InstalledSkillsResponse",
+        "type": "object"
+      },
       "LaunchRunnerRequest": {
         "description": "Request body for ``POST /v1/hosts/{host_id}/runners``.\n\n:param session_id: Session to bind the new runner to, e.g.\n    ``\"conv_abc123\"``.\n:param workspace: Absolute path on the host machine to use\n    as the runner's working directory, e.g.\n    ``\"/Users/corey/projects/frontend\"``. When ``git`` is set,\n    this is interpreted as the source repository directory and\n    the runner starts in the created worktree instead.\n:param git: Optional git worktree options. When set, the server\n    creates a worktree for a new branch off ``workspace`` on the\n    host and binds the runner to it (the fork-resume path; mirrors\n    ``POST /v1/sessions``). ``None`` binds ``workspace`` directly.\n    ``host_id`` is always present (it is in the path), so no\n    host requirement check is needed here.",
         "properties": {
@@ -3558,6 +3628,560 @@
         "title": "SessionUsageEvent",
         "type": "object"
       },
+      "SkillApplyRequest": {
+        "properties": {
+          "target_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Agent Ids"
+          }
+        },
+        "title": "SkillApplyRequest",
+        "type": "object"
+      },
+      "SkillApplyResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillApplyResultObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_apply.result",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillApplyResponse",
+        "type": "object"
+      },
+      "SkillApplyResultObject": {
+        "properties": {
+          "action_count": {
+            "default": 0,
+            "title": "Action Count",
+            "type": "integer"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "agent_id",
+          "status"
+        ],
+        "title": "SkillApplyResultObject",
+        "type": "object"
+      },
+      "SkillCommandBody": {
+        "description": "Command source for free-form/configured source adapters.",
+        "properties": {
+          "argv": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Argv"
+          },
+          "shell": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shell"
+          },
+          "timeout_seconds": {
+            "default": 60,
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "SkillCommandBody",
+        "type": "object"
+      },
+      "SkillCommandEvidenceObject": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Command"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "exit_code": {
+            "title": "Exit Code",
+            "type": "integer"
+          },
+          "shell": {
+            "title": "Shell",
+            "type": "boolean"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "shell",
+          "exit_code",
+          "duration_ms",
+          "stdout",
+          "stderr"
+        ],
+        "title": "SkillCommandEvidenceObject",
+        "type": "object"
+      },
+      "SkillFileManifestObject": {
+        "properties": {
+          "binary": {
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "sha256",
+          "binary"
+        ],
+        "title": "SkillFileManifestObject",
+        "type": "object"
+      },
+      "SkillPreviewRequest": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCommandBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "install_mode": {
+            "default": "replace",
+            "enum": [
+              "replace",
+              "skip_existing",
+              "fail_on_existing"
+            ],
+            "title": "Install Mode",
+            "type": "string"
+          },
+          "operation": {
+            "default": "install",
+            "enum": [
+              "install",
+              "remove"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "selected_skill_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Skill Names"
+          },
+          "skill_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Names"
+          },
+          "source": {
+            "default": "freeform",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "target_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Target Agent Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "target_agent_ids"
+        ],
+        "title": "SkillPreviewRequest",
+        "type": "object"
+      },
+      "SkillPreviewResponse": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCommandEvidenceObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "install_mode": {
+            "title": "Install Mode",
+            "type": "string"
+          },
+          "object": {
+            "default": "skill_preview",
+            "title": "Object",
+            "type": "string"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "skill_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Names",
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/StagedSkillObject"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "target_actions": {
+            "items": {
+              "$ref": "#/components/schemas/SkillTargetActionObject"
+            },
+            "title": "Target Actions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "operation",
+          "install_mode",
+          "created_at",
+          "expires_at",
+          "skills",
+          "target_actions"
+        ],
+        "title": "SkillPreviewResponse",
+        "type": "object"
+      },
+      "SkillSearchRequest": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCommandBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SkillSearchRequest",
+        "type": "object"
+      },
+      "SkillSearchResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSearchResultObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_search.result",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillSearchResponse",
+        "type": "object"
+      },
+      "SkillSearchResultObject": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "source",
+          "name"
+        ],
+        "title": "SkillSearchResultObject",
+        "type": "object"
+      },
+      "SkillSourceObject": {
+        "properties": {
+          "high_risk": {
+            "title": "High Risk",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "supports_preview": {
+            "title": "Supports Preview",
+            "type": "boolean"
+          },
+          "supports_search": {
+            "title": "Supports Search",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "supports_search",
+          "supports_preview",
+          "high_risk"
+        ],
+        "title": "SkillSourceObject",
+        "type": "object"
+      },
+      "SkillSourcesResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSourceObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_source.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillSourcesResponse",
+        "type": "object"
+      },
       "SkillSummary": {
         "description": "Safe subset of a discovered skill for API exposure.\n\nSurfaces the skill name and one-line description so clients\n(e.g. the web composer's slash-command menu) can list which\nskills the session has access to. The full skill ``content``\nis intentionally omitted \u2014 it's only loaded server-side when\nthe harness invokes the skill, and it can be large.\n\n:param name: Skill identifier as parsed from the SKILL.md\n    frontmatter, e.g. ``\"triage-issues\"``. Lowercase\n    kebab-case.\n:param description: One-line summary from the SKILL.md\n    frontmatter, e.g. ``\"Triage open GitHub issues in the\n    repo.\"``.",
         "properties": {
@@ -3575,6 +4199,50 @@
           "description"
         ],
         "title": "SkillSummary",
+        "type": "object"
+      },
+      "SkillTargetActionObject": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "agent_version": {
+            "title": "Agent Version",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "skill_name": {
+            "title": "Skill Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "agent_name",
+          "agent_version",
+          "skill_name",
+          "action"
+        ],
+        "title": "SkillTargetActionObject",
         "type": "object"
       },
       "SpawnTree": {
@@ -3656,6 +4324,37 @@
           "last_activity_at"
         ],
         "title": "SpawnTreeMetadata",
+        "type": "object"
+      },
+      "StagedSkillObject": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/SkillFileManifestObject"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "total_bytes",
+          "files"
+        ],
+        "title": "StagedSkillObject",
         "type": "object"
       },
       "TurnCancelledEvent": {
@@ -4186,6 +4885,138 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "_AppendBody": {
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "name": {
+            "default": "org-context",
+            "title": "Name",
+            "type": "string"
+          },
+          "scope": {
+            "default": "team",
+            "title": "Scope",
+            "type": "string"
+          },
+          "weight": {
+            "default": 1.0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "title": "_AppendBody",
+        "type": "object"
+      },
+      "_CompartmentsBody": {
+        "properties": {},
+        "title": "_CompartmentsBody",
+        "type": "object"
+      },
+      "_GetBody": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "_GetBody",
+        "type": "object"
+      },
+      "_PutBody": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          },
+          "weight": {
+            "default": 1.0,
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "address",
+          "content"
+        ],
+        "title": "_PutBody",
+        "type": "object"
+      },
+      "_RecallBody": {
+        "properties": {
+          "limit": {
+            "default": 10,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "name": {
+            "default": "org-context",
+            "title": "Name",
+            "type": "string"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "scope": {
+            "default": "team",
+            "title": "Scope",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "_RecallBody",
+        "type": "object"
+      },
+      "_UnsetBody": {
+        "properties": {
+          "address": {
+            "title": "Address",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address"
+        ],
+        "title": "_UnsetBody",
         "type": "object"
       }
     }
@@ -5603,6 +6434,228 @@
           }
         },
         "summary": "Me"
+      }
+    },
+    "/v1/memory/append": {
+      "post": {
+        "description": "Save a durable shared memory into a compartment.",
+        "operationId": "append_v1_memory_append_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_AppendBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Append"
+      }
+    },
+    "/v1/memory/compartments": {
+      "post": {
+        "description": "List the reachable shared (team + topic) memory compartments.",
+        "operationId": "compartments_v1_memory_compartments_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_CompartmentsBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compartments"
+      }
+    },
+    "/v1/memory/get": {
+      "post": {
+        "description": "Exact-key read of an addressable slot (e.g. ``org:charter``).\n\nDeterministic lookup on the indexed ``key`` column \u2014 no similarity search,\nno decay. Returns the slot's current value or ``{\"found\": false}``.",
+        "operationId": "get_v1_memory_get_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_GetBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get"
+      }
+    },
+    "/v1/memory/put": {
+      "post": {
+        "description": "Write an addressable slot, OVERWRITING any current value at this key.\n\nOverwrite-in-place: any live row(s) at the key are archived (history\nretained via the archive flag), then the new content is written as the\nsingle live slot on the first-class ``key`` column. Owner is\nserver-stamped from the address class (anti-spoof).",
+        "operationId": "put_v1_memory_put_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_PutBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put"
+      }
+    },
+    "/v1/memory/recall": {
+      "post": {
+        "description": "Recall shared memories from a compartment, ranked by decayed salience.",
+        "operationId": "recall_v1_memory_recall_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_RecallBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recall"
+      }
+    },
+    "/v1/memory/unset": {
+      "post": {
+        "description": "Clear an addressable slot \u2014 archive whatever lives at this key.",
+        "operationId": "unset_v1_memory_unset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/_UnsetBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Unset"
       }
     },
     "/v1/policies": {
@@ -9484,6 +10537,217 @@
         "summary": "Fork Session",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/skills/installed": {
+      "get": {
+        "operationId": "list_installed_skills_v1_skills_installed_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledSkillsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Installed Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/previews": {
+      "post": {
+        "operationId": "create_skill_preview_v1_skills_previews_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Skill Preview",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/previews/{preview_id}/apply": {
+      "post": {
+        "operationId": "apply_skill_preview_v1_skills_previews__preview_id__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preview_id",
+            "required": true,
+            "schema": {
+              "title": "Preview Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SkillApplyRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillApplyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Skill Preview",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/search": {
+      "post": {
+        "operationId": "search_skills_v1_skills_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/sources": {
+      "get": {
+        "operationId": "list_skill_sources_v1_skills_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillSourcesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Skill Sources",
+        "tags": [
+          "skills"
         ]
       }
     },

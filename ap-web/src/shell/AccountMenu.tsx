@@ -22,6 +22,7 @@ import { Link } from "@/lib/routing";
 import {
   KeyRoundIcon,
   LogOutIcon,
+  PuzzleIcon,
   SettingsIcon,
   ShieldCheckIcon,
   SquareTerminalIcon,
@@ -51,8 +52,9 @@ import { useServerInfo } from "@/lib/CapabilitiesContext";
 
 export function AccountMenu() {
   const info = useServerInfo();
-  const accountsEnabled = info !== "loading" && info.accounts_enabled;
-  const terminalEnabled = info !== "loading" && info.omni_cli_terminal_enabled;
+  if (info === "loading") return null;
+  const accountsEnabled = info.accounts_enabled;
+  const terminalEnabled = info.omni_cli_terminal_enabled;
 
   const [me, setMe] = useState<CurrentAccount | null | "unknown">("unknown");
 
@@ -112,8 +114,7 @@ export function AccountMenu() {
   // First gate: not in accounts mode. Account actions stay off, but the
   // standalone Omni CLI terminal can still be exposed in local/header deploys.
   if (!accountsEnabled) {
-    if (!terminalEnabled) return null;
-    return <LocalOperatorMenu />;
+    return <LocalOperatorMenu terminalEnabled={terminalEnabled} />;
   }
   // Second gate: probe in flight or failed → render nothing
   // (matches the pre-context-aware behavior).
@@ -161,6 +162,11 @@ export function AccountMenu() {
             )}
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
+          <DropdownMenuItem asChild>
+            <Link to="/skills" className="flex items-center gap-2">
+              <PuzzleIcon /> Skills
+            </Link>
+          </DropdownMenuItem>
           {me.is_admin && (
             <>
               <DropdownMenuItem asChild>
@@ -286,7 +292,7 @@ export function AccountMenu() {
   );
 }
 
-function LocalOperatorMenu() {
+function LocalOperatorMenu({ terminalEnabled }: { terminalEnabled: boolean }) {
   return (
     <div className="shrink-0">
       <DropdownMenu>
@@ -300,10 +306,17 @@ function LocalOperatorMenu() {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" side="top" className="mx-2 w-auto min-w-48">
           <DropdownMenuItem asChild>
-            <Link to="/terminal" className="flex items-center gap-2">
-              <SquareTerminalIcon /> Terminal
+            <Link to="/skills" className="flex items-center gap-2">
+              <PuzzleIcon /> Skills
             </Link>
           </DropdownMenuItem>
+          {terminalEnabled && (
+            <DropdownMenuItem asChild>
+              <Link to="/terminal" className="flex items-center gap-2">
+                <SquareTerminalIcon /> Terminal
+              </Link>
+            </DropdownMenuItem>
+          )}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
