@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import tarfile
 from pathlib import Path
 
 import pytest
 
 from omnigent.errors import OmnigentError
 from omnigent.skills.acquisition import (
+    CommandEvidence,
     SkillAcquisitionService,
     SkillCommandRunner,
     SkillCommandSpec,
@@ -80,6 +82,8 @@ def test_sources_report_unavailable_named_adapters(
 
     assert sources["skills"]["available"] is False
     assert "npx" in str(sources["skills"]["unavailable_reason"])
+    assert sources["github"]["available"] is False
+    assert "gh" in str(sources["github"]["unavailable_reason"])
     assert sources["freeform"]["available"] is True
 
 
@@ -99,3 +103,59 @@ def test_search_returns_source_error_for_unavailable_adapter(
 
     assert outcome.results == ()
     assert "skills: skill source unavailable" in outcome.errors[0]
+
+
+def test_github_source_uses_gh_archive_and_secret_backend_fallback_token(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_source = tmp_path / "archive-source"
+    _write_skill(archive_source / "skills", name="repo-skill")
+
+    class ArchiveRunner(SkillCommandRunner):
+        spec: SkillCommandSpec | None = None
+
+        def run(self, spec: SkillCommandSpec, cwd: Path) -> CommandEvidence:
+            self.spec = spec
+            with tarfile.open(cwd / "github-source.tgz", "w:gz") as archive:
+                archive.add(archive_source, arcname="owner-repo-sha")
+            return CommandEvidence(
+                command=spec.shell or list(spec.argv or ()),
+                shell=spec.shell is not None,
+                exit_code=0,
+                duration_ms=1,
+                stdout="",
+                stderr="",
+            )
+
+    def load_secret(name: str) -> str | None:
+        return "infisical-token" if name == "GITHUB_TOKEN_FALLBACK" else None
+
+    monkeypatch.delenv("GH_TOKEN", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+    monkeypatch.setattr("omnigent.onboarding.secrets.load_secret", load_secret)
+    runner = ArchiveRunner()
+    service = SkillAcquisitionService(
+        agent_store=None,  # type: ignore[arg-type]
+        agent_cache=None,  # type: ignore[arg-type]
+        artifact_store=None,
+        runner=runner,
+        stage_root=tmp_path,
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    evidence = service._resolve_source(
+        source="github",
+        source_ref="https://github.com/ByteDeskAI/example/tree/main/skills",
+        command=None,
+        workspace=workspace,
+        selected_skill_names=[],
+    )
+
+    assert evidence.exit_code == 0
+    assert runner.spec is not None
+    assert runner.spec.shell == "gh api repos/ByteDeskAI/example/tarball/main > github-source.tgz"
+    assert runner.spec.env["GH_TOKEN"] == "infisical-token"
+    assert runner.spec.env["GITHUB_TOKEN"] == "infisical-token"
+    assert [package.name for package in discover_skill_packages(workspace)] == ["repo-skill"]

@@ -77,8 +77,7 @@ spec:
           # an execution host.
           # ByteDesk-built host image (Dockerfile --target host): bakes the omnigent pkg
           # (incl. the grok-native harness) + claude/codex/pi/grok CLIs + git/tmux/bwrap.
-          # Built locally to the MicroK8s registry; prod overlay → Harbor. Until built, the
-          # running cluster is overridden to ghcr.io/omnigent-ai/omnigent-host:latest at apply time.
+          # Built locally to the MicroK8s registry; prod overlay → Harbor.
           image: localhost:32000/bytedesk-omnigent-host:local # image-managed
           imagePullPolicy: IfNotPresent
           # The native-terminal harnesses (claude-native/codex/pi) run the agent CLI
@@ -94,11 +93,8 @@ spec:
           args:
             - |
               set -e
-              # Public omnigent-host image ships WITHOUT bwrap; the linux_bwrap sandbox
-              # needs it. ByteDesk's own host image bakes it (Dockerfile host target runs
-              # `apt install bubblewrap`) — this startup install is the stopgap for the
-              # public image only.
-              command -v bwrap >/dev/null 2>&1 || { echo "[host] installing bubblewrap"; apt-get update -qq && apt-get install -y -qq bubblewrap; }
+              command -v bwrap >/dev/null 2>&1 || { echo "[host] missing bwrap in host image" >&2; exit 1; }
+              command -v grok >/dev/null 2>&1 || { echo "[host] missing grok CLI in host image" >&2; exit 1; }
               # Codex OAuth: Codex reads its login state from ~/.codex/auth.json.
               # Keep that file in the host's persistent HOME so token refreshes
               # update the source of truth. The codex-auth Secret is a bootstrap
@@ -112,11 +108,9 @@ spec:
               else
                 echo "[host] no codex auth.json mounted — codex harness unavailable until the codex-auth Secret is provided";
               fi
-              # Grok Build CLI (xAI). Not baked in the public image — install via npm
-              # (@xai-official/grok; avoids the Cloudflare-walled x.ai/cli host). ByteDesk's
-              # own host image should bake it. Grok OAuth = subscription auth in ~/.grok/auth.json
-              # (from `grok login`); stage it into a WRITABLE ~/.grok so the CLI refreshes in place.
-              command -v grok >/dev/null 2>&1 || { echo "[host] installing grok CLI (@xai-official/grok)"; npm install -g @xai-official/grok >/dev/null 2>&1 || echo "[host] grok npm install FAILED"; }
+              # Grok OAuth = subscription auth in ~/.grok/auth.json (from
+              # `grok login`); stage it into a WRITABLE ~/.grok so the CLI
+              # refreshes in place.
               if [ -f /etc/grok-auth/auth.json ]; then
                 mkdir -p "$HOME/.grok" && cp /etc/grok-auth/auth.json "$HOME/.grok/auth.json" && chmod 600 "$HOME/.grok/auth.json" && echo "[host] grok auth.json staged into ~/.grok (subscription OAuth)";
               else

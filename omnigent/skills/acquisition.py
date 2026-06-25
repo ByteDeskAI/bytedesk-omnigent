@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tarfile
@@ -24,6 +25,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Literal
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import yaml
@@ -53,9 +55,11 @@ _MAX_COMMAND_OUTPUT_CHARS = 64 * 1024
 _SOURCE_COMMAND_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "skills": ("npx",),
     "npm": ("npm",),
-    "github": ("git",),
+    "github": ("gh",),
     "skills-npm": ("npx",),
 }
+_GITHUB_TOKEN_SECRET_NAMES = ("GITHUB_TOKEN", "BYTEDESK_GITHUB_TOKEN", "GITHUB_TOKEN_FALLBACK")
+_GITHUB_ARCHIVE_NAME = "github-source.tgz"
 
 
 @dataclass(frozen=True)
@@ -65,6 +69,7 @@ class SkillCommandSpec:
     argv: tuple[str, ...] | None = None
     shell: str | None = None
     timeout_seconds: int = 60
+    env: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if bool(self.argv) == bool(self.shell):
@@ -184,6 +189,7 @@ class SkillCommandRunner:
         home = cwd / ".home"
         home.mkdir(exist_ok=True)
         env = _command_env(home, cwd)
+        env.update(spec.env)
         started = time.monotonic()
         try:
             completed = subprocess.run(
@@ -679,13 +685,13 @@ class SkillAcquisitionService:
                     "github preview requires source_ref",
                     code=ErrorCode.INVALID_INPUT,
                 )
-            return self._runner.run(
-                SkillCommandSpec(
-                    argv=("git", "clone", "--depth=1", source_ref, "checkout"),
-                    timeout_seconds=120,
-                ),
+            evidence = self._runner.run(
+                _github_archive_command(source_ref),
                 workspace,
             )
+            if evidence.exit_code == 0:
+                _extract_github_archive(workspace)
+            return evidence
         if source == "npm":
             if not source_ref:
                 raise OmnigentError(
@@ -971,6 +977,93 @@ def _command_name(spec: SkillCommandSpec) -> str | None:
     return None
 
 
+def _github_archive_command(source_ref: str) -> SkillCommandSpec:
+    owner, repo, ref = _parse_github_source_ref(source_ref)
+    api_path = f"repos/{owner}/{repo}/tarball"
+    if ref:
+        api_path = f"{api_path}/{ref}"
+    return SkillCommandSpec(
+        shell=f"gh api {shlex.quote(api_path)} > {shlex.quote(_GITHUB_ARCHIVE_NAME)}",
+        timeout_seconds=120,
+        env=_github_cli_env(),
+    )
+
+
+def _parse_github_source_ref(source_ref: str) -> tuple[str, str, str | None]:
+    ref = source_ref.strip()
+    if not ref:
+        raise OmnigentError("github preview requires source_ref", code=ErrorCode.INVALID_INPUT)
+
+    tree_ref: str | None = None
+    if ref.startswith("git@github.com:"):
+        ref = ref[len("git@github.com:") :]
+    elif "://" in ref:
+        parsed = urlparse(ref)
+        if parsed.netloc.lower() not in {"github.com", "www.github.com"}:
+            raise OmnigentError(
+                "github source_ref must point to github.com",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        parts = [part for part in parsed.path.strip("/").split("/") if part]
+        if len(parts) >= 4 and parts[2] in {"tree", "blob"}:
+            tree_ref = parts[3]
+        ref = "/".join(parts[:2])
+
+    if "#" in ref:
+        ref, _, tree_ref = ref.partition("#")
+    elif "@" in ref:
+        ref, _, tree_ref = ref.partition("@")
+
+    parts = [part for part in ref.strip("/").split("/") if part]
+    if len(parts) < 2:
+        raise OmnigentError(
+            "github source_ref must be 'owner/repo' or a github.com repository URL",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    owner, repo = parts[0], parts[1]
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", owner) or not re.fullmatch(
+        r"[A-Za-z0-9_.-]+", repo
+    ):
+        raise OmnigentError(
+            "github source_ref contains an invalid owner or repo",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    if tree_ref and not re.fullmatch(r"[A-Za-z0-9_./-]+", tree_ref):
+        raise OmnigentError(
+            "github source_ref contains an invalid ref",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return owner, repo, tree_ref or None
+
+
+def _github_cli_env() -> dict[str, str]:
+    token = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    if not token:
+        token = _github_token_from_secret_backend()
+    env = {"GH_PROMPT_DISABLED": "1"}
+    if token:
+        env["GH_TOKEN"] = token
+        env["GITHUB_TOKEN"] = token
+    return env
+
+
+def _github_token_from_secret_backend() -> str:
+    try:
+        from omnigent.onboarding.secrets import load_secret
+    except Exception:  # noqa: BLE001 - secret backend is optional for public sources
+        return ""
+    for name in _GITHUB_TOKEN_SECRET_NAMES:
+        try:
+            value = (load_secret(name) or "").strip()
+        except Exception:  # noqa: BLE001 - try the next backend/name without leaking values
+            continue
+        if value:
+            return value
+    return ""
+
+
 def _source_availability(source: str) -> tuple[bool, str | None]:
     missing = [
         cmd
@@ -1049,6 +1142,18 @@ def _extract_npm_tgz(workspace: Path) -> None:
                 f"failed to extract npm package {tgz.name}: {exc}",
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
+
+
+def _extract_github_archive(workspace: Path) -> None:
+    archive = workspace / _GITHUB_ARCHIVE_NAME
+    dest = workspace / "github"
+    try:
+        extract_safe(archive, dest, max_bytes=_MAX_SKILL_BYTES * 2)
+    except (ExtractionError, tarfile.TarError) as exc:
+        raise OmnigentError(
+            f"failed to extract GitHub archive: {exc}",
+            code=ErrorCode.INVALID_INPUT,
+        ) from exc
 
 
 def _is_relative_to(path: Path, parent: Path) -> bool:

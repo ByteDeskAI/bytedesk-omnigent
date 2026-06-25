@@ -59,22 +59,31 @@ The runner needs to reach a model. Pick one (set in `k8s/secret.yaml` →
   Codex-OAuth path): use the `codex` harness with `~/.codex` auth mounted on the
   runner. Heaviest to wire; do it once Option B is green.
 
-## Build the image
+## Build the images
 
-One image (`bytedesk-omnigent`) serves both server and runner (it ships the
-`omnigent` package + CLI + harnesses; the runner image also bakes the bundles in
-`agents/`).
+The server and host images are the local-dev dependency bases. The server image
+bakes the Omnigent venv, Postgres/NATS/recall dependencies, and server-side
+Skills acquisition tools (`gh`, `node`, `npm`, `npx`). The host image bakes the
+harness runtime tools (`git`, `tmux`, `bubblewrap`, Node/npm/npx, and harness
+CLIs). Local-dev still source-mounts this repo for code, so rebuilding is only
+needed when image dependencies change.
 
 ```bash
 # LOCAL → MicroK8s registry. From the fork root:
-docker build -f deploy/docker/Dockerfile -t localhost:32000/bytedesk-omnigent:local .
-docker push localhost:32000/bytedesk-omnigent:local
-# (PROD is built by TeamCity to registry.prod.bytedesk.ai/bytedesk/bytedesk-omnigent — see "Productionize".)
+docker build -f deploy/docker/Dockerfile \
+  -t localhost:32000/bytedesk-omnigent-server:local .
+docker push localhost:32000/bytedesk-omnigent-server:local
+
+docker build -f deploy/docker/Dockerfile --target host \
+  -t localhost:32000/bytedesk-omnigent-host:local .
+docker push localhost:32000/bytedesk-omnigent-host:local
+
+# PROD is built by TeamCity to registry.prod.bytedesk.ai/bytedesk/* — see "Productionize".
 ```
-> The base manifests reference `localhost:32000/bytedesk-omnigent:local`. If the
-> upstream `ghcr.io/omnigent-ai/omnigent-server` package is public you can use it
-> for the *server* and only build a runner image that bakes the bundles — but one
-> shared image is simpler.
+> The base manifests reference `localhost:32000/bytedesk-omnigent-server:local`
+> and `localhost:32000/bytedesk-omnigent-host:local`. The local-dev overlay
+> source-mounts the repo over `/build`, so images are dependency bases rather
+> than the code delivery mechanism.
 
 ## Local deploy + smoke
 

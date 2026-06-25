@@ -59,6 +59,10 @@ resources:
   # service. A CR pointing at bytedesk-agent-configuration /github-mcp — the
   # operator hydrates github-mcp-config-secrets, consumed only by github-mcp.
   - omnigent-github-mcp-config-secret.yaml
+  # Infisical-operator-managed system GitHub token for server-side Skills
+  # acquisition. Hydrates omnigent-github-token-secrets (GITHUB_TOKEN), consumed
+  # only by omnigent-server's gh archive adapter.
+  - omnigent-github-token-secret.yaml
   - github-mcp.yaml
   # Infisical-operator-managed signed-principal HMAC secret (BDP-2389). A CR
   # pointing at the dedicated `bytedesk-omnigent` project, path / — the operator
