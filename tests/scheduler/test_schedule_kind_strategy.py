@@ -1,10 +1,8 @@
-"""Seam tests for the schedule-kind Strategy registry (BDP-2349 #13).
+"""Seam tests for the schedule-kind Strategy registry (BDP-2349 #13)."""
 
-Proves: built-in interval/once behavior is byte-identical, cron stays the same
-NotImplementedError seam, an unknown kind raises ValueError, and a new kind can
-be registered as a strategy without editing compute_next_fire.
-"""
 from __future__ import annotations
+
+from datetime import datetime, timezone
 
 import pytest
 
@@ -20,11 +18,10 @@ def test_once_strategy_returns_none() -> None:
     assert compute_next_fire("once", "ignored", 1000) is None
 
 
-def test_cron_seam_still_not_implemented() -> None:
-    # The cron seam preserves the historical NotImplementedError until a real
-    # croniter-backed strategy is registered.
-    with pytest.raises(NotImplementedError):
-        compute_next_fire("cron", "* * * * *", 1000)
+def test_cron_strategy_computes_next_fire() -> None:
+    after = int(datetime(2026, 6, 25, 13, 5, tzinfo=timezone.utc).timestamp())
+    expected = int(datetime(2026, 6, 25, 14, 0, tzinfo=timezone.utc).timestamp())
+    assert compute_next_fire("cron", "0 * * * *", after) == expected
 
 
 def test_unknown_kind_raises_value_error() -> None:

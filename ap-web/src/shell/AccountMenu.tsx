@@ -20,6 +20,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "@/lib/routing";
 import {
+  CalendarClockIcon,
   KeyRoundIcon,
   LogOutIcon,
   PuzzleIcon,
@@ -167,6 +168,11 @@ export function AccountMenu() {
               <PuzzleIcon /> Skills
             </Link>
           </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/schedules" className="flex items-center gap-2">
+              <CalendarClockIcon /> Schedules
+            </Link>
+          </DropdownMenuItem>
           {me.is_admin && (
             <>
               <DropdownMenuItem asChild>
@@ -308,6 +314,11 @@ function LocalOperatorMenu({ terminalEnabled }: { terminalEnabled: boolean }) {
           <DropdownMenuItem asChild>
             <Link to="/skills" className="flex items-center gap-2">
               <PuzzleIcon /> Skills
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/schedules" className="flex items-center gap-2">
+              <CalendarClockIcon /> Schedules
             </Link>
           </DropdownMenuItem>
           {terminalEnabled && (

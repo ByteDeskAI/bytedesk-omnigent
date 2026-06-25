@@ -63,6 +63,7 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.omni_cli_terminal import (
             create_omni_cli_terminal_router,
         )
+        from bytedesk_omnigent.scheduler.router import create_schedules_router
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
         return [
@@ -74,6 +75,7 @@ class BytedeskExtension:
             create_integration_capabilities_router(auth_provider=auth_provider),
             create_memory_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
+            create_schedules_router(auth_provider=auth_provider),
             create_config_router(auth_provider=auth_provider),
             create_omni_cli_terminal_router(
                 auth_provider=auth_provider,

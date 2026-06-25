@@ -1,5 +1,6 @@
 """Tests for the durable tasks store — a goal with assignment + execution binding
 (BDP-2333, ADR-0142)."""
+
 from __future__ import annotations
 
 import time
@@ -30,6 +31,8 @@ def test_create_list_and_claim_task_exactly_once(tmp_path) -> None:
     assert open_tasks[0].required_capability == "release.execute"
     assert open_tasks[0].payload == {"branch": "release/0.3.0"}
     assert open_tasks[0].assignee_agent_id is None
+    assert store.get_task(high.id) == high
+    assert store.get_task("task_missing") is None
 
     # First claim of an open task wins; a second claim loses (no longer open).
     assert store.claim_task(task_id=high.id, owner_agent_id="maya", now=now) is True

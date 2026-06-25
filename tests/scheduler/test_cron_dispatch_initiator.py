@@ -31,13 +31,14 @@ class _SpyInitiator:
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
-    def initiate(self, *, agent_id, prompt, source, metadata=None) -> str:
+    def initiate(self, *, agent_id, prompt, source, metadata=None, external_key=None) -> str:
         self.calls.append(
             {
                 "agent_id": agent_id,
                 "prompt": prompt,
                 "source": source,
                 "metadata": metadata,
+                "external_key": external_key,
             }
         )
         return f"conv_{len(self.calls)}"
@@ -76,6 +77,7 @@ def test_due_trigger_initiates_a_real_session_not_log_only(tmp_path) -> None:
     assert call["prompt"] == "Run the morning ops review."
     assert call["source"] == "cron:morning-ops-review"
     assert call["metadata"]["trigger_key"] == "morning-ops-review"
+    assert call["external_key"].startswith("cron:cron_")
 
     # Claim-once still holds: the fire instant advanced, so it is no longer due.
     assert sched.due_triggers(now=now) == []

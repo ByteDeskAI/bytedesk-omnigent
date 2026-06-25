@@ -60,13 +60,14 @@ class _RecordingInitiator:
 
     calls: list[dict] = field(default_factory=list)
 
-    def initiate(self, *, agent_id, prompt, source, metadata=None) -> str:
+    def initiate(self, *, agent_id, prompt, source, metadata=None, external_key=None) -> str:
         self.calls.append(
             {
                 "agent_id": agent_id,
                 "prompt": prompt,
                 "source": source,
                 "metadata": metadata,
+                "external_key": external_key,
             }
         )
         return f"sess_{len(self.calls)}"
@@ -95,6 +96,7 @@ def test_run_task_resolves_then_dispatches_session() -> None:
     assert call["prompt"] == "Generate the comprehensive SEO report for acme.com."
     assert call["source"] == "task:task_seo"
     assert call["metadata"] == {"task_id": "task_seo", "agent_id": "ag_writer"}
+    assert call["external_key"] is None
 
     assert result == TaskDispatch(task_id="task_seo", agent_id="ag_writer", session_id="sess_1")
 
@@ -108,7 +110,7 @@ def test_run_task_dispatch_contract_is_unchanged_initiate_shape() -> None:
     run_task(_StubTask(id="t1", title="do the thing"), resolve=resolver, initiator=initiator)
 
     (call,) = initiator.calls
-    assert set(call) == {"agent_id", "prompt", "source", "metadata"}
+    assert set(call) == {"agent_id", "prompt", "source", "metadata", "external_key"}
 
 
 # ── explicit owner short-circuits the resolver ────────────────────────────
@@ -125,6 +127,19 @@ def test_run_task_explicit_owner_wins_without_resolver_call() -> None:
     assert resolver.calls == []
     assert result.agent_id == "ag_owner"
     assert initiator.calls[0]["agent_id"] == "ag_owner"
+
+
+def test_run_task_explicit_owner_does_not_require_resolver() -> None:
+    initiator = _RecordingInitiator()
+
+    result = run_task(
+        _StubTask(id="t_owned", owner_agent_id="ag_owner", title="owned work"),
+        initiator=initiator,
+        external_key="cron:t_owned:1",
+    )
+
+    assert result.agent_id == "ag_owner"
+    assert initiator.calls[0]["external_key"] == "cron:t_owned:1"
 
 
 # ── seed-prompt derivation (task as input) ────────────────────────────────

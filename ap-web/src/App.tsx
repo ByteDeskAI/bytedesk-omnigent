@@ -28,6 +28,9 @@ const ConfigPage = lazy(() =>
 const SkillsPage = lazy(() =>
   import("@/pages/SkillsPage").then((m) => ({ default: m.SkillsPage })),
 );
+const SchedulesPage = lazy(() =>
+  import("@/pages/SchedulesPage").then((m) => ({ default: m.SchedulesPage })),
+);
 const TerminalPage = lazy(() =>
   import("@/pages/TerminalPage").then((m) => ({ default: m.TerminalPage })),
 );
@@ -133,6 +136,7 @@ function App({ basename }: AppProps = {}) {
           <Route path={`${prefix}/c/:conversationId`} element={<ChatPage />} />
           <Route path={`${prefix}/inbox`} element={<InboxPage />} />
           <Route path={`${prefix}/skills`} element={<SkillsPage />} />
+          <Route path={`${prefix}/schedules`} element={<SchedulesPage />} />
           {info.omni_cli_terminal_enabled && (
             <Route path={`${prefix}/terminal`} element={<TerminalPage />} />
           )}
