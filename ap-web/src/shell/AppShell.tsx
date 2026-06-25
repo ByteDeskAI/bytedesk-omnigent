@@ -4,7 +4,10 @@ import { Outlet, useParams, useSearchParams } from "@/lib/routing";
 import { useConversations } from "@/hooks/useConversations";
 import { useSessionAgent } from "@/hooks/useAgents";
 import { AgentInfoContent, agentHasInfo } from "@/components/AgentInfo";
+import { OfflineBanner } from "@/components/OfflineBanner";
 import { useIdleNotifications } from "@/hooks/useIdleNotifications";
+import { usePushSubscription } from "@/hooks/usePushSubscription";
+import { supportsWindowControlsOverlay } from "@/lib/pwa/runtime";
 import { readFilesPanelPreferences, writeFilesPanelPreferences } from "@/lib/filesPanelPreferences";
 import { derivePermissionLevel, isOwnerLevel } from "@/lib/permissionsApi";
 import { isMacElectronShell } from "@/lib/nativeBridge";
@@ -214,6 +217,7 @@ export function AppShell() {
   // the active conversation id, which suppresses the notification/badge for
   // the session the user is actively viewing.
   useIdleNotifications(conversationId);
+  usePushSubscription();
   const activeConv = useMemo(() => {
     if (!conversationId) return null;
     return (
@@ -940,7 +944,9 @@ export function AppShell() {
           <div
             className="app-shell relative flex h-dvh bg-sidebar text-foreground"
             data-electron-mac={isMacElectronShell() ? "true" : undefined}
+            data-pwa-wco={supportsWindowControlsOverlay() ? "true" : undefined}
           >
+            <OfflineBanner />
             {/* Frameless-window titlebar stand-in (macOS Electron only): the
           sidebar's electron top margin (see index.css) frees this strip of
           canvas for the traffic lights, and the strip is the window's one

@@ -12,6 +12,15 @@ import { CapabilitiesProvider } from "./lib/CapabilitiesContext";
 import { resolveIdentity } from "./lib/identity";
 import { initChatStore } from "./store/chatStore";
 import "./index.css";
+import { shouldRegisterPwa } from "./lib/pwa/runtime";
+
+async function registerStandalonePwa(): Promise<void> {
+  if (!shouldRegisterPwa()) return;
+  const { registerSW } = await import("virtual:pwa-register");
+  registerSW({ immediate: true });
+}
+
+void registerStandalonePwa();
 
 // Single client at module scope — shared across the whole app.
 //

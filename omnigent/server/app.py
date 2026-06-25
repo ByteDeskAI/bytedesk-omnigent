@@ -839,7 +839,7 @@ def create_app(
     # bootstrap immediately below sees it directly.
     _principal_head_resolvers: list[object] = []
     if auth_provider is not None:
-        from omnigent.extensions import extension_principal_resolvers
+        from omnigent.kernel.extensions import extension_principal_resolvers
 
         _principal_head_resolvers = list(extension_principal_resolvers())
 
@@ -1045,7 +1045,7 @@ def create_app(
         if _di_container is not None:
             _di_container.run_startup_discovery()
         else:
-            from omnigent.pluggable.manifest import discover_all_extensions
+            from omnigent.kernel.pluggable.manifest import discover_all_extensions
 
             discover_all_extensions()
 
@@ -1126,10 +1126,10 @@ def create_app(
 
         # BDP-2300 (ADR-0143): start first-party extension background loops — the
         # signal-bus reaper, cron heartbeat, accountability loop, and the one-shot
-        # tool-step resume sweep — via the generic omnigent.extensions seam. They
+        # tool-step resume sweep — via the generic omnigent.kernel.extensions seam. They
         # are cancelled on shutdown in the finally below. Generic: no ByteDesk
         # reference in core.
-        from omnigent.extensions import extension_background_factories
+        from omnigent.kernel.extensions import extension_background_factories
 
         _ext_bg_tasks = [
             asyncio.create_task(factory())
@@ -1189,7 +1189,7 @@ def create_app(
     # BDP-2327 (core-refactor spine, Phase 3): behind
     # OMNIGENT_USE_LIFESPAN_PHASES (default OFF), run the same startup/
     # shutdown steps through the LifespanOrchestrator's depends_on DAG
-    # (omnigent.server.lifespan_phases) instead of the monolithic _lifespan
+    # (omnigent.kernel.lifespan_phases) instead of the monolithic _lifespan
     # above. The phases mirror _lifespan 1:1 and the orchestrator's reverse-
     # topological teardown reproduces the original ``finally`` order; with
     # the flag off the orchestrator is never built and _lifespan stays the
@@ -1197,7 +1197,7 @@ def create_app(
     from omnigent.server.auth import env_var_is_truthy as _env_var_is_truthy
 
     if _env_var_is_truthy("OMNIGENT_USE_LIFESPAN_PHASES"):
-        from omnigent.server.lifespan_phases import (
+        from omnigent.kernel.lifespan_phases import (
             LifespanContext,
             LifespanOrchestrator,
             build_default_lifespan_phases,
@@ -1293,7 +1293,7 @@ def create_app(
     from omnigent.server.auth import env_var_is_truthy
 
     if env_var_is_truthy("OMNIGENT_USE_SERVICE_REGISTRY"):
-        from omnigent.server.service_registry import ServiceRegistry
+        from omnigent.kernel.service_registry import ServiceRegistry
 
         _service_registry = ServiceRegistry()
         _service_registry.register(tunnel_registry)
@@ -1747,7 +1747,7 @@ def create_app(
         Returns one entry per live pluggable seam — its registered
         provider names, the active impl, the registered default, and the
         ``OMNIGENT_USE_<SEAM>`` override env var — projected from
-        :data:`omnigent.pluggable.manifest.SEAMS`. Read-only and cheap
+        :data:`omnigent.kernel.pluggable.manifest.SEAMS`. Read-only and cheap
         (no factories are invoked, only registry introspection).
 
         Authentication: intentionally UNAUTHED, matching ``/v1/info`` —
@@ -1757,7 +1757,7 @@ def create_app(
 
         :returns: ``{"seams": [<describe() + override_env>, ...]}``.
         """
-        from omnigent.pluggable.manifest import capability_manifest
+        from omnigent.kernel.pluggable.manifest import capability_manifest
         from omnigent.server.event_schema import (
             EVENT_SCHEMA_VERSION,
             event_schema_hash,
@@ -1913,12 +1913,32 @@ def create_app(
         tags=["policy_registry"],
     )
 
+    from omnigent.server.push.service import create_push_service, set_push_service
+    from omnigent.server.routes.push import create_push_router
+    from omnigent.stores.push_subscription_store.sqlalchemy_store import (
+        SqlAlchemyPushSubscriptionStore,
+    )
+
+    push_subscription_store = SqlAlchemyPushSubscriptionStore(conversation_store.storage_location)
+    set_push_service(
+        create_push_service(
+            subscription_store=push_subscription_store,
+            permission_store=permission_store,
+            conversation_store=conversation_store,
+        )
+    )
+    app.include_router(
+        create_push_router(push_subscription_store, auth_provider),
+        prefix="/v1",
+        tags=["push"],
+    )
+
     # BDP-2291/2300 (ADR-0143): discover + mount first-party extensions via the
-    # generic omnigent.extensions seam — the single seam that keeps ByteDesk
+    # generic omnigent.kernel.extensions seam — the single seam that keeps ByteDesk
     # functionality (routes, tools, policies, background loops) out of
     # upstream-tracked core. auth_provider is threaded to extension routes that
     # need it. One bad extension is logged and skipped, never fatal.
-    from omnigent.extensions import install_extensions
+    from omnigent.kernel.extensions import install_extensions
 
     install_extensions(
         app,

@@ -122,6 +122,14 @@ def record_publish(conversation_id: str, event: dict[str, Any]) -> None:
             _pending.setdefault(conversation_id, {})[elicitation_id] = event
         _sync_backplane_upsert(conversation_id, elicitation_id, event)
         _notify_observer(conversation_id, event)
+        try:
+            from omnigent.server.push.service import get_push_service
+
+            push_service = get_push_service()
+            if push_service is not None:
+                push_service.on_new_elicitation(conversation_id)
+        except Exception:
+            pass
         return
     if event_type == "response.elicitation_resolved":
         elicitation_id = event.get("elicitation_id")

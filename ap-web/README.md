@@ -9,6 +9,15 @@ session-scoped `/v1/sessions/{id}/resources/files`,
 This is the new UI. The legacy `web/` folder targets the old `/api/chat/stream`
 server and is unrelated.
 
+## Progressive Web App (standalone build)
+
+The production standalone build (`npm run build`) emits a web app manifest and
+service worker for installable browser use: offline app-shell caching, Web Push
+when the tab is closed (requires `OMNIGENT_VAPID_*` on the server), manifest
+shortcuts, and inbound share-target handling at `/share`. PWA registration is
+disabled in the embed build and Electron shell — those paths keep using the host
+or native integrations instead.
+
 ## Develop
 
 In one terminal, start the omnigent server (default port `8000`). Use
