@@ -113,6 +113,56 @@ def test_emit_goal_change_noop_when_tenant_unset(monkeypatch):
     assert calls == []
 
 
+def test_emit_goal_planning_publishes_when_tenant_set(monkeypatch):
+    monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "tenant-abc")
+    calls = _capture(monkeypatch)
+    bridge.emit_goal_planning(
+        {
+            "type": "goal.planning.started",
+            "planningSessionId": "conv_1",
+            "targetKind": "department",
+            "targetId": "Operations",
+            "targetLabel": "Operations",
+            "sourceIds": ["jira"],
+            "occurredAt": 101,
+            "draftReady": False,
+        }
+    )
+    assert calls == [
+        (
+            "office:goals:tenant-abc",
+            {
+                "type": "goal.planning.started",
+                "planningSessionId": "conv_1",
+                "targetKind": "department",
+                "targetId": "Operations",
+                "targetLabel": "Operations",
+                "sourceIds": ["jira"],
+                "occurredAt": 101,
+                "draftReady": False,
+            },
+        )
+    ]
+
+
+def test_emit_goal_planning_noop_when_tenant_unset(monkeypatch):
+    monkeypatch.delenv("BYTEDESK_REALTIME_TENANT_ID", raising=False)
+    calls = _capture(monkeypatch)
+    bridge.emit_goal_planning(
+        {
+            "type": "goal.planning.committed",
+            "planningSessionId": "conv_1",
+            "targetKind": "organization",
+            "targetId": "omnigent",
+            "targetLabel": "Organization",
+            "sourceIds": [],
+            "occurredAt": 101,
+            "goalId": "goal_1",
+        }
+    )
+    assert calls == []
+
+
 def test_wrap_create_calls_orig_then_emits(monkeypatch):
     monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
     calls = _capture(monkeypatch)

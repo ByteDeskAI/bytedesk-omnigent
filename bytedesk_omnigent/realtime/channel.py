@@ -73,3 +73,32 @@ def goal_changed(
     if dependency is not None:
         payload["dependency"] = dependency
     return payload
+
+
+def goal_planning_event(
+    *,
+    event_type: str,
+    planning_session_id: str,
+    target_kind: str,
+    target_id: str,
+    target_label: str | None,
+    source_ids: list[str],
+    occurred_at: int,
+    goal_id: str | None = None,
+    draft_ready: bool | None = None,
+) -> dict[str, Any]:
+    """A goal-planning lifecycle delta for admin UI and Platform consumers."""
+    payload: dict[str, Any] = {
+        "type": event_type,
+        "planningSessionId": planning_session_id,
+        "targetKind": target_kind,
+        "targetId": target_id,
+        "targetLabel": target_label,
+        "sourceIds": source_ids,
+        "occurredAt": occurred_at,
+    }
+    if goal_id is not None:
+        payload["goalId"] = goal_id
+    if draft_ready is not None:
+        payload["draftReady"] = draft_ready
+    return payload

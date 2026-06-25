@@ -5,6 +5,7 @@ import {
   Building2Icon,
   CheckCircle2Icon,
   CheckIcon,
+  ChevronDownIcon,
   CircleDashedIcon,
   CircleDotIcon,
   FlagIcon,
@@ -12,6 +13,7 @@ import {
   NetworkIcon,
   PauseCircleIcon,
   PlusIcon,
+  SparklesIcon,
   TargetIcon,
   XIcon,
 } from "lucide-react";
@@ -25,18 +27,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
 import {
   useActivateGoal,
   useAddGoalDependency,
-  useCreateGoal,
   useGoalEvents,
+  useGoalPlannerSources,
   useGoals,
+  useStartGoalPlanningSession,
   useUpdateGoal,
   useUpdateGoalDependency,
 } from "@/hooks/useGoals";
-import { Link } from "@/lib/routing";
+import { Link, useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import type {
   GoalActivationState,
@@ -44,9 +46,10 @@ import type {
   GoalRecord,
   GoalStatus,
   GoalTargetKind,
+  GoalPlannerSource,
 } from "@/lib/goalsApi";
 
-type ScopeKind = "all" | GoalTargetKind;
+type ScopeKind = GoalTargetKind;
 type GoalView = "active" | "waiting" | "done";
 
 interface ScopeOption {
@@ -58,28 +61,11 @@ interface ScopeOption {
   count: number;
 }
 
-interface TargetOption {
-  key: string;
-  kind: GoalTargetKind;
-  id: string;
-  label: string;
-  subtitle: string;
-}
-
 const STATUS_OPTIONS: GoalStatus[] = ["open", "assigned", "in_progress", "blocked", "done"];
-const PRIORITY_OPTIONS = [1, 2, 3, 4, 5];
+const DEFAULT_SCOPE_KEY = scopeKey("organization", "omnigent");
 
 function scopeKey(kind: ScopeKind, id: string) {
   return `${kind}:${id}`;
-}
-
-function targetKey(kind: GoalTargetKind, id: string) {
-  return `${kind}:${id}`;
-}
-
-function splitTargetKey(value: string): { kind: GoalTargetKind; id: string } {
-  const [kind, ...rest] = value.split(":");
-  return { kind: kind as GoalTargetKind, id: rest.join(":") };
 }
 
 function departmentId(agent: AvailableAgent): string {
@@ -113,7 +99,6 @@ function formattedTime(epochSeconds: number): string {
 }
 
 function goalMatchesScope(goal: GoalRecord, scope: ScopeOption): boolean {
-  if (scope.kind === "all") return true;
   return goal.target_kind === scope.kind && goal.target_id === scope.id;
 }
 
@@ -127,47 +112,34 @@ function pendingDependencyCount(goal: GoalRecord): number {
   return goal.dependencies.filter((dependency) => dependency.status === "pending").length;
 }
 
-function targetOptionsForAgents(agents: AvailableAgent[]): TargetOption[] {
+function scopeOptionsForGoals(agents: AvailableAgent[], goals: GoalRecord[]): ScopeOption[] {
   const departments = Array.from(new Set(agents.map(departmentId))).sort((a, b) =>
     a.localeCompare(b),
   );
-  return [
+  const targets = [
     {
-      key: targetKey("organization", "omnigent"),
-      kind: "organization",
+      key: scopeKey("organization", "omnigent"),
+      kind: "organization" as const,
       id: "omnigent",
       label: "Organization",
       subtitle: "All Omnigent work",
     },
     ...departments.map((department) => ({
-      key: targetKey("department", department),
+      key: scopeKey("department", department),
       kind: "department" as const,
       id: department,
       label: department,
       subtitle: "Department goal",
     })),
     ...agents.map((agent) => ({
-      key: targetKey("agent", agent.id),
+      key: scopeKey("agent", agent.id),
       kind: "agent" as const,
       id: agent.id,
       label: agent.display_name,
       subtitle: agent.title || agent.name,
     })),
   ];
-}
-
-function scopeOptionsForGoals(agents: AvailableAgent[], goals: GoalRecord[]): ScopeOption[] {
-  const targets = targetOptionsForAgents(agents);
-  return [
-    {
-      key: scopeKey("all", "all"),
-      kind: "all",
-      id: "all",
-      label: "All scopes",
-      subtitle: "Organization, departments, agents",
-      count: goals.length,
-    },
-    ...targets.map((target) => ({
+  return targets.map((target) => ({
       key: scopeKey(target.kind, target.id),
       kind: target.kind,
       id: target.id,
@@ -176,8 +148,7 @@ function scopeOptionsForGoals(agents: AvailableAgent[], goals: GoalRecord[]): Sc
       count: goals.filter(
         (goal) => goal.target_kind === target.kind && goal.target_id === target.id,
       ).length,
-    })),
-  ];
+    }));
 }
 
 function iconForScope(kind: ScopeKind, className = "size-4") {
@@ -196,9 +167,11 @@ function activationIcon(goal: GoalRecord) {
 }
 
 export function GoalsPage() {
+  const navigate = useNavigate();
   const agents = useAvailableAgents();
   const goals = useGoals({ include_dependencies: true });
-  const createGoal = useCreateGoal();
+  const plannerSources = useGoalPlannerSources();
+  const startPlanningSession = useStartGoalPlanningSession();
   const updateGoal = useUpdateGoal();
   const activateGoal = useActivateGoal();
   const addDependency = useAddGoalDependency();
@@ -206,26 +179,42 @@ export function GoalsPage() {
   useGoalEvents(true);
 
   const agentRows = useMemo(() => agents.data ?? [], [agents.data]);
+  const employeeRows = useMemo(() => agentRows.filter((agent) => !agent.workflow), [agentRows]);
   const goalRows = useMemo(() => goals.data ?? [], [goals.data]);
-  const targetOptions = useMemo(() => targetOptionsForAgents(agentRows), [agentRows]);
   const scopeOptions = useMemo(
-    () => scopeOptionsForGoals(agentRows, goalRows),
-    [agentRows, goalRows],
+    () => scopeOptionsForGoals(employeeRows, goalRows),
+    [employeeRows, goalRows],
+  );
+  const organizationScope =
+    scopeOptions.find((scope) => scope.kind === "organization") ??
+    ({
+      key: DEFAULT_SCOPE_KEY,
+      kind: "organization",
+      id: "omnigent",
+      label: "Organization",
+      subtitle: "All Omnigent work",
+      count: goalRows.filter(
+        (goal) => goal.target_kind === "organization" && goal.target_id === "omnigent",
+      ).length,
+    } satisfies ScopeOption);
+  const departmentScopes = useMemo(
+    () => scopeOptions.filter((scope) => scope.kind === "department"),
+    [scopeOptions],
+  );
+  const employeeScopes = useMemo(
+    () => scopeOptions.filter((scope) => scope.kind === "agent"),
+    [scopeOptions],
   );
 
-  const [selectedScopeKey, setSelectedScopeKey] = useState(scopeKey("all", "all"));
+  const [selectedScopeKey, setSelectedScopeKey] = useState(DEFAULT_SCOPE_KEY);
   const [view, setView] = useState<GoalView>("active");
   const [selectedGoalId, setSelectedGoalId] = useState<string | null>(null);
-  const [title, setTitle] = useState("");
-  const [priority, setPriority] = useState("3");
-  const [targetValue, setTargetValue] = useState(targetKey("organization", "omnigent"));
-  const [readiness, setReadiness] = useState<GoalReadinessKind>("immediate");
-  const [dependencyDraft, setDependencyDraft] = useState("");
+  const [sectionsOpen, setSectionsOpen] = useState({ department: true, employees: true });
   const [newDependency, setNewDependency] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const selectedScope =
-    scopeOptions.find((scope) => scope.key === selectedScopeKey) ?? scopeOptions[0];
+    scopeOptions.find((scope) => scope.key === selectedScopeKey) ?? organizationScope;
   const selectedGoal = selectedGoalId
     ? goalRows.find((goal) => goal.id === selectedGoalId) ?? null
     : null;
@@ -253,45 +242,16 @@ export function GoalsPage() {
   );
 
   useEffect(() => {
-    if (selectedScope?.kind && selectedScope.kind !== "all") {
-      setTargetValue(targetKey(selectedScope.kind, selectedScope.id));
+    if (!scopeOptions.some((scope) => scope.key === selectedScopeKey)) {
+      setSelectedScopeKey(DEFAULT_SCOPE_KEY);
     }
-  }, [selectedScope?.id, selectedScope?.kind]);
+  }, [scopeOptions, selectedScopeKey]);
 
   useEffect(() => {
     if (selectedGoalId && !goalRows.some((goal) => goal.id === selectedGoalId)) {
       setSelectedGoalId(null);
     }
   }, [goalRows, selectedGoalId]);
-
-  async function submitGoal() {
-    setError(null);
-    const target = splitTargetKey(targetValue);
-    const option = targetOptions.find((candidate) => candidate.key === targetValue);
-    const dependencies = dependencyDraft
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean)
-      .map((label) => ({ kind: "manual" as const, label, status: "pending" as const }));
-    try {
-      const goal = await createGoal.mutateAsync({
-        title: title.trim(),
-        priority: Number(priority),
-        target_kind: target.kind,
-        target_id: target.id,
-        target_label: option?.label,
-        readiness_kind: dependencies.length > 0 ? "dependent" : readiness,
-        dependencies,
-      });
-      setSelectedGoalId(goal.id);
-      setView(goal.activation_state === "ready" ? "active" : "waiting");
-      setTitle("");
-      setDependencyDraft("");
-      setReadiness("immediate");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to create goal.");
-    }
-  }
 
   async function addGoalDependency(goal: GoalRecord) {
     const label = newDependency.trim();
@@ -309,12 +269,11 @@ export function GoalsPage() {
   }
 
   const busy =
-    createGoal.isPending ||
+    startPlanningSession.isPending ||
     updateGoal.isPending ||
     activateGoal.isPending ||
     addDependency.isPending ||
     updateDependency.isPending;
-  const canCreate = title.trim().length > 0 && !busy;
 
   return (
     <div className="fixed inset-3 z-50 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
@@ -350,31 +309,57 @@ export function GoalsPage() {
               Scope
             </div>
             <div className="min-h-0 flex-1 overflow-auto p-2">
-              {scopeOptions.map((scope) => (
-                <button
-                  key={scope.key}
-                  type="button"
-                  onClick={() => setSelectedScopeKey(scope.key)}
-                  className={cn(
-                    "mb-1 flex min-h-12 w-full cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50",
-                    scope.key === selectedScopeKey
-                      ? "border-border bg-muted text-foreground"
-                      : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
-                  )}
-                  aria-pressed={scope.key === selectedScopeKey}
-                >
-                  <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background">
-                    {iconForScope(scope.kind)}
-                  </span>
-                  <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">{scope.label}</span>
-                    <span className="block truncate text-xs text-muted-foreground">
-                      {scope.subtitle}
-                    </span>
-                  </span>
-                  <Badge variant="secondary">{scope.count}</Badge>
-                </button>
-              ))}
+              <ScopeButton
+                scope={organizationScope}
+                selected={organizationScope.key === selectedScopeKey}
+                onSelect={() => setSelectedScopeKey(organizationScope.key)}
+              />
+              <ScopeAccordion
+                label="Department"
+                icon={<NetworkIcon className="size-4" />}
+                open={sectionsOpen.department}
+                onToggle={() =>
+                  setSectionsOpen((current) => ({
+                    ...current,
+                    department: !current.department,
+                  }))
+                }
+                count={departmentScopes.length}
+              >
+                {departmentScopes.map((scope) => (
+                  <ScopeButton
+                    key={scope.key}
+                    scope={scope}
+                    selected={scope.key === selectedScopeKey}
+                    onSelect={() => setSelectedScopeKey(scope.key)}
+                    nested
+                  />
+                ))}
+                {departmentScopes.length === 0 && <EmptyScopeRow label="No departments" />}
+              </ScopeAccordion>
+              <ScopeAccordion
+                label="Employees"
+                icon={<BotIcon className="size-4" />}
+                open={sectionsOpen.employees}
+                onToggle={() =>
+                  setSectionsOpen((current) => ({
+                    ...current,
+                    employees: !current.employees,
+                  }))
+                }
+                count={employeeScopes.length}
+              >
+                {employeeScopes.map((scope) => (
+                  <ScopeButton
+                    key={scope.key}
+                    scope={scope}
+                    selected={scope.key === selectedScopeKey}
+                    onSelect={() => setSelectedScopeKey(scope.key)}
+                    nested
+                  />
+                ))}
+                {employeeScopes.length === 0 && <EmptyScopeRow label="No employees" />}
+              </ScopeAccordion>
             </div>
           </div>
         </aside>
@@ -418,80 +403,28 @@ export function GoalsPage() {
 
         <section className="min-h-0 overflow-auto">
           <div className="space-y-4 p-3">
-            <div className="rounded-md border border-border">
-              <div className="flex items-center gap-2 border-b border-border px-3 py-2">
-                <PlusIcon className="size-4 text-muted-foreground" />
-                <h2 className="text-sm font-semibold">New Goal</h2>
-              </div>
-              <div className="space-y-3 p-3">
-                <Field label="Title">
-                  <Input value={title} onChange={(event) => setTitle(event.target.value)} />
-                </Field>
-                <div className="grid grid-cols-[7rem_minmax(0,1fr)] gap-2">
-                  <Field label="Priority">
-                    <Select value={priority} onValueChange={setPriority}>
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PRIORITY_OPTIONS.map((option) => (
-                          <SelectItem key={option} value={String(option)}>
-                            P{option}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field label="Readiness">
-                    <Select
-                      value={readiness}
-                      onValueChange={(value) => setReadiness(value as GoalReadinessKind)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="immediate">Immediate</SelectItem>
-                        <SelectItem value="dependent">Dependent</SelectItem>
-                        <SelectItem value="deferred">Deferred</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </div>
-                <Field label="Target">
-                  <Select value={targetValue} onValueChange={setTargetValue}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {targetOptions.map((option) => (
-                        <SelectItem key={option.key} value={option.key}>
-                          {option.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="Dependencies">
-                  <Textarea
-                    value={dependencyDraft}
-                    onChange={(event) => setDependencyDraft(event.target.value)}
-                    className="min-h-20 resize-none"
-                  />
-                </Field>
-                {error && (
-                  <div
-                    role="alert"
-                    className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-                  >
-                    {error}
-                  </div>
-                )}
-                <Button className="w-full" disabled={!canCreate} onClick={() => void submitGoal()}>
-                  <PlusIcon /> Create goal
-                </Button>
-              </div>
-            </div>
+            <PlannerPanel
+              scope={selectedScope}
+              sources={plannerSources.data ?? []}
+              busy={startPlanningSession.isPending}
+              error={error}
+              onStart={async (sourceIds) => {
+                setError(null);
+                try {
+                  const session = await startPlanningSession.mutateAsync({
+                    target_kind: selectedScope.kind,
+                    target_id: selectedScope.id,
+                    target_label: selectedScope.label,
+                    source_ids: sourceIds,
+                  });
+                  navigate(session.web_path);
+                } catch (err) {
+                  setError(
+                    err instanceof Error ? err.message : "Unable to start planning session.",
+                  );
+                }
+              }}
+            />
 
             {selectedGoal ? (
               <GoalDetail
@@ -546,6 +479,180 @@ function ViewButton({
     <Button variant={active ? "secondary" : "ghost"} size="sm" onClick={onClick}>
       {children}
     </Button>
+  );
+}
+
+function ScopeButton({
+  scope,
+  selected,
+  onSelect,
+  nested = false,
+}: {
+  scope: ScopeOption;
+  selected: boolean;
+  onSelect: () => void;
+  nested?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "mb-1 flex min-h-12 w-full cursor-pointer items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50",
+        nested && "pl-4",
+        selected
+          ? "border-border bg-muted text-foreground"
+          : "border-transparent text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+      )}
+      aria-pressed={selected}
+    >
+      <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+        {iconForScope(scope.kind)}
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-medium">{scope.label}</span>
+        <span className="block truncate text-xs text-muted-foreground">{scope.subtitle}</span>
+      </span>
+      <Badge variant="secondary">{scope.count}</Badge>
+    </button>
+  );
+}
+
+function ScopeAccordion({
+  label,
+  icon,
+  open,
+  onToggle,
+  count,
+  children,
+}: {
+  label: string;
+  icon: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  count: number;
+  children: ReactNode;
+}) {
+  return (
+    <div className="mb-1">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex min-h-11 w-full cursor-pointer items-center gap-2 rounded-md border border-transparent px-2.5 py-2 text-left text-muted-foreground transition-colors hover:bg-muted/60 hover:text-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+        aria-expanded={open}
+      >
+        <span className="flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-background">
+          {icon}
+        </span>
+        <span className="min-w-0 flex-1 truncate text-sm font-medium">{label}</span>
+        <Badge variant="outline">{count}</Badge>
+        <ChevronDownIcon
+          className={cn("size-4 transition-transform", open ? "rotate-180" : "rotate-0")}
+        />
+      </button>
+      {open && <div className="mt-1">{children}</div>}
+    </div>
+  );
+}
+
+function EmptyScopeRow({ label }: { label: string }) {
+  return (
+    <div className="mb-1 rounded-md border border-dashed border-border px-3 py-3 text-xs text-muted-foreground">
+      {label}
+    </div>
+  );
+}
+
+function PlannerPanel({
+  scope,
+  sources,
+  busy,
+  error,
+  onStart,
+}: {
+  scope: ScopeOption;
+  sources: GoalPlannerSource[];
+  busy: boolean;
+  error: string | null;
+  onStart: (sourceIds: string[]) => Promise<void>;
+}) {
+  const availableSourceIds = useMemo(
+    () => sources.filter((source) => source.available).map((source) => source.id),
+    [sources],
+  );
+  const sourceSignature = availableSourceIds.join("|");
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelectedSourceIds(availableSourceIds);
+  }, [sourceSignature]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  function toggleSource(source: GoalPlannerSource) {
+    if (!source.available) return;
+    setSelectedSourceIds((current) =>
+      current.includes(source.id)
+        ? current.filter((sourceId) => sourceId !== source.id)
+        : [...current, source.id],
+    );
+  }
+
+  return (
+    <div className="rounded-md border border-border">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <SparklesIcon className="size-4 text-muted-foreground" />
+        <h2 className="text-sm font-semibold">Planning assistant</h2>
+      </div>
+      <div className="space-y-3 p-3">
+        <div className="rounded-md border border-border bg-muted/30 px-3 py-2">
+          <div className="flex min-w-0 items-center gap-2">
+            {iconForScope(scope.kind, "size-3.5")}
+            <div className="min-w-0">
+              <div className="truncate text-sm font-medium">{scope.label}</div>
+              <div className="truncate text-xs text-muted-foreground">{scope.subtitle}</div>
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <div className="text-xs font-medium text-muted-foreground">Sources</div>
+          <div className="flex flex-wrap gap-2">
+            {sources.map((source) => {
+              const selected = selectedSourceIds.includes(source.id);
+              return (
+                <Button
+                  key={source.id}
+                  type="button"
+                  variant={selected ? "secondary" : "outline"}
+                  size="sm"
+                  disabled={!source.available || busy}
+                  onClick={() => toggleSource(source)}
+                  title={source.reason ?? source.label}
+                >
+                  {selected ? <CheckIcon /> : <CircleDashedIcon />}
+                  {source.label}
+                </Button>
+              );
+            })}
+          </div>
+        </div>
+
+        {error && (
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            {error}
+          </div>
+        )}
+        <Button
+          className="w-full"
+          disabled={busy}
+          onClick={() => void onStart(selectedSourceIds)}
+        >
+          <SparklesIcon /> Start interview
+        </Button>
+      </div>
+    </div>
   );
 }
 

@@ -27,6 +27,7 @@ from typing import Any
 from bytedesk_omnigent.realtime import config
 from bytedesk_omnigent.realtime.channel import (
     goal_changed,
+    goal_planning_event,
     office_agents_channel,
     office_goals_channel,
     presence_changed,
@@ -74,6 +75,25 @@ def emit_goal_change(event: dict[str, Any]) -> None:
         updated_at=int(event["updatedAt"]),
         occurred_at=int(event["occurredAt"]),
         dependency=event.get("dependency"),
+    )
+    publish(office_goals_channel(tenant), payload)
+
+
+def emit_goal_planning(event: dict[str, Any]) -> None:
+    """Publish a goal-planning lifecycle delta for future Platform consumers."""
+    tenant = config.tenant_id()
+    if not tenant:
+        return
+    payload = goal_planning_event(
+        event_type=str(event["type"]),
+        planning_session_id=str(event["planningSessionId"]),
+        target_kind=str(event["targetKind"]),
+        target_id=str(event["targetId"]),
+        target_label=event.get("targetLabel"),
+        source_ids=[str(source) for source in event.get("sourceIds", [])],
+        occurred_at=int(event["occurredAt"]),
+        goal_id=event.get("goalId"),
+        draft_ready=event.get("draftReady"),
     )
     publish(office_goals_channel(tenant), payload)
 

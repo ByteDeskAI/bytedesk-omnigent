@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
+import os
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any
@@ -19,10 +21,23 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from omnigent.db.utils import now_epoch
+from omnigent.entities import MessageData, NewConversationItem
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.server.auth import AuthProvider
+from omnigent.server.auth import LEVEL_OWNER, AuthProvider
 from omnigent.server.routes._auth_helpers import get_user_id, require_user
 from omnigent.stores.permission_store import PermissionStore
+
+logger = logging.getLogger(__name__)
+
+PLANNING_EVENT_TYPES = {
+    "goal.changed",
+    "goal.planning.started",
+    "goal.draft.updated",
+    "goal.planning.committed",
+}
+
+PLANNER_AGENT_NAMES = ("goal-planner", "chief-of-staff")
 
 
 class GoalDependencyBody(BaseModel):
@@ -73,6 +88,49 @@ class UpdateDependencyBody(BaseModel):
     metadata: dict[str, Any] | None = None
 
 
+class GoalPlannerSource(BaseModel):
+    """A knowledge source the goal-planner assistant may reference."""
+
+    id: str
+    label: str
+    available: bool = True
+    tools: list[str] = Field(default_factory=list)
+    reason: str | None = None
+
+
+class StartGoalPlanningSessionBody(BaseModel):
+    """Start a goal-planning interview for one scope."""
+
+    target_kind: str = Field(max_length=16)
+    target_id: str = Field(min_length=1, max_length=128)
+    target_label: str | None = Field(default=None, max_length=256)
+    source_ids: list[str] = Field(default_factory=list, max_length=8)
+
+
+class GoalDraftBody(BaseModel):
+    """Structured goal draft committed by the planner interview."""
+
+    title: str = Field(min_length=1, max_length=512)
+    priority: int = Field(default=3, ge=1, le=10)
+    target_kind: str = Field(default="organization", max_length=16)
+    target_id: str | None = Field(default=None, max_length=128)
+    target_label: str | None = Field(default=None, max_length=256)
+    readiness_kind: str = Field(default="immediate", max_length=16)
+    dependencies: list[GoalDependencyBody] = Field(default_factory=list)
+    outcome: str | None = Field(default=None, max_length=2000)
+    acceptance_criteria: list[str] = Field(default_factory=list, max_length=20)
+    assumptions: list[str] = Field(default_factory=list, max_length=20)
+    source_refs: list[dict[str, Any]] = Field(default_factory=list, max_length=20)
+    payload: dict[str, Any] | None = None
+
+
+class CommitGoalPlanningSessionBody(BaseModel):
+    """Commit a planner-produced draft into the durable goal backlog."""
+
+    source_ids: list[str] = Field(default_factory=list, max_length=8)
+    draft: GoalDraftBody
+
+
 async def _require_admin(
     request: Request,
     auth_provider: AuthProvider | None,
@@ -96,6 +154,121 @@ def _format_sse(event: dict[str, Any]) -> str:
     event_type = str(event.get("type") or "message")
     data = json.dumps(event, separators=(",", ":"))
     return f"event: {event_type}\ndata: {data}\n\n"
+
+
+def _planner_sources() -> list[GoalPlannerSource]:
+    google_available = bool(
+        os.getenv("GOOGLE_WORKSPACE_MCP_URL") or os.getenv("BYTEDESK_GOOGLE_WORKSPACE_MCP_URL")
+    )
+    return [
+        GoalPlannerSource(
+            id="jira",
+            label="Jira",
+            tools=["bytedesk_jira"],
+            available=True,
+        ),
+        GoalPlannerSource(
+            id="confluence",
+            label="Confluence",
+            tools=["bytedesk_confluence"],
+            available=True,
+        ),
+        GoalPlannerSource(
+            id="google_workspace",
+            label="Google Workspace",
+            tools=["google_workspace"],
+            available=google_available,
+            reason=None if google_available else "not_configured",
+        ),
+    ]
+
+
+def _available_sources(source_ids: list[str]) -> list[GoalPlannerSource]:
+    by_id = {source.id: source for source in _planner_sources()}
+    selected: list[GoalPlannerSource] = []
+    for source_id in source_ids:
+        source = by_id.get(source_id)
+        if source is not None and source.available:
+            selected.append(source)
+    return selected
+
+
+def _publish_planning_event(
+    event_type: str,
+    *,
+    planning_session_id: str,
+    target_kind: str,
+    target_id: str,
+    target_label: str | None,
+    source_ids: list[str],
+    goal_id: str | None = None,
+    draft_ready: bool | None = None,
+    occurred_at: int | None = None,
+) -> None:
+    event: dict[str, Any] = {
+        "type": event_type,
+        "planningSessionId": planning_session_id,
+        "targetKind": target_kind,
+        "targetId": target_id,
+        "targetLabel": target_label,
+        "sourceIds": source_ids,
+        "occurredAt": occurred_at if occurred_at is not None else now_epoch(),
+    }
+    if goal_id is not None:
+        event["goalId"] = goal_id
+    if draft_ready is not None:
+        event["draftReady"] = draft_ready
+    try:
+        from bytedesk_omnigent.realtime.bridge import emit_goal_planning
+
+        emit_goal_planning(event)
+    except Exception:  # pragma: no cover - best-effort bridge
+        logger.exception("failed to publish goal-planning realtime delta")
+    try:
+        from bytedesk_omnigent.goals import GOAL_EVENT_USER_KEY
+        from omnigent.runtime.event_hub import publish
+
+        publish(GOAL_EVENT_USER_KEY, event)
+    except Exception:  # pragma: no cover - best-effort local event stream
+        logger.exception("failed to publish goal-planning event-hub delta")
+
+
+def _resolve_planner_agent() -> Any:
+    from omnigent.runtime import get_agent_store
+
+    agent_store = get_agent_store()
+    for name in PLANNER_AGENT_NAMES:
+        agent = agent_store.get_by_name(name)
+        if agent is not None:
+            return agent
+    expected = ", ".join(PLANNER_AGENT_NAMES)
+    raise OmnigentError(
+        f"No goal planner agent is registered; expected one of: {expected}",
+        code=ErrorCode.NOT_FOUND,
+    )
+
+
+def _planner_prompt(
+    *,
+    target_kind: str,
+    target_id: str,
+    target_label: str | None,
+    sources: list[GoalPlannerSource],
+) -> str:
+    source_labels = ", ".join(source.label for source in sources) or "none"
+    label = target_label or target_id
+    return (
+        "GOAL PLANNING INTERVIEW\n"
+        f"Scope: {target_kind}:{target_id} ({label})\n"
+        f"Sources enabled: {source_labels}\n\n"
+        "Run a planning interview for this scope. Ask one concise question at a time. "
+        "When the harness exposes AskUserQuestion, use it for choices or required "
+        "clarifications; otherwise ask directly in chat. Search/read the enabled "
+        "sources before creating or recommending tracked work. The final draft must "
+        "include title, priority, readiness_kind, dependencies, desired outcome, "
+        "acceptance criteria, assumptions, and source references. Do not commit a "
+        "goal until the user explicitly approves the final draft."
+    )
 
 
 def create_goals_router(
@@ -159,9 +332,136 @@ def create_goals_router(
             raise _invalid_input(exc) from exc
         return JSONResponse({"goal": asdict(goal)}, status_code=201)
 
+    @router.get("/goals/planner/sources")
+    async def list_planner_sources(request: Request) -> JSONResponse:
+        """List available knowledge sources for the goal-planning assistant."""
+        require_user(request, auth_provider)
+        return JSONResponse({"sources": [source.model_dump() for source in _planner_sources()]})
+
+    @router.post("/goals/planner/sessions")
+    async def start_planning_session(
+        request: Request,
+        body: StartGoalPlanningSessionBody,
+    ) -> JSONResponse:
+        """Create an assistant-driven goal-planning session for one scope."""
+        user_id = await _require_admin(request, auth_provider, permission_store)
+        from omnigent.runtime import get_conversation_store
+
+        agent = _resolve_planner_agent()
+        sources = _available_sources(body.source_ids)
+        source_ids = [source.id for source in sources]
+        title = f"Plan goal: {body.target_label or body.target_id}"
+        prompt = _planner_prompt(
+            target_kind=body.target_kind,
+            target_id=body.target_id,
+            target_label=body.target_label,
+            sources=sources,
+        )
+        conversation_store = get_conversation_store()
+        conv = await asyncio.to_thread(
+            conversation_store.create_conversation,
+            agent_id=agent.id,
+            title=title,
+            kind="default",
+        )
+        labels = {
+            "bytedesk.goal_planner": "1",
+            "bytedesk.goal_planner.target_kind": body.target_kind,
+            "bytedesk.goal_planner.target_id": body.target_id,
+            "bytedesk.goal_planner.target_label": body.target_label or "",
+            "bytedesk.goal_planner.sources": ",".join(source_ids),
+        }
+        await asyncio.to_thread(conversation_store.set_labels, conv.id, labels)
+        await asyncio.to_thread(
+            conversation_store.append,
+            conv.id,
+            [
+                NewConversationItem(
+                    type="message",
+                    response_id="seed",
+                    data=MessageData(
+                        role="user",
+                        content=[{"type": "input_text", "text": prompt}],
+                    ),
+                    created_by=user_id,
+                )
+            ],
+        )
+        if permission_store is not None and user_id is not None:
+            await asyncio.to_thread(permission_store.grant, user_id, conv.id, LEVEL_OWNER)
+        _publish_planning_event(
+            "goal.planning.started",
+            planning_session_id=conv.id,
+            target_kind=body.target_kind,
+            target_id=body.target_id,
+            target_label=body.target_label,
+            source_ids=source_ids,
+            draft_ready=False,
+        )
+        return JSONResponse(
+            {
+                "session_id": conv.id,
+                "agent_id": agent.id,
+                "agent_name": agent.name,
+                "title": title,
+                "prompt": prompt,
+                "sources": [source.model_dump() for source in sources],
+                "web_path": f"/c/{conv.id}",
+            },
+            status_code=201,
+        )
+
+    @router.post("/goals/planner/sessions/{session_id}/commit")
+    async def commit_planning_session(
+        request: Request,
+        session_id: str,
+        body: CommitGoalPlanningSessionBody,
+    ) -> JSONResponse:
+        """Commit an approved planner draft into the durable goal backlog."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_store
+
+        draft = body.draft
+        payload = {
+            **(draft.payload or {}),
+            "goal_planning": {
+                "session_id": session_id,
+                "outcome": draft.outcome,
+                "acceptance_criteria": draft.acceptance_criteria,
+                "assumptions": draft.assumptions,
+                "source_refs": draft.source_refs,
+                "source_ids": body.source_ids,
+            },
+        }
+        try:
+            goal = get_goal_store().create_goal(
+                title=draft.title,
+                priority=draft.priority,
+                source="goal-planner",
+                payload=payload,
+                target_kind=draft.target_kind,
+                target_id=draft.target_id,
+                target_label=draft.target_label,
+                readiness_kind=draft.readiness_kind,
+                dependencies=[dependency.model_dump() for dependency in draft.dependencies],
+            )
+        except ValueError as exc:
+            raise _invalid_input(exc) from exc
+        _publish_planning_event(
+            "goal.planning.committed",
+            planning_session_id=session_id,
+            target_kind=goal.target_kind,
+            target_id=goal.target_id,
+            target_label=goal.target_label,
+            source_ids=body.source_ids,
+            goal_id=goal.id,
+            draft_ready=True,
+        )
+        return JSONResponse({"goal": asdict(goal)}, status_code=201)
+
     @router.get("/goals/events", response_model=None)
     async def subscribe_goal_events(request: Request) -> StreamingResponse:
-        """Subscribe to goal.changed events for live Omnigent admin refresh."""
+        """Subscribe to goal events for live Omnigent admin refresh."""
         require_user(request, auth_provider)
         from bytedesk_omnigent.goals import GOAL_EVENT_USER_KEY
         from omnigent.runtime.event_hub import subscribe
@@ -169,7 +469,7 @@ def create_goals_router(
         async def _gen() -> AsyncIterator[str]:
             async for event in subscribe(
                 GOAL_EVENT_USER_KEY,
-                types={"goal.changed"},
+                types=PLANNING_EVENT_TYPES,
                 heartbeat_interval_s=20.0,
             ):
                 yield _format_sse(event)

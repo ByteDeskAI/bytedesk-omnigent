@@ -95,6 +95,51 @@ export interface UpdateGoalDependencyRequest {
   metadata?: Record<string, unknown> | null;
 }
 
+export interface GoalPlannerSource {
+  id: string;
+  label: string;
+  available: boolean;
+  tools: string[];
+  reason?: string | null;
+}
+
+export interface StartGoalPlanningSessionRequest {
+  target_kind: GoalTargetKind;
+  target_id: string;
+  target_label?: string | null;
+  source_ids?: string[];
+}
+
+export interface GoalPlanningSession {
+  session_id: string;
+  agent_id: string;
+  agent_name: string;
+  title: string;
+  prompt: string;
+  sources: GoalPlannerSource[];
+  web_path: string;
+}
+
+export interface GoalDraft {
+  title: string;
+  priority?: number;
+  target_kind?: GoalTargetKind;
+  target_id?: string | null;
+  target_label?: string | null;
+  readiness_kind?: GoalReadinessKind;
+  dependencies?: CreateGoalDependencyRequest[];
+  outcome?: string | null;
+  acceptance_criteria?: string[];
+  assumptions?: string[];
+  source_refs?: Record<string, unknown>[];
+  payload?: Record<string, unknown> | null;
+}
+
+export interface CommitGoalPlanningSessionRequest {
+  source_ids?: string[];
+  draft: GoalDraft;
+}
+
 async function readJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -137,6 +182,39 @@ export async function createGoal(payload: CreateGoalRequest): Promise<GoalRecord
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  const body = await readJson<{ goal: GoalRecord }>(res);
+  return body.goal;
+}
+
+export async function listGoalPlannerSources(): Promise<GoalPlannerSource[]> {
+  const res = await authenticatedFetch("/v1/goals/planner/sources");
+  const body = await readJson<{ sources: GoalPlannerSource[] }>(res);
+  return body.sources;
+}
+
+export async function startGoalPlanningSession(
+  payload: StartGoalPlanningSessionRequest,
+): Promise<GoalPlanningSession> {
+  const res = await authenticatedFetch("/v1/goals/planner/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return readJson<GoalPlanningSession>(res);
+}
+
+export async function commitGoalPlanningSession(
+  sessionId: string,
+  payload: CommitGoalPlanningSessionRequest,
+): Promise<GoalRecord> {
+  const res = await authenticatedFetch(
+    `/v1/goals/planner/sessions/${encodeURIComponent(sessionId)}/commit`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
   const body = await readJson<{ goal: GoalRecord }>(res);
   return body.goal;
 }

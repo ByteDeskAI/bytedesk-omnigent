@@ -9,14 +9,15 @@ vi.mock("@/hooks/useAvailableAgents", () => ({ useAvailableAgents: vi.fn() }));
 vi.mock("@/hooks/useGoals", () => ({
   useGoals: vi.fn(),
   useGoalEvents: vi.fn(),
-  useCreateGoal: vi.fn(),
+  useGoalPlannerSources: vi.fn(),
+  useStartGoalPlanningSession: vi.fn(),
   useUpdateGoal: vi.fn(),
   useActivateGoal: vi.fn(),
   useAddGoalDependency: vi.fn(),
   useUpdateGoalDependency: vi.fn(),
 }));
 
-const createGoal = vi.fn();
+const startPlanningSession = vi.fn();
 const updateGoal = vi.fn();
 const activateGoal = vi.fn();
 const addDependency = vi.fn();
@@ -43,6 +44,28 @@ beforeEach(() => {
         department: "Operations",
         title: "Chief of Staff",
         workflow: false,
+      },
+      {
+        id: "ag_growth",
+        name: "marketing-director",
+        display_name: "Claire Donovan",
+        description: null,
+        harness: "claude-sdk",
+        skills: [],
+        department: "Growth",
+        title: "Growth Marketing Director",
+        workflow: false,
+      },
+      {
+        id: "ag_workflow",
+        name: "weekly-business-review",
+        display_name: "Weekly Business Review",
+        description: null,
+        harness: "claude-sdk",
+        skills: [],
+        department: "Operations",
+        title: "Workflow",
+        workflow: true,
       },
     ],
   } as never);
@@ -82,12 +105,35 @@ beforeEach(() => {
     isFetching: false,
   } as never);
   vi.mocked(goalHooks.useGoalEvents).mockReturnValue(undefined);
-  createGoal.mockResolvedValue({
-    id: "goal_new",
-    activation_state: "waiting",
+  vi.mocked(goalHooks.useGoalPlannerSources).mockReturnValue({
+    data: [
+      { id: "jira", label: "Jira", available: true, tools: ["bytedesk_jira"] },
+      {
+        id: "confluence",
+        label: "Confluence",
+        available: true,
+        tools: ["bytedesk_confluence"],
+      },
+      {
+        id: "google_workspace",
+        label: "Google Workspace",
+        available: false,
+        tools: [],
+        reason: "not_configured",
+      },
+    ],
+  } as never);
+  startPlanningSession.mockResolvedValue({
+    session_id: "conv_plan",
+    agent_id: "ag_maya",
+    agent_name: "chief-of-staff",
+    title: "Plan goal: Organization",
+    prompt: "GOAL PLANNING INTERVIEW",
+    sources: [],
+    web_path: "/c/conv_plan",
   });
-  vi.mocked(goalHooks.useCreateGoal).mockReturnValue({
-    mutateAsync: createGoal,
+  vi.mocked(goalHooks.useStartGoalPlanningSession).mockReturnValue({
+    mutateAsync: startPlanningSession,
     isPending: false,
   } as never);
   vi.mocked(goalHooks.useUpdateGoal).mockReturnValue({
@@ -118,8 +164,13 @@ describe("GoalsPage", () => {
     renderPage();
 
     expect(screen.getByRole("heading", { name: "Goals" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Organization/ })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Department/ }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /Employees/ })).toBeInTheDocument();
     expect(screen.getAllByText("Operations").length).toBeGreaterThan(0);
+    expect(screen.queryByText("Weekly Business Review")).not.toBeInTheDocument();
 
+    fireEvent.click(screen.getByRole("button", { name: /OperationsDepartment goal/ }));
     fireEvent.click(screen.getByRole("button", { name: "Waiting" }));
     fireEvent.click(screen.getByRole("button", { name: /Prepare reporting loop/ }));
     fireEvent.click(await screen.findByRole("button", { name: /Satisfy/ }));
@@ -131,28 +182,19 @@ describe("GoalsPage", () => {
     });
   });
 
-  it("creates a dependent organization goal from the editor", async () => {
+  it("starts a planning interview for the selected scope", async () => {
     renderPage();
 
-    fireEvent.change(screen.getByLabelText("Title"), {
-      target: { value: "Close onboarding loop" },
-    });
-    fireEvent.change(screen.getByLabelText("Dependencies"), {
-      target: { value: "Agent roster synced\nDefault policy published" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: /Create goal/ }));
+    fireEvent.click(screen.getByRole("button", { name: /GrowthDepartment goal/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Start interview/ }));
 
     await waitFor(() =>
-      expect(createGoal).toHaveBeenCalledWith(
+      expect(startPlanningSession).toHaveBeenCalledWith(
         expect.objectContaining({
-          title: "Close onboarding loop",
-          target_kind: "organization",
-          target_id: "omnigent",
-          readiness_kind: "dependent",
-          dependencies: [
-            { kind: "manual", label: "Agent roster synced", status: "pending" },
-            { kind: "manual", label: "Default policy published", status: "pending" },
-          ],
+          target_kind: "department",
+          target_id: "Growth",
+          target_label: "Growth",
+          source_ids: ["jira", "confluence"],
         }),
       ),
     );

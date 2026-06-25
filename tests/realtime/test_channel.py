@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from bytedesk_omnigent.realtime.channel import (
     goal_changed,
+    goal_planning_event,
     office_agents_channel,
     office_goals_channel,
     presence_changed,
@@ -69,4 +70,26 @@ def test_goal_changed_envelope():
         "updatedAt": 100,
         "occurredAt": 101,
         "dependency": {"id": "dep_1", "status": "pending"},
+    }
+
+
+def test_goal_planning_event_envelope():
+    assert goal_planning_event(
+        event_type="goal.planning.started",
+        planning_session_id="conv_1",
+        target_kind="department",
+        target_id="Operations",
+        target_label="Operations",
+        source_ids=["jira", "confluence"],
+        occurred_at=101,
+        draft_ready=False,
+    ) == {
+        "type": "goal.planning.started",
+        "planningSessionId": "conv_1",
+        "targetKind": "department",
+        "targetId": "Operations",
+        "targetLabel": "Operations",
+        "sourceIds": ["jira", "confluence"],
+        "occurredAt": 101,
+        "draftReady": False,
     }
