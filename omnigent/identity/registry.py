@@ -1,10 +1,10 @@
-"""Per-port :class:`~omnigent.pluggable.registry.PluggableRegistry` instances.
+"""Per-port :class:`~omnigent.kernel.pluggable.registry.PluggableRegistry` instances.
 
 One registry per identity seam, each constructed with its in-box default so
 ``resolve_default()`` returns a working impl with zero extensions installed (the
 "acts as a product standalone" guarantee, satisfied by construction). Each
 registry also gets an ``OMNIGENT_USE_<SEAM>`` strangler env and an extension
-discovery hook (wired into :data:`omnigent.pluggable.manifest.SEAMS`), so a
+discovery hook (wired into :data:`omnigent.kernel.pluggable.manifest.SEAMS`), so a
 consumer can swap any subpart per-environment or via an installed extension.
 
 Built per call (cheap; impls are stateless) rather than as module singletons, so
@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from omnigent.identity.defaults import OwnerAllowAuthorizer, StaticSecretProvider
 from omnigent.identity.verifiers import HmacAssertionVerifier
-from omnigent.pluggable.registry import PluggableRegistry
+from omnigent.kernel.pluggable.registry import PluggableRegistry
 
 if TYPE_CHECKING:
     from omnigent.identity.ports import (

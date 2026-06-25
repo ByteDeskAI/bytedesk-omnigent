@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from databricks.sdk import WorkspaceClient
 
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ def _build_remote_function_registry() -> PluggableRegistry[RemoteFunctionExecuto
     An alternative backend can register under another name and be selected via
     ``OMNIGENT_USE_REMOTE_FUNCTION``.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[RemoteFunctionExecutor] = PluggableRegistry(
         "remote_function", default=("databricks", DatabricksRemoteFunctionExecutor)

@@ -4,8 +4,8 @@ CORE = KERNEL + first-party plugins. Per Section 9.1 of
 ``docs/EXTENSION_FRAMEWORK_ANALYSIS.md`` the ``omnigent/identity/`` subpackage
 becomes the ``omnigent.identity`` first-party plugin, registering this
 subpackage's already-existing default providers into the three identity kernel
-seams it owns (all three are already :class:`~omnigent.pluggable.PluggableRegistry`
-seams in :data:`omnigent.pluggable.manifest.SEAMS`):
+seams it owns (all three are already :class:`~omnigent.kernel.pluggable.PluggableRegistry`
+seams in :data:`omnigent.kernel.pluggable.manifest.SEAMS`):
 
   * ``assertion_verifier``  ← :class:`~omnigent.identity.verifiers.HmacAssertionVerifier`
   * ``outbound_credential`` ← :class:`~omnigent.identity.defaults.StaticSecretProvider`
@@ -29,7 +29,7 @@ identity-port hooks.
 **Not yet wired into boot.** The Integration phase mounts first-party plugins;
 this module only needs to import cleanly and expose correct hook returns. It is
 authored on the :func:`omnigent.sdk.extension` facade so its instances satisfy
-the kernel :class:`omnigent.extensions.OmnigentExtension` Protocol unchanged.
+the kernel :class:`omnigent.kernel.extensions.OmnigentExtension` Protocol unchanged.
 """
 
 from __future__ import annotations

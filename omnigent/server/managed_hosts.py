@@ -111,7 +111,7 @@ from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
     from omnigent.onboarding.sandboxes import SandboxLauncher
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -669,7 +669,7 @@ def _build_sandbox_provider_registry() -> PluggableRegistry[SandboxProviderSpec]
     registered as a *staged* provider (parses, rejects launch) so it stays in
     :data:`SUPPORTED_SANDBOX_PROVIDERS` without a code branch.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[SandboxProviderSpec] = PluggableRegistry("sandbox")
     registry.register("modal", _modal_provider)

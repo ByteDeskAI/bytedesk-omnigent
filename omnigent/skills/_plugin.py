@@ -16,7 +16,7 @@ kernel seams:
     (:mod:`omnigent.tools.builtins.skills`).
 
 It is built with the :func:`omnigent.sdk.extension` decorator, so its instances
-satisfy the kernel :class:`omnigent.extensions.OmnigentExtension` Protocol
+satisfy the kernel :class:`omnigent.kernel.extensions.OmnigentExtension` Protocol
 (Section 12.7 invariant) and flow through the existing
 ``discover_extensions`` / ``install_extensions`` /
 ``PluggableRegistry.discover_extensions`` machinery unchanged — there is no

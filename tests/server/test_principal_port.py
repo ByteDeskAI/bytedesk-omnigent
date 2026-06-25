@@ -9,7 +9,7 @@ Covers the foundation laid in increment 1 with ZERO behavior change:
 3. :class:`CompositeAuthProvider` — Chain of Responsibility: first non-None
    resolver wins, fall-through to the configured base, and (no extension
    resolver) behavior-identical to the base provider alone.
-4. :func:`omnigent.extensions.extension_principal_resolvers` — aggregates the
+4. :func:`omnigent.kernel.extensions.extension_principal_resolvers` — aggregates the
    optional ``principal_resolvers()`` hook and defaults to ``[]``.
 """
 
@@ -238,7 +238,7 @@ def test_accounts_provider_none_for_none() -> None:
 
 
 def test_extension_principal_resolvers_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    import omnigent.extensions as ext_mod
+    import omnigent.kernel.extensions as ext_mod
 
     class _ExtNoHook:
         name = "no-hook"
@@ -251,7 +251,7 @@ def test_extension_principal_resolvers_default_empty(monkeypatch: pytest.MonkeyP
 
 
 def test_extension_principal_resolvers_collected(monkeypatch: pytest.MonkeyPatch) -> None:
-    import omnigent.extensions as ext_mod
+    import omnigent.kernel.extensions as ext_mod
 
     resolver = _StubProvider("ext-user")
 

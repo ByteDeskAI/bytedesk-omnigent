@@ -4,7 +4,7 @@ Dogfoods the kernel extension seam for the ``terminals`` subpackage (Section 9.1
 of ``docs/EXTENSION_FRAMEWORK_ANALYSIS.md``: the ``omnigent/terminals/`` row,
 which registers into the ``tool_factories`` seam with the ``sys_terminal_*``
 tools). This is *not* privileged code — it registers through the exact same
-:class:`omnigent.extensions.OmnigentExtension` contract a third-party plugin
+:class:`omnigent.kernel.extensions.OmnigentExtension` contract a third-party plugin
 would use, via the :mod:`omnigent.sdk` ``@extension`` / ``@tool`` decorators
 (the Section 9.2 dogfooding argument). The existing concrete providers in
 ``omnigent/tools/builtins/sys_terminal.py`` are **reused unchanged** — this

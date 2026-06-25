@@ -1,7 +1,7 @@
 """The single ByteDesk extension (ADR-0143, BDP-2291 / BDP-2300).
 
 Contributes ALL ByteDesk surfaces to omnigent core through the generic
-``omnigent.extensions`` seam — routers, background lifespan loops, tool factories,
+``omnigent.kernel.extensions`` seam — routers, background lifespan loops, tool factories,
 and policy modules — so core carries no ByteDesk-specific registration glue
 (Phase 5: zero ByteDesk conflicts on upstream rebase).
 """
@@ -259,7 +259,7 @@ class BytedeskExtension:
         — Kade Vector's model-agnostic brain, ACP over ``hermes acp``) is declared
         here as a ``harness_descriptors`` contribution, exactly the way a third
         party would add a harness. Discovery runs at server startup via
-        :func:`omnigent.pluggable.manifest.discover_all_extensions`.
+        :func:`omnigent.kernel.pluggable.manifest.discover_all_extensions`.
 
         IDEMPOTENT: ``hermes`` is also present in core's first-party descriptor set
         so it is resolvable at *import* time (``_HARNESS_MODULES`` materializes

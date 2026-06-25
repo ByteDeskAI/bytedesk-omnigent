@@ -38,7 +38,7 @@ Lifetimes
 Startup hook
 ------------
 :meth:`Core.run_startup_discovery` calls the EXISTING
-:func:`omnigent.pluggable.manifest.discover_all_extensions` — discovery is not
+:func:`omnigent.kernel.pluggable.manifest.discover_all_extensions` — discovery is not
 duplicated here. ``create_app`` already invokes that function from its lifespan;
 when the DI path is active the call is simply routed through the container so
 the container owns the one composition-root startup concern.
@@ -123,11 +123,11 @@ class Core(containers.DeclarativeContainer):
         """Run the composition-root startup hook: extension discovery.
 
         Delegates to the EXISTING
-        :func:`omnigent.pluggable.manifest.discover_all_extensions` — the one
+        :func:`omnigent.kernel.pluggable.manifest.discover_all_extensions` — the one
         place discovery is triggered — rather than duplicating it. Called from
         ``create_app``'s lifespan when the DI path is active.
         """
-        from omnigent.pluggable.manifest import discover_all_extensions
+        from omnigent.kernel.pluggable.manifest import discover_all_extensions
 
         discover_all_extensions()
 

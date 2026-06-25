@@ -5,7 +5,7 @@ Per Section 9.1 (the ``tools`` row) and Section 9.2 (the dogfooding argument) of
 plugin* contribution into the ``tools`` kernel seam — not a privileged hard-coded
 default. This module expresses that: it wraps the subpackage's **already-existing**
 default tool factories (``_FIRST_PARTY_FACTORIES`` in
-:mod:`omnigent.tools.builtins`) as an :class:`~omnigent.extensions.OmnigentExtension`
+:mod:`omnigent.tools.builtins`) as an :class:`~omnigent.kernel.extensions.OmnigentExtension`
 via the :func:`omnigent.sdk.extension` decorator, registering them through the same
 ``tool_factories`` hook a third-party extension uses.
 
@@ -42,7 +42,7 @@ class BuiltinToolsExtension:
     """First-party plugin contributing the built-in tool set to the ``tools`` seam.
 
     The single capability hook is ``tool_factories()`` — the same hook the kernel's
-    ``tools`` :class:`~omnigent.pluggable.PluggableRegistry` seam and the legacy
+    ``tools`` :class:`~omnigent.kernel.pluggable.PluggableRegistry` seam and the legacy
     ``extension_tool_factories()`` aggregator already consume. The SDK synthesises the
     required ``routers()`` (returning ``[]``) and the remaining optional Protocol hooks
     as behaviour-neutral no-ops, so the instance conforms to ``OmnigentExtension``

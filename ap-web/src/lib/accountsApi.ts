@@ -107,6 +107,8 @@ export async function login(body: LoginRequest): Promise<LoginResult> {
  */
 export async function logout(): Promise<void> {
   try {
+    const { unsubscribeFromPushNotifications } = await import("@/lib/pwa/pushSubscription");
+    await unsubscribeFromPushNotifications();
     await fetch("/auth/logout", { method: "POST" });
   } catch {
     // Network error — the cookie is still in the browser, but the

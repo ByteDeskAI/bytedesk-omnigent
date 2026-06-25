@@ -5,7 +5,7 @@ subpackage (Section 9.1 of ``docs/EXTENSION_FRAMEWORK_ANALYSIS.md``). Instead of
 the ``LocalBackend`` being an implicit, always-present tail of the chain that the
 secrets module hard-codes, it is expressed as a *first-party plugin* registered
 into the kernel's ``secret_backends`` seam through the exact same
-:class:`omnigent.extensions.OmnigentExtension` Protocol contract a third-party
+:class:`omnigent.kernel.extensions.OmnigentExtension` Protocol contract a third-party
 package (``bytedesk_omnigent``) uses for its Infisical backend.
 
 Dogfooding argument (Section 9.2): if the seam cannot host core's own
@@ -42,7 +42,7 @@ class SecretsPlugin:
     members with behaviour-neutral no-ops, but it leaves a hand-written hook
     intact (``_set_if_absent`` only writes when the attribute is missing from the
     class body) — so this method is what the kernel's ``hasattr``-probe
-    aggregator (:func:`omnigent.extensions.extension_secret_backends`) finds.
+    aggregator (:func:`omnigent.kernel.extensions.extension_secret_backends`) finds.
     """
 
     def secret_backends(self) -> list[object]:
@@ -56,7 +56,7 @@ class SecretsPlugin:
 
         Returns a list of :class:`~omnigent.onboarding.secrets.SecretBackend`
         instances, matching the shape
-        :func:`omnigent.extensions.extension_secret_backends` aggregates (it
+        :func:`omnigent.kernel.extensions.extension_secret_backends` aggregates (it
         ``.extend()``s each extension's ``secret_backends()`` return).
         """
         from .secrets import LocalBackend

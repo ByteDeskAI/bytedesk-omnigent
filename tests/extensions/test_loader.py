@@ -10,7 +10,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from bytedesk_omnigent.extension import BytedeskExtension
-from omnigent.extensions import (
+from omnigent.kernel.extensions import (
     ENV_VAR,
     OmnigentExtension,
     _load_env_extensions,
@@ -140,7 +140,7 @@ def test_bytedesk_extension_satisfies_full_protocol() -> None:
 def test_aggregators_skip_extension_missing_optional_methods(monkeypatch) -> None:
     """An extension that omits an optional method is skipped by the matching
     aggregator (hasattr branch), never probed with getattr defaults (BDP-2352)."""
-    monkeypatch.setattr("omnigent.extensions.discover_extensions", lambda: [_MinimalExt()])
+    monkeypatch.setattr("omnigent.kernel.extensions.discover_extensions", lambda: [_MinimalExt()])
     assert extension_tool_factories() == {}
     assert extension_policy_modules() == []
     assert extension_secret_backends() == []

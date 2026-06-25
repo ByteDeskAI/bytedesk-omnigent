@@ -20,6 +20,7 @@ import {
   ChevronDownIcon,
   CornerUpLeftIcon,
   CopyIcon,
+  Share2Icon,
   FileTextIcon,
   GitBranchIcon,
   GitForkIcon,
@@ -72,6 +73,9 @@ import { usePermissions } from "@/hooks/usePermissions";
 import type { SandboxStatus, Session, SessionStatus } from "@/lib/types";
 import { usePromptHistory } from "@/hooks/usePromptHistory";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
+import { useOffline } from "@/hooks/useOffline";
+import { shareMessageContent } from "@/lib/pwa/shareMessage";
+import { consumeShareDraft } from "@/pages/SharePage";
 import type { MessageContentBlock } from "@/lib/blocks";
 import { derivePermissionLevel, isOwnerLevel } from "@/lib/permissionsApi";
 import {
@@ -384,6 +388,7 @@ const sessionDrafts = loadDraftsFromStorage();
 export function ChatPage() {
   const { conversationId: urlConvId } = useParams<{ conversationId: string }>();
   const navigate = useNavigate();
+  const networkOffline = useOffline();
   // Optional first message handed off by the landing composer through the
   // shared chatStore (keyed by conversation id), not router state — router state
   // doesn't survive the embed's host-provided routing. Consumed read-once
@@ -853,7 +858,7 @@ export function ChatPage() {
       runnerOnline={runnerOnline}
       liveness={liveness}
       agentsError={agentsError}
-      disabled={!agentId || agentsError !== null}
+      disabled={!agentId || agentsError !== null || networkOffline}
       onSend={onSend}
       onSendSlashCommand={onSendSlashCommand}
       onStop={onStop}
@@ -2349,6 +2354,22 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
     }
   };
 
+  const handleShare = async () => {
+    if (!markdownText) return;
+    const conversationId = useChatStore.getState().conversationId;
+    const url =
+      typeof window !== "undefined" && conversationId
+        ? `${window.location.origin}/c/${conversationId}`
+        : typeof window !== "undefined"
+          ? window.location.href
+          : "";
+    await shareMessageContent({
+      title: "Omnigent conversation",
+      text: markdownText.slice(0, 500),
+      url,
+    });
+  };
+
   return (
     <>
       <Message
@@ -2373,6 +2394,9 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
           <MessageActions className="mt-1 opacity-40 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
             <MessageAction tooltip="Copy" onClick={handleCopy}>
               {isCopied ? <CheckIcon size={14} /> : <CopyIcon size={14} />}
+            </MessageAction>
+            <MessageAction tooltip="Share" onClick={() => void handleShare()}>
+              <Share2Icon size={14} />
             </MessageAction>
             {/* Fork from this response: clone the session with history
                 truncated after this turn. Hidden while the response is
@@ -2816,7 +2840,8 @@ export function Composer({
 
   useEffect(() => {
     const restored = conversationId ? sessionDrafts.get(conversationId) : undefined;
-    setValue(restored?.text ?? "");
+    const shareDraft = conversationId ? null : consumeShareDraft();
+    setValue(shareDraft ?? restored?.text ?? "");
     setFiles(restored?.files ?? []);
     dirtyRef.current = false;
     textareaRef.current?.focus();

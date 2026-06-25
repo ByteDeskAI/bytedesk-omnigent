@@ -37,6 +37,9 @@ dependencies = [
     "starlette>=0.27,<1",
     "uvicorn[standard]>=0.30,<1",
     "httpx>=0.27,<1",
+    # Web Push (VAPID) for ap-web PWA notifications when the browser tab is closed.
+    "pywebpush>=2.0,<3",
+    "cryptography>=42,<46",
     "ftfy>=6.0",
     # Portable zombie-aware PID liveness checks for the host daemon
     # lifecycle (omnigent/host/local_server.py).

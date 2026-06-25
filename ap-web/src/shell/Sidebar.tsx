@@ -68,6 +68,7 @@ import { useResizableSidebar } from "@/hooks/useResizableSidebar";
 import { useSessionSwitchHotkey } from "@/hooks/useSessionSwitchHotkey";
 import { absoluteTime, relativeTime } from "@/lib/relativeTime";
 import { ThemeModeMenu } from "@/components/theme/ThemeModeMenu";
+import { PwaInstallButton } from "@/components/PwaInstallButton";
 import { AccountMenu } from "./AccountMenu";
 import {
   type ActiveChatOverride,
@@ -355,7 +356,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           bottom of the sidebar column. Renders nothing (no border, no
           padding) when the accounts auth provider is off, so non-accounts
           deploys keep the conversation list flush to the bottom edge. */}
-      <AccountMenu />
+      <div className="flex items-center gap-2 px-3 pb-2">
+        <PwaInstallButton />
+        <AccountMenu />
+      </div>
     </aside>
   );
 }

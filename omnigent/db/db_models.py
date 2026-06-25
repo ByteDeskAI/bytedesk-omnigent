@@ -203,6 +203,24 @@ class SqlAccountToken(Base):
     )
 
 
+class SqlPushSubscription(Base):
+    """
+    SQLAlchemy model for browser Web Push subscriptions.
+
+    :param user_id: Authenticated user owning this device subscription.
+    :param endpoint: Push service endpoint URL (unique per browser install).
+    :param p256dh: Client public key for message encryption.
+    :param auth: Client auth secret for message encryption.
+    """
+
+    __tablename__ = "push_subscriptions"
+
+    endpoint: Mapped[str] = mapped_column(String(2048), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    p256dh: Mapped[str] = mapped_column(String(256), nullable=False)
+    auth: Mapped[str] = mapped_column(String(128), nullable=False)
+
+
 class SqlSessionPermission(Base):
     """
     SQLAlchemy model for the ``session_permissions`` table.

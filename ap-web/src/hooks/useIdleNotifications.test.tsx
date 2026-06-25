@@ -16,11 +16,12 @@ vi.mock("@/lib/browserNotifications", () => ({
   showNotification: vi.fn(),
 }));
 
-// The native bridge is mocked so we can assert badge calls and toggle the
-// "running inside the desktop shell" discriminator without a real Electron env.
 vi.mock("@/lib/nativeBridge", () => ({
   isNativeShell: vi.fn(),
-  setBadgeCount: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/pwa/badging", () => ({
+  setAppBadgeCount: vi.fn().mockResolvedValue(undefined),
 }));
 
 // The turn-end notification body is enriched by an async fetch of the agent's
@@ -38,7 +39,8 @@ import {
   requestNotificationPermission,
   showNotification,
 } from "@/lib/browserNotifications";
-import { isNativeShell, setBadgeCount } from "@/lib/nativeBridge";
+import { isNativeShell } from "@/lib/nativeBridge";
+import { setAppBadgeCount } from "@/lib/pwa/badging";
 import { fetchLastAssistantText } from "@/lib/lastAssistantText";
 import { markConversationSeen } from "@/hooks/useUnseenConversations";
 import { useIdleNotifications } from "./useIdleNotifications";
@@ -48,7 +50,7 @@ const getPermMock = vi.mocked(getNotificationPermission);
 const requestPermMock = vi.mocked(requestNotificationPermission);
 const showMock = vi.mocked(showNotification);
 const isNativeMock = vi.mocked(isNativeShell);
-const setBadgeMock = vi.mocked(setBadgeCount);
+const setBadgeMock = vi.mocked(setAppBadgeCount);
 const fetchPreviewMock = vi.mocked(fetchLastAssistantText);
 
 /**

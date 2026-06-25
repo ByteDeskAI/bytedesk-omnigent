@@ -14,7 +14,7 @@ The source yields *raw* text/dict so a future DB / URL / OCI backend only has to
 implement "fetch the bytes for a ref"; it reuses the existing parser + validator
 unchanged. The built-in :class:`FilesystemSpecSource` reads ``config.yaml`` exactly
 as before (byte-identical), and is registered as the default in
-:data:`spec_source_registry` per the :mod:`omnigent.pluggable` 4-invariant recipe.
+:data:`spec_source_registry` per the :mod:`omnigent.kernel.pluggable` 4-invariant recipe.
 
 A cache/invalidate seam (:meth:`SpecSource.invalidate`) is part of the Protocol so
 the near-term hot-reload use (re-read a changed spec without a process restart) has a
@@ -31,7 +31,7 @@ from typing import Protocol, runtime_checkable
 import yaml
 
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.spec.parser import _ConfigYamlLoader
 
 # Stable seam id; also the suffix of the ``OMNIGENT_USE_SPEC_SOURCE`` override env.
@@ -174,7 +174,7 @@ def build_spec_source_registry(
 ) -> PluggableRegistry[SpecSource]:
     """Build the :class:`SpecSource` registry with the filesystem default.
 
-    Follows the :mod:`omnigent.pluggable` recipe: filesystem is the registered
+    Follows the :mod:`omnigent.kernel.pluggable` recipe: filesystem is the registered
     default (active unless ``OMNIGENT_USE_SPEC_SOURCE`` overrides it), and extensions
     contribute alternatives via the :data:`EXTENSION_HOOK`. A future DB/URL/OCI
     source registers here without touching this module.

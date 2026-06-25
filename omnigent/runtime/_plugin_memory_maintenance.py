@@ -6,7 +6,7 @@ lifespan starts inline today is re-expressed here as a first-party plugin
 contribution, registered through the *same* ``OmnigentExtension`` Protocol a
 third-party extension uses. No new discovery, lifecycle, or registry mechanism —
 the SDK ``@extension`` decorator compiles this class down to the kernel contract
-(Section 12.7), and the existing :func:`omnigent.extensions.extension_background_factories`
+(Section 12.7), and the existing :func:`omnigent.kernel.extensions.extension_background_factories`
 aggregator collects what this plugin's ``background_tasks()`` returns.
 
 The default provider — :func:`omnigent.runtime.memory_maintenance.memory_maintenance_loop`

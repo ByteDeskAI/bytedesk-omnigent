@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.stores.memory_store import (
     AgentMemoryProvider,
     ComposedAgentMemoryProvider,

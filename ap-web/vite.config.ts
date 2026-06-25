@@ -3,7 +3,16 @@ import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import type { ProxyOptions } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 import { defineConfig } from "vitest/config";
+import {
+  manifestScreenshots,
+  manifestShortcuts,
+  PWA_BACKGROUND_COLOR,
+  PWA_THEME_COLOR,
+  relatedApplications,
+  shareTarget,
+} from "./src/lib/pwa/manifestConfig";
 
 const OMNIGENT_URL = process.env.OMNIGENT_URL ?? "http://localhost:6767";
 
@@ -124,7 +133,63 @@ if (useAuth) {
 const proxyConfig = createProxyConfig(OMNIGENT_URL, useAuth);
 
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [
+    react(),
+    tailwindcss(),
+    VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      registerType: "autoUpdate",
+      injectRegister: false,
+      manifest: {
+        name: "Omnigent",
+        short_name: "Omnigent",
+        description: "Agent chat and workspace for Omnigent",
+        start_url: "/",
+        scope: "/",
+        display: "standalone",
+        theme_color: PWA_THEME_COLOR,
+        background_color: PWA_BACKGROUND_COLOR,
+        categories: ["productivity", "developer"],
+        icons: [
+          {
+            src: "/pwa-192.png",
+            sizes: "192x192",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/pwa-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "any",
+          },
+          {
+            src: "/pwa-512.png",
+            sizes: "512x512",
+            type: "image/png",
+            purpose: "maskable",
+          },
+        ],
+        shortcuts: manifestShortcuts.map((s) => ({
+          ...s,
+          icons: s.icons.map((icon) => ({ ...icon })),
+        })),
+        screenshots: manifestScreenshots.map((s) => ({ ...s })),
+        related_applications: relatedApplications.map((r) => ({ ...r })),
+        prefer_related_applications: false,
+        share_target: shareTarget,
+      },
+      injectManifest: {
+        // Monaco + main bundle exceed the 2 MiB default; precache the full shell.
+        maximumFileSizeToCacheInBytes: 4 * 1024 * 1024,
+      },
+      devOptions: {
+        enabled: false,
+      },
+    }),
+  ],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),

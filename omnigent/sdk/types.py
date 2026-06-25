@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 #: name -> "module:attr" the lazy ``__getattr__`` resolves on first access.
 _LAZY: dict[str, str] = {
-    "OmnigentExtension": "omnigent.extensions:OmnigentExtension",
+    "OmnigentExtension": "omnigent.kernel.extensions:OmnigentExtension",
     "Tool": "omnigent.tools.base:Tool",
     "ToolContext": "omnigent.tools.base:ToolContext",
     "HarnessDescriptor": "omnigent.runtime.harnesses.descriptors:HarnessDescriptor",
@@ -26,7 +26,7 @@ _LAZY: dict[str, str] = {
 }
 
 if TYPE_CHECKING:  # static import for type checkers only — no runtime cost
-    from omnigent.extensions import OmnigentExtension as OmnigentExtension
+    from omnigent.kernel.extensions import OmnigentExtension as OmnigentExtension
 
 
 def __getattr__(name: str) -> Any:  # PEP 562 module-level lazy attribute

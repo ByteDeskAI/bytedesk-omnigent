@@ -1,7 +1,7 @@
 """SDK — the ``@extension`` class decorator (BDP-2508).
 
 Turns a plain class into a class whose instances satisfy the kernel's
-:class:`omnigent.extensions.OmnigentExtension` Protocol, by scanning for the
+:class:`omnigent.kernel.extensions.OmnigentExtension` Protocol, by scanning for the
 member-decorator markers (:mod:`omnigent.sdk.contrib`) and *synthesising* the
 matching Protocol hook methods. The synthesised hooks return the **same shape**
 a hand-written Protocol implementation would (the Section 12.7 invariant):

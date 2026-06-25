@@ -24,7 +24,7 @@ import logging
 from collections.abc import Callable
 from typing import Generic, TypeVar
 
-from omnigent.pluggable.errors import ProviderNotRegistered, RegistryConflict
+from omnigent.kernel.pluggable.errors import ProviderNotRegistered, RegistryConflict
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +39,7 @@ def discover_extensions():
     import is deferred to the moment discovery actually runs — which only
     happens server-side. Kept as a module-level symbol so tests can patch it.
     """
-    from omnigent.extensions import discover_extensions as _discover
+    from omnigent.kernel.extensions import discover_extensions as _discover
 
     return _discover()
 

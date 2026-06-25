@@ -35,7 +35,8 @@ import {
   requestNotificationPermission,
   showNotification,
 } from "@/lib/browserNotifications";
-import { isNativeShell, setBadgeCount } from "@/lib/nativeBridge";
+import { isNativeShell } from "@/lib/nativeBridge";
+import { setAppBadgeCount } from "@/lib/pwa/badging";
 import { fetchLastAssistantText } from "@/lib/lastAssistantText";
 import {
   buildElicitationMap,
@@ -129,7 +130,7 @@ export function useIdleNotifications(activeConversationId?: string): void {
   const pushBadge = (count: number) => {
     if (count === lastSentBadge.current) return;
     lastSentBadge.current = count;
-    void setBadgeCount(count);
+    void setAppBadgeCount(count);
   };
 
   // Refocusing the window (focused on the open conversation) marks that

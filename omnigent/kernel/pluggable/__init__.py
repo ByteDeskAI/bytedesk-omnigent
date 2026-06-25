@@ -28,14 +28,14 @@ All seam failures raise from the shared taxonomy in :mod:`omnigent.pluggable.err
 
 from __future__ import annotations
 
-from omnigent.pluggable.errors import (
+from omnigent.kernel.pluggable.errors import (
     ProviderError,
     ProviderNotRegistered,
     ProviderUnavailable,
     ProviderUnconfigured,
     RegistryConflict,
 )
-from omnigent.pluggable.registry import PluggableRegistry
+from omnigent.kernel.pluggable.registry import PluggableRegistry
 
 __all__ = [
     "PluggableRegistry",

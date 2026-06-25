@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.coordination.replica_id import server_replica_id
-from omnigent.pluggable.registry import PluggableRegistry
+from omnigent.kernel.pluggable.registry import PluggableRegistry
 
 if TYPE_CHECKING:
     from omnigent.coordination.protocol import CoordinationBackplane

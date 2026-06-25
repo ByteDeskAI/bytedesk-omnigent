@@ -4,7 +4,7 @@ The agent-memory plane is a **domain capability** with a real second-impl market
 (pgvector default → Pinecone/Qdrant/Weaviate, or a hosted memory service like
 mem0/zep). This module makes the whole backend swappable behind one coarse-grained
 :class:`AgentMemoryProvider` Protocol, registered in a
-:class:`~omnigent.pluggable.PluggableRegistry` (the artifact-store seam is the
+:class:`~omnigent.kernel.pluggable.PluggableRegistry` (the artifact-store seam is the
 worked reference; see :mod:`omnigent.stores.factory`).
 
 TWO-LEVEL composition — do **not** add a fourth parallel memory thing:
@@ -41,7 +41,7 @@ import enum
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.stores.memory_store.embeddings import Embedder
 from omnigent.stores.memory_store.sqlalchemy_store import (
     MemoryHit,

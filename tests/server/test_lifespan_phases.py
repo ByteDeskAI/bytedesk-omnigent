@@ -1,10 +1,10 @@
-"""Tests for omnigent.server.lifespan_phases (BDP-2327, Phase 3)."""
+"""Tests for omnigent.kernel.lifespan_phases (BDP-2327, Phase 3)."""
 
 from __future__ import annotations
 
 import pytest
 
-from omnigent.server.lifespan_phases import (
+from omnigent.kernel.lifespan_phases import (
     LifespanContext,
     LifespanCycleError,
     LifespanOrchestrator,

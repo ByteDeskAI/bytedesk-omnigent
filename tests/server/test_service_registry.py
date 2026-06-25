@@ -1,10 +1,10 @@
-"""Tests for omnigent.server.service_registry (BDP-2327, Phase 1)."""
+"""Tests for omnigent.kernel.service_registry (BDP-2327, Phase 1)."""
 
 from __future__ import annotations
 
 import pytest
 
-from omnigent.server.service_registry import ServiceRegistry
+from omnigent.kernel.service_registry import ServiceRegistry
 
 
 class _A:

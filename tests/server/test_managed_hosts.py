@@ -355,7 +355,7 @@ def test_sandbox_provider_registry_selects_each_provider() -> None:
 def test_sandbox_provider_registry_unknown_raises() -> None:
     """An unknown provider is not registered (registry.get raises) — and
     parse_sandbox_config rejects it with the 'must be one of' ValueError."""
-    from omnigent.pluggable.errors import ProviderNotRegistered
+    from omnigent.kernel.pluggable.errors import ProviderNotRegistered
     from omnigent.server.managed_hosts import _build_sandbox_provider_registry
 
     with pytest.raises(ProviderNotRegistered):

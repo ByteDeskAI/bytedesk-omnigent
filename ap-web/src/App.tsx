@@ -39,6 +39,7 @@ const ApprovePage = lazy(() =>
   import("@/pages/ApprovePage").then((m) => ({ default: m.ApprovePage })),
 );
 const InboxPage = lazy(() => import("@/pages/InboxPage").then((m) => ({ default: m.InboxPage })));
+const SharePage = lazy(() => import("@/pages/SharePage").then((m) => ({ default: m.SharePage })));
 
 interface AppProps {
   /**
@@ -132,6 +133,7 @@ function App({ basename }: AppProps = {}) {
           </>
         )}
         <Route path={`${prefix}/approve/:sessionId/:elicitationId`} element={<ApprovePage />} />
+        <Route path={`${prefix}/share`} element={<SharePage />} />
         <Route element={<AppShell />}>
           <Route path={prefix || "/"} element={<ChatPage />} />
           <Route path={`${prefix}/c/:conversationId`} element={<ChatPage />} />

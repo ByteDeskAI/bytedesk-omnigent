@@ -13,7 +13,7 @@ import os
 
 import pytest
 
-import omnigent.extensions as kext
+import omnigent.kernel.extensions as kext
 from omnigent.sdk import Host, extension, tool
 
 

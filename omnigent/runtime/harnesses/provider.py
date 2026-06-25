@@ -2,7 +2,7 @@
 
 The single source of truth is now the descriptor registry in
 :mod:`omnigent.runtime.harnesses.descriptors` (BDP-2346): a
-:class:`~omnigent.pluggable.PluggableRegistry` of :class:`HarnessDescriptor`
+:class:`~omnigent.kernel.pluggable.PluggableRegistry` of :class:`HarnessDescriptor`
 values, from which the harness-name → module-path mapping, the native
 classification, and alias resolution are all projected.
 

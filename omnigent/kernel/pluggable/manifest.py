@@ -28,7 +28,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from omnigent.pluggable.registry import PluggableRegistry, _override_env_name
+from omnigent.kernel.pluggable.registry import PluggableRegistry, _override_env_name
 
 _logger = logging.getLogger(__name__)
 

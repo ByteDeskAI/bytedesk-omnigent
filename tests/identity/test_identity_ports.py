@@ -43,7 +43,7 @@ from omnigent.identity.registry import (
     build_outbound_credential_registry,
 )
 from omnigent.identity.verifiers import HmacAssertionVerifier
-from omnigent.pluggable.errors import ProviderNotRegistered
+from omnigent.kernel.pluggable.errors import ProviderNotRegistered
 from omnigent.server.principal import Principal
 
 _SECRET = "test-shared-secret"
@@ -240,7 +240,7 @@ def test_extension_hook_contributes_a_verifier(monkeypatch):
         def assertion_verifiers(self):
             return {"fake_verifier": lambda: HmacAssertionVerifier("ext-secret")}
 
-    monkeypatch.setattr("omnigent.pluggable.registry.discover_extensions", lambda: [FakeExt()])
+    monkeypatch.setattr("omnigent.kernel.pluggable.registry.discover_extensions", lambda: [FakeExt()])
     reg = build_assertion_verifier_registry()
     reg.discover_extensions(hook="assertion_verifiers")
     assert "fake_verifier" in reg.names()
@@ -251,7 +251,7 @@ def test_extension_hook_contributes_a_verifier(monkeypatch):
 
 
 def test_capability_manifest_lists_identity_seams():
-    from omnigent.pluggable.manifest import capability_manifest
+    from omnigent.kernel.pluggable.manifest import capability_manifest
 
     seams = {entry["seam"]: entry for entry in capability_manifest()}
     for seam, default in (
@@ -334,7 +334,7 @@ def test_extension_hook_contributes_outbound_and_authorizer(monkeypatch):
         def authorization_providers(self):
             return {"fake_authorizer": FakeAuthorizer}
 
-    monkeypatch.setattr("omnigent.pluggable.registry.discover_extensions", lambda: [FakeExt()])
+    monkeypatch.setattr("omnigent.kernel.pluggable.registry.discover_extensions", lambda: [FakeExt()])
 
     out = build_outbound_credential_registry()
     out.discover_extensions(hook="outbound_credential_providers")

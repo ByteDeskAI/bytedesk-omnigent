@@ -175,7 +175,7 @@ def _apply_extension_default_mcp(spec: AgentSpec) -> AgentSpec:
     discovery/import failure leaves the spec unchanged.
     """
     try:
-        from omnigent.extensions import extension_default_mcp_servers
+        from omnigent.kernel.extensions import extension_default_mcp_servers
 
         defaults = extension_default_mcp_servers()
     except Exception:  # noqa: BLE001 — a default-mount lookup must never break load

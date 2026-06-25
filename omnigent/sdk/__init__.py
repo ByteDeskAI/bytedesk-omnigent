@@ -1,7 +1,7 @@
 """omnigent.sdk — the public, semver-stable extension-author facade (BDP-2508).
 
 Everything a third-party extension author needs, and nothing they don't. The
-kernel below (``omnigent.extensions`` Protocol, ``omnigent.pluggable``
+kernel below (``omnigent.kernel.extensions`` Protocol, ``omnigent.kernel.pluggable``
 registries, ``omnigent.server.app.create_app``) is the implementation this
 facade hides. Write::
 
@@ -26,14 +26,14 @@ facade hides. Write::
         async def my_maintenance_loop(self): ...
 
     # still a kernel Protocol object — no parallel mechanism:
-    from omnigent.extensions import OmnigentExtension
+    from omnigent.kernel.extensions import OmnigentExtension
     assert isinstance(MyExtension(), OmnigentExtension)
 
 The entry-point string in ``pyproject.toml`` remains the irreducible
 self-registration hook (Section 12.3); everything else is hidden here.
 
 **Layering invariant (Section 12.7):** a class decorated with ``@extension``
-conforms to :class:`omnigent.extensions.OmnigentExtension`, and its synthesised
+conforms to :class:`omnigent.kernel.extensions.OmnigentExtension`, and its synthesised
 hooks return the *same shape* as the hand-written Protocol form. The SDK adds no
 parallel discovery, plugin list, or lifecycle — it compiles down to the kernel.
 

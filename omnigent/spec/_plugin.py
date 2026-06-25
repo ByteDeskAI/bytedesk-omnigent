@@ -4,7 +4,7 @@ Section 9.1 of ``docs/EXTENSION_FRAMEWORK_ANALYSIS.md`` lists this subpackage as
 the ``omnigent.spec`` first-party plugin: it registers the package's *existing*
 default :class:`~omnigent.spec.source.SpecSource` into the kernel ``spec_source``
 seam. Per the dogfooding argument (Section 9.2), a core capability ships through
-the *same* :class:`omnigent.extensions.OmnigentExtension` / ``PluggableRegistry``
+the *same* :class:`omnigent.kernel.extensions.OmnigentExtension` / ``PluggableRegistry``
 contract a third-party extension would use — there is no privileged wiring for
 core's own spec source. If the seam can host this default, it can host an
 alternate (DB / URL / OCI) source too.
@@ -17,7 +17,7 @@ this plugin only *registers* the existing default through the seam's
 source would contribute through.
 
 Why a hand-written ``spec_source_providers`` rather than an SDK member
-decorator: the ``spec_source`` seam is a generic :mod:`omnigent.pluggable`
+decorator: the ``spec_source`` seam is a generic :mod:`omnigent.kernel.pluggable`
 ``PluggableRegistry`` seam discovered via the
 :data:`~omnigent.spec.source.EXTENSION_HOOK` (``"spec_source_providers"``), not
 one of the SDK's curated member-decorator seams (``@tool`` / ``@policy`` /
@@ -50,7 +50,7 @@ class SpecPlugin:
     """First-party ``omnigent.spec`` plugin — registers the default spec source.
 
     Registers this subpackage's existing :class:`FilesystemSpecSource` into the
-    kernel ``spec_source`` :class:`~omnigent.pluggable.PluggableRegistry` seam,
+    kernel ``spec_source`` :class:`~omnigent.kernel.pluggable.PluggableRegistry` seam,
     under the same name (``"filesystem"``) the registry already uses for its
     built-in default (see
     :func:`~omnigent.spec.source.build_spec_source_registry`). The contribution
@@ -64,7 +64,7 @@ class SpecPlugin:
         Returns the ``{name: factory}`` mapping the ``spec_source`` seam's
         :meth:`PluggableRegistry.discover_extensions` expects: each value is a
         zero-argument factory the registry calls (via
-        :meth:`~omnigent.pluggable.PluggableRegistry.get`) to build the
+        :meth:`~omnigent.kernel.pluggable.PluggableRegistry.get`) to build the
         :class:`~omnigent.spec.source.SpecSource` on demand.
 
         The provider class is imported lazily here (not at module import) to keep

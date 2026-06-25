@@ -9,7 +9,7 @@ secret back when a family's ``api_key_ref`` is ``keychain:<name>``.
 :class:`SecretBackend`. The store consults, in order:
 
 1. **Extension-contributed backends** (e.g. an Infisical backend from the
-   ``bytedesk_omnigent`` package, discovered via the ``omnigent.extensions``
+   ``bytedesk_omnigent`` package, discovered via the ``omnigent.kernel.extensions``
    seam) — but only the ones reporting :meth:`SecretBackend.available`. This is
    the generic, upstream-contributable hook; core names no specific provider.
 2. **The local backend** (:class:`LocalBackend`) — the historical
@@ -200,7 +200,7 @@ def _extension_backends() -> list[SecretBackend]:
     lack the entry-point metadata).
     """
     try:
-        from omnigent.extensions import extension_secret_backends
+        from omnigent.kernel.extensions import extension_secret_backends
 
         return list(extension_secret_backends())
     except Exception:  # noqa: BLE001 — extensions are best-effort

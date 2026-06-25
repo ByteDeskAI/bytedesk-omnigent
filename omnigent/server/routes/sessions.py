@@ -283,14 +283,14 @@ _TOOL_INTERCEPTORS_CACHE: dict[str, Callable[..., object]] | None = None
 def _tool_interceptors() -> dict[str, Callable[..., object]]:
     """The aggregated ``{prefix: handler}`` interceptor table (memoized).
 
-    Deferred import of :mod:`omnigent.extensions` keeps the FastAPI/extension
+    Deferred import of :mod:`omnigent.kernel.extensions` keeps the FastAPI/extension
     stack off this module's import path. When no extension contributes an
     interceptor the table is empty and every tool falls through to runner
     dispatch (back-compatible default).
     """
     global _TOOL_INTERCEPTORS_CACHE
     if _TOOL_INTERCEPTORS_CACHE is None:
-        from omnigent.extensions import extension_tool_interceptors
+        from omnigent.kernel.extensions import extension_tool_interceptors
 
         _TOOL_INTERCEPTORS_CACHE = extension_tool_interceptors()
     return _TOOL_INTERCEPTORS_CACHE
@@ -4754,7 +4754,16 @@ def _publish_status(
     # ``failed``), so this is a safe, harness-agnostic invariant.
     if status == "idle" and _session_status_cache.get(session_id) == "failed":
         return
+    previous_status = _session_status_cache.get(session_id)
     _session_status_cache[session_id] = status
+    try:
+        from omnigent.server.push.service import get_push_service
+
+        push_service = get_push_service()
+        if push_service is not None:
+            push_service.on_status_change(session_id, previous_status, status)
+    except Exception:
+        pass
     event = SessionStatusEvent(
         type="session.status",
         conversation_id=session_id,

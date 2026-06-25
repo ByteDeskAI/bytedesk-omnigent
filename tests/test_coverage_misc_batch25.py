@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from omnigent.server.lifespan_phases import (
+from omnigent.kernel.lifespan_phases import (
     AccountsAutoOpenPhase,
     AnyioThreadLimiterPhase,
     DefaultAgentsPhase,
@@ -288,7 +288,7 @@ async def test_extension_background_tasks_phase_cancels_all_tasks(
         await asyncio.sleep(3600)
 
     monkeypatch.setattr(
-        "omnigent.extensions.extension_background_factories",
+        "omnigent.kernel.extensions.extension_background_factories",
         lambda: [_factory],
     )
     ctx = _lifespan_ctx()

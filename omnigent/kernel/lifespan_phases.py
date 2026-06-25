@@ -560,7 +560,7 @@ class ExtensionBackgroundTasksPhase(LifespanPhase):
 
         :param ctx: The shared lifespan context.
         """
-        from omnigent.extensions import extension_background_factories
+        from omnigent.kernel.extensions import extension_background_factories
 
         ctx.state["ext_bg_tasks"] = [
             asyncio.create_task(factory())

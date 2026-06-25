@@ -31,7 +31,9 @@ _APP_PY = _REPO_ROOT / "omnigent" / "server" / "app.py"
 _HARNESSES_INIT = _REPO_ROOT / "omnigent" / "runtime" / "harnesses" / "__init__.py"
 _OMNIGENT_COMPAT = _REPO_ROOT / "omnigent" / "spec" / "_omnigent_compat.py"
 _TOOL_DISPATCH = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatch.py"
-_EXTENSIONS = _REPO_ROOT / "omnigent" / "extensions.py"
+# Canonical kernel location post-BDP-2515 (omnigent/extensions.py is now a
+# strangler re-export shim; the extension_*() getter defs live in the kernel).
+_EXTENSIONS = _REPO_ROOT / "omnigent" / "kernel" / "extensions.py"
 _HANDOFF_DOC = _REPO_ROOT / "docs" / "architecture" / "abstraction-spine-handoff.md"
 
 # ── Phase 1 anchor: the create_app *body* app.state key set (app.py 1052–1066). ──
@@ -71,9 +73,11 @@ _EXPECTED_ALL_APP_STATE_KEYS = (
 )
 
 # ── Phase 5 anchor: dispatch elif chain (tool_dispatch.py 3412–3570). ──
-# 16 set-family branches + 4 predicate tails
+# 17 set-family branches + 4 predicate tails
 # (spec-builtin, spec-local-python, UC-function, else).
-_EXPECTED_SET_FAMILY_BRANCHES = 16
+# 17th set-family branch is _SKILL_ACQ_TOOLS (sys_skill_* acquisition family),
+# a legit tool family added by BDP-2487 (skills as runner builtins).
+_EXPECTED_SET_FAMILY_BRANCHES = 17
 _EXPECTED_PREDICATE_TAILS = 4
 
 # ── Phase 3/lifespan + Phase 1/harness anchors. ──
@@ -241,9 +245,9 @@ def test_dispatch_elif_chain_branch_counts_are_pinned():
     assert "_is_spec_local_python_tool(tool_name, agent_spec)" in src
     assert "_is_uc_function_tool(tool_name, agent_spec)" in src
     assert "_execute_spec_callable_tool(tool_name, args, agent_spec=agent_spec)" in src
-    # Total routing branches quoted by the plan (16 + 4 = 20).
+    # Total routing branches quoted by the plan (17 + 4 = 21).
     assert (
-        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 20
+        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 21
     )
 
 

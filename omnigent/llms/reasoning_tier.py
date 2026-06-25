@@ -9,7 +9,7 @@ This module turns that into the canonical pluggable seam (``reasoning_tier``):
 
 - :class:`ReasoningTierProvider` — the Protocol each provider implements; it
   declares its own effort→native-knob map via :meth:`native_knob`.
-- :func:`reasoning_tier_registry` — a :class:`~omnigent.pluggable.PluggableRegistry`
+- :func:`reasoning_tier_registry` — a :class:`~omnigent.kernel.pluggable.PluggableRegistry`
   with the Anthropic + OpenAI defaults registered in-module (no extension
   discovery at import; the runner hot path stays fastapi-free).
 
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.reasoning_effort import (
     ANTHROPIC_EFFORTS,
     OPENAI_EFFORTS,

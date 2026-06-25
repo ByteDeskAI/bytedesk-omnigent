@@ -12,6 +12,7 @@ import { Loader2Icon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTheme } from "next-themes";
 import { Button } from "@/components/ui/button";
+import { useOffline } from "@/hooks/useOffline";
 import { resolveWebSocketUrl } from "@/lib/host";
 import {
   type ConnectionState,
@@ -83,6 +84,7 @@ export function TerminalView({
   if (!attachPath && (!sessionId || !terminalId)) {
     throw new Error("TerminalView requires either attachPath or sessionId + terminalId");
   }
+  const offline = useOffline();
   const [state, setState] = useState<ConnectionState>({ kind: "connecting" });
   const [connectAttempt, setConnectAttempt] = useState(0);
   const [resumeError, setResumeError] = useState<string | null>(null);
@@ -151,6 +153,10 @@ export function TerminalView({
   const attachSession = useCallback(
     (node: HTMLDivElement | null) => {
       if (node === null) return;
+      if (offline) {
+        notifyState({ kind: "closed", code: 1000, reason: "offline" });
+        return;
+      }
       // Reset to ``connecting`` for every fresh attach so a stale
       // overlay from a previous mount doesn't flash during the
       // handshake. The session's WS ``open`` handler transitions us
@@ -188,7 +194,7 @@ export function TerminalView({
         onStateChangeRef.current?.(null);
       };
     },
-    [sessionId, terminalId, readOnly, attachPath, notifyState, notifyActivity, notifyInput],
+    [offline, sessionId, terminalId, readOnly, attachPath, notifyState, notifyActivity, notifyInput],
   );
 
   // Push theme changes into the live session without remounting.

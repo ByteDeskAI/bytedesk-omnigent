@@ -260,6 +260,18 @@
 [data-electron-mac] :is(a, button, input, textarea, [role="button"]) {
   -webkit-app-region: no-drag;
 }
+
+/* Desktop installed PWA with Window Controls Overlay (AppShell sets
+ * data-pwa-wco). Reserves the system title-bar region so header chrome
+ * does not sit under overlay controls. */
+[data-pwa-wco] .app-shell {
+  padding-top: env(titlebar-area-height, 0px);
+  padding-left: env(titlebar-area-x, 0px);
+  width: env(titlebar-area-width, 100%);
+}
+[data-pwa-wco] .conversations-sidebar {
+  margin-top: max(0px, env(titlebar-area-height, 0px));
+}
 /* Share button keeps the existing class name but now uses Platform primary. */
 .share-button-glassy {
   background: var(--color-accent-blue);
