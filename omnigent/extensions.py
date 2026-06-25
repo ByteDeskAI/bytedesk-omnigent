@@ -36,18 +36,28 @@ ENTRY_POINT_GROUP = "omnigent.extensions"
 #: to entry-points. Lets source-mounted local-dev pods load extensions without the
 #: image's baked entry_points.txt being regenerated (ADR-0143 / BDP-2294).
 ENV_VAR = "OMNIGENT_EXTENSIONS"
+#: Comma-separated extension *names* to disable (the ``EnableFeatures`` analog,
+#: ADR-0143 §4.5 / BDP-2504). Filtered inside :func:`discover_extensions`; unset
+#: (the default) is a no-op. Disables an extension without removing its package
+#: or editing entry-points.
+DISABLED_ENV_VAR = "OMNIGENT_DISABLED_EXTENSIONS"
 
 
 @runtime_checkable
 class OmnigentExtension(Protocol):
     """An out-of-core extension the server discovers and installs (ADR-0143).
 
-    ``name`` and ``routers`` are required. The four capability methods below
+    ``name`` and ``routers`` are required. The capability methods below
     (``tool_factories`` / ``policy_modules`` / ``secret_backends`` /
-    ``background_tasks``) are **optional** — an extension contributes only the
-    surfaces it has. They are declared here for the type checker; the
-    aggregators use ``hasattr`` so an extension that omits one is simply
-    skipped (no ``getattr`` default probe).
+    ``background_tasks`` / …) are **optional** — an extension contributes only
+    the surfaces it has. They are declared here for the type checker; the
+    aggregators use ``hasattr`` so an extension that omits one is simply skipped
+    (no ``getattr`` default probe).
+
+    The staged lifecycle hooks (``pre_init`` / ``post_init`` / ``after_init``)
+    and the ``tool_interceptors`` hook are **not** declared on this
+    ``@runtime_checkable`` Protocol — see :class:`OmnigentExtensionLifecycle`
+    below for why. They are equally optional and ``hasattr``-probed.
     """
 
     name: str
@@ -134,6 +144,84 @@ class OmnigentExtension(Protocol):
         """Authorization providers ({name: factory}) — the allow/deny subpart."""
         ...
 
+    # NOTE: the optional staged lifecycle hooks (pre_init / post_init /
+    # after_init) and the tool_interceptors hook are deliberately NOT declared
+    # on this @runtime_checkable Protocol. A runtime_checkable Protocol requires
+    # an instance to carry EVERY declared member to satisfy isinstance(); adding
+    # these here would flip isinstance(legacy_extension, OmnigentExtension) from
+    # True to False for any extension that doesn't implement all four (BDP-2504
+    # regression). They live on OmnigentExtensionLifecycle below — equally
+    # optional, hasattr-probed by install_extensions / extension_tool_interceptors,
+    # never used in an isinstance() gate.
+
+
+class OmnigentExtensionLifecycle(Protocol):
+    """Optional staged-lifecycle + tool-interception hooks (ADR-0143 §4.3/§5).
+
+    Deliberately a SEPARATE, non-``@runtime_checkable`` Protocol from
+    :class:`OmnigentExtension`. These hooks are optional, so they must not be
+    members of the runtime-checkable contract — a runtime-checkable Protocol
+    requires every declared member to be present for ``isinstance`` to pass,
+    which would break legacy extensions that implement none of them (BDP-2504).
+    This Protocol exists purely for static typing / documentation; the runtime
+    never gates on it — :func:`install_extensions` and
+    :func:`extension_tool_interceptors` ``hasattr``-probe each hook by name.
+
+    ServiceStack analogs: ``IPreInitPlugin`` / ``IPostInitPlugin`` /
+    ``IAfterInitAppHost``. Each lifecycle hook receives the host (the FastAPI
+    ``app``) so it can stash cross-extension state on it.
+    """
+
+    def pre_init(self, host: FastAPI) -> None:
+        """Stage 1 — called BEFORE any router is mounted.
+
+        Use to create DB tables, validate required env/secrets, or fail fast.
+        An exception here aborts ONLY this extension (it is dropped from every
+        later stage via the ``healthy`` set) and is logged — it must never kill
+        server boot.
+        """
+        ...
+
+    def post_init(self, host: FastAPI) -> None:
+        """Stage 3 — called AFTER all healthy extensions' routers are mounted.
+
+        Use to register cross-extension state or wire inter-extension
+        dependencies now that every router/seam contribution is in place.
+        """
+        ...
+
+    def after_init(self, host: FastAPI) -> None:
+        """Stage 4 — called after ``post_init`` for every healthy extension.
+
+        The ``IAfterInitAppHost`` analog: the final settle hook, run once the
+        whole extension set is mounted and post-init wired, before the server
+        lifespan (background tasks) starts.
+        """
+        ...
+
+    def tool_interceptors(self) -> dict[str, Callable[..., object]]:
+        """Tool-call interceptors keyed by tool-name prefix (``{prefix: handler}``).
+
+        Core consults the prefix table before runner dispatch; a matching
+        handler returns a result (or ``None`` to fall through to normal
+        dispatch). Lets any extension claim an interception point (e.g.
+        ``{"memory__": execute_memory_tool}``) without a hard core→extension
+        name reference. Aggregated by :func:`extension_tool_interceptors`;
+        defaults to ``{}`` via ``hasattr`` probing.
+        """
+        ...
+
+
+def _disabled_from_env() -> set[str]:
+    """Extension names disabled via ``OMNIGENT_DISABLED_EXTENSIONS`` (comma-separated).
+
+    The ``EnableFeatures`` analog (ADR-0143 §4.5): an operator disables an entire
+    extension by name without removing the package or editing entry-points. The
+    empty/unset env var (the default) yields an empty set — a no-op filter.
+    """
+    raw = os.environ.get(DISABLED_ENV_VAR, "")
+    return {name.strip() for name in raw.split(",") if name.strip()}
+
 
 def _load_env_extensions() -> list[OmnigentExtension]:
     """Load extensions named in the ``OMNIGENT_EXTENSIONS`` env var (``module:factory``)."""
@@ -151,14 +239,24 @@ def _load_env_extensions() -> list[OmnigentExtension]:
     return found
 
 
-def discover_extensions() -> list[OmnigentExtension]:
+def discover_extensions(
+    *,
+    disabled: set[str] | None = None,
+) -> list[OmnigentExtension]:
     """Load extensions from the entry-point group + the ``OMNIGENT_EXTENSIONS`` env.
 
     Entry-points are the production path (registered at install time); the env var
     is the explicit/local-dev path (no installed metadata needed, BDP-2294).
     Deduped by ``name`` so a redundant env entry doesn't double-register. A single
     bad extension is logged and skipped — it must never break server boot.
+
+    :param disabled: extension names to exclude (the ``EnableFeatures`` analog,
+        ADR-0143 §4.5 / BDP-2504). Defaults to :func:`_disabled_from_env`
+        (``OMNIGENT_DISABLED_EXTENSIONS``); an empty set — the default — filters
+        nothing. A disabled extension's factory still runs (entry-point load),
+        but it is dropped from the returned set before any stage sees it.
     """
+    _disabled = _disabled_from_env() if disabled is None else disabled
     found: list[OmnigentExtension] = []
     seen: set[str] = set()
     for ep in entry_points(group=ENTRY_POINT_GROUP):
@@ -167,9 +265,15 @@ def discover_extensions() -> list[OmnigentExtension]:
         except Exception:  # one bad extension must not break server boot
             logger.exception("failed to load omnigent extension %r", ep.name)
             continue
+        if ext.name in _disabled:
+            logger.info("omnigent extension %r disabled by %s", ext.name, DISABLED_ENV_VAR)
+            continue
         found.append(ext)
         seen.add(ext.name)
     for ext in _load_env_extensions():
+        if ext.name in _disabled:
+            logger.info("omnigent extension %r disabled by %s", ext.name, DISABLED_ENV_VAR)
+            continue
         if ext.name not in seen:
             found.append(ext)
             seen.add(ext.name)
@@ -194,8 +298,26 @@ def install_extensions(
         permission checks; older extensions are retried without it.
     """
     exts = discover_extensions() if extensions is None else extensions
+
+    # ── Stage 1 — pre_init (ADR-0143 §4.3, BDP-2504) ──────────────────────
+    # Optional; ``hasattr``-probed. An extension whose ``pre_init`` raises is
+    # marked unhealthy and EXCLUDED from every later stage (§6 risk) — a failed
+    # pre-init must never leave that extension's routers mounted. Extensions
+    # defining no lifecycle hooks are all healthy and behave exactly as before.
+    healthy: set[str] = {ext.name for ext in exts}
+    for ext in exts:
+        if hasattr(ext, "pre_init"):
+            try:
+                ext.pre_init(app)
+            except Exception:  # one bad pre_init must not break server boot
+                logger.exception("extension %r pre_init failed — excluding it", ext.name)
+                healthy.discard(ext.name)
+
+    # ── Stage 2 — register (mount routers) ────────────────────────────────
     installed: list[str] = []
     for ext in exts:
+        if ext.name not in healthy:
+            continue
         try:
             routers = ext.routers(
                 auth_provider=auth_provider,
@@ -210,7 +332,54 @@ def install_extensions(
             app.include_router(router, prefix="/v1")
         installed.append(ext.name)
         logger.info("installed omnigent extension %r", ext.name)
+
+    # ── Stage 3 — post_init (after all healthy routers mounted) ───────────
+    for ext in exts:
+        if ext.name not in healthy:
+            continue
+        if hasattr(ext, "post_init"):
+            try:
+                ext.post_init(app)
+            except Exception:  # observability only — must not break boot
+                logger.exception("extension %r post_init failed", ext.name)
+
+    # ── Stage 4 — after_init (final settle, before lifespan starts) ───────
+    for ext in exts:
+        if ext.name not in healthy:
+            continue
+        if hasattr(ext, "after_init"):
+            try:
+                ext.after_init(app)
+            except Exception:  # observability only — must not break boot
+                logger.exception("extension %r after_init failed", ext.name)
+
     return installed
+
+
+def get_extension(name: str) -> OmnigentExtension | None:
+    """Return the discovered extension named *name*, or ``None`` if absent (BDP-2504).
+
+    A thin lookup over :func:`discover_extensions` (the ``appHost.GetPlugin<T>()``
+    analog). Honors ``OMNIGENT_DISABLED_EXTENSIONS`` — a disabled extension is not
+    found. Discovery is re-run per call (not memoized), consistent with the
+    aggregators.
+    """
+    return next((ext for ext in discover_extensions() if ext.name == name), None)
+
+
+def assert_extension(name: str) -> OmnigentExtension:
+    """Like :func:`get_extension` but raise ``LookupError`` if absent (BDP-2504).
+
+    The ``appHost.AssertPlugin<T>()`` analog — for a core path that hard-requires
+    a specific extension to be present.
+    """
+    ext = get_extension(name)
+    if ext is None:
+        loaded = [e.name for e in discover_extensions()]
+        raise LookupError(
+            f"required omnigent extension {name!r} not loaded (loaded: {loaded})"
+        )
+    return ext
 
 
 def extension_tool_factories() -> dict:
@@ -302,3 +471,25 @@ def extension_config_descriptors() -> list:
         if hasattr(ext, "config_descriptors"):
             descriptors.extend(ext.config_descriptors())
     return descriptors
+
+
+def extension_tool_interceptors() -> dict:
+    """Tool-call interceptors contributed by extensions (``tool_interceptors()``).
+
+    A ``{prefix: handler}`` table merged across extensions so core can claim an
+    interception point (e.g. ``memory__*``) ahead of runner dispatch without a
+    hard core→extension name reference (ADR-0143 §5 Step 1, BDP-2504). Mirrors
+    the ``extension_secret_backends`` style — ``hasattr`` probe — but isolates a
+    misbehaving contributor: one extension whose ``tool_interceptors`` raises is
+    logged and skipped so the rest still register (it must never break boot).
+    """
+    interceptors: dict = {}
+    for ext in discover_extensions():
+        if hasattr(ext, "tool_interceptors"):
+            try:
+                interceptors.update(ext.tool_interceptors())
+            except Exception:  # one bad extension must not break the others
+                logger.exception(
+                    "extension %r tool_interceptors() failed — skipped", ext.name
+                )
+    return interceptors

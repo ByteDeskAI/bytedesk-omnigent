@@ -269,6 +269,71 @@ from omnigent.tools.client_specified import parse_client_side_tool_specs
 
 _logger = logging.getLogger(__name__)
 
+# ── Extension tool-interceptor table (ADR-0143 §5 Step 1, BDP-2505) ────────
+# memory__* (and any future server-side tool) is executed via the generic
+# ``tool_interceptors()`` extension hook rather than a hard
+# ``from bytedesk_omnigent.memory_tool_intercept import ...`` reference — core
+# no longer names the bytedesk extension. The aggregated ``{prefix: handler}``
+# table is memoized at first use: extensions are fixed for the process
+# lifetime, so the prefix table never changes, and this keeps the per-tool-call
+# hot path off a fresh extension-discovery walk.
+_TOOL_INTERCEPTORS_CACHE: dict[str, Callable[..., object]] | None = None
+
+
+def _tool_interceptors() -> dict[str, Callable[..., object]]:
+    """The aggregated ``{prefix: handler}`` interceptor table (memoized).
+
+    Deferred import of :mod:`omnigent.extensions` keeps the FastAPI/extension
+    stack off this module's import path. When no extension contributes an
+    interceptor the table is empty and every tool falls through to runner
+    dispatch (back-compatible default).
+    """
+    global _TOOL_INTERCEPTORS_CACHE
+    if _TOOL_INTERCEPTORS_CACHE is None:
+        from omnigent.extensions import extension_tool_interceptors
+
+        _TOOL_INTERCEPTORS_CACHE = extension_tool_interceptors()
+    return _TOOL_INTERCEPTORS_CACHE
+
+
+def _intercept_tool(
+    namespaced_name: str,
+    arguments: dict[str, Any] | None,
+    *,
+    caller_agent_id: str | None,
+    caller_department: str | None,
+) -> str | None:
+    """Dispatch *namespaced_name* through the extension interceptor table.
+
+    Returns the handler's JSON result string when an extension claims the tool
+    (longest matching prefix wins, so more-specific prefixes take precedence),
+    or ``None`` to fall through to normal runner dispatch — both when no prefix
+    matches and when the matching handler itself returns ``None``. A handler
+    that raises is logged and treated as "not intercepted" so a misbehaving
+    extension can never break the tool path.
+    """
+    table = _tool_interceptors()
+    if not table:
+        return None
+    for prefix in sorted(table, key=len, reverse=True):
+        if namespaced_name.startswith(prefix):
+            try:
+                return table[prefix](
+                    namespaced_name,
+                    arguments,
+                    caller_agent_id=caller_agent_id,
+                    caller_department=caller_department,
+                )
+            except Exception:  # noqa: BLE001 — never 500 the tool path on a bad interceptor.
+                _logger.warning(
+                    "tool interceptor for prefix %r failed on %r — falling through",
+                    prefix,
+                    namespaced_name,
+                    exc_info=True,
+                )
+                return None
+    return None
+
 # ── Module-level constants (rule 34) ──────────────────────────────
 
 # Wire literal for the interrupt input type. Lives here so the
@@ -11821,29 +11886,31 @@ async def _handle_mcp_tools_call(
         if call_result.data is not None:
             arguments = call_result.data
 
-    # ── BDP-2458: three-tier keyed memory tools execute SERVER-SIDE ──────────
-    # memory__* tools are served by the omnigent server itself: it owns the
-    # memory store AND the verified caller identity (conv.agent_id + the bundle's
-    # department). The stdio memory front is a single subprocess shared across
-    # agents with no per-call identity channel, so it cannot carry a trustworthy
-    # per-agent identity (the BDP-2458 blocker); handling memory here stamps the
-    # owner from the verified identity (anti-spoof). TOOL_CALL policy already ran
-    # above; TOOL_RESULT runs below, identical to a runner-dispatched tool.
-    from bytedesk_omnigent.memory_tool_intercept import (
-        execute_memory_tool,
-        is_memory_tool,
+    # ── BDP-2505: extension tool interception (was BDP-2458 server-side memory) ──
+    # Some tools execute on the omnigent server itself rather than the runner —
+    # e.g. the three-tier keyed memory__* tools, which the server owns alongside
+    # the verified caller identity (conv.agent_id + the bundle's department). The
+    # shared stdio memory front is a single subprocess with no per-call identity
+    # channel, so it cannot carry a trustworthy per-agent identity (the BDP-2458
+    # blocker); handling such tools here stamps the owner from the verified
+    # identity (anti-spoof). Dispatch goes through the generic extension
+    # ``tool_interceptors()`` prefix table (``_intercept_tool``) so core no longer
+    # hard-imports ``bytedesk_omnigent.memory_tool_intercept`` by name — the
+    # bytedesk extension claims the ``memory__`` prefix (ADR-0143 §5 Step 1). A
+    # ``None`` return means no extension handled the tool → fall through to runner
+    # dispatch. TOOL_CALL policy already ran above; TOOL_RESULT runs below,
+    # identical to a runner-dispatched tool.
+    _caller_dept = (spec.params or {}).get("department")
+    _caller_dept = str(_caller_dept) if _caller_dept else None
+    output = await asyncio.to_thread(
+        _intercept_tool,
+        namespaced_name,
+        arguments,
+        caller_agent_id=conv.agent_id,
+        caller_department=_caller_dept,
     )
 
-    if is_memory_tool(namespaced_name):
-        _caller_dept = (spec.params or {}).get("department")
-        _caller_dept = str(_caller_dept) if _caller_dept else None
-        output = await asyncio.to_thread(
-            execute_memory_tool,
-            namespaced_name,
-            arguments,
-            caller_agent_id=conv.agent_id,
-            caller_department=_caller_dept,
-        )
+    if output is not None:
         result_ctx = EvaluationContext(
             phase=Phase.TOOL_RESULT,
             content={"result": output},

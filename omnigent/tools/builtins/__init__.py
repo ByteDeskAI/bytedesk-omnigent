@@ -23,7 +23,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 
-from omnigent.extensions import extension_tool_factories
+from omnigent.pluggable.errors import ProviderNotRegistered
+from omnigent.pluggable.registry import PluggableRegistry
 from omnigent.spec.types import SkillSpec
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins.agents import (
@@ -116,6 +117,7 @@ __all__ = [
     "format_skill_meta_text",
     "get_builtin_tool",
     "list_skill_resources",
+    "register_extension_tools",
 ]
 
 # Lazy imports avoid circular import cycles — each tool's actual
@@ -206,11 +208,17 @@ def _create_skill_tool(config: dict[str, str], cls: type[Tool]) -> Tool:
     return cls()
 
 
-# Unified registry for every reserved builtin name. The value
-# is either a factory callable (for user-enablable tools) or
-# ``None`` for framework-owned names that occupy the name-space
-# but are never instantiated by user spec directives.
-# See POLICIES.md §15.8 for the unification rationale.
+# Framework-owned reserved names: these occupy the builtin name-space
+# but are NEVER instantiated by a user spec directive, so they carry no
+# factory. They are kept out of the :class:`PluggableRegistry` (whose
+# factories must be callable) and folded into :data:`BUILTIN_NAMES`
+# separately. ``web_fetch`` is constructed by ToolManager before reaching
+# this registry; ``list_comments`` / ``update_comment`` are auto-registered
+# by ``ToolManager._register_comment_tools``; ``sys_list_models`` by
+# ``ToolManager._register_sub_agent_tools``. They are reserved here so user
+# specs cannot shadow them. (Policy ASKs are surfaced as MCP-shape
+# elicitations on the SSE stream — not via the tool registry — see
+# omnigent/runtime/policies/approval.py.)
 #
 # Note: the legacy ``terminal_run`` / ``terminal_list`` /
 # ``terminal_close`` / ``terminal_send_input`` family was deleted
@@ -220,7 +228,20 @@ def _create_skill_tool(config: dict[str, str], cls: type[Tool]) -> Tool:
 # the spec declares a ``terminals:`` block — not via this
 # registry. One-shot shell commands now use ``sys_os_shell``
 # instead.
-_BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
+_FRAMEWORK_OWNED_NAMES: frozenset[str] = frozenset(
+    {
+        "web_fetch",
+        "list_comments",
+        "update_comment",
+        "sys_list_models",
+    }
+)
+
+# The first-party builtin tool set. Each entry is a config-accepting
+# factory (the ``_BuiltinFactory`` shape). This is the default set this
+# plugin contributes to the ``tools`` seam; it is the same mapping that
+# used to be spelled inline in the old ``_BUILTIN_REGISTRY`` dict.
+_FIRST_PARTY_FACTORIES: dict[str, _BuiltinFactory] = {
     # User-enablable tools (factory present).
     "web_search": lambda config: WebSearchTool(config=config),
     "upload_file": _create_upload_file,
@@ -242,40 +263,149 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "sys_skill_stage_preview": partial(_create_skill_tool, cls=SysSkillStagePreviewTool),
     "sys_skill_apply": partial(_create_skill_tool, cls=SysSkillApplyTool),
     "sys_skill_remove": partial(_create_skill_tool, cls=SysSkillRemoveTool),
-    # First-party tools (ByteDesk goals/peer/deliberation/outcome/signal/routing)
-    # are contributed via the omnigent.extensions seam (ADR-0143 / BDP-2300) and
-    # merged here — no ByteDesk import in core.
-    **extension_tool_factories(),
-    # Framework-owned: need runtime context. ``web_fetch`` is
-    # constructed by ToolManager before reaching this registry.
-    # ``list_comments`` and ``update_comment`` are auto-registered by
-    # ``ToolManager._register_comment_tools`` — they are reserved
-    # here so user specs cannot shadow them. (Policy ASKs are
-    # surfaced as MCP-shape elicitations on the SSE stream — not
-    # via the tool registry — see omnigent/runtime/policies/approval.py.)
-    "web_fetch": None,
-    "list_comments": None,
-    "update_comment": None,
-    # ``sys_list_models`` is auto-registered by
-    # ``ToolManager._register_sub_agent_tools`` with the dispatch grant
-    # and intercepted by name in the runner's tool dispatch — reserved
-    # here so user specs cannot shadow it.
-    "sys_list_models": None,
 }
 
-# Canonical set of every reserved builtin name. Derived from
-# the registry so there is a single source of truth — no drift
-# between the reserved-name check and the factory dispatch.
-BUILTIN_NAMES: frozenset[str] = frozenset(_BUILTIN_REGISTRY.keys())
+
+def _thunk(factory: _BuiltinFactory) -> Callable[[], _BuiltinFactory]:
+    """Wrap a config-accepting *factory* as the zero-arg thunk the registry stores.
+
+    :class:`PluggableRegistry` stores zero-arg factories (``Callable[[], T]``)
+    and calls them on :meth:`~PluggableRegistry.get`, so every tool name is
+    registered as a thunk that *returns* its ``_BuiltinFactory`` verbatim.
+    ``get(name)`` thus yields the config-accepting factory, not a ``Tool``
+    instance; :func:`get_builtin_tool` threads the spec ``config`` into it.
+
+    :param factory: The config-accepting builtin/extension tool factory.
+    :returns: A zero-arg thunk returning *factory* unchanged.
+    """
+    return lambda: factory
+
+
+def _build_builtin_registry() -> PluggableRegistry[_BuiltinFactory]:
+    """
+    Build the ``tools`` seam registry for the **first-party** builtin tools.
+
+    The seam is keyed by tool name and is generic over ``T =
+    _BuiltinFactory`` — i.e. the *provider* a seam resolves to is the
+    config-accepting builtin factory (a ``Callable[[dict], Tool]``), not a
+    ``Tool`` instance. Each name is registered as a thunk (see :func:`_thunk`)
+    that *returns* its ``_BuiltinFactory``; :func:`get_builtin_tool` then
+    threads the spec ``config`` into that factory at instantiation time.
+    Storing the factory (not an instance) preserves the lazy per-tool import
+    deferral the old dict relied on — nothing imports until the tool is
+    actually resolved.
+
+    **Import-safe (BDP-2371 / BDP-2506).** This builds *only* the first-party
+    set (web_search, upload_file, memory_*, sys_skill_*). It deliberately does
+    NOT call ``discover_extensions()`` — entry-point discovery loads the
+    FastAPI-heavy extension hub and must stay off the runner hot path, exactly
+    as ``web_search._build_provider_registry`` keeps it off. Extension tools —
+    e.g. the ByteDesk goals/peer/deliberation/outcome/signal/routing tools
+    (ADR-0143 / BDP-2300) — are merged later by :func:`register_extension_tools`,
+    called once at server startup. This restores the baseline timing, where the
+    old ``**extension_tool_factories()`` splice was invisible to the import
+    safety net because no entry points are installed on the runner hot path.
+
+    :returns: A populated :class:`PluggableRegistry` keyed by first-party name.
+    """
+    registry: PluggableRegistry[_BuiltinFactory] = PluggableRegistry("tools")
+    for name, factory in _FIRST_PARTY_FACTORIES.items():
+        registry.register(name, _thunk(factory))
+    return registry
+
+
+# The ``tools`` seam: a PluggableRegistry keyed by tool name whose
+# providers are config-accepting builtin/extension tool factories.
+# Built once at module import with the first-party set only (same lifetime
+# the old dict had). Extension tools are merged in at server startup by
+# ``register_extension_tools`` — NOT at import (BDP-2371 / BDP-2506).
+_BUILTIN_REGISTRY: PluggableRegistry[_BuiltinFactory] = _build_builtin_registry()
+
+
+def _recompute_name_sets() -> None:
+    """Refresh the module-level reserved-name frozensets from the live registry.
+
+    :data:`BUILTIN_NAMES` and :data:`INSTANTIABLE_BUILTINS` are snapshots of the
+    registry's current name set. They are computed once at import (first-party
+    only) and recomputed by :func:`register_extension_tools` after the
+    server-startup extension merge, so extension-contributed tool names become
+    reserved (and instantiable) once discovery has run — matching the baseline,
+    where the entry-point splice populated these sets in the server process.
+    Consumers re-fetch the symbol (e.g. ``spec.validator`` imports it lazily),
+    so the rebind is observed.
+    """
+    global BUILTIN_NAMES, INSTANTIABLE_BUILTINS
+    BUILTIN_NAMES = frozenset(_BUILTIN_REGISTRY.names()) | _FRAMEWORK_OWNED_NAMES
+    INSTANTIABLE_BUILTINS = frozenset(_BUILTIN_REGISTRY.names())
+
+
+# Canonical set of every reserved builtin name: the instantiable
+# seam names plus the framework-owned names that carry no factory.
+# Single source of truth — no drift between the reserved-name check
+# and the factory dispatch.
+BUILTIN_NAMES: frozenset[str] = frozenset(_BUILTIN_REGISTRY.names()) | _FRAMEWORK_OWNED_NAMES
 
 # Subset of names that have a user-facing factory. Used by the
 # onboarding ``list_builtin_tools`` helper, which only lists
 # tools an agent spec can actually enable via
 # ``tools.builtins`` — framework-owned names would just confuse
-# the agent author.
-INSTANTIABLE_BUILTINS: frozenset[str] = frozenset(
-    name for name, factory in _BUILTIN_REGISTRY.items() if factory is not None
-)
+# the agent author. Every seam-registered name is instantiable;
+# framework-owned names are excluded by construction.
+INSTANTIABLE_BUILTINS: frozenset[str] = frozenset(_BUILTIN_REGISTRY.names())
+
+
+def register_extension_tools() -> None:
+    """Merge extension-contributed builtin tools into the ``tools`` seam (startup).
+
+    The companion to :func:`_build_builtin_registry`: it runs entry-point
+    discovery and folds each discovered extension's ``tool_factories()`` hook
+    into the module-level :data:`_BUILTIN_REGISTRY`, then refreshes
+    :data:`BUILTIN_NAMES` / :data:`INSTANTIABLE_BUILTINS`. This is the SAME work
+    the old ``**extension_tool_factories()`` splice did inline in the registry
+    dict, but deferred to **server startup** so the FastAPI-heavy extension hub
+    stays off the runner hot path (BDP-2371 / BDP-2506) — mirroring how
+    ``web_search`` defers its provider discovery to ``discover_all_extensions``.
+
+    Idempotent: re-running merely re-attempts registration, and an
+    already-registered tool name is skipped by the registry's conflict guard
+    (caught per-extension below). Error-isolated per extension so one bad
+    extension can never break boot. Discovery is routed through
+    :func:`omnigent.pluggable.registry.discover_extensions`, the lazy proxy that
+    defers the heavy ``omnigent.extensions`` import.
+    """
+    import logging
+
+    from omnigent.pluggable.errors import RegistryConflict
+    from omnigent.pluggable.registry import discover_extensions
+
+    logger = logging.getLogger(__name__)
+    for ext in discover_extensions():
+        getter = getattr(ext, "tool_factories", None)
+        if getter is None:
+            continue
+        try:
+            factories = dict(getter())
+        except Exception:  # extensions are best-effort; never break boot
+            logger.warning(
+                "extension %r failed to contribute tool_factories for the "
+                "tools seam",
+                getattr(ext, "name", ext),
+                exc_info=True,
+            )
+            continue
+        for name, factory in factories.items():
+            try:
+                _BUILTIN_REGISTRY.register(name, _thunk(factory))
+            except RegistryConflict:
+                # Already registered (e.g. a re-run, or two extensions
+                # contributing the same name) — keep the first; never break boot.
+                logger.debug(
+                    "tool %r already registered in the tools seam; skipping "
+                    "the duplicate from extension %r",
+                    name,
+                    getattr(ext, "name", ext),
+                )
+    _recompute_name_sets()
 
 
 def get_builtin_tool(
@@ -297,9 +427,12 @@ def get_builtin_tool(
     # Returns None for both "not in registry" AND
     # "framework-owned without factory" — callers treat both
     # as "not instantiable via this entry point". Check against
-    # BUILTIN_NAMES first if you need to distinguish.
-    factory = _BUILTIN_REGISTRY.get(name)
-    if factory is None:
+    # BUILTIN_NAMES first if you need to distinguish. ``get`` raises
+    # ProviderNotRegistered for an unknown name (which includes the
+    # framework-owned names, deliberately not seam-registered).
+    try:
+        factory = _BUILTIN_REGISTRY.get(name)
+    except ProviderNotRegistered:
         return None
     return factory(config or {})
 
