@@ -73,11 +73,19 @@ export function SkillsPage() {
   });
   const hasDefaultedScope = useRef(false);
 
+  // Employee rows, ordered by department then display name — so the Employee
+  // list (which maps agentRows) and every department group read in the same
+  // department → name order. Case-insensitive so "Operations"/"engineering"
+  // sort naturally rather than by ASCII case.
   const agentRows = useMemo(
     () =>
-      agents.filter(
-        (agent) => agent.workflow !== true && Boolean(agent.department || agent.title),
-      ),
+      agents
+        .filter((agent) => agent.workflow !== true && Boolean(agent.department || agent.title))
+        .sort(
+          (a, b) =>
+            departmentId(a).localeCompare(departmentId(b), undefined, { sensitivity: "base" }) ||
+            a.display_name.localeCompare(b.display_name, undefined, { sensitivity: "base" }),
+        ),
     [agents],
   );
 
@@ -87,12 +95,11 @@ export function SkillsPage() {
       const department = departmentId(agent);
       groups.set(department, [...(groups.get(department) ?? []), agent]);
     }
+    // agentRows is already department→name ordered, so each group's agents keep
+    // that order; sort the departments themselves by name (case-insensitive).
     return [...groups.entries()]
-      .map(([id, departmentAgents]) => ({
-        id,
-        agents: [...departmentAgents].sort((a, b) => a.display_name.localeCompare(b.display_name)),
-      }))
-      .sort((a, b) => a.id.localeCompare(b.id));
+      .map(([id, departmentAgents]) => ({ id, agents: departmentAgents }))
+      .sort((a, b) => a.id.localeCompare(b.id, undefined, { sensitivity: "base" }));
   }, [agentRows]);
 
   const targetAgentIds = useMemo(
