@@ -15,7 +15,12 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
-import { useInstalledSkills, useStartSkillsConciergeSession } from "@/hooks/useSkills";
+import {
+  useInstalledSkills,
+  useSkillMarketplaces,
+  useSkillRecommendations,
+  useStartSkillsConciergeSession,
+} from "@/hooks/useSkills";
 import { AgentConversation, AgentComposer } from "@/components/chat";
 import { Link } from "@/lib/routing";
 import { useChatStore } from "@/store/chatStore";
@@ -66,6 +71,7 @@ function findConcierge(agents: AvailableAgent[]): AvailableAgent | null {
 export function SkillsPage() {
   const agentsQuery = useAvailableAgents();
   const installed = useInstalledSkills();
+  const marketplaces = useSkillMarketplaces();
   const { mutateAsync: startConciergeSession } = useStartSkillsConciergeSession();
   const agents = useMemo(() => agentsQuery.data ?? [], [agentsQuery.data]);
 
@@ -159,6 +165,20 @@ export function SkillsPage() {
     targetAgentIds,
   ]);
 
+  const scopeContextAgent = useMemo(() => {
+    if (selectedScope.kind === "employee") {
+      return agentRows.find((agent) => agent.id === selectedScope.id) ?? null;
+    }
+    if (selectedScope.kind === "department") {
+      return agentRows.find((agent) => departmentId(agent) === selectedScope.id) ?? null;
+    }
+    return agentRows[0] ?? null;
+  }, [agentRows, selectedScope]);
+  const recommendations = useSkillRecommendations(
+    scopeContextAgent?.department ?? null,
+    scopeContextAgent?.title ?? null,
+  );
+
   const scopedInstalled = useMemo(
     () =>
       (installed.data ?? [])
@@ -221,7 +241,37 @@ export function SkillsPage() {
           <div className="space-y-4 p-3">
             <section className="rounded-md border border-border bg-background">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
-                <h2 className="text-sm font-medium">Available Skills</h2>
+                <h2 className="text-sm font-medium">ByteDesk Catalog</h2>
+                <Badge variant="secondary">github_marketplace</Badge>
+              </div>
+              <div className="space-y-3 px-3 py-3">
+                <div className="flex flex-wrap gap-1.5">
+                  {(marketplaces.data ?? [])
+                    .filter((entry) => entry.source_id === "github_marketplace")
+                    .map((entry) => (
+                      <Badge key={entry.id} variant={entry.default ? "default" : "outline"}>
+                        {entry.label}
+                      </Badge>
+                    ))}
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-medium text-muted-foreground">Suggested plugins</div>
+                  {(recommendations.data ?? []).slice(0, 5).map((item) => (
+                    <div key={item.source_ref} className="rounded-md border border-border px-2.5 py-2">
+                      <div className="text-sm font-medium">{item.name}</div>
+                      <div className="line-clamp-2 text-xs text-muted-foreground">{item.reason}</div>
+                    </div>
+                  ))}
+                  {!recommendations.isLoading && (recommendations.data ?? []).length === 0 && (
+                    <div className="text-xs text-muted-foreground">No suggestions for this scope.</div>
+                  )}
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-md border border-border bg-background">
+              <div className="flex items-center justify-between border-b border-border px-3 py-2">
+                <h2 className="text-sm font-medium">Installed Skills</h2>
                 <span className="text-xs text-muted-foreground">{scopedInstalled.length}</span>
               </div>
               <div className="max-h-[30rem] divide-y divide-border overflow-y-auto">
