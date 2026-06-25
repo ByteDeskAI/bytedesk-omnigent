@@ -16,7 +16,11 @@ from __future__ import annotations
 
 import json
 
-from bytedesk_omnigent.policies.verify_gate import POLICY_REGISTRY, verify_as_gate
+from bytedesk_omnigent.policies.verify_gate import (
+    POLICY_REGISTRY,
+    _result_payload,
+    verify_as_gate,
+)
 
 from .helpers import tool_result_event
 
@@ -46,9 +50,7 @@ async def test_denies_gated_success_without_verification() -> None:
 
 async def test_allows_gated_success_with_verification() -> None:
     gate = verify_as_gate(gated_tools=_GATED)
-    event = tool_result_event(
-        "release_trigger", json.dumps({"status": "ok", "verified": True})
-    )
+    event = tool_result_event("release_trigger", json.dumps({"status": "ok", "verified": True}))
     assert await gate(event) is None
 
 
@@ -87,3 +89,33 @@ def test_registry_entry_is_well_formed() -> None:
     assert entry["handler"] == "bytedesk_omnigent.policies.verify_gate.verify_as_gate"
     assert entry["kind"] == "factory"
     assert "gated_tools" in entry["params_schema"]["required"]
+
+
+def test_result_payload_rejects_non_dict_data() -> None:
+    assert _result_payload("not-a-dict") is None
+
+
+def test_result_payload_accepts_dict_result_without_json_decode() -> None:
+    assert _result_payload({"result": {"verified": True}}) == {"verified": True}
+
+
+def test_result_payload_rejects_json_that_parses_to_non_object() -> None:
+    assert _result_payload({"result": "[1, 2]"}) is None
+
+
+def test_result_payload_rejects_non_string_non_dict_result() -> None:
+    assert _result_payload({"result": 42}) is None
+
+
+async def test_denies_gated_tool_when_data_is_not_dict() -> None:
+    gate = verify_as_gate(gated_tools=_GATED)
+    event = {
+        "type": "tool_result",
+        "target": "release_trigger",
+        "data": "not-a-dict",
+        "context": {"actor": {}, "usage": {}},
+        "session_state": {},
+    }
+    resp = await gate(event)  # type: ignore[arg-type]
+    assert resp is not None
+    assert resp["result"] == "DENY"

@@ -193,6 +193,20 @@ def test_runner_startup_progress_plain_mode_does_not_swallow_exceptions(
     assert "omnigent: Starting" in capsys.readouterr().err
 
 
+def test_runner_startup_progress_finish_is_idempotent_in_rich_mode(
+    capsys,
+) -> None:
+    """Calling ``finish`` twice in rich mode must not raise or double-stop."""
+    with runner_startup_progress(
+        initial_message="Starting\u2026",
+        enabled=True,
+    ) as p:
+        p.finish()
+        p.finish()
+
+    assert capsys.readouterr().out == ""
+
+
 def test_runner_startup_progress_rich_mode_writes_only_to_stderr(
     capsys,
 ) -> None:

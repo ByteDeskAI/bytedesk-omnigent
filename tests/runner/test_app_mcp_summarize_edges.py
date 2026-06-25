@@ -13,10 +13,21 @@ import pytest
 from fastapi import FastAPI
 
 from omnigent.runner import create_runner_app, tool_dispatch
-from omnigent.runner.app import _session_agent_ids_ref, _session_event_queues_ref, _session_histories_ref
+from omnigent.runner.app import (
+    _session_agent_ids_ref,
+    _session_event_queues_ref,
+    _session_histories_ref,
+)
 from omnigent.runner.mcp_manager import McpSchemasResult
 from omnigent.runtime.compaction import CompactionResult, SummaryMetadata
-from omnigent.spec.types import AgentSpec, ApiKeyAuth, CompactionConfig, DatabricksAuth, ExecutorSpec, ProviderAuth
+from omnigent.spec.types import (
+    AgentSpec,
+    ApiKeyAuth,
+    CompactionConfig,
+    DatabricksAuth,
+    ExecutorSpec,
+    ProviderAuth,
+)
 from omnigent.tools.mcp import McpElicitationRequired
 from tests.runner.helpers import NullServerClient
 from tests.runner.test_app_runner_route_edges import (
@@ -65,8 +76,10 @@ class _FakeMcpManager:
         arguments: dict[str, Any],
         *,
         session_id: str | None = None,
+        subject_token: str | None = None,
+        agent_id: str | None = None,
     ) -> str:
-        del spec, session_id
+        del spec, session_id, subject_token, agent_id
         self.call_tool_calls.append((bare_tool, arguments))
         if self._elicitation is not None:
             raise self._elicitation
@@ -500,7 +513,7 @@ async def test_summarize_resolves_provider_auth_via_helper(
     # _resolve_provider_connection is closure-local; patch its dependency instead.
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.load_config",
-        lambda: {},
+        dict,
     )
     monkeypatch.setattr(
         "omnigent.onboarding.provider_config.load_providers",
@@ -508,12 +521,14 @@ async def test_summarize_resolves_provider_auth_via_helper(
             "litellm": SimpleNamespace(
                 kind="key",
                 profile=None,
-                family=lambda name: SimpleNamespace(
-                    api_key="prov-key",
-                    base_url="https://litellm.example/v1",
-                )
-                if name == "openai"
-                else None,
+                family=lambda name: (
+                    SimpleNamespace(
+                        api_key="prov-key",
+                        base_url="https://litellm.example/v1",
+                    )
+                    if name == "openai"
+                    else None
+                ),
             ),
         },
     )
@@ -812,7 +827,9 @@ async def test_proactive_compaction_uses_provider_tokens_from_prior_turn(
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
-            assert (await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})).status_code == 201
+            assert (
+                await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})
+            ).status_code == 201
             assert (
                 await client.post(
                     f"/v1/sessions/{conv}/events",
@@ -942,7 +959,9 @@ async def test_proactive_compaction_layer2_serializes_str_content_and_truncates_
     try:
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
-            assert (await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})).status_code == 201
+            assert (
+                await client.post("/v1/sessions", json={"session_id": conv, "agent_id": "ag"})
+            ).status_code == 201
             assert (
                 await client.post(
                     f"/v1/sessions/{conv}/events",
@@ -1024,7 +1043,9 @@ async def test_proactive_compaction_resolves_api_key_connection_for_summarize(
     app = create_runner_app(
         process_manager=pm,  # type: ignore[arg-type]
         spec_resolver=_resolver,
-        server_client=_PaginatedServerClient([{"id": "item_ak", "type": "message", "role": "user", "content": []}]),  # type: ignore[arg-type]
+        server_client=_PaginatedServerClient(
+            [{"id": "item_ak", "type": "message", "role": "user", "content": []}]
+        ),  # type: ignore[arg-type]
     )
 
     _session_histories_ref[conv] = [
@@ -1224,7 +1245,9 @@ async def test_summarize_uses_global_api_key_when_spec_has_no_auth(
     spec = AgentSpec(
         spec_version=1,
         name="no-auth-agent",
-        executor=ExecutorSpec(type="omnigent", model="gpt-4o-mini", config={"harness": "openai-agents"}),
+        executor=ExecutorSpec(
+            type="omnigent", model="gpt-4o-mini", config={"harness": "openai-agents"}
+        ),
     )
     captured: dict[str, Any] = {}
 
@@ -1361,7 +1384,7 @@ async def test_summarize_provider_resolution_returns_none_when_provider_missing(
         "omnigent.runner.app._get_runner_llm_client",
         lambda: SimpleNamespace(responses=_FakeResponses()),
     )
-    monkeypatch.setattr("omnigent.onboarding.provider_config.load_config", lambda: {})
+    monkeypatch.setattr("omnigent.onboarding.provider_config.load_config", dict)
     monkeypatch.setattr("omnigent.onboarding.provider_config.load_providers", lambda _cfg: {})
     monkeypatch.setattr(
         "omnigent.onboarding.detected.effective_config_with_detected",
@@ -1466,7 +1489,9 @@ async def test_proactive_compaction_persist_failure_is_logged(
         spec_version=1,
         name="compact-agent",
         compaction=CompactionConfig(trigger_threshold=0.5, recent_window=0),
-        executor=ExecutorSpec(type="omnigent", model="gpt-4o-mini", config={"harness": "openai-agents"}),
+        executor=ExecutorSpec(
+            type="omnigent", model="gpt-4o-mini", config={"harness": "openai-agents"}
+        ),
     )
     sse_frames = [
         _sse({"type": "response.created", "response": {"id": "resp_cpf"}}),
@@ -1477,7 +1502,9 @@ async def test_proactive_compaction_persist_failure_is_logged(
 
     class _FailingCompactionClient(_PaginatedServerClient):
         def __init__(self) -> None:
-            super().__init__([{"id": "item_cpf", "type": "message", "role": "user", "content": []}])
+            super().__init__(
+                [{"id": "item_cpf", "type": "message", "role": "user", "content": []}]
+            )
 
         async def post(self, url: str, **kwargs: Any) -> Any:
             payload = kwargs.get("json") or {}
@@ -1578,9 +1605,10 @@ async def test_codex_ensure_returns_409_when_stale_terminal_cannot_close(
 
     monkeypatch.setattr(SessionResourceRegistry, "get_terminal_resource", _stub_get_terminal)
     monkeypatch.setattr(SessionResourceRegistry, "close_terminal", _stub_close_terminal)
+
     def _no_role(self: object, session_id: str, terminal_id: str) -> None:
         del self, session_id, terminal_id
-        return None
+        return
 
     monkeypatch.setattr(SessionResourceRegistry, "terminal_resource_role", _no_role)
 
@@ -1639,7 +1667,7 @@ async def test_native_terminal_ensure_creates_pi_and_grok(
 
     async def _no_terminal(self: object, session_id: str, terminal_id: str) -> None:
         del self, session_id, terminal_id
-        return None
+        return
 
     monkeypatch.setattr(runner_app_mod, auto_create_attr, _stub_auto_create)
     monkeypatch.setattr(SessionResourceRegistry, "get_terminal_resource", _no_terminal)
@@ -1690,7 +1718,7 @@ async def test_native_terminal_ensure_failure_returns_start_error(
 
     async def _no_terminal(self: object, session_id: str, terminal_id: str) -> None:
         del self, session_id, terminal_id
-        return None
+        return
 
     monkeypatch.setattr(runner_app_mod, auto_create_attr, _boom)
     monkeypatch.setattr(SessionResourceRegistry, "get_terminal_resource", _no_terminal)

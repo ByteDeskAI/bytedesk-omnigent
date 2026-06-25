@@ -707,8 +707,9 @@ def test_load_mcp_stdio_yaml_translates_to_mcp_server(mcp_tool_yaml: Path) -> No
     under the Omnigent integration path.
     """
     spec = load(mcp_tool_yaml)
-    assert len(spec.mcp_servers) == 1
-    mcp = spec.mcp_servers[0]
+    by_name = {m.name: m for m in spec.mcp_servers}
+    assert "glean" in by_name
+    mcp = by_name["glean"]
     # Identity fields come from the YAML key + tool body.
     assert mcp.name == "glean"
     assert mcp.transport == "stdio"
@@ -733,8 +734,9 @@ def test_load_mcp_http_yaml_translates_to_mcp_server(mcp_http_tool_yaml: Path) -
     (``None`` command) or a silently dropped tool.
     """
     spec = load(mcp_http_tool_yaml)
-    assert len(spec.mcp_servers) == 1
-    mcp = spec.mcp_servers[0]
+    by_name = {m.name: m for m in spec.mcp_servers}
+    assert "github" in by_name
+    mcp = by_name["github"]
     assert mcp.name == "github"
     assert mcp.transport == "http"
     assert mcp.url == "https://mcp.example.com/sse"

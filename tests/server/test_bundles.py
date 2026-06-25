@@ -15,6 +15,7 @@ enforces two protections that trusted spec loading does not:
 
 from __future__ import annotations
 
+import hashlib
 import io
 import tarfile
 from pathlib import Path
@@ -23,7 +24,7 @@ import pytest
 import yaml
 
 from omnigent.errors import OmnigentError
-from omnigent.server.bundles import validate_agent_bundle
+from omnigent.server.bundles import bundle_location, validate_agent_bundle
 
 _SECRET_ENV_VAR = "OMNIGENT_W7_BUNDLE_SECRET"
 _SECRET_VALUE = "server-side-secret-token"
@@ -263,6 +264,33 @@ def test_validate_bundle_rejects_unregistered_handler_in_sub_agent() -> None:
     )
     with pytest.raises(OmnigentError, match=r"not a registered policy handler"):
         validate_agent_bundle(bundle)
+
+
+def test_validate_bundle_rejects_invalid_tarball() -> None:
+    with pytest.raises(OmnigentError, match=r"invalid tarball"):
+        validate_agent_bundle(b"not-a-valid-tarball")
+
+
+def test_validate_bundle_rejects_missing_name() -> None:
+    bundle = _make_bundle_bytes(
+        {
+            "config.yaml": (
+                "spec_version: 1\n"
+                "executor:\n"
+                "  type: omnigent\n"
+                "  config:\n"
+                "    harness: claude-sdk\n"
+                "prompt: hi\n"
+            )
+        }
+    )
+    with pytest.raises(OmnigentError, match=r"must include a name"):
+        validate_agent_bundle(bundle)
+
+
+def test_bundle_location_is_content_addressed() -> None:
+    data = b"bundle-bytes"
+    assert bundle_location("ag_test", data) == f"ag_test/{hashlib.sha256(data).hexdigest()}"
 
 
 def test_validate_bundle_accepts_registered_handler_in_sub_agent() -> None:

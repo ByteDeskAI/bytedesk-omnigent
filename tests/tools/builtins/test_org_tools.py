@@ -1,6 +1,7 @@
 """Unit tests for the native org tools over the durable social/why-act/decision
 stores (BDP-2262 C2/C3/C6/B7 integration, ADR-0142). Verifies the round-trips +
 the server-side agent-identity stamping (anti-spoofing)."""
+
 from __future__ import annotations
 
 import json
@@ -79,9 +80,7 @@ def test_goal_create_list_claim_advance(stores) -> None:
     assert _call(GoalClaimTool(), {"goal_id": gid}, agent_id="ag_c")["claimed"] is False
 
     # The OWNER advances it (BDP-2285 — advance is owner-scoped).
-    advanced = _call(
-        GoalAdvanceTool(), {"goal_id": gid, "status": "in_progress"}, agent_id="ag_b"
-    )
+    advanced = _call(GoalAdvanceTool(), {"goal_id": gid, "status": "in_progress"}, agent_id="ag_b")
     assert advanced["advanced"] is True
     assert advanced["status"] == "in_progress"
 
@@ -93,9 +92,7 @@ def test_goal_advance_denies_non_owner_and_missing_goal(stores) -> None:
     assert _call(GoalClaimTool(), {"goal_id": gid}, agent_id="ag_owner")["claimed"] is True
 
     # A different agent tries to advance it → denied; it stays assigned to the owner.
-    foreign = _call(
-        GoalAdvanceTool(), {"goal_id": gid, "status": "done"}, agent_id="ag_intruder"
-    )
+    foreign = _call(GoalAdvanceTool(), {"goal_id": gid, "status": "done"}, agent_id="ag_intruder")
     assert foreign["advanced"] is False
     still = stores["goals"].list_goals(status="assigned")
     assert len(still) == 1 and still[0].id == gid and still[0].owner_agent_id == "ag_owner"
@@ -116,17 +113,142 @@ def test_deliberation_start_position_decide_find(stores) -> None:
         {"deliberation_id": did, "stance": "against", "body": "churn"},
         agent_id="ag_b",
     )
-    assert _call(
-        DeliberationDecideTool(),
-        {"deliberation_id": did, "decision": "$89"},
-        agent_id="ag_ceo",
-    )["decided"] is True
+    assert (
+        _call(
+            DeliberationDecideTool(),
+            {"deliberation_id": did, "decision": "$89"},
+            agent_id="ag_ceo",
+        )["decided"]
+        is True
+    )
     assert _call(DeliberationFindTool(), {"topic": "pricing"})["decision"] == "$89"
 
 
-def test_outcome_record_rolls_into_scoreboard(stores) -> None:
-    out = _call(
-        OutcomeRecordTool(), {"kind": "deal_won", "metric": "revenue", "value": 500}
+def test_org_tool_schemas_expose_metadata() -> None:
+    for tool in (
+        PeerSendTool(),
+        PeerInboxTool(),
+        OutcomeRecordTool(),
+        GoalCreateTool(),
+        GoalListTool(),
+        GoalClaimTool(),
+        GoalAdvanceTool(),
+        DeliberationStartTool(),
+        DeliberationPositionTool(),
+        DeliberationDecideTool(),
+        DeliberationFindTool(),
+    ):
+        schema = tool.get_schema()
+        assert schema["type"] == "function"
+        assert schema["function"]["name"] == tool.name()
+        assert tool.description()
+
+
+def test_goal_tools_validate_required_fields_and_identity(stores) -> None:
+    assert "missing required 'title'" in _call(GoalCreateTool(), {})["error"]
+    assert "missing required 'goal_id'" in _call(GoalClaimTool(), {})["error"]
+    assert "missing required" in _call(GoalAdvanceTool(), {"goal_id": "g"})["error"]
+    assert (
+        "requires an agent identity"
+        in _call(GoalClaimTool(), {"goal_id": "g1"}, agent_id="")["error"]
     )
+
+    gid = _call(GoalCreateTool(), {"title": "mine"})["goal_id"]
+    _call(GoalClaimTool(), {"goal_id": gid}, agent_id="ag_owner")
+    mine = _call(GoalListTool(), {"mine": True}, agent_id="ag_owner")
+    assert len(mine["goals"]) == 1
+    assert _call(GoalListTool(), {"mine": True}, agent_id="ag_other")["goals"] == []
+
+    assert (
+        "invalid status"
+        in _call(GoalAdvanceTool(), {"goal_id": gid, "status": "bogus"}, agent_id="ag_owner")[
+            "error"
+        ]
+    )
+    assert (
+        "requires an agent identity"
+        in _call(GoalAdvanceTool(), {"goal_id": gid, "status": "done"}, agent_id="")["error"]
+    )
+
+
+def test_deliberation_tools_validate_inputs_and_not_found(stores) -> None:
+    assert "missing required 'topic'" in _call(DeliberationFindTool(), {})["error"]
+    assert (
+        "missing required 'topic' or 'proposal'"
+        in _call(DeliberationStartTool(), {"topic": "x"})["error"]
+    )
+
+    did = _call(DeliberationStartTool(), {"topic": "launch", "proposal": "go"})["deliberation_id"]
+
+    assert (
+        "missing required"
+        in _call(DeliberationPositionTool(), {"deliberation_id": did, "stance": "for"})["error"]
+    )
+    assert (
+        "invalid stance"
+        in _call(
+            DeliberationPositionTool(),
+            {"deliberation_id": did, "stance": "maybe", "body": "nope"},
+        )["error"]
+    )
+    assert (
+        "requires an agent identity"
+        in _call(
+            DeliberationPositionTool(),
+            {"deliberation_id": did, "stance": "for", "body": "yes"},
+            agent_id="",
+        )["error"]
+    )
+
+    assert (
+        "missing required"
+        in _call(DeliberationDecideTool(), {"deliberation_id": did, "decision": ""})["error"]
+    )
+    assert (
+        "requires an agent identity"
+        in _call(
+            DeliberationDecideTool(),
+            {"deliberation_id": did, "decision": "ship"},
+            agent_id="",
+        )["error"]
+    )
+
+    missing = _call(DeliberationFindTool(), {"topic": "unknown-topic"})
+    assert missing["decision"] is None
+    assert "No decision recorded" in missing["message"]
+
+
+def test_peer_tools_validate_required_fields_kind_and_identity(stores) -> None:
+    assert "missing required 'topic' or 'body'" in _call(PeerSendTool(), {"topic": "t"})["error"]
+    assert (
+        "requires an agent identity"
+        in _call(PeerSendTool(), {"topic": "t", "body": "hi"}, agent_id="")["error"]
+    )
+    assert (
+        "invalid kind"
+        in _call(
+            PeerSendTool(),
+            {"topic": "t", "body": "hi", "kind": "fax"},
+            agent_id="ag_a",
+        )["error"]
+    )
+    assert "requires an agent identity" in _call(PeerInboxTool(), {}, agent_id="")["error"]
+
+
+def test_outcome_record_validates_required_fields_and_identity(stores) -> None:
+    assert (
+        "missing required 'kind' or 'metric'"
+        in _call(OutcomeRecordTool(), {"kind": "deal_won"})["error"]
+    )
+    assert (
+        "requires an agent identity"
+        in _call(OutcomeRecordTool(), {"kind": "deal_won", "metric": "revenue"}, agent_id="")[
+            "error"
+        ]
+    )
+
+
+def test_outcome_record_rolls_into_scoreboard(stores) -> None:
+    out = _call(OutcomeRecordTool(), {"kind": "deal_won", "metric": "revenue", "value": 500})
     assert out["metric"] == "revenue"
     assert stores["goals"].scoreboard(metric="revenue") == [("ag_a", 500.0)]

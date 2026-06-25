@@ -46,9 +46,7 @@ def _make_tool(handler) -> tuple[BytedeskJiraTool, list[httpx.Request]]:
 
     transport = httpx.MockTransport(_capturing)
     client = httpx.Client(base_url=_BASE, transport=transport)
-    adapter = _JiraClient(
-        base_url=_BASE, email=_EMAIL, api_token=_TOKEN, client=client
-    )
+    adapter = _JiraClient(base_url=_BASE, email=_EMAIL, api_token=_TOKEN, client=client)
     return BytedeskJiraTool(client=adapter), captured
 
 
@@ -84,9 +82,7 @@ def test_adf_doc_blank_is_still_valid_document():
 
 
 def test_search_sends_basic_auth_header():
-    tool, captured = _make_tool(
-        lambda r: httpx.Response(200, json={"issues": []})
-    )
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"issues": []}))
     _call(tool, op="search", jql="project = BDP")
 
     assert captured[0].headers["Authorization"] == _expected_basic()
@@ -138,6 +134,13 @@ def test_search_requires_jql():
     assert captured == []  # never hit the network
 
 
+def test_search_invalid_max_results_falls_back_to_default():
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"issues": []}))
+    _call(tool, op="search", jql="project = BDP", max_results="nope")
+    sent = json.loads(captured[0].content)
+    assert sent["maxResults"] == 20
+
+
 def test_search_clamps_max_results():
     tool, captured = _make_tool(lambda r: httpx.Response(200, json={"issues": []}))
     _call(tool, op="search", jql="x", max_results=9999)
@@ -148,9 +151,7 @@ def test_search_clamps_max_results():
 
 
 def test_get_issue_gets_path():
-    tool, captured = _make_tool(
-        lambda r: httpx.Response(200, json={"key": "BDP-7", "fields": {}})
-    )
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"key": "BDP-7", "fields": {}}))
     result = _call(tool, op="get_issue", key="BDP-7")
 
     assert captured[0].method == "GET"
@@ -310,9 +311,7 @@ def test_unknown_op_returns_structured_error():
 
 
 def test_http_4xx_returns_structured_error_not_raised():
-    tool, _ = _make_tool(
-        lambda r: httpx.Response(400, json={"errorMessages": ["bad jql"]})
-    )
+    tool, _ = _make_tool(lambda r: httpx.Response(400, json={"errorMessages": ["bad jql"]}))
     result = _call(tool, op="search", jql="busted")
     assert result["ok"] is False
     assert result["error"] == "jira_http_error"
@@ -325,6 +324,32 @@ def test_http_5xx_returns_structured_error_not_raised():
     assert result["ok"] is False
     assert result["error"] == "jira_http_error"
     assert result["status"] == 503
+
+
+def test_transport_error_returns_request_failed():
+    def _boom(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down")
+
+    tool, _ = _make_tool(_boom)
+    result = _call(tool, op="search", jql="project = BDP")
+    assert result == {"ok": False, "error": "jira_request_failed"}
+
+
+def test_http_lazy_client_is_created_without_injected_client(monkeypatch):
+    created: list[str] = []
+    real_client = httpx.Client
+
+    def _fake_client(**kwargs):
+        created.append(kwargs.get("base_url", ""))
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+        return real_client(transport=transport)
+
+    monkeypatch.setattr(httpx, "Client", _fake_client)
+    adapter = _JiraClient(base_url=_BASE, email=_EMAIL, api_token=_TOKEN)
+    first = adapter._http()
+    second = adapter._http()
+    assert first is second
+    assert created == [_BASE]
 
 
 def test_missing_credentials_returns_jira_not_configured(monkeypatch):
