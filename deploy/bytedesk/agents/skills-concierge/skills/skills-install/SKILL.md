@@ -13,7 +13,7 @@ agents by default, and never write secrets.
 
 ## 1. Resolve the target set
 
-Turn the user's scope into concrete agents with `skills__resolve_targets`:
+Turn the user's scope into concrete agents with `sys_skill_resolve_targets`:
 
 - `organization` — every non-workflow agent.
 - `department:<name>` — one department's agents.
@@ -26,8 +26,8 @@ targets back before any mutation.
 
 ## 2. Find and stage (no mutation yet)
 
-`skills__search(query)` → choose the best hit; its `name` is the
-`owner/repo@skill` install ref. `skills__stage_preview(source="skills",
+`sys_skill_search(query)` → choose the best hit; its `name` is the
+`owner/repo@skill` install ref. `sys_skill_stage_preview(source="skills",
 source_ref=<ref>, target_agent_ids=[...], install_mode="skip_existing")` fetches
 and validates the skill files and computes a per-agent action plan WITHOUT
 applying. Show the staged files and the per-agent actions and get an explicit
@@ -39,7 +39,7 @@ reinstall/update.
 
 ## 3. Apply
 
-`skills__apply_preview(preview_id)`. Record exactly which targets the apply
+`sys_skill_apply(preview_id)`. Record exactly which targets the apply
 **succeeded** on. Only those are installed; only those are verified or rolled
 back. A target that errored at apply time was never installed — don't probe or
 roll it back, just report it.
@@ -72,12 +72,12 @@ the worst outcome.
 
 ## 6. Diagnose and, if needed, roll back — per target only
 
-For a FAILED target: re-check `skills__installed(agent_id=<target>)`, re-apply
+For a FAILED target: re-check `sys_skill_installed(agent_id=<target>)`, re-apply
 once if it looks transient, and re-probe. If it still won't load, roll back that
 target ALONE:
 
 ```
-skills__remove("<skill-name>", ["<failed target id>"])
+sys_skill_remove("<skill-name>", ["<failed target id>"])
 ```
 
 Never roll back a target that verified, and never let one target's failure touch

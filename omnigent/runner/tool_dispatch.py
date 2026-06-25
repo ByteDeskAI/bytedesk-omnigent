@@ -443,6 +443,27 @@ _AGENT_TOOLS = frozenset({"sys_agent_get", "sys_agent_download", "sys_agent_list
 # The runner proxies the Omnigent server's session policy REST endpoint.
 _POLICY_TOOLS = frozenset({"sys_add_policy", "sys_policy_registry"})
 
+# Priority 5m: Skill-acquisition tools (BDP-2487). The Skills Concierge
+# discovers and INSTALLS skills via these. They replace the old ``skills``
+# stdio MCP front: the user-gated /v1/skills/previews|apply routes are
+# ``require_user``-gated, and the runner's server_client carries
+# ``X-Omnigent-Runner-Tunnel-Token`` (so RunnerTokenAuthProvider resolves the
+# session owner and require_user passes), whereas the stdio front held no
+# server credential and 401'd. Each proxies a /v1/skills/* route (or /v1/agents
+# for scope resolution) over server_client — same posture as _AGENT_TOOLS.
+# OPT-IN: registered only for agents that list them in ``tools.builtins``.
+_SKILL_ACQ_TOOLS = frozenset(
+    {
+        "sys_skill_search",
+        "sys_skill_sources",
+        "sys_skill_installed",
+        "sys_skill_resolve_targets",
+        "sys_skill_stage_preview",
+        "sys_skill_apply",
+        "sys_skill_remove",
+    }
+)
+
 # Builtin tools the claude-native / codex-native relay advertises to the
 # real CLI, beyond the always-relayed ``sys_os_*`` family. Native harnesses
 # ignore the harness ``tools`` list, so the relay is their ONLY tool
@@ -499,6 +520,7 @@ _ALL_LOCAL_TOOLS = (
     | _COMMENT_TOOLS
     | _AGENT_TOOLS
     | _POLICY_TOOLS
+    | _SKILL_ACQ_TOOLS
 )
 _PLACEHOLDER_CWDS = (None, "", ".", "./")
 
@@ -3127,6 +3149,181 @@ def _project_agent_list(
     }
 
 
+# ── Skill-acquisition dispatch (sys_skill_*, BDP-2487) ──────────────
+
+
+def _skill_scope_matches(agent: dict[str, Any], scope: str) -> bool:
+    """
+    Whether *agent* falls within a scope phrase (mirrors skills_mcp).
+
+    Scope grammar: ``organization`` (all non-workflow agents),
+    ``department:<name>``, ``employee:<id-or-name>``, or a bare agent id /
+    display name. Workflow/orchestrator agents are excluded from
+    ``organization`` / ``department`` by default.
+
+    :param agent: One row from ``GET /v1/agents``.
+    :param scope: The scope phrase to match against.
+    :returns: ``True`` when the agent is in scope.
+    """
+    if agent.get("workflow") is True and scope.startswith(("organization", "department")):
+        return False
+    if scope == "organization":
+        return True
+    if scope.startswith("department:"):
+        want = scope[len("department:") :].strip().lower()
+        return str(agent.get("department") or "").strip().lower() == want
+    target = scope[len("employee:") :] if scope.startswith("employee:") else scope
+    target = target.strip().lower()
+    return target in (
+        str(agent.get("id") or "").lower(),
+        str(agent.get("display_name") or "").lower(),
+    )
+
+
+def _skill_body(resp: httpx.Response) -> dict[str, Any]:
+    """
+    Decode a skills-route JSON body, raising on a non-2xx with the detail.
+
+    :param resp: The httpx response from a ``/v1/skills/*`` or ``/v1/agents``
+        call.
+    :returns: The decoded JSON object.
+    :raises RuntimeError: on a non-2xx status, carrying the server detail.
+    """
+    if not (200 <= resp.status_code < 300):
+        try:
+            payload = resp.json()
+        except ValueError:
+            payload = None
+        detail = payload.get("detail") if isinstance(payload, dict) else resp.text[:200]
+        raise RuntimeError(f"server returned {resp.status_code}: {detail}")
+    return resp.json()
+
+
+async def _execute_skill_acq_tool(
+    tool_name: str,
+    args: dict[str, Any],
+    server_client: httpx.AsyncClient | None,
+) -> str:
+    """
+    Runner-local handler for the ``sys_skill_*`` family (BDP-2487).
+
+    Each tool proxies one of the Omnigent server's existing ``/v1/skills/*``
+    routes (or ``/v1/agents`` for scope resolution) over ``server_client``,
+    which carries the runner tunnel token so the ``require_user`` mutating
+    routes (previews / apply) resolve the session owner and pass — the same
+    posture as :func:`_execute_agent_tool`. Reuses the request shapes and
+    response-unwrapping of ``bytedesk_omnigent.skills_mcp``.
+
+    :param tool_name: One of the seven ``sys_skill_*`` names.
+    :param args: Parsed tool arguments from the LLM.
+    :param server_client: HTTP client pointed at the Omnigent server; ``None``
+        returns a JSON error object.
+    :returns: Tool output JSON string.
+    """
+    if server_client is None:
+        return json.dumps({"error": f"{tool_name} requires server access"})
+    try:
+        if tool_name == "sys_skill_search":
+            body: dict[str, Any] = {"query": args.get("query"), "limit": args.get("limit", 20)}
+            if args.get("sources") is not None:
+                body["sources"] = args["sources"]
+            resp = await server_client.post("/v1/skills/search", json=body, timeout=60.0)
+            out = _skill_body(resp)
+            return json.dumps({"results": out.get("data", []), "errors": out.get("errors", [])})
+
+        if tool_name == "sys_skill_sources":
+            out = _skill_body(await server_client.get("/v1/skills/sources", timeout=60.0))
+            return json.dumps({"sources": out.get("data", [])})
+
+        if tool_name == "sys_skill_installed":
+            agent_id = args.get("agent_id")
+            params = {"agent_id": agent_id} if agent_id else None
+            out = _skill_body(
+                await server_client.get("/v1/skills/installed", params=params, timeout=60.0)
+            )
+            return json.dumps({"installed": out.get("data", [])})
+
+        if tool_name == "sys_skill_resolve_targets":
+            scope = args.get("scope")
+            if not isinstance(scope, str) or not scope:
+                return json.dumps({"error": "sys_skill_resolve_targets requires a 'scope' string"})
+            out = _skill_body(
+                await server_client.get(
+                    "/v1/agents", params={"limit": 1000, "order": "asc"}, timeout=60.0
+                )
+            )
+            targets = [
+                {
+                    "id": a.get("id"),
+                    "display_name": a.get("display_name"),
+                    "department": a.get("department"),
+                }
+                for a in out.get("data", [])
+                if _skill_scope_matches(a, scope)
+            ]
+            return json.dumps({"targets": targets})
+
+        if tool_name == "sys_skill_stage_preview":
+            preview_body = {
+                "operation": "install",
+                "target_agent_ids": args.get("target_agent_ids", []),
+                "install_mode": args.get("install_mode", "skip_existing"),
+                "source": args.get("source"),
+                "source_ref": args.get("source_ref"),
+            }
+            out = _skill_body(
+                await server_client.post("/v1/skills/previews", json=preview_body, timeout=60.0)
+            )
+            return json.dumps(
+                {
+                    "preview_id": out.get("id"),
+                    "skills": out.get("skills", []),
+                    "target_actions": out.get("target_actions", []),
+                }
+            )
+
+        if tool_name == "sys_skill_apply":
+            preview_id = args.get("preview_id")
+            if not isinstance(preview_id, str) or not preview_id:
+                return json.dumps({"error": "sys_skill_apply requires a 'preview_id' string"})
+            apply_body: dict[str, Any] = {}
+            if args.get("agent_ids") is not None:
+                apply_body["target_agent_ids"] = args["agent_ids"]
+            out = _skill_body(
+                await server_client.post(
+                    f"/v1/skills/previews/{preview_id}/apply", json=apply_body, timeout=60.0
+                )
+            )
+            return json.dumps({"results": out.get("data", [])})
+
+        # sys_skill_remove: stage a remove preview, then apply it.
+        skill_name = args.get("skill_name")
+        target_agent_ids = args.get("target_agent_ids", [])
+        if not isinstance(skill_name, str) or not skill_name:
+            return json.dumps({"error": "sys_skill_remove requires a 'skill_name' string"})
+        preview = _skill_body(
+            await server_client.post(
+                "/v1/skills/previews",
+                json={
+                    "operation": "remove",
+                    "target_agent_ids": target_agent_ids,
+                    "skill_names": [skill_name],
+                },
+                timeout=60.0,
+            )
+        )
+        out = _skill_body(
+            await server_client.post(
+                f"/v1/skills/previews/{preview.get('id')}/apply",
+                json={"target_agent_ids": target_agent_ids},
+                timeout=60.0,
+            )
+        )
+        return json.dumps({"results": out.get("data", [])})
+    except Exception as exc:  # noqa: BLE001
+        return json.dumps({"error": f"{tool_name} failed: {exc}"})
+
+
 async def _session_list_via_rest(
     conversation_id: str,
     server_client: httpx.AsyncClient,
@@ -3986,6 +4183,12 @@ async def execute_tool(
                 arguments,
                 conversation_id=conversation_id,
                 server_client=server_client,
+            )
+        elif tool_name in _SKILL_ACQ_TOOLS:
+            output = await _execute_skill_acq_tool(
+                tool_name,
+                args,
+                server_client,
             )
         elif _is_spec_builtin_tool(tool_name, agent_spec):
             output = await _execute_spec_builtin_tool(
