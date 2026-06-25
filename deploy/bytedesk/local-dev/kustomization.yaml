@@ -1,4 +1,4 @@
-# ByteDesk Omnigent — LOCAL-DEV overlay (source-mounted, no image builds).
+# ByteDesk Omnigent — LOCAL-DEV overlay (source-mounted, prebuilt dependency image).
 #
 # WHY: omnigent installs editable (`uv pip install -e .`) with the venv's
 # PEP-660 finder mapping `omnigent -> /build/omnigent` by absolute path
@@ -10,10 +10,11 @@
 # seeding, routes) need a `kubectl rollout restart deploy/omnigent-server`
 # (seconds), never an image rebuild.
 #
-# Images are PRODUCTION-ONLY: prod (deploy/bytedesk/fleet/production, a
-# separate overlay over ../../k8s) builds + ships the Harbor image via
-# TeamCity/Fleet. This overlay is a SIBLING of k8s/ (like fleet/), never on
-# the prod base path, so it is never reconciled to prod.
+# Local-dev uses ByteDesk-built dependency bases:
+# localhost:32000/bytedesk-omnigent-server:local and
+# localhost:32000/bytedesk-omnigent-host:local. They bake the venv plus system
+# tools, so pod starts do not install dependencies. The omnigent PACKAGE still
+# comes from the /build source mount, so code hot-loads without rebuilding.
 #
 # APPLY (local MicroK8s):
 #   microk8s kubectl apply -k deploy/bytedesk/local-dev/
@@ -28,9 +29,7 @@
 # a FILE WATCHER, not a dev server (no `npm run dev`), so the single
 # omnigent.bytedesk.localhost origin is preserved.
 #
-# We pin to the public ghcr images (they carry the venv + system tools +
-# baked CLIs); the omnigent PACKAGE comes from the mount, so the image tag
-# only provides dependencies, not our code.
+# Rebuild/push the local base images only when image dependencies change.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: bytedesk
@@ -38,14 +37,6 @@ resources:
   - ../k8s
   # Local-only ingress: http://omnigent.bytedesk.localhost -> omnigent-server.
   - omnigent-ingress.yaml
-
-images:
-  - name: localhost:32000/bytedesk-omnigent-server
-    newName: ghcr.io/omnigent-ai/omnigent-server
-    newTag: latest
-  - name: localhost:32000/bytedesk-omnigent-host
-    newName: ghcr.io/omnigent-ai/omnigent-host
-    newTag: latest
 
 patches:
   # Source-mount the repo at /build (the editable-install import root) on the
@@ -84,7 +75,6 @@ patches:
                   - sh
                   - -c
                   - |
-                    pip install -q 'nats-py>=2.7' && \
                     exec python /build/deploy/docker/entrypoint.py
                 env:
                   # hostPath bind mounts don't always deliver inotify events into

@@ -6,19 +6,21 @@
 # NOT execute agent harnesses — runners run on the user's local machine
 # and dial in via WS /v1/runner/tunnel.
 #
-# As a consequence: no tmux, no git, no harness SDK runtime
-# requirements in the final image. The omnigent package is still
-# installed in full (its pyproject pulls claude-agent-sdk +
-# openai-agents transitively), so the bits are on disk; they are
-# simply never imported because HarnessProcessManager is never
-# invoked in this deployment mode.
+# As a consequence: no tmux and no harness SDK runtime requirements
+# in the final image. It does include the small acquisition-tool set
+# used by the server-side Skills UI: Node/npm/npx for skills/npm
+# adapters and gh for GitHub archive downloads. The omnigent package is
+# still installed in full (its pyproject pulls claude-agent-sdk +
+# openai-agents transitively), so the bits are on disk; they are simply
+# never imported because HarnessProcessManager is never invoked in this
+# deployment mode.
 #
 # The `host` target is the inverse: a prebaked Omnigent HOST image for
 # remote sandboxes (e.g. `omnigent sandbox create --provider modal`)
 # and server-launched managed hosts. It bakes the full omnigent
 # install plus the tools a host needs at runtime — git (workspaces /
 # worktrees), tmux (terminal sessions spawned by native harnesses),
-# and the coding-harness CLIs (claude / codex / pi, via Node) — and
+# and the coding-harness CLIs (claude / codex / pi / grok, via Node) — and
 # skips everything server-only: no SPA bundle, no psycopg, no
 # uvicorn entrypoint. Modal's `Image.from_registry` requirements shape
 # it: built for linux/amd64, `python` + `pip` on $PATH, and CMD-only
@@ -208,6 +210,7 @@ RUN npm install -g --no-audit --no-fund \
       @anthropic-ai/claude-code \
       @openai/codex \
       @earendil-works/pi-coding-agent \
+      @xai-official/grok \
  && npm cache clean --force
 
 # Preserve /build/ — the venv's editable install .pth files reference
@@ -238,11 +241,16 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}"
 
-# curl + ca-certificates only — for the HEALTHCHECK and for outbound
-# HTTPS to LLM gateways / external services.
+# curl + ca-certificates for the HEALTHCHECK/outbound HTTPS; gh plus
+# Node/npm/npx for server-side skill search/install source adapters.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates \
+ && apt-get install -y --no-install-recommends curl ca-certificates gh \
  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
+COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
+RUN ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+ && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
 
 # Preserve /build/ in the runtime stage — the venv's editable install
 # .pth files reference /build/omnigent and /build/sdks/* by absolute

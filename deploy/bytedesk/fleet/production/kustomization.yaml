@@ -56,6 +56,19 @@ patches:
             secretsScope:
               envSlug: production
   - target:
+      kind: InfisicalSecret
+      name: omnigent-github-token
+    patch: |
+      apiVersion: secrets.infisical.com/v1alpha1
+      kind: InfisicalSecret
+      metadata:
+        name: omnigent-github-token
+      spec:
+        authentication:
+          universalAuth:
+            secretsScope:
+              envSlug: production
+  - target:
       kind: Deployment
       name: omnigent-server
     patch: |
@@ -71,6 +84,9 @@ patches:
             containers:
               - name: server
                 imagePullPolicy: Always
+                env:
+                  - name: OMNIGENT_INFISICAL_ENV
+                    value: production
   - target:
       kind: Deployment
       name: github-mcp

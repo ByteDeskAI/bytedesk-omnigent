@@ -80,6 +80,18 @@ spec:
             - secretRef:
                 name: agentic-inbox-config-secrets
                 optional: true
+            # InfisicalBackend (BDP-2303) bootstrap creds. The Skills GitHub
+            # adapter resolves GITHUB_TOKEN through Omnigent's secret backend
+            # and passes it only to gh's isolated command environment.
+            - secretRef:
+                name: omnigent-infisical-secrets
+                optional: true
+            # System GitHub token for server-side Skills GitHub acquisition.
+            # Infisical operator maps bytedesk-development / GITHUB_TOKEN into
+            # GITHUB_TOKEN for gh only.
+            - secretRef:
+                name: omnigent-github-token-secrets
+                optional: true
           env:
             - name: HOST
               value: "0.0.0.0"
@@ -137,6 +149,17 @@ spec:
             # only in github-mcp; agent images and runners receive this URL.
             - name: GITHUB_MCP_URL
               value: http://github-mcp.bytedesk.svc.cluster.local/mcp
+            # Extension + InfisicalBackend config for server-side integrations
+            # such as Skills GitHub acquisition. Entry points cover production
+            # images; the env keeps source-mounted localDev pods aligned.
+            - name: OMNIGENT_EXTENSIONS
+              value: bytedesk_omnigent.extension:BytedeskExtension
+            - name: INFISICAL_HOST_URL
+              value: https://infisical.prod.bytedesk.ai
+            - name: OMNIGENT_INFISICAL_PROJECT_SLUG
+              value: bytedesk-agent-configuration
+            - name: OMNIGENT_INFISICAL_ENV
+              value: development
             - name: OMNIGENT_MCP_CLIENT_SECRET
               valueFrom:
                 secretKeyRef:
