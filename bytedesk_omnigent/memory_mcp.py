@@ -14,11 +14,15 @@ One store, two write modes, one search:
 * ``search`` — semantic + keyword search spanning **both** (kind = all / ambient
   / addressable).
 
-Owner is stamped server-side from the scope/address (never the model — the
-anti-spoof invariant). ``agent``-private scope/addresses fail closed pending
-per-agent identity on MCP egress (BDP-2458). The model sees ``memory__search`` /
-``memory__get`` / ``memory__put`` / ``memory__append`` / ``memory__list`` /
-``memory__unset``.
+Owner is stamped server-side from the VERIFIED caller identity (never the model —
+the anti-spoof invariant). Three tiers (BDP-2458): ``org:*`` every agent;
+``dept:<id>:*`` members of that department only; ``agent:*`` private to the
+caller. Memory tools are executed server-side at the ``tools/call`` choke point
+(``_handle_mcp_tools_call``), where the caller's verified ``agent_id`` + department
+are known — this stdio front advertises the tool schemas; it does not carry the
+identity, so the per-call route below is a legacy/fallback path. The model sees
+``memory__search`` / ``memory__get`` / ``memory__put`` / ``memory__append`` /
+``memory__list`` / ``memory__unset``.
 
 Base URL: ``OMNIGENT_SELF_BASE_URL`` → ``OMNIGENT_SERVER_URL`` (the host pod
 carries it) → the in-cluster default.
@@ -73,9 +77,10 @@ def search(
     you don't repeat or contradict what a teammate already recorded.
 
     kind: 'all' (default) / 'ambient' / 'addressable'. scope/name conventions:
-    org-wide = scope='team', name='org-context' (default); department =
-    scope='topic', name='dept:<id>'; initiative = scope='topic',
-    name='initiative:<id>'. (scope='agent' private memory is currently disabled.)
+    org-wide = scope='team', name='org-context' (default, every agent); a
+    department = scope='topic', name='dept:<id>' (only members of <id> see it);
+    initiative = scope='topic', name='initiative:<id>'; your OWN private memory =
+    scope='agent' (only you can read it).
     """
     return _post(
         "recall", {"query": query, "scope": scope, "name": name, "kind": kind, "limit": limit}
@@ -91,8 +96,9 @@ def append(
     other agents should know, save it so the whole org sees it (find it later with
     `search`). For a stable named fact you'll look up by address, use `put` instead.
 
-    scope/name: org-wide = scope='team', name='org-context' (default); department =
-    scope='topic', name='dept:<id>'; initiative = scope='topic', name='initiative:<id>'.
+    scope/name: org-wide = scope='team', name='org-context' (default, every agent);
+    department = scope='topic', name='dept:<id>' (members of <id> only); initiative =
+    scope='topic', name='initiative:<id>'; private to you = scope='agent'.
     """
     return _post("append", {"content": content, "scope": scope, "name": name, "weight": weight})
 
@@ -106,10 +112,12 @@ def put(
     source_conversation_id: str | None = None,
 ) -> dict:
     """Write a durable ADDRESSABLE slot at an exact address (e.g. 'org:charter',
-    'dept:engineering:oncall'). OVERWRITES any current value (one per address),
-    never decays, retrieved exactly by `get` and also found by `search`. Use for
-    stable, prompt-referenced facts (charter, this-week focus, an oncall rota).
-    Address grammar: 'org:<key>' or 'dept:<dept>:<key>'."""
+    'dept:engineering:oncall', 'agent:scratchpad'). OVERWRITES any current value
+    (one per address), never decays, retrieved exactly by `get` and also found by
+    `search`. Use for stable, prompt-referenced facts (charter, this-week focus, an
+    oncall rota, a private note). Address grammar + who can read it: 'org:<key>' =
+    every agent; 'dept:<dept>:<key>' = only members of that department; 'agent:<key>'
+    = private to you (no other agent can read it)."""
     return _post(
         "put",
         {
@@ -124,17 +132,18 @@ def put(
 
 @mcp.tool()
 def get(address: str) -> dict:
-    """Read the durable value at an exact ADDRESS (e.g. 'org:charter'). Deterministic
-    — always THIS slot, no fuzzy match, no decay. Use when your instructions
-    reference a known address. Returns {"found": false} if the slot was never set."""
+    """Read the durable value at an exact ADDRESS (e.g. 'org:charter',
+    'dept:engineering:oncall', 'agent:scratchpad'). Deterministic — always THIS slot,
+    no fuzzy match, no decay. You may read org (any agent), your own department, and
+    your own private 'agent:<key>' slots. Returns {"found": false} if unset."""
     return _post("get", {"address": address})
 
 
 @mcp.tool(name="list")
 def list_slots(prefix: str = "org") -> dict:
-    """List the addressable slots under a prefix ('org' or 'dept:<id>') WITHOUT a
-    query — browse what's stored, newest first. The fuzzy, meaning-based counterpart
-    is `search`."""
+    """List the addressable slots under a prefix ('org', 'dept:<id>', or 'agent' for
+    your own private slots) WITHOUT a query — browse what's stored, newest first. The
+    fuzzy, meaning-based counterpart is `search`."""
     return _post("list", {"prefix": prefix})
 
 

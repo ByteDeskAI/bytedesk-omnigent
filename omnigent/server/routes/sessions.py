@@ -11805,6 +11805,45 @@ async def _handle_mcp_tools_call(
         if call_result.data is not None:
             arguments = call_result.data
 
+    # ── BDP-2458: three-tier keyed memory tools execute SERVER-SIDE ──────────
+    # memory__* tools are served by the omnigent server itself: it owns the
+    # memory store AND the verified caller identity (conv.agent_id + the bundle's
+    # department). The stdio memory front is a single subprocess shared across
+    # agents with no per-call identity channel, so it cannot carry a trustworthy
+    # per-agent identity (the BDP-2458 blocker); handling memory here stamps the
+    # owner from the verified identity (anti-spoof). TOOL_CALL policy already ran
+    # above; TOOL_RESULT runs below, identical to a runner-dispatched tool.
+    from bytedesk_omnigent.memory_tool_intercept import (
+        execute_memory_tool,
+        is_memory_tool,
+    )
+
+    if is_memory_tool(namespaced_name):
+        _caller_dept = (spec.params or {}).get("department")
+        _caller_dept = str(_caller_dept) if _caller_dept else None
+        output = await asyncio.to_thread(
+            execute_memory_tool,
+            namespaced_name,
+            arguments,
+            caller_agent_id=conv.agent_id,
+            caller_department=_caller_dept,
+        )
+        result_ctx = EvaluationContext(
+            phase=Phase.TOOL_RESULT,
+            content={"result": output},
+            tool_name=namespaced_name,
+            request_data={"name": namespaced_name, "arguments": arguments},
+            actor=actor,
+        )
+        result_policy = await engine.evaluate(result_ctx)
+        if result_policy.set_labels:
+            await asyncio.to_thread(engine.apply_label_writes, result_policy.set_labels)
+        if result_policy.action == PolicyAction.DENY:
+            output = f"[Result suppressed by policy: {result_policy.reason or 'no reason given'}]"
+        elif isinstance(result_policy.data, str):
+            output = result_policy.data
+        return _mcp_ok_response(rpc_id, {"content": [{"type": "text", "text": output}]})
+
     # ── Execute on the runner via WS tunnel ──────────────────────────
     # The runner owns stdio subprocess spawning (correct machine, cwd,
     # and env). We call its /mcp/execute endpoint through the same WS
