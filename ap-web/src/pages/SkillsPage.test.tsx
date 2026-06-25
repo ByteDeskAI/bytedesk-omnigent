@@ -9,6 +9,14 @@ vi.mock("@/hooks/useAvailableAgents", () => ({ useAvailableAgents: vi.fn() }));
 vi.mock("@/hooks/useSkills", () => ({
   useInstalledSkills: vi.fn(),
   useSkillSources: vi.fn(),
+  useSkillMarketplaces: vi.fn(),
+  useSkillRecommendations: vi.fn(),
+  useStartSkillsConciergeSession: vi.fn(),
+}));
+vi.mock("@/store/chatStore", () => ({
+  useChatStore: Object.assign(vi.fn(() => ({})), {
+    getState: () => ({ switchTo: vi.fn() }),
+  }),
 }));
 // The embedded chat atoms subscribe to the module-level chatStore; stub
 // them so the page test stays a focused structural render.
@@ -59,6 +67,17 @@ beforeEach(() => {
     data: EMPLOYEES,
     isLoading: false,
   } as never);
+  vi.mocked(skillsHooks.useStartSkillsConciergeSession).mockReturnValue({
+    mutateAsync: vi.fn(),
+  } as never);
+  vi.mocked(skillsHooks.useSkillMarketplaces).mockReturnValue({
+    data: [{ id: "github:ByteDeskAI-bytedesk-marketplace", label: "ByteDesk Catalog", source_id: "github_marketplace", kind: "github_catalog", description: null, default: true, repo: "ByteDeskAI/bytedesk-marketplace" }],
+    isLoading: false,
+  } as never);
+  vi.mocked(skillsHooks.useSkillRecommendations).mockReturnValue({
+    data: [{ name: "platform-dev", source: "github_marketplace", source_ref: "ByteDeskAI/bytedesk-marketplace@platform-dev", reason: "Suggested" }],
+    isLoading: false,
+  } as never);
   vi.mocked(skillsHooks.useInstalledSkills).mockReturnValue({
     data: [
       {
@@ -87,6 +106,9 @@ describe("SkillsPage", () => {
     expect(screen.getByRole("button", { name: /Operations/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Engineering/ })).toBeInTheDocument();
     expect(screen.getByTestId("agent-conversation")).toBeInTheDocument();
+    expect(screen.getByText("ByteDesk Catalog")).toBeInTheDocument();
+    expect(screen.getByText("platform-dev")).toBeInTheDocument();
+    expect(screen.getByText("Installed Skills")).toBeInTheDocument();
     expect(screen.getByText("deep-search")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Close skills/ })).toBeInTheDocument();
   });
