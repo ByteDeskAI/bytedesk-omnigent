@@ -49,6 +49,70 @@ def test_emit_presence_noop_when_tenant_unset(monkeypatch):
     assert calls == []
 
 
+def test_emit_goal_change_publishes_when_tenant_set(monkeypatch):
+    monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "tenant-abc")
+    calls = _capture(monkeypatch)
+    bridge.emit_goal_change(
+        {
+            "type": "goal.changed",
+            "change": "created",
+            "goalId": "goal_1",
+            "status": "open",
+            "activationState": "ready",
+            "readinessKind": "immediate",
+            "targetKind": "organization",
+            "targetId": "omnigent",
+            "targetLabel": "Organization",
+            "ownerAgentId": None,
+            "priority": 3,
+            "updatedAt": 100,
+            "occurredAt": 101,
+        }
+    )
+    assert calls == [
+        (
+            "office:goals:tenant-abc",
+            {
+                "type": "goal.changed",
+                "change": "created",
+                "goalId": "goal_1",
+                "status": "open",
+                "activationState": "ready",
+                "readinessKind": "immediate",
+                "targetKind": "organization",
+                "targetId": "omnigent",
+                "targetLabel": "Organization",
+                "ownerAgentId": None,
+                "priority": 3,
+                "updatedAt": 100,
+                "occurredAt": 101,
+            },
+        )
+    ]
+
+
+def test_emit_goal_change_noop_when_tenant_unset(monkeypatch):
+    monkeypatch.delenv("BYTEDESK_REALTIME_TENANT_ID", raising=False)
+    calls = _capture(monkeypatch)
+    bridge.emit_goal_change(
+        {
+            "change": "updated",
+            "goalId": "goal_1",
+            "status": "open",
+            "activationState": "ready",
+            "readinessKind": "immediate",
+            "targetKind": "organization",
+            "targetId": "omnigent",
+            "targetLabel": "Organization",
+            "ownerAgentId": None,
+            "priority": 3,
+            "updatedAt": 100,
+            "occurredAt": 101,
+        }
+    )
+    assert calls == []
+
+
 def test_wrap_create_calls_orig_then_emits(monkeypatch):
     monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
     calls = _capture(monkeypatch)

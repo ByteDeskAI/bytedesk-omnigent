@@ -173,6 +173,7 @@ def test_builtin_names_size_matches_registry() -> None:
                 "goal_list",
                 "goal_claim",
                 "goal_advance",
+                "goal_dependency_update",
                 "peer_send",
                 "peer_inbox",
                 "outcome_record",

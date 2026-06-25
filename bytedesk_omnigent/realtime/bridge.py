@@ -26,7 +26,9 @@ from typing import Any
 
 from bytedesk_omnigent.realtime import config
 from bytedesk_omnigent.realtime.channel import (
+    goal_changed,
     office_agents_channel,
+    office_goals_channel,
     presence_changed,
     roster_changed,
 )
@@ -51,6 +53,29 @@ def emit_presence(agent_id: str, status: str) -> None:
     if not tenant:
         return
     publish(office_agents_channel(tenant), presence_changed(agent_id, status))
+
+
+def emit_goal_change(event: dict[str, Any]) -> None:
+    """Publish a goal.changed delta for Omnigent-admin and future Platform consumers."""
+    tenant = config.tenant_id()
+    if not tenant:
+        return
+    payload = goal_changed(
+        change=str(event["change"]),
+        goal_id=str(event["goalId"]),
+        status=str(event["status"]),
+        activation_state=str(event["activationState"]),
+        readiness_kind=str(event["readinessKind"]),
+        target_kind=str(event["targetKind"]),
+        target_id=str(event["targetId"]),
+        target_label=event.get("targetLabel"),
+        owner_agent_id=event.get("ownerAgentId"),
+        priority=int(event["priority"]),
+        updated_at=int(event["updatedAt"]),
+        occurred_at=int(event["occurredAt"]),
+        dependency=event.get("dependency"),
+    )
+    publish(office_goals_channel(tenant), payload)
 
 
 # ── store-method wrappers (factored out so they're unit-testable without a DB) ──
