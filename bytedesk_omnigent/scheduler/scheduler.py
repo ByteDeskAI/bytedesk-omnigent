@@ -49,11 +49,8 @@ class CronTrigger:
 
 # ── Schedule-kind Strategy registry (BDP-2349 #13) ──────────────────────────
 # Each strategy maps ``(schedule_expr, after) -> next_fire | None`` for one
-# schedule_kind. Replaces the closed if/elif so a new cadence (cron/rrule) is a
-# `register_schedule_kind` call, not an edit to this function. `interval` and
-# `once` ship in-tree; `cron`/`rrule` are a clean seam (register a strategy that
-# pulls in croniter when that dependency lands) — deliberately NOT implemented
-# here.
+# schedule_kind. Replaces the closed if/elif so a new cadence (rrule) is a
+# `register_schedule_kind` call, not an edit to this function.
 ScheduleKindStrategy = Callable[[str, int], "int | None"]
 
 
@@ -68,24 +65,17 @@ def _once_strategy(schedule_expr: str, after: int) -> int | None:
     return None
 
 
-def _cron_seam_strategy(schedule_expr: str, after: int) -> int | None:
-    """``cron``: clean seam — cron-expression support requires ``croniter``.
+def _cron_strategy(schedule_expr: str, after: int) -> int | None:
+    """``cron``: compute the next five-field cron occurrence with ``croniter``."""
+    from croniter import croniter
 
-    Raises until a real strategy is registered (via
-    :func:`register_schedule_kind`), preserving the historical ``cron`` behavior
-    instead of silently failing.
-    """
-    del schedule_expr, after
-    raise NotImplementedError(
-        "cron-expression schedules require croniter (not yet a dependency); "
-        "use schedule_kind='interval' for now"
-    )
+    return int(croniter(schedule_expr, after).get_next(float))
 
 
 _SCHEDULE_KIND_STRATEGIES: dict[str, ScheduleKindStrategy] = {
     "interval": _interval_strategy,
     "once": _once_strategy,
-    "cron": _cron_seam_strategy,
+    "cron": _cron_strategy,
 }
 
 
@@ -106,9 +96,7 @@ def compute_next_fire(schedule_kind: str, schedule_expr: str, after: int) -> int
     - ``interval``: ``after + int(schedule_expr)`` (seconds).
     - ``once``: ``None`` — a one-shot trigger has no next fire (it is disabled
       after it fires).
-    - ``cron``/``rrule``: not registered in-tree — register a strategy via
-      :func:`register_schedule_kind` (requires ``croniter`` etc.); use
-      ``interval`` until then.
+    - ``cron``: the next occurrence of a five-field cron expression.
 
     :raises ValueError: if no strategy is registered for *schedule_kind*.
     """
@@ -252,6 +240,38 @@ class SqlAlchemyCronScheduler:
         )
         with self._session() as session:
             return [_to_trigger(r) for r in session.execute(stmt).scalars().all()]
+
+    def list_triggers(
+        self,
+        *,
+        agent_id: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[CronTrigger]:
+        """List registered triggers by next fire time, optionally scoped."""
+        stmt = select(SqlCronTrigger)
+        if agent_id is not None:
+            stmt = stmt.where(SqlCronTrigger.agent_id == agent_id)
+        if enabled is not None:
+            stmt = stmt.where(SqlCronTrigger.enabled.is_(enabled))
+        stmt = stmt.order_by(SqlCronTrigger.next_fire_at, SqlCronTrigger.key)
+        with self._session() as session:
+            return [_to_trigger(r) for r in session.execute(stmt).scalars().all()]
+
+    def get_trigger(self, trigger_id: str) -> CronTrigger | None:
+        """Return one trigger by id, or ``None`` when missing."""
+        with self._session() as session:
+            row = session.get(SqlCronTrigger, trigger_id)
+            return _to_trigger(row) if row is not None else None
+
+    def set_enabled(self, *, trigger_id: str, enabled: bool) -> bool:
+        """Enable or disable a trigger. Returns True iff a row was updated."""
+        with self._write_session() as session:
+            result = session.execute(
+                update(SqlCronTrigger)
+                .where(SqlCronTrigger.id == trigger_id)
+                .values(enabled=enabled, version=SqlCronTrigger.version + 1)
+            )
+            return result.rowcount == 1
 
     def claim_fire(
         self,

@@ -92,6 +92,10 @@ class TaskStore(ABC):
         """Create an ``open``, unassigned task. Lower ``priority`` sorts first."""
 
     @abstractmethod
+    def get_task(self, task_id: str) -> Task | None:
+        """Return one task by id, or ``None`` when missing."""
+
+    @abstractmethod
     def list_tasks(
         self,
         *,
@@ -102,9 +106,7 @@ class TaskStore(ABC):
         """List tasks (by priority then age), optionally filtered."""
 
     @abstractmethod
-    def claim_task(
-        self, *, task_id: str, owner_agent_id: str, now: int | None = None
-    ) -> bool:
+    def claim_task(self, *, task_id: str, owner_agent_id: str, now: int | None = None) -> bool:
         """Atomically assign an ``open`` task to an owner. True iff THIS caller won."""
 
     @abstractmethod
@@ -199,9 +201,13 @@ class SqlAlchemyTaskStore(TaskStore):
         with self._session() as session:
             return [sql_task_to_entity(r) for r in session.execute(stmt).scalars().all()]
 
-    def claim_task(
-        self, *, task_id: str, owner_agent_id: str, now: int | None = None
-    ) -> bool:
+    def get_task(self, task_id: str) -> Task | None:
+        """Return one task by id, or ``None`` when missing."""
+        with self._session() as session:
+            row = session.get(SqlTask, task_id)
+            return sql_task_to_entity(row) if row is not None else None
+
+    def claim_task(self, *, task_id: str, owner_agent_id: str, now: int | None = None) -> bool:
         """Atomically assign an ``open`` task. Returns True if THIS caller claimed it.
 
         Guarded UPDATE on ``(id, status='open')`` — exactly one agent wins (ADR-0009).
@@ -251,9 +257,7 @@ class SqlAlchemyTaskStore(TaskStore):
             if current is not None:
                 _LIFECYCLE.check(WorkflowLifecycleStatus(current.status), target)
             session.execute(
-                update(SqlTask)
-                .where(SqlTask.id == task_id)
-                .values(status=target, updated_at=now)
+                update(SqlTask).where(SqlTask.id == task_id).values(status=target, updated_at=now)
             )
 
     def advance_task_owned(

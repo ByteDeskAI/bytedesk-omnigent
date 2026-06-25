@@ -85,6 +85,10 @@ spec:
               value: "0.0.0.0"
             - name: PORT
               value: "8000"
+            # The cron scheduler re-enters the existing session-create path
+            # through the server's own HTTP API when firing scheduled work.
+            - name: OMNIGENT_SELF_BASE_URL
+              value: http://127.0.0.1:8000
             # Durable, replica-shared agent-bundle storage over NATS JetStream
             # Object Store (BDP-2380, ADR-0148). The entrypoint routes a
             # nats:// location through the pluggable artifact-store factory to

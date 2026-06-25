@@ -129,6 +129,24 @@ def _explicit_owner(task: Task) -> str | None:
     return getattr(task, "owner_agent_id", None)
 
 
+def _canonical_agent_id(value: str) -> str:
+    """Resolve a stored agent slug/name to the stable Omnigent ``ag_...`` id."""
+    if value.startswith("ag_"):
+        return value
+    try:
+        from omnigent.runtime import get_agent_store
+
+        store = get_agent_store()
+        if store.get(value) is not None:
+            return value
+        by_name = store.get_by_name(value)
+        if by_name is not None:
+            return by_name.id
+    except Exception:  # noqa: BLE001 - runtime may be uninitialized in unit tests
+        return value
+    return value
+
+
 def _task_prompt(task: Task) -> str:
     """Derive the seed prompt (the "task as input") for the dispatched session.
 
@@ -155,6 +173,7 @@ def run_task(
     *,
     resolve: TaskAssigneeResolver | None = None,
     initiator: SessionInitiator | None = None,
+    external_key: str | None = None,
 ) -> TaskDispatch:
     """Resolve ``task``'s assignee, then dispatch a session for that agent.
 
@@ -178,13 +197,6 @@ def run_task(
     """
     task_id = _task_id(task)
 
-    resolver = resolve if resolve is not None else get_task_assignee_resolver()
-    if resolver is None:
-        raise TaskDispatchError(
-            f"no task assignee resolver registered — cannot resolve an agent for task {task_id!r}",
-            task_id=task_id,
-        )
-
     session_initiator = initiator if initiator is not None else get_session_initiator()
     if session_initiator is None:
         raise TaskDispatchError(
@@ -194,21 +206,34 @@ def run_task(
 
     # 1. Resolve: explicit owner short-circuits; otherwise the resolver applies
     #    the full owner → capability ∩ department → scoreboard chain (B3).
-    agent_id = _explicit_owner(task) or resolver.resolve(task)
+    agent_id = _explicit_owner(task)
+    if not agent_id:
+        resolver = resolve if resolve is not None else get_task_assignee_resolver()
+        if resolver is None:
+            raise TaskDispatchError(
+                "no task assignee resolver registered — cannot resolve an agent "
+                f"for task {task_id!r}",
+                task_id=task_id,
+            )
+        agent_id = resolver.resolve(task)
     if not agent_id:
         raise TaskDispatchError(
             f"task {task_id!r} resolved to no assignable agent",
             task_id=task_id,
         )
+    agent_id = _canonical_agent_id(agent_id)
 
     # 2. Dispatch: create + start a session for the resolved agent, seeded with
     #    the task as input — the EXISTING spawn/session-create path, untouched.
-    session_id = session_initiator.initiate(
-        agent_id=agent_id,
-        prompt=_task_prompt(task),
-        source=f"task:{task_id}",
-        metadata={"task_id": task_id, "agent_id": agent_id},
-    )
+    initiate_kwargs = {
+        "agent_id": agent_id,
+        "prompt": _task_prompt(task),
+        "source": f"task:{task_id}",
+        "metadata": {"task_id": task_id, "agent_id": agent_id},
+    }
+    if external_key:
+        initiate_kwargs["external_key"] = external_key
+    session_id = session_initiator.initiate(**initiate_kwargs)
     _logger.info(
         "run_task dispatched session %s for task=%s agent=%s",
         session_id,

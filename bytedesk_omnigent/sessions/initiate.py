@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
+from dataclasses import replace
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from bytedesk_omnigent.scheduler.scheduler import CronTrigger
@@ -96,11 +97,41 @@ def build_cron_dispatch(
     """
 
     def _dispatch(trigger: CronTrigger) -> None:
+        external_key = f"cron:{trigger.id}:{trigger.next_fire_at}"
+        if trigger.payload and isinstance(trigger.payload.get("task_id"), str):
+            from bytedesk_omnigent.task_execution import run_task
+            from bytedesk_omnigent.tasks.store import get_task_store
+
+            task_id = trigger.payload["task_id"]
+            task = get_task_store().get_task(task_id)
+            if task is None:
+                _logger.error(
+                    "cron task dispatch skipped missing task=%s trigger=%s",
+                    task_id,
+                    trigger.id,
+                )
+                return
+            run_as = trigger.payload.get("run_as_agent_id") or trigger.agent_id
+            result = run_task(
+                replace(task, owner_agent_id=str(run_as)),
+                initiator=initiator,
+                external_key=external_key,
+            )
+            _logger.info(
+                "cron initiated task session %s for task=%s agent=%s key=%s",
+                result.session_id,
+                result.task_id,
+                result.agent_id,
+                trigger.key,
+            )
+            return
+
         session_id = initiator.initiate(
             agent_id=trigger.agent_id,
             prompt=_trigger_prompt(trigger),
             source=f"cron:{trigger.key}",
             metadata={"trigger_id": trigger.id, "trigger_key": trigger.key},
+            external_key=external_key,
         )
         _logger.info(
             "cron initiated session %s for agent=%s key=%s",
