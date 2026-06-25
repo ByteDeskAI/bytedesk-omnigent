@@ -36,11 +36,11 @@ from typing import Any
 
 import httpx
 
+from bytedesk_omnigent.tools._http_adapter import HttpToolClient
 from omnigent.tools.base import Tool, ToolContext
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_S = 20.0
 _DEFAULT_MAX_RESULTS = 20
 _MAX_MAX_RESULTS = 100
 
@@ -71,7 +71,7 @@ class JiraNotConfiguredError(RuntimeError):
     """Raised internally when one of the three Jira secrets is unset/empty."""
 
 
-class _JiraClient:
+class _JiraClient(HttpToolClient):
     """Internal Adapter over Atlassian Cloud REST v3 (ADR-0008).
 
     Resolves credentials lazily from the secret backend on first use. The httpx
@@ -117,17 +117,6 @@ class _JiraClient:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-
-    def _http(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(base_url=self._base_url, timeout=_TIMEOUT_S)
-        return self._client
-
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        self._require_configured()
-        return self._http().request(
-            method, path, headers=self._headers(), **kwargs
-        )
 
     # ── operations ────────────────────────────────────────────────────────────
 

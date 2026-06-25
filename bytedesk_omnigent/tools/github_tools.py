@@ -40,11 +40,11 @@ from typing import Any
 
 import httpx
 
+from bytedesk_omnigent.tools._http_adapter import HttpToolClient, first_secret
 from omnigent.tools.base import Tool, ToolContext
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_S = 20.0
 _BASE_URL = "https://api.github.com"
 _DEFAULT_PER_PAGE = 30
 _DEFAULT_FILE_PER_PAGE = 100
@@ -57,17 +57,6 @@ _SECRET_TOKEN = ("GITHUB_TOKEN", "BYTEDESK_GITHUB_TOKEN")
 _SECRET_REPO = "GITHUB_REPO"
 
 
-def _first_secret(names: tuple[str, ...]) -> str:
-    """Return the first non-empty secret value among ``names`` (or empty string)."""
-    from omnigent.onboarding.secrets import load_secret
-
-    for name in names:
-        value = (load_secret(name) or "").strip()
-        if value:
-            return value
-    return ""
-
-
 class GitHubNotConfiguredError(RuntimeError):
     """Raised internally when no GitHub token is set/empty."""
 
@@ -76,7 +65,7 @@ class GitHubRepoNotConfiguredError(RuntimeError):
     """Raised internally when an op needs a repo but none is supplied/configured."""
 
 
-class _GitHubClient:
+class _GitHubClient(HttpToolClient):
     """Internal Adapter over the GitHub REST v3 API (ADR-0008).
 
     Resolves credentials lazily from the secret backend on first use. The httpx
@@ -100,7 +89,7 @@ class _GitHubClient:
     def _resolve_credentials(self) -> None:
         if self._resolved:
             return
-        self._token = _first_secret(_SECRET_TOKEN)
+        self._token = first_secret(_SECRET_TOKEN)
         if self._default_repo is None:
             from omnigent.onboarding.secrets import load_secret
 
@@ -125,15 +114,6 @@ class _GitHubClient:
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
         }
-
-    def _http(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(base_url=self._base_url, timeout=_TIMEOUT_S)
-        return self._client
-
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        self._require_configured()
-        return self._http().request(method, path, headers=self._headers(), **kwargs)
 
     def _get_json(self, path: str, **kwargs: Any) -> Any:
         resp = self._request("GET", path, **kwargs)

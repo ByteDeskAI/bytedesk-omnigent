@@ -41,11 +41,11 @@ from typing import Any
 
 import httpx
 
+from bytedesk_omnigent.tools._http_adapter import HttpToolClient, first_secret
 from omnigent.tools.base import Tool, ToolContext
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_S = 20.0
 _DEFAULT_LIMIT = 20
 _MAX_LIMIT = 250
 
@@ -69,22 +69,11 @@ def _storage_body(text: str) -> str:
     return f"<p>{value}</p>"
 
 
-def _first_secret(names: tuple[str, ...]) -> str:
-    """Return the first non-empty secret value among ``names`` (or empty string)."""
-    from omnigent.onboarding.secrets import load_secret
-
-    for name in names:
-        value = (load_secret(name) or "").strip()
-        if value:
-            return value
-    return ""
-
-
 class ConfluenceNotConfiguredError(RuntimeError):
     """Raised internally when one of the three Confluence secrets is unset/empty."""
 
 
-class _ConfluenceClient:
+class _ConfluenceClient(HttpToolClient):
     """Internal Adapter over the Confluence Cloud REST API (ADR-0008).
 
     Resolves credentials lazily from the secret backend on first use. The httpx
@@ -109,14 +98,14 @@ class _ConfluenceClient:
     def _resolve_credentials(self) -> None:
         if self._resolved:
             return
-        base = _first_secret(_SECRET_BASE_URL).rstrip("/")
+        base = first_secret(_SECRET_BASE_URL).rstrip("/")
         # The site root may be supplied with a trailing /wiki; strip it so the
         # adapter's own /wiki/... paths compose cleanly.
         if base.endswith("/wiki"):
             base = base[: -len("/wiki")]
         self._base_url = base.rstrip("/")
-        self._email = _first_secret(_SECRET_EMAIL)
-        self._api_token = _first_secret(_SECRET_API_TOKEN)
+        self._email = first_secret(_SECRET_EMAIL)
+        self._api_token = first_secret(_SECRET_API_TOKEN)
         self._resolved = True
 
     def _require_configured(self) -> None:
@@ -134,15 +123,6 @@ class _ConfluenceClient:
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
-
-    def _http(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(base_url=self._base_url, timeout=_TIMEOUT_S)
-        return self._client
-
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        self._require_configured()
-        return self._http().request(method, path, headers=self._headers(), **kwargs)
 
     # ── operations ────────────────────────────────────────────────────────────
 

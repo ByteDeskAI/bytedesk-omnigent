@@ -45,11 +45,11 @@ from typing import Any
 
 import httpx
 
+from bytedesk_omnigent.tools._http_adapter import HttpToolClient, first_secret
 from omnigent.tools.base import Tool, ToolContext
 
 logger = logging.getLogger(__name__)
 
-_TIMEOUT_S = 20.0
 _BASE_URL = "https://slack.com/api"
 _DEFAULT_HISTORY_LIMIT = 50
 _DEFAULT_LIST_LIMIT = 100
@@ -62,17 +62,6 @@ _SECRET_TOKEN = ("SLACK_BOT_TOKEN", "BYTEDESK_SLACK_TOKEN")
 _SECRET_DEFAULT_CHANNEL = "SLACK_DEFAULT_CHANNEL"
 
 
-def _first_secret(names: tuple[str, ...]) -> str:
-    """Return the first non-empty secret value among ``names`` (or empty string)."""
-    from omnigent.onboarding.secrets import load_secret
-
-    for name in names:
-        value = (load_secret(name) or "").strip()
-        if value:
-            return value
-    return ""
-
-
 class SlackNotConfiguredError(RuntimeError):
     """Raised internally when no Slack token is set/empty."""
 
@@ -81,7 +70,7 @@ class SlackChannelNotConfiguredError(RuntimeError):
     """Raised internally when an op needs a channel but none is supplied/configured."""
 
 
-class _SlackClient:
+class _SlackClient(HttpToolClient):
     """Internal Adapter over the Slack Web API (ADR-0008).
 
     Resolves credentials lazily from the secret backend on first use. The httpx
@@ -105,7 +94,7 @@ class _SlackClient:
     def _resolve_credentials(self) -> None:
         if self._resolved:
             return
-        self._token = _first_secret(_SECRET_TOKEN)
+        self._token = first_secret(_SECRET_TOKEN)
         if self._default_channel is None:
             from omnigent.onboarding.secrets import load_secret
 
@@ -126,28 +115,23 @@ class _SlackClient:
             raise SlackChannelNotConfiguredError(_SECRET_DEFAULT_CHANNEL)
         return target
 
-    def _headers(self, *, json_body: bool) -> dict[str, str]:
+    def _auth_headers(self, *, json_body: bool) -> dict[str, str]:
         headers = {"Authorization": f"Bearer {self._token}"}
         if json_body:
             headers["Content-Type"] = "application/json; charset=utf-8"
         return headers
 
-    def _http(self) -> httpx.Client:
-        if self._client is None:
-            self._client = httpx.Client(base_url=self._base_url, timeout=_TIMEOUT_S)
-        return self._client
-
     def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         self._require_configured()
         resp = self._http().request(
-            "GET", path, headers=self._headers(json_body=False), params=params
+            "GET", path, headers=self._auth_headers(json_body=False), params=params
         )
         return self._envelope(resp)
 
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         self._require_configured()
         resp = self._http().request(
-            "POST", path, headers=self._headers(json_body=True), json=body
+            "POST", path, headers=self._auth_headers(json_body=True), json=body
         )
         return self._envelope(resp)
 
