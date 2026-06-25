@@ -1,4 +1,4 @@
-# Codex OAuth credential for the omnigent host pool.
+# Codex OAuth credential for bootstrapping the omnigent host.
 #
 # Omnigent's codex harness uses the codex CLI's SUBSCRIPTION auth (it strips
 # OPENAI_API_KEY to force this). The credential is the file `codex login` writes
@@ -13,8 +13,12 @@
 # (Run `codex login` first if you don't have ~/.codex/auth.json. Same Codex/ChatGPT
 # subscription account OpenClaw uses: ryan.helms@bytedesk.ai.)
 #
-# The host stages this into a WRITABLE ~/.codex so the codex CLI can refresh the
-# token in place. gitignored: codex-auth.yaml. In PROD: Infisical/SOPS-reconciled.
+# The host copies this only when its persistent ~/.codex/auth.json is missing.
+# After bootstrap, ~/.codex/auth.json on the host home PVC is the source of truth
+# because Codex refreshes tokens in place. Do not use one auth.json Secret to
+# run multiple Codex hosts; scale with per-host auth sources or an enterprise
+# Codex access-token flow. gitignored: codex-auth.yaml. In PROD:
+# Infisical/SOPS-reconciled.
 apiVersion: v1
 kind: Secret
 metadata:
