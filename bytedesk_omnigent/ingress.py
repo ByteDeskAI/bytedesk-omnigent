@@ -155,6 +155,25 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class BitbucketWebhookAdapter:
+    """Bitbucket Cloud adapter: HMAC-SHA256 plus the Bitbucket event key.
+
+    Bitbucket signs webhook bodies with ``X-Hub-Signature`` (commonly
+    ``sha256=<hex>``, though a bare digest is accepted here for parity with the
+    default adapter) and carries the routeable event name in ``X-Event-Key``
+    (for example ``repo:push`` or ``pullrequest:fulfilled``).
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-hub-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return _header(headers, "x-event-key") or "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -179,6 +198,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("bitbucket", BitbucketWebhookAdapter)
     return registry
 
 
