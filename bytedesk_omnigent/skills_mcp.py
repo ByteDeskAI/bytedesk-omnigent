@@ -153,6 +153,7 @@ def _scope_matches(agent: dict[str, Any], scope: str) -> bool:
     target = target.strip().lower()
     return target in (
         str(agent.get("id") or "").lower(),
+        str(agent.get("name") or "").lower(),
         str(agent.get("display_name") or "").lower(),
     )
 

@@ -3174,8 +3174,12 @@ def _skill_scope_matches(agent: dict[str, Any], scope: str) -> bool:
         return str(agent.get("department") or "").strip().lower() == want
     target = scope[len("employee:") :] if scope.startswith("employee:") else scope
     target = target.strip().lower()
+    # Match the generated id, the stable `name` slug, OR the display name — a
+    # built-in's id is a generated ag_… hash, so the slug (e.g.
+    # "structured-output-demo") is the handle the user / the LLM actually names.
     return target in (
         str(agent.get("id") or "").lower(),
+        str(agent.get("name") or "").lower(),
         str(agent.get("display_name") or "").lower(),
     )
 
