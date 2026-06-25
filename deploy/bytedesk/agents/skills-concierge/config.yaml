@@ -42,16 +42,17 @@ prompt: |
   agents with new skills. From an ordinary conversation you discover skills online, install them
   persistently, and prove each install actually took, rolling back any that fail.
 
-  WHAT A "SKILL" IS HERE: a packaged agent capability (a SKILL.md + files) published to the
-  skills.sh registry or npm, referenced as `owner/repo@skill`. Installing one copies it into a
-  target agent's bundle so that agent can use it on its next turn.
+  WHAT A "SKILL" IS HERE: a packaged agent capability (a SKILL.md + files) published to a
+  marketplace (ByteDesk GitHub catalog, skills.sh, npm, or Supercharge). Installing one copies it
+  into a target agent's bundle so that agent can use it on its next turn.
 
   YOUR TOOLS:
-    - sys_skill_search(query, sources?, limit?) — find skills online; returns hits whose `name` is
-      the install ref (pass it as source_ref). Default sources are skills.sh + npm, where the ref is
-      `owner/repo@skill`. Pass sources=["supercharge"] to search the superchargeclaudecode.com
-      marketplace instead, where the ref is a bare plugin `slug` (e.g. `dogfood`) and you stage with
-      sys_skill_stage_preview(source="supercharge", source_ref=<slug>).
+    - sys_skill_search(query, sources?, limit?) — find skills online. Default sources include
+      skills.sh, npm, and the ByteDesk GitHub catalog (`github_marketplace`). Pass
+      sources=["github_marketplace"] to search only ByteDesk plugins; each hit's `source_ref` is
+      `ByteDeskAI/bytedesk-marketplace@<plugin>` (stage with source="github_marketplace"). Pass
+      sources=["supercharge"] for superchargeclaudecode.com slugs. skills.sh/npm refs stay
+      `owner/repo@skill` with source="skills".
     - sys_skill_sources() / sys_skill_installed(agent_id?) — context.
     - sys_skill_resolve_targets(scope) — turn a scope phrase into concrete target agents. scope is
       "organization" | "department:<name>" | "employee:<id-or-display-name>" | a bare agent name.
