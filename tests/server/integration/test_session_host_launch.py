@@ -602,6 +602,76 @@ async def test_message_relaunch_harness_not_configured_persists_error_turn(
     assert conv.host_id == _HOST_ID
 
 
+async def test_message_relaunch_evicts_non_acking_host(
+    client: httpx.AsyncClient,
+    app: FastAPI,
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """BDP-2491: a host that receives the launch frame but never ACKs is evicted.
+
+    This reproduces the wedged-host failure mode: the host tunnel is registered
+    and the server's ``host.launch_runner`` frame reaches it, but the host never
+    replies with its result frame (it is no longer delivering frames into
+    dispatch). Pre-fix, the server swallowed the ACK timeout, assumed "launched",
+    and waited out the full connect timeout for a runner that never comes — every
+    retry doing the same until a human restarts the host. Post-fix, the missing
+    ACK marks the attempt ``acked=False``, the server EVICTS the dead host tunnel
+    (so its reconnect loop rebuilds a deliverable one) and fails fast.
+
+    Mutation check: revert the eviction (treat a timeout as success) and the host
+    is NOT evicted — ``host_registry.get(_HOST_ID)`` stays the live conn and the
+    final assertion fails.
+    """
+    from omnigent.runtime import set_runner_client
+    from omnigent.server.routes import sessions as sessions_module
+
+    monkeypatch.setattr(sessions_module, "_HOST_BOUND_RUNNER_CONNECT_GRACE_S", 0.0)
+    # Tiny ACK budget so the wedge is detected fast; tiny connect timeout as a
+    # safety net so a regression (no fast-fail) can't hang the test for 30s.
+    monkeypatch.setattr(sessions_module, "_HOST_LAUNCH_RESULT_TIMEOUT_S", 0.3)
+    monkeypatch.setattr(sessions_module, "_HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S", 2.0)
+
+    comm = await _connect_host(app)
+    agent = await create_test_agent(
+        client,
+        executor={"type": "omnigent", "config": {"harness": "codex"}},
+    )
+    create_responder = asyncio.create_task(_serve_one_launch(comm, launch_status="launched"))
+    create_resp = await client.post(
+        "/v1/sessions",
+        json={"agent_id": agent["id"], "host_id": _HOST_ID, "workspace": _WORKSPACE},
+    )
+    await create_responder
+    assert create_resp.status_code == 201, create_resp.text
+    session_id = create_resp.json()["id"]
+
+    # Runner offline → the message relaunches; the wedge: read the relaunch
+    # frame off the host's tunnel but NEVER reply (no result ACK).
+    set_runner_client(None)
+    wedge_reader = asyncio.create_task(_wait_for_launch(comm, budget_s=2.0))
+    try:
+        msg_resp = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            },
+        )
+    finally:
+        launch_frame = await wedge_reader
+        set_runner_client(None)
+
+    # The host DID receive the launch frame on a live tunnel — this is a
+    # deliver-then-wedge, the exact case the fix targets (not a missing send).
+    assert launch_frame is not None, "host never received the relaunch frame"
+    # The wedged host tunnel was EVICTED (the defining fix behavior) so its
+    # reconnect loop rebuilds a deliverable tunnel — no manual restart needed.
+    assert app.state.host_registry.get(_HOST_ID) is None
+    # The turn fails fast rather than persisting against a phantom runner.
+    assert msg_resp.status_code in (503, 202), msg_resp.text
+
+
 @pytest.mark.parametrize(
     "workspace,expected_detail",
     [
@@ -1193,6 +1263,11 @@ async def test_relaunch_posts_session_init_before_forwarding_message(
 
     monkeypatch.setattr(sessions_module, "_ensure_runner_relay_ready", _noop_relay_ready)
 
+    # Serve the relaunch's launch ACK so the host reads as healthy (BDP-2491:
+    # an un-ACKed launch is now a wedge that gets the host evicted). The staged
+    # _wait_for_runner_client then drives the runner-reconnect for the ordering
+    # assertion.
+    relaunch_responder = asyncio.create_task(_serve_one_launch(comm, launch_status="launched"))
     try:
         resp = await client.post(
             f"/v1/sessions/{session_id}/events",
@@ -1205,6 +1280,7 @@ async def test_relaunch_posts_session_init_before_forwarding_message(
             },
         )
     finally:
+        await relaunch_responder
         # Always close the recording client, even if the POST raised, so a
         # regression can't leak the AsyncClient / emit unclosed-client warnings.
         await fake_runner.aclose()

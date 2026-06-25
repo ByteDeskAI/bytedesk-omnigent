@@ -141,6 +141,39 @@ def test_register_replaces_stale_connection() -> None:
     assert poison is None
 
 
+def test_evict_retires_current_connection_and_poisons_queue() -> None:
+    """BDP-2491: evict() drops the registration and poisons the queue.
+
+    A wedged-but-registered host is retired by evict() exactly like a
+    newest-wins replacement: get() goes None and the outbound queue is
+    poisoned with the None sentinel so the sender loop exits and trips the
+    tunnel teardown (which reconnects the host). evict() returns True.
+    """
+    registry = HostRegistry()
+    conn = registry.register("host_evict", FakeWebSocket(), _make_hello(), owner="erin")
+
+    assert registry.evict(conn) is True
+    assert registry.get("host_evict") is None
+    assert conn.outbound_queue.get_nowait() is None
+
+
+def test_evict_is_noop_when_connection_already_replaced() -> None:
+    """BDP-2491: evict() is current-conn-guarded — it never retires a fresh tunnel.
+
+    If the host already reconnected (a newer conn replaced the wedged one),
+    evicting the stale conn returns False and leaves the new registration and
+    its (unpoisoned) outbound queue intact.
+    """
+    registry = HostRegistry()
+    old_conn = registry.register("host_race", FakeWebSocket(), _make_hello(), owner="ray")
+    new_conn = registry.register("host_race", FakeWebSocket(), _make_hello(), owner="ray")
+
+    assert registry.evict(old_conn) is False
+    assert registry.get("host_race") is new_conn
+    # The live connection's queue must be untouched (no spurious poison).
+    assert new_conn.outbound_queue.empty()
+
+
 def test_send_text_enqueues_frame() -> None:
     """
     Verify that send_text puts the frame on the connection's
