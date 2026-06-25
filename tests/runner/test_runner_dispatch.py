@@ -56,7 +56,7 @@ from omnigent.runner.app import (
 from omnigent.runtime.harnesses import _HARNESS_MODULES
 from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
 from omnigent.session_lifecycle import CLOSED_LABEL_KEY, CLOSED_LABEL_VALUE
-from omnigent.spec.types import AgentSpec, ExecutorSpec
+from omnigent.spec.types import AgentSpec, BuiltinToolConfig, ExecutorSpec, ToolsConfig
 from tests.runner.helpers import NullServerClient
 
 _TEST_HARNESS_NAME = "runner-test-default"
@@ -5269,6 +5269,114 @@ async def test_agent_tools_map_404_to_agent_not_found(
     assert info["session_id"] == "conv_missing"
 
 
+@pytest.mark.asyncio
+async def test_spec_declared_generic_builtin_dispatches_through_toolmanager(
+    tmp_path: Path,
+) -> None:
+    """
+    Spec-declared builtins that are not in a hard-coded runner family still
+    dispatch through ``ToolManager``.
+
+    ``bytedesk_jira`` / ``bytedesk_confluence`` use this same path. This test
+    uses ``export_agent`` because it is a harmless builtin that returns a
+    deterministic validation error without credentials or network access.
+    """
+    from omnigent.runner.tool_dispatch import execute_tool
+
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(builtins=[BuiltinToolConfig(name="export_agent")]),
+    )
+
+    output = await execute_tool(
+        tool_name="export_agent",
+        arguments="{}",
+        agent_spec=spec,
+        conversation_id="conv_builtin",
+        task_id="task_builtin",
+        agent_id="agent_builtin",
+        runner_workspace=tmp_path,
+    )
+
+    assert output == "Error: 'source' parameter is required."
+    assert "not in local dispatch table" not in output
+
+
+def test_bytedesk_extension_builtins_are_spec_builtin_tools() -> None:
+    """
+    ByteDesk's Atlassian tools are extension-contributed builtins, so the
+    runner must treat them as spec builtin tools when an agent declares them.
+    """
+    from omnigent.runner.tool_dispatch import _is_spec_builtin_tool
+
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(
+            builtins=[
+                BuiltinToolConfig(name="bytedesk_jira"),
+                BuiltinToolConfig(name="bytedesk_confluence"),
+            ],
+        ),
+    )
+
+    assert _is_spec_builtin_tool("bytedesk_jira", spec) is True
+    assert _is_spec_builtin_tool("bytedesk_confluence", spec) is True
+    assert _is_spec_builtin_tool("bytedesk_jira", AgentSpec(spec_version=1)) is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tool_name, arguments, expected_error",
+    [
+        pytest.param(
+            "bytedesk_jira",
+            {"op": "search", "jql": "project = BDP", "max_results": 1},
+            "jira_not_configured",
+            id="jira",
+        ),
+        pytest.param(
+            "bytedesk_confluence",
+            {"op": "search", "cql": "type=page", "limit": 1},
+            "confluence_not_configured",
+            id="confluence",
+        ),
+    ],
+)
+async def test_bytedesk_atlassian_builtins_dispatch_without_local_table_error(
+    tool_name: str,
+    arguments: dict[str, Any],
+    expected_error: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The real Atlassian builtins dispatch through ``ToolManager`` when declared.
+
+    Secrets are stubbed empty so the tools stop at their structured
+    not-configured responses, proving the runner reached the tool implementation
+    instead of falling through to ``not in local dispatch table``.
+    """
+    import omnigent.onboarding.secrets as secrets_mod
+    from omnigent.runner.tool_dispatch import execute_tool
+
+    monkeypatch.setattr(secrets_mod, "load_secret", lambda name: None)
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(builtins=[BuiltinToolConfig(name=tool_name)]),
+    )
+
+    output = await execute_tool(
+        tool_name=tool_name,
+        arguments=json.dumps(arguments),
+        agent_spec=spec,
+        conversation_id="conv_atlassian",
+        task_id="task_atlassian",
+        agent_id="agent_atlassian",
+    )
+
+    assert json.loads(output) == {"ok": False, "error": expected_error}
+    assert "not in local dispatch table" not in output
+
+
 @pytest.mark.parametrize(
     "opt_in, expected_writes",
     [
@@ -5290,13 +5398,13 @@ def test_native_relay_builtin_set_matches_toolmanager_gating(
     expected_writes: set[str],
 ) -> None:
     """
-    The native relay advertises exactly ``ToolManager``'s builtin schemas
-    intersected with ``_NATIVE_RELAY_BUILTIN_TOOLS``.
+    The native relay advertises ``ToolManager``'s runner/native-callable
+    schemas through the spec-aware relay predicate.
 
     claude-native / codex-native ignore the harness ``tools`` list, so the
     relay is their only tool surface; ``_ensure_comment_relay_started``
-    applies this same ``ToolManager(spec).get_tool_schemas()`` ∩
-    ``_NATIVE_RELAY_BUILTIN_TOOLS`` filter. This locks two invariants:
+    applies this same ``ToolManager(spec).get_tool_schemas()`` +
+    ``should_relay_tool_to_native`` filter. This locks two invariants:
 
     - **Parity**: the always-on orchestrator/discovery surface (agent
       reads, session reads, async inbox reads/cancels, comment tools)
@@ -5316,7 +5424,7 @@ def test_native_relay_builtin_set_matches_toolmanager_gating(
     :param expected_writes: Exact spawn-write tool names expected in
         the relayed set for this opt-in arm.
     """
-    from omnigent.runner.tool_dispatch import _NATIVE_RELAY_BUILTIN_TOOLS
+    from omnigent.runner.tool_dispatch import should_relay_tool_to_native
     from omnigent.spec.types import ToolsConfig
     from omnigent.tools.manager import ToolManager
 
@@ -5331,7 +5439,9 @@ def test_native_relay_builtin_set_matches_toolmanager_gating(
     else:
         spec = AgentSpec(spec_version=1)
     schema_names = {s["function"]["name"] for s in ToolManager(spec).get_tool_schemas()}
-    relayed = schema_names & _NATIVE_RELAY_BUILTIN_TOOLS
+    relayed = {
+        name for name in schema_names if should_relay_tool_to_native(name, spec)
+    }
 
     # Always-on reads/discovery reach every native agent — if any is
     # missing, the orchestrator running under claude-native can't list or
@@ -5351,10 +5461,10 @@ def test_native_relay_builtin_set_matches_toolmanager_gating(
     assert ("sys_list_models" in relayed) == ("sys_session_send" in expected_writes)
 
     # OS tools ride a separate unconditional relay path (overriding the
-    # bridge's static versions), so they must never be in the builtin set —
-    # otherwise they'd be double-advertised and bypass that override.
+    # bridge's static versions), so the builtin relay predicate must keep
+    # excluding them.
     os_tools = {"sys_os_read", "sys_os_write", "sys_os_edit", "sys_os_shell"}
-    assert not (os_tools & _NATIVE_RELAY_BUILTIN_TOOLS)
+    assert not any(should_relay_tool_to_native(name, spec) for name in os_tools)
 
 
 @pytest.mark.parametrize(
@@ -5384,8 +5494,8 @@ def test_native_relay_advertises_terminal_tools_per_spec_gate(
     ``terminals``.
 
     claude-native / codex-native ignore the harness ``tools`` list, so
-    the relay (``ToolManager(spec).get_tool_schemas()`` ∩
-    ``_NATIVE_RELAY_BUILTIN_TOOLS``, applied by
+    the relay (``ToolManager(spec).get_tool_schemas()`` +
+    ``should_relay_tool_to_native``, applied by
     ``_ensure_comment_relay_started``) is the ONLY way the five
     terminal tools reach the real CLI. This locks both directions of
     the gate:
@@ -5407,7 +5517,7 @@ def test_native_relay_advertises_terminal_tools_per_spec_gate(
         ``get_terminal_registry()``) works without runtime ``init()``.
     """
     from omnigent.inner.datamodel import TerminalEnvSpec
-    from omnigent.runner.tool_dispatch import _NATIVE_RELAY_BUILTIN_TOOLS
+    from omnigent.runner.tool_dispatch import should_relay_tool_to_native
     from omnigent.runtime import _globals as rt_globals
     from omnigent.terminals.registry import TerminalRegistry
     from omnigent.tools.manager import ToolManager
@@ -5418,7 +5528,9 @@ def test_native_relay_advertises_terminal_tools_per_spec_gate(
     spec = AgentSpec(spec_version=1, terminals=terminals)
 
     schema_names = {s["function"]["name"] for s in ToolManager(spec).get_tool_schemas()}
-    relayed = schema_names & _NATIVE_RELAY_BUILTIN_TOOLS
+    relayed = {
+        name for name in schema_names if should_relay_tool_to_native(name, spec)
+    }
 
     all_terminal_tools = {
         "sys_terminal_launch",
@@ -5428,11 +5540,46 @@ def test_native_relay_advertises_terminal_tools_per_spec_gate(
         "sys_terminal_close",
     }
     # Exact-set check on the terminal family: a missing name means the
-    # relay filter dropped a granted tool (set regression in
-    # _NATIVE_RELAY_BUILTIN_TOOLS); an extra name on the no-terminals
-    # arm means ToolManager registered terminal tools without the spec
-    # gate (registration regression).
+    # relay filter dropped a granted tool; an extra name on the no-terminals
+    # arm means ToolManager registered terminal tools without the spec gate.
     assert relayed & all_terminal_tools == expected_terminal_tools
+
+
+def test_native_relay_advertises_spec_declared_generic_builtins() -> None:
+    """
+    Native CLI agents see declared generic builtins through the MCP relay.
+
+    This covers extension-contributed builtins such as Atlassian and Slack,
+    which are not part of the static runner-local family set.
+    """
+    from omnigent.runner.tool_dispatch import should_relay_tool_to_native
+    from omnigent.tools.manager import ToolManager
+
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(
+            builtins=[
+                BuiltinToolConfig(name="export_agent"),
+                BuiltinToolConfig(name="bytedesk_jira"),
+                BuiltinToolConfig(name="bytedesk_confluence"),
+            ],
+        ),
+    )
+
+    schema_names = {s["function"]["name"] for s in ToolManager(spec).get_tool_schemas()}
+    relayed = {
+        name for name in schema_names if should_relay_tool_to_native(name, spec)
+    }
+
+    assert {"export_agent", "bytedesk_jira", "bytedesk_confluence"} <= relayed
+    empty_spec = AgentSpec(spec_version=1)
+    empty_schema_names = {
+        s["function"]["name"] for s in ToolManager(empty_spec).get_tool_schemas()
+    }
+    empty_relays = {
+        name for name in empty_schema_names if should_relay_tool_to_native(name, empty_spec)
+    }
+    assert "export_agent" not in empty_relays
 
 
 def test_session_create_is_runner_local() -> None:

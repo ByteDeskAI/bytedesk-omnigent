@@ -13,12 +13,13 @@ dispatch implementation behind the strategies, not two.
 Precedence is fixed and load-bearing: **MCP first** (an unconditional
 override whenever an ``mcp_manager`` is present), then the static
 name-set categories in declaration order, then the predicate-based tail
-(``_is_spec_local_python_tool`` → ``_is_uc_function_tool`` → catch-all
-``_execute_spec_callable_tool``). ``_NATIVE_RELAY_BUILTIN_TOOLS`` and the
-per-category tool sets are imported from ``tool_dispatch`` (never
-re-declared), so the registry's category membership tracks ``tool_dispatch``
-by construction; ``register_default_dispatchers`` builds the strategies in
-that precedence order.
+(``_is_spec_builtin_tool`` → ``_is_spec_local_python_tool`` →
+``_is_uc_function_tool`` → catch-all ``_execute_spec_callable_tool``).
+``_NATIVE_RELAY_BUILTIN_TOOLS`` and the per-category tool sets are imported
+from ``tool_dispatch`` (never re-declared), so the registry's category
+membership tracks ``tool_dispatch`` by construction;
+``register_default_dispatchers`` builds the strategies in that precedence
+order.
 
 It supersedes the prior inline dispatch path behind
 ``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` (default OFF, strangler-fig): with
@@ -216,9 +217,10 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
     15. ``_COMMENT_TOOLS`` → ``_execute_comment_tool``
     16. ``_AGENT_TOOLS`` → ``_execute_agent_tool``
     17. ``_POLICY_TOOLS`` → ``_execute_policy_tool``
-    18. ``_is_spec_local_python_tool`` → ``_execute_local_python_tool``
-    19. ``_is_uc_function_tool`` → ``_execute_uc_function_tool``
-    20. catch-all → ``_execute_spec_callable_tool``
+    18. ``_is_spec_builtin_tool`` → ``_execute_spec_builtin_tool``
+    19. ``_is_spec_local_python_tool`` → ``_execute_local_python_tool``
+    20. ``_is_uc_function_tool`` → ``_execute_uc_function_tool``
+    21. catch-all → ``_execute_spec_callable_tool``
 
     Helpers and tool sets are imported lazily from ``tool_dispatch`` (the
     sets are imported, never re-declared, so they cannot drift). The
@@ -373,7 +375,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
     )
 
     # 8. List-models tool.
-    async def _run_list_models(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
+    async def _run_list_models(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_list_models_tool(agent_spec=ctx.agent_spec)
 
     registry.register(
@@ -405,7 +407,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
 
     # 10. Session-query tools. (Passes the raw ``ctx.arguments`` string, not
     # the parsed dict — same as the elif branch.)
-    async def _run_session_query(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
+    async def _run_session_query(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_session_query_tool(
             ctx.tool_name,
             ctx.arguments,
@@ -500,7 +502,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
     )
 
     # 15. Comment tools. (Passes the raw ``ctx.arguments`` string.)
-    async def _run_comment(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
+    async def _run_comment(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_comment_tool(
             ctx.tool_name,
             ctx.arguments,
@@ -536,7 +538,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
     )
 
     # 17. Policy tools. (Passes the raw ``ctx.arguments`` string.)
-    async def _run_policy(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
+    async def _run_policy(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_policy_tool(
             ctx.tool_name,
             ctx.arguments,
@@ -552,9 +554,30 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 18. Spec-defined local Python tool (predicate branch). ``args`` is the
-    # raw ``ctx.arguments`` string here, matching the elif branch.
-    async def _run_local_python(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
+    # 18. Spec-declared builtin tool (predicate branch). ``ctx.arguments`` is
+    # the raw JSON string, matching the elif branch.
+    async def _run_spec_builtin(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
+        return await td._execute_spec_builtin_tool(
+            ctx.tool_name,
+            ctx.arguments,
+            agent_spec=ctx.agent_spec,
+            conversation_id=ctx.conversation_id,
+            task_id=ctx.task_id,
+            agent_id=ctx.agent_id,
+            runner_workspace=ctx.runner_workspace,
+        )
+
+    registry.register(
+        _FunctionalDispatcher(
+            name="spec_builtin",
+            match=lambda ctx, _args: td._is_spec_builtin_tool(ctx.tool_name, ctx.agent_spec),
+            run=_run_spec_builtin,
+        )
+    )
+
+    # 19. Spec-defined local Python tool (predicate branch). ``ctx.arguments``
+    # is the raw JSON string here, matching the elif branch.
+    async def _run_local_python(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_local_python_tool(
             ctx.tool_name,
             ctx.arguments,
@@ -573,7 +596,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 19. Unity Catalog function tool (predicate branch).
+    # 20. Unity Catalog function tool (predicate branch).
     async def _run_uc_function(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
         return await td._execute_uc_function_tool(ctx.tool_name, args, agent_spec=ctx.agent_spec)
 
@@ -585,7 +608,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 20. Catch-all (the elif chain's ``else``) — spec callable tool. Always
+    # 21. Catch-all (the elif chain's ``else``) — spec callable tool. Always
     # matches, so the registry is total: every tool name resolves to exactly
     # one dispatch, mirroring the elif chain's final ``else`` arm.
     async def _run_spec_callable(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:

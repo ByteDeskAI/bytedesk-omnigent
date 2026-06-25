@@ -547,6 +547,80 @@ def _is_spec_local_python_tool(tool_name: str, agent_spec: AgentSpecLike | None)
     )
 
 
+def _is_spec_builtin_tool(tool_name: str, agent_spec: AgentSpecLike | None) -> bool:
+    """
+    Return whether *tool_name* is explicitly declared in ``tools.builtins``.
+
+    Generic builtins (including extension-contributed tools such as
+    ``bytedesk_jira``) are model-visible through ``ToolManager`` schemas, but
+    most do not belong to one of the runner's hard-coded tool families. This
+    predicate lets the dispatch tail route those declared builtins back through
+    ``ToolManager`` instead of falling through to spec-callable resolution.
+
+    :param tool_name: Tool name emitted by the model.
+    :param agent_spec: Current session agent spec.
+    :returns: ``True`` when the spec declares the builtin.
+    """
+    tools = getattr(agent_spec, "tools", None)
+    builtins = getattr(tools, "builtins", None) or []
+    return any(getattr(entry, "name", None) == tool_name for entry in builtins)
+
+
+def should_relay_tool_to_native(tool_name: str, agent_spec: AgentSpecLike | None) -> bool:
+    """
+    Return whether a ToolManager schema should be added to the native CLI relay.
+
+    Claude-native / Codex-native ignore the harness ``tools`` list and only see
+    the MCP relay. Always relay the runner/server-proxied builtin families, and
+    additionally relay spec-declared generic builtins so extension tools exposed
+    via ``tools.builtins`` are reachable from native agents too. OS tools stay
+    excluded here because the native bridge installs the policy-enforced OS
+    relay separately.
+
+    :param tool_name: Tool schema name from ``ToolManager``.
+    :param agent_spec: Current session agent spec.
+    :returns: ``True`` if the relay should advertise the schema.
+    """
+    if tool_name in _OS_ENV_TOOLS:
+        return False
+    return tool_name in _NATIVE_RELAY_BUILTIN_TOOLS or _is_spec_builtin_tool(
+        tool_name,
+        agent_spec,
+    )
+
+
+async def _execute_spec_builtin_tool(
+    tool_name: str,
+    args: str,
+    *,
+    agent_spec: AgentSpecLike | None,
+    conversation_id: str | None,
+    task_id: str | None,
+    agent_id: str | None,
+    runner_workspace: Path | None,
+    acting_identity: ActingIdentity | None = None,
+) -> str:
+    if agent_spec is None:
+        return f"Error: {tool_name} not in local dispatch table (no agent spec)"
+    try:
+        manager = ToolManager(cast("AgentSpec", agent_spec), workdir=runner_workspace)
+        workspace = None
+        if runner_workspace is not None and conversation_id is not None:
+            workspace = runner_workspace / conversation_id
+            workspace.mkdir(parents=True, exist_ok=True)
+        ctx = ToolContext(
+            task_id=task_id or conversation_id or "runner-builtin-tool",
+            agent_id=agent_id or getattr(agent_spec, "name", "runner-agent") or "runner-agent",
+            workspace=workspace,
+            conversation_id=conversation_id,
+            acting_identity=acting_identity,
+        )
+        return await asyncio.to_thread(manager.call_tool, tool_name, args, ctx)
+    except Exception as exc:
+        _logger.exception("runner spec builtin dispatch failed for %s", tool_name)
+        return f"Error: {type(exc).__name__}: {exc}"
+
+
 async def _execute_local_python_tool(
     tool_name: str,
     args: str,
@@ -3912,6 +3986,17 @@ async def execute_tool(
                 arguments,
                 conversation_id=conversation_id,
                 server_client=server_client,
+            )
+        elif _is_spec_builtin_tool(tool_name, agent_spec):
+            output = await _execute_spec_builtin_tool(
+                tool_name,
+                arguments,
+                acting_identity=acting_identity,
+                agent_spec=agent_spec,
+                conversation_id=conversation_id,
+                task_id=task_id,
+                agent_id=agent_id,
+                runner_workspace=runner_workspace,
             )
         elif _is_spec_local_python_tool(tool_name, agent_spec):
             output = await _execute_local_python_tool(

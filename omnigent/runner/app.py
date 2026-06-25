@@ -7917,7 +7917,7 @@ def create_runner_app(
             post_tools_changed,
             start_tool_relay,
         )
-        from omnigent.runner.tool_dispatch import _NATIVE_RELAY_BUILTIN_TOOLS
+        from omnigent.runner.tool_dispatch import should_relay_tool_to_native
         from omnigent.tools.builtins.agents import (
             SysAgentDownloadTool,
             SysAgentGetTool,
@@ -7970,15 +7970,15 @@ def create_runner_app(
         # giving centralized policy evaluation on the Omnigent server. Two groups
         # are assembled:
         #
-        # 1. The runner-/server-proxied builtin surface
-        #    (``_NATIVE_RELAY_BUILTIN_TOOLS`` — comment, session read/write,
-        #    agent-discovery, and terminal families), derived from the
-        #    session's own ToolManager so the relayed set and the
+        # 1. The runner-/server-proxied builtin surface, derived from the
+        #    session's own ToolManager plus ``should_relay_tool_to_native`` so
+        #    the relayed set includes both framework-owned builtin families and
+        #    spec-declared generic builtins (e.g. bytedesk_jira). The
         #    spec-dependent schemas (e.g. sys_session_send's named-mode
-        #    ``agent`` enum, present only when the spec declares
-        #    sub-agents; sys_terminal_*, present only when the spec
-        #    declares ``terminals:``) exactly match what non-native
-        #    harnesses receive via ``request.tools``.
+        #    ``agent`` enum, present only when the spec declares sub-agents;
+        #    sys_terminal_*, present only when the spec declares ``terminals:``)
+        #    exactly match what non-native harnesses receive via
+        #    ``request.tools``.
         # 2. OS tools (``sys_os_*``), relayed unconditionally below to
         #    override the bridge's static (non-policy-enforced) versions —
         #    independent of the spec's ``os_env`` gate.
@@ -8020,7 +8020,7 @@ def create_runner_app(
 
             for _schema in ToolManager(relay_spec).get_tool_schemas():
                 _fn = _schema["function"]
-                if _fn["name"] in _NATIVE_RELAY_BUILTIN_TOOLS:
+                if should_relay_tool_to_native(_fn["name"], relay_spec):
                     _append_flat_schema(_fn)
         else:
             # No resolvable spec: fall back to the always-on read/discovery

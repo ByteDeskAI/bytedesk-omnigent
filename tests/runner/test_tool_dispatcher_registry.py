@@ -18,6 +18,7 @@ from omnigent.runner.tool_dispatcher_registry import (
     use_tool_dispatcher_registry,
 )
 from omnigent.runner.tool_execution_context import ToolExecutionContext
+from omnigent.spec.types import AgentSpec, BuiltinToolConfig, ToolsConfig
 
 
 def test_flag_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -50,7 +51,7 @@ async def _noop_run(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
 
 
 def test_default_registry_registers_all_branches() -> None:
-    """The default registry mirrors the 20 elif branches, in order."""
+    """The default registry mirrors the MCP guard plus 20 routing branches."""
     registry = build_default_registry()
     names = [d.name for d in registry.dispatchers]
     assert names == [
@@ -71,6 +72,7 @@ def test_default_registry_registers_all_branches() -> None:
         "comment",
         "agent",
         "policy",
+        "spec_builtin",
         "local_python",
         "uc_function",
         "spec_callable",
@@ -220,7 +222,38 @@ def test_native_relay_builtin_tools_unchanged() -> None:
         | tool_dispatch._POLICY_TOOLS
         | tool_dispatch._TERMINAL_TOOLS
     )
-    assert tool_dispatch._NATIVE_RELAY_BUILTIN_TOOLS == expected
+    assert expected == tool_dispatch._NATIVE_RELAY_BUILTIN_TOOLS
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatches_spec_declared_builtin(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The registry path mirrors the elif chain's spec-builtin branch."""
+    received: dict[str, Any] = {}
+
+    async def _fake_spec_builtin(tool_name: str, args: str, **kwargs: Any) -> str:
+        received.update(tool_name=tool_name, args=args, agent_spec=kwargs.get("agent_spec"))
+        return "builtin-output"
+
+    monkeypatch.setattr(tool_dispatch, "_execute_spec_builtin_tool", _fake_spec_builtin)
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(builtins=[BuiltinToolConfig(name="export_agent")]),
+    )
+
+    out = await build_default_registry().dispatch(
+        ToolExecutionContext(
+            tool_name="export_agent",
+            arguments='{"source": "a"}',
+            agent_spec=spec,
+        )
+    )
+
+    assert out == "builtin-output"
+    assert received == {
+        "tool_name": "export_agent",
+        "args": '{"source": "a"}',
+        "agent_spec": spec,
+    }
 
 
 @pytest.mark.asyncio
@@ -276,5 +309,5 @@ def test_register_default_dispatchers_is_idempotent_into_fresh_registry() -> Non
     registry = DispatcherRegistry()
     assert registry.dispatchers == ()
     register_default_dispatchers(registry)
-    assert len(registry.dispatchers) == 20
+    assert len(registry.dispatchers) == 21
     assert registry.dispatchers[0].name == "mcp"
