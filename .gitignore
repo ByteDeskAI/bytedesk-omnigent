@@ -16,6 +16,7 @@ omnigent/_build_info.py
 .sessions/
 .codex-tmp/
 .codex
+.grok
 .worktrees/
 .claude/worktrees/
 .tmp*
