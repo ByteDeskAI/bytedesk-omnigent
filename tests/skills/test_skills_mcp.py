@@ -159,47 +159,61 @@ def test_resolve_targets_employee_by_id_or_name(monkeypatch: pytest.MonkeyPatch)
 # --- auth/transport layer ---------------------------------------------------
 
 
-def test_request_logs_in_once_and_caches_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_is_anonymous_first_no_login_when_route_is_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Read routes are open to anonymous service callers, so a headerless 200
+    # must NOT trigger a login (the runner has no creds anyway).
     monkeypatch.setenv("OMNIGENT_HOST_AUTH_USERNAME", "admin")
     monkeypatch.setenv("OMNIGENT_HOST_AUTH_PASSWORD", "pw")
-    raw_calls: list[tuple[str, str, dict | None, str | None]] = []
+    raw_calls: list[tuple[str, str, str | None]] = []
 
     def fake_raw(method: str, url: str, headers: dict, json: Any) -> tuple[int, Any]:
-        bearer = headers.get("Authorization")
-        raw_calls.append((method, url, json, bearer))
-        if url.endswith("/auth/login"):
-            return 200, {"token": "TKN"}
+        raw_calls.append((method, url, headers.get("Authorization")))
         return 200, {"ok": True}
 
     monkeypatch.setattr(skills_mcp, "_raw", fake_raw)
 
-    skills_mcp._request("GET", "/v1/skills/sources")
-    skills_mcp._request("GET", "/v1/skills/sources")
-
-    logins = [c for c in raw_calls if c[1].endswith("/auth/login")]
-    assert len(logins) == 1  # logged in once, token cached for the second call
-    api = [c for c in raw_calls if c[1].endswith("/v1/skills/sources")]
-    assert all(c[3] == "Bearer TKN" for c in api)
+    assert skills_mcp._request("GET", "/v1/skills/sources") == {"ok": True}
+    assert not any(c[1].endswith("/auth/login") for c in raw_calls)  # no login
+    assert raw_calls[0][2] is None  # first call is headerless
 
 
-def test_request_relogins_once_on_401(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_request_authenticates_on_401_when_creds_present(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setenv("OMNIGENT_HOST_AUTH_USERNAME", "admin")
     monkeypatch.setenv("OMNIGENT_HOST_AUTH_PASSWORD", "pw")
-    tokens = iter(["STALE", "FRESH"])
     seen_bearers: list[str | None] = []
 
     def fake_raw(method: str, url: str, headers: dict, json: Any) -> tuple[int, Any]:
         if url.endswith("/auth/login"):
-            return 200, {"token": next(tokens)}
+            return 200, {"token": "TKN"}
         seen_bearers.append(headers.get("Authorization"))
-        # First API call (STALE) 401s; after re-login (FRESH) it succeeds.
-        if headers.get("Authorization") == "Bearer STALE":
-            return 401, {"detail": "unauthorized"}
-        return 200, {"ok": True}
+        # Anonymous (no bearer) 401s; after login the bearer call succeeds.
+        return (401, {"detail": "unauthorized"}) if headers.get("Authorization") is None else (
+            200,
+            {"ok": True},
+        )
 
     monkeypatch.setattr(skills_mcp, "_raw", fake_raw)
 
-    out = skills_mcp._request("GET", "/v1/skills/sources")
+    assert skills_mcp._request("GET", "/v1/skills/installed") == {"ok": True}
+    assert seen_bearers == [None, "Bearer TKN"]  # headerless first, then bearer
 
-    assert out == {"ok": True}
-    assert seen_bearers == ["Bearer STALE", "Bearer FRESH"]
+
+def test_request_raises_clear_error_on_401_without_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The runner case: a user-gated route 401s and there are no host creds to
+    # fall back on — surface a clear, actionable error (not a crash).
+    monkeypatch.delenv("OMNIGENT_HOST_AUTH_USERNAME", raising=False)
+    monkeypatch.delenv("OMNIGENT_HOST_AUTH_PASSWORD", raising=False)
+
+    def fake_raw(method: str, url: str, headers: dict, json: Any) -> tuple[int, Any]:
+        return 401, {"detail": "unauthorized"}
+
+    monkeypatch.setattr(skills_mcp, "_raw", fake_raw)
+
+    with pytest.raises(RuntimeError, match="runner holds no server credential"):
+        skills_mcp._request("POST", "/v1/skills/previews/x/apply", {})

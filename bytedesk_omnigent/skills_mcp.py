@@ -65,15 +65,19 @@ def _raw(method: str, url: str, headers: dict[str, str], json: Any) -> tuple[int
         return resp.status_code, None
 
 
-def _login() -> str:
-    """Mint a bearer from the host credentials in the runner env."""
+def _try_login() -> str | None:
+    """Mint a bearer from host credentials, or ``None`` when none are present.
+
+    Host credentials only exist on the host pod / admin path; the **runner**
+    (where the real agent executes) deliberately holds no server credential, so
+    this returns ``None`` there. Read-only skill routes (search/sources) are
+    open to anonymous callers, so a ``None`` here is fine for those — only the
+    user-gated routes (installed/preview/apply/remove) then surface a 401.
+    """
     username = os.environ.get("OMNIGENT_HOST_AUTH_USERNAME")
     password = os.environ.get("OMNIGENT_HOST_AUTH_PASSWORD")
     if not username or not password:
-        raise RuntimeError(
-            "skills MCP front cannot authenticate: OMNIGENT_HOST_AUTH_USERNAME / "
-            "OMNIGENT_HOST_AUTH_PASSWORD are not set in the runner env"
-        )
+        return None
     status, body = _raw(
         "POST",
         f"{_base_url()}/auth/login",
@@ -82,35 +86,44 @@ def _login() -> str:
     )
     token = body.get("token") if isinstance(body, dict) else None
     if status != 200 or not isinstance(token, str) or not token:
-        raise RuntimeError(f"skills MCP front login failed (status {status})")
+        return None
     return token
 
 
-def _ensure_token() -> str:
-    global _cached_token
-    with _token_lock:
-        if _cached_token is None:
-            _cached_token = _login()
-        return _cached_token
+def _headers(token: str | None) -> dict[str, str]:
+    h = {"content-type": "application/json"}
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    return h
 
 
 def _request(method: str, path: str, body: dict[str, Any] | None = None) -> Any:
-    """Authenticated request to ``{base}{path}``; re-login once on a 401.
+    """Call ``{base}{path}`` — anonymous first, authenticate only if required.
 
-    :param path: A server-absolute path beginning with ``/`` (e.g.
-        ``/v1/skills/search``).
+    The read-only skill routes accept anonymous service callers, so try
+    headerless first. On a 401 (a user-gated route), mint a bearer from host
+    creds and retry — but in the runner no creds exist, so the 401 is surfaced
+    as a clear, actionable error instead of crashing.
+
+    :param path: A server-absolute path beginning with ``/``.
     :returns: The decoded JSON body.
-    :raises RuntimeError: on a non-2xx response (after one re-login attempt).
+    :raises RuntimeError: on a non-2xx response.
     """
+    global _cached_token
     url = f"{_base_url()}{path}"
-    token = _ensure_token()
-    headers = {"content-type": "application/json", "Authorization": f"Bearer {token}"}
-    status, payload = _raw(method, url, headers, body)
+    status, payload = _raw(method, url, _headers(_cached_token), body)
     if status == 401:
-        _reset_token_cache()
-        token = _ensure_token()
-        headers["Authorization"] = f"Bearer {token}"
-        status, payload = _raw(method, url, headers, body)
+        with _token_lock:
+            _cached_token = _try_login()
+        if _cached_token is not None:
+            status, payload = _raw(method, url, _headers(_cached_token), body)
+    if status == 401:
+        raise RuntimeError(
+            f"{method} {path} is not available to the agent: it requires an "
+            "authenticated user, but the runner holds no server credential. "
+            "Read-only discovery (search/sources) works anonymously; "
+            "installing/removing skills needs the identity fix (BDP-2487)."
+        )
     if not (200 <= status < 300):
         detail = payload.get("detail") if isinstance(payload, dict) else payload
         raise RuntimeError(f"{method} {path} failed (status {status}): {detail}")
