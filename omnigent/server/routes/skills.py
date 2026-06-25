@@ -22,6 +22,11 @@ from omnigent.skills.acquisition import (
 from omnigent.stores import AgentStore
 from omnigent.stores.artifact_store import ArtifactStore
 
+#: Skill sources that run an OPERATOR-SUPPLIED command (arbitrary shell in a
+#: staging workspace). They stay authenticated even on the otherwise-anonymous
+#: read routes — an unauthenticated caller must never reach arbitrary execution.
+_COMMAND_SOURCES = frozenset({"freeform", "configured"})
+
 
 class SkillCommandBody(BaseModel):
     """Command source for free-form/configured source adapters."""
@@ -189,8 +194,11 @@ def create_skills_router(
     )
 
     @router.get("/skills/sources")
-    async def list_skill_sources(request: Request) -> SkillSourcesResponse:
-        _require_user(request, auth_provider)
+    async def list_skill_sources() -> SkillSourcesResponse:
+        # Read-only adapter metadata (which sources exist + are available). No
+        # user data, no mutation, no command execution — open to anonymous
+        # service callers (the Skills Concierge's in-cluster MCP front, which
+        # by design holds no server credential) so it can discover sources.
         return SkillSourcesResponse(
             data=[SkillSourceObject(**source) for source in acquisition.sources()]
         )
@@ -211,7 +219,15 @@ def create_skills_router(
         request: Request,
         body: SkillSearchRequest,
     ) -> SkillSearchResponse:
-        _require_user(request, auth_provider)
+        # Registry discovery is read-only (no agent mutation), so anonymous
+        # service callers (the Concierge's MCP front) may search the safe NAMED
+        # adapters (skills/npm/github). The freeform/configured sources run an
+        # operator-supplied command, so those — and any explicit `command` —
+        # still require an authenticated user (a no-op in single-user mode; a
+        # 401 for a multi-user anonymous caller). Never expose arbitrary
+        # execution to an unauthenticated caller.
+        if body.command is not None or _COMMAND_SOURCES.intersection(body.sources or ()):
+            _require_user(request, auth_provider)
         outcome = await asyncio.to_thread(
             acquisition.search,
             body.query,
