@@ -80,6 +80,17 @@ class OmnigentExtension(Protocol):
         """Secret backends consulted by :mod:`omnigent.onboarding.secrets`."""
         ...
 
+    def default_mcp_servers(self) -> list[object]:
+        """``MCPServerConfig``s merged into EVERY agent spec at load (BDP-2459).
+
+        Lets an extension expose a platform-wide tool to all agents from one place
+        — e.g. ``bytedesk_omnigent``'s shared-memory stdio MCP front — without
+        editing each bundle's ``config.yaml``. Merged by name in
+        :func:`omnigent.spec.load` (a spec's own server of the same name wins).
+        Defaults to ``[]`` via ``hasattr`` probing.
+        """
+        ...
+
     def background_tasks(self) -> list[Callable[[], Awaitable[None]]]:
         """Background-task factories the server lifespan starts and cancels."""
         ...
@@ -236,6 +247,20 @@ def extension_secret_backends() -> list:
         if hasattr(ext, "secret_backends"):
             backends.extend(ext.secret_backends())
     return backends
+
+
+def extension_default_mcp_servers() -> list:
+    """Default MCP-server configs contributed by extensions (``default_mcp_servers()``).
+
+    Merged into every agent spec by :func:`omnigent.spec.load` so a platform-wide
+    tool (e.g. shared memory) reaches all agents from one place. Upstream-generic
+    here; the concrete servers live in the extension.
+    """
+    servers: list = []
+    for ext in discover_extensions():
+        if hasattr(ext, "default_mcp_servers"):
+            servers.extend(ext.default_mcp_servers())
+    return servers
 
 
 def extension_principal_resolvers() -> list[object]:

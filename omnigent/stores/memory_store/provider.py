@@ -112,8 +112,13 @@ class AgentMemoryProvider(Protocol):
         query: str,
         k: int = 10,
         mode: RecallMode = RecallMode.AUTO,
+        kind: str = "ambient",
     ) -> list[Memory]:
-        """Recall up to ``k`` memories ranked by relevance × decayed weight."""
+        """Recall up to ``k`` memories ranked by relevance × decayed weight.
+
+        *kind* (BDP-2459): ``"ambient"`` (default) / ``"addressable"`` / ``"all"``
+        selects whether keyed slots are included in the search candidate set.
+        """
         ...
 
     def list_compartments(
@@ -253,15 +258,17 @@ class ComposedAgentMemoryProvider:
         query: str,
         k: int = 10,
         mode: RecallMode = RecallMode.AUTO,
+        kind: str = "ambient",
     ) -> list[Memory]:
         # The store auto-selects semantic vs lexical from its embedder + dialect
         # (the historical AUTO behavior). An explicit LEXICAL forces keyword recall
         # even when an embedder is attached; SEMANTIC is only reachable when the
         # store actually has the embedder+pg substrate, otherwise it falls through
-        # to the store's lexical path — never a crash.
+        # to the store's lexical path — never a crash. *kind* (BDP-2459) selects
+        # ambient / addressable / all candidates.
         with self._store.recall_mode(_store_mode(mode)):
             return self._store.query(
-                scope=scope, owner=owner, name=name, query=query, limit=k
+                scope=scope, owner=owner, name=name, query=query, limit=k, kind=kind
             )
 
     def list_compartments(

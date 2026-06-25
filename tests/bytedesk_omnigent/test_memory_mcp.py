@@ -1,9 +1,8 @@
-"""Unit tests for the stdio MCP front (BDP-2457 F1).
+"""Unit tests for the stdio MCP front (BDP-2459 unified memory).
 
-Each tool must POST to the right ``/v1/memory/<path>`` URL with the right body
-and return the route's JSON verbatim. httpx is stubbed with a MockTransport so no
-server is needed; we patch ``httpx.Client`` to inject the transport + capture the
-request.
+Each tool POSTs to the right ``/v1/memory/<path>`` URL with the right body and
+returns the route's JSON. httpx is stubbed with a MockTransport so no server is
+needed; we patch ``httpx.Client`` to inject the transport + capture the request.
 """
 
 from __future__ import annotations
@@ -18,115 +17,97 @@ import bytedesk_omnigent.memory_mcp as mm
 
 @pytest.fixture()
 def captured(monkeypatch):
-    """Patch httpx.Client so every tool call is captured + answered by a stub.
-
-    Returns a dict that, after a tool call, holds the request ``url`` + ``body``.
-    """
+    """Patch httpx.Client so every tool call is captured + answered by a stub."""
     box: dict = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
         box["url"] = str(request.url)
         box["method"] = request.method
         box["body"] = json.loads(request.content.decode() or "{}")
-        return httpx.Response(200, json={"ok": True, "echo": box["body"]})
+        return httpx.Response(200, json={"ok": True})
 
     transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
-
-    def client_factory(*args, **kwargs):
-        kwargs["transport"] = transport
-        return real_client(*args, **kwargs)
-
-    monkeypatch.setattr(mm.httpx, "Client", client_factory)
+    real = httpx.Client
+    monkeypatch.setattr(
+        mm.httpx, "Client", lambda *a, **k: real(*a, **{**k, "transport": transport})
+    )
     monkeypatch.setenv("OMNIGENT_SELF_BASE_URL", "http://srv")
     return box
 
 
-def test_recall_posts_to_recall_route(captured) -> None:
-    out = mm.recall(query="release cadence", scope="team", name="org-context", limit=5)
-    assert captured["method"] == "POST"
+def test_search_posts_recall_spanning_both(captured) -> None:
+    mm.search(query="pricing")
     assert captured["url"] == "http://srv/v1/memory/recall"
     assert captured["body"] == {
-        "query": "release cadence",
+        "query": "pricing",
         "scope": "team",
         "name": "org-context",
-        "limit": 5,
+        "kind": "all",  # search spans ambient + addressable by default
+        "limit": 10,
     }
-    assert out["ok"] is True
 
 
-def test_recall_defaults_to_org_blackboard(captured) -> None:
-    mm.recall(query="x")
-    assert captured["body"]["scope"] == "team"
-    assert captured["body"]["name"] == "org-context"
-    assert captured["body"]["limit"] == 10
+def test_search_kind_override(captured) -> None:
+    mm.search(query="x", kind="addressable", scope="topic", name="dept:eng", limit=3)
+    assert captured["body"] == {
+        "query": "x",
+        "scope": "topic",
+        "name": "dept:eng",
+        "kind": "addressable",
+        "limit": 3,
+    }
 
 
-def test_append_posts_to_append_route(captured) -> None:
-    mm.append(content="we ship fridays", scope="topic", name="dept:engineering", weight=2.0)
+def test_append_posts_append(captured) -> None:
+    mm.append(content="we ship fridays", scope="topic", name="dept:eng", weight=2.0)
     assert captured["url"] == "http://srv/v1/memory/append"
     assert captured["body"] == {
         "content": "we ship fridays",
         "scope": "topic",
-        "name": "dept:engineering",
+        "name": "dept:eng",
         "weight": 2.0,
     }
 
 
-def test_append_defaults(captured) -> None:
-    mm.append(content="c")
-    body = captured["body"]
-    assert body["scope"] == "team"
-    assert body["name"] == "org-context"
-    assert body["weight"] == 1.0
-
-
-def test_compartments_posts_empty_body(captured) -> None:
-    mm.compartments()
-    assert captured["url"] == "http://srv/v1/memory/compartments"
-    assert captured["body"] == {}
-
-
-def test_memory_get_posts_address(captured) -> None:
-    mm.memory_get(address="org:charter")
-    assert captured["url"] == "http://srv/v1/memory/get"
-    assert captured["body"] == {"address": "org:charter"}
-
-
-def test_memory_put_posts_address_and_content(captured) -> None:
-    mm.memory_put(
-        address="org:charter", content="be the best", confidence=0.9, source_conversation_id="c1"
-    )
+def test_put_posts_put(captured) -> None:
+    mm.put(address="org:charter", content="be the best", confidence=0.9)
     assert captured["url"] == "http://srv/v1/memory/put"
     assert captured["body"] == {
         "address": "org:charter",
         "content": "be the best",
         "weight": 1.0,
         "confidence": 0.9,
-        "source_conversation_id": "c1",
+        "source_conversation_id": None,
     }
 
 
-def test_memory_unset_posts_address(captured) -> None:
-    mm.memory_unset(address="dept:engineering:oncall")
+def test_get_posts_get(captured) -> None:
+    mm.get(address="org:charter")
+    assert captured["url"] == "http://srv/v1/memory/get"
+    assert captured["body"] == {"address": "org:charter"}
+
+
+def test_list_posts_list(captured) -> None:
+    mm.list_slots(prefix="dept:eng")
+    assert captured["url"] == "http://srv/v1/memory/list"
+    assert captured["body"] == {"prefix": "dept:eng"}
+
+
+def test_unset_posts_unset(captured) -> None:
+    mm.unset(address="org:charter")
     assert captured["url"] == "http://srv/v1/memory/unset"
-    assert captured["body"] == {"address": "dept:engineering:oncall"}
+    assert captured["body"] == {"address": "org:charter"}
 
 
 def test_non_json_response_is_wrapped(monkeypatch) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(500, text="boom")
-
-    transport = httpx.MockTransport(handler)
-    real_client = httpx.Client
+    transport = httpx.MockTransport(lambda r: httpx.Response(500, text="boom"))
+    real = httpx.Client
     monkeypatch.setattr(
-        mm.httpx, "Client", lambda *a, **k: real_client(*a, **{**k, "transport": transport})
+        mm.httpx, "Client", lambda *a, **k: real(*a, **{**k, "transport": transport})
     )
     monkeypatch.setenv("OMNIGENT_SELF_BASE_URL", "http://srv")
-
-    out = mm.recall(query="x")
-    assert "error" in out
-    assert "non-JSON" in out["error"]
+    out = mm.get(address="org:x")
+    assert "error" in out and "non-JSON" in out["error"]
 
 
 def test_base_url_precedence(monkeypatch) -> None:
@@ -136,17 +117,10 @@ def test_base_url_precedence(monkeypatch) -> None:
     monkeypatch.setenv("OMNIGENT_SERVER_URL", "http://host-side")
     assert mm._base_url() == "http://host-side"
     monkeypatch.setenv("OMNIGENT_SELF_BASE_URL", "http://self/")
-    assert mm._base_url() == "http://self"  # SELF wins + trailing slash stripped
+    assert mm._base_url() == "http://self"
 
 
 @pytest.mark.asyncio
-async def test_tools_list_exposes_all_tools() -> None:
+async def test_tools_list_exposes_six() -> None:
     tools = await mm.mcp.list_tools()
-    assert sorted(t.name for t in tools) == [
-        "append",
-        "compartments",
-        "memory_get",
-        "memory_put",
-        "memory_unset",
-        "recall",
-    ]
+    assert sorted(t.name for t in tools) == ["append", "get", "list", "put", "search", "unset"]

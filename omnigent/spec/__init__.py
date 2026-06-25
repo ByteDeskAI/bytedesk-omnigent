@@ -165,6 +165,29 @@ def _find_omnigent_yaml_in_dir(root: Path) -> Path | None:
     return None
 
 
+def _apply_extension_default_mcp(spec: AgentSpec) -> AgentSpec:
+    """Merge extension-contributed default MCP servers into *spec* (BDP-2459).
+
+    Lets an extension expose a platform-wide tool (e.g. ``bytedesk_omnigent``'s
+    shared-memory front) to EVERY agent from one place — no per-bundle
+    ``config.yaml`` edit. A server the spec already declares by name wins. The
+    list is mutated in place (works on a frozen spec too). Best-effort: a
+    discovery/import failure leaves the spec unchanged.
+    """
+    try:
+        from omnigent.extensions import extension_default_mcp_servers
+
+        defaults = extension_default_mcp_servers()
+    except Exception:  # noqa: BLE001 — a default-mount lookup must never break load
+        return spec
+    if defaults:
+        have = {s.name for s in spec.mcp_servers}
+        spec.mcp_servers.extend(
+            s for s in defaults if getattr(s, "name", None) not in have
+        )
+    return spec
+
+
 def load(
     source: Path | bytes,
     *,
@@ -232,7 +255,9 @@ def load(
         # omnigent.spec._omnigent_compat. Tech-debt aside;
         # remove this branch when omnigent compat ends.
         if is_omnigent_yaml(source):
-            return load_omnigent_yaml(source, enforce_handler_allowlist=enforce_handler_allowlist)
+            return _apply_extension_default_mcp(
+                load_omnigent_yaml(source, enforce_handler_allowlist=enforce_handler_allowlist)
+            )
         if source.suffix.lower() in {".yaml", ".yml"}:
             # The path is a YAML file but failed the omnigent check
             # (missing required key, ``spec_version`` set, malformed,
@@ -269,7 +294,9 @@ def load(
     # *expand_env* and the flag does not apply.
     candidate = _find_omnigent_yaml_in_dir(root)
     if candidate is not None:
-        return load_omnigent_yaml(candidate, enforce_handler_allowlist=enforce_handler_allowlist)
+        return _apply_extension_default_mcp(
+            load_omnigent_yaml(candidate, enforce_handler_allowlist=enforce_handler_allowlist)
+        )
 
     spec = parse(root, expand_env=expand_env)
     result = validate(spec)
@@ -287,7 +314,7 @@ def load(
         # The single-file omnigent YAML path is guarded earlier, inside
         # the loader, because that loader executes factories at parse.
         _reject_unregistered_spec_policy_handlers(spec)
-    return spec
+    return _apply_extension_default_mcp(spec)
 
 
 def _reject_unregistered_spec_policy_handlers(spec: AgentSpec) -> None:
