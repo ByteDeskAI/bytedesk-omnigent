@@ -59,7 +59,6 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
         )
-        from bytedesk_omnigent.routes.memory import create_memory_router
         from bytedesk_omnigent.routes.omni_cli_terminal import (
             create_omni_cli_terminal_router,
         )
@@ -76,7 +75,6 @@ class BytedeskExtension:
                 permission_store=permission_store,
             ),
             create_integration_capabilities_router(auth_provider=auth_provider),
-            create_memory_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
             create_schedules_router(auth_provider=auth_provider),
             create_config_router(auth_provider=auth_provider),
@@ -90,12 +88,15 @@ class BytedeskExtension:
     def default_mcp_servers(self) -> list:
         """The shared-memory stdio MCP front, mounted on EVERY agent.
 
-        A stdio server (``python -m bytedesk_omnigent.memory_mcp``) proxying to
-        this extension's ``/v1/memory/*`` routes — one searchable + addressable
-        shared-memory store across team/dept/org. ``env.PYTHONPATH=/build`` so the
-        spawned subprocess can import ``bytedesk_omnigent`` (the SDK's minimal
-        stdio env omits PYTHONPATH; ``/build`` is the source mount in localDev and
-        the install root in the prod image). Model sees ``memory__search`` /
+        A stdio server (``python -m bytedesk_omnigent.memory_mcp``) that ADVERTISES
+        the ``memory__*`` tool schemas — one searchable + addressable shared-memory
+        store across org/dept/agent. Execution is handled SERVER-SIDE at the
+        ``tools/call`` choke point (``_handle_mcp_tools_call``), where the caller's
+        verified identity is known (BDP-2458); the front carries the schemas only,
+        not the identity, and never executes the tool bodies. ``env.PYTHONPATH=/build``
+        so the spawned subprocess can import ``bytedesk_omnigent`` (the SDK's minimal
+        stdio env omits PYTHONPATH; ``/build`` is the source mount in localDev and the
+        install root in the prod image). Model sees ``memory__search`` /
         ``memory__get`` / ``memory__put`` / ``memory__append`` / ``memory__list`` /
         ``memory__unset``. An agent that declares its own ``memory`` server wins
         (merged by name in :func:`omnigent.spec.load`).
