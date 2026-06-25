@@ -121,6 +121,32 @@ async def test_resolve_targets_filters_by_scope() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resolve_targets_matches_employee_by_name_slug() -> None:
+    # A built-in's id is a generated ag_… hash and its display_name may be
+    # capitalized/absent, so an employee scope must match the stable `name`
+    # slug too (regression: it only matched id + display_name → empty targets).
+    agents = {
+        "data": [
+            {
+                "id": "ag_07b3",
+                "name": "structured-output-demo",
+                "display_name": "Structured Output Demo",
+            },
+            {"id": "ag_x", "name": "other", "display_name": "Other"},
+        ]
+    }
+    client = _FakeClient([_FakeResponse(agents)])
+    out = json.loads(
+        await _execute_skill_acq_tool(
+            "sys_skill_resolve_targets",
+            {"scope": "employee:structured-output-demo"},
+            client,  # type: ignore[arg-type]
+        )
+    )
+    assert [t["id"] for t in out["targets"]] == ["ag_07b3"]
+
+
+@pytest.mark.asyncio
 async def test_resolve_targets_organization_excludes_workflow() -> None:
     agents = {
         "data": [
