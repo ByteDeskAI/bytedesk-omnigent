@@ -91,6 +91,48 @@ describe("SkillsPage", () => {
     expect(screen.getByRole("link", { name: /Close skills/ })).toBeInTheDocument();
   });
 
+  it("orders departments by name and employees by department then name", () => {
+    const mk = (id: string, display_name: string, department: string, workflow = false) => ({
+      id,
+      name: id,
+      display_name,
+      department,
+      title: null,
+      description: null,
+      harness: "claude-sdk",
+      skills: [],
+      workflow,
+    });
+    vi.mocked(useAvailableAgents).mockReturnValue({
+      data: [
+        mk("a_zara", "Zara", "Sales"),
+        mk("a_bob", "Bob", "Engineering"),
+        mk("a_alice", "Alice", "Engineering"),
+        mk("a_mona", "Mona", "Marketing"),
+        mk("a_router", "Router", "Engineering", true), // workflow → excluded
+        mk("ag_cc", "Concierge", "Operations"),
+        { ...mk("ag_cc", "Concierge", "Operations"), name: "skills-concierge" },
+      ],
+      isLoading: false,
+    } as never);
+
+    renderPage();
+    const labels = screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label") || b.textContent || "");
+    const order = (s: string) => labels.findIndex((l) => l.includes(s));
+
+    // Departments sorted by name (case-insensitive).
+    expect(order("Engineering")).toBeLessThan(order("Marketing"));
+    expect(order("Marketing")).toBeLessThan(order("Operations"));
+    expect(order("Operations")).toBeLessThan(order("Sales"));
+
+    // Employees ordered by department then name: Engineering's Alice before Bob,
+    // both before Marketing's Mona.
+    expect(order("Alice")).toBeLessThan(order("Bob"));
+    expect(order("Bob")).toBeLessThan(order("Mona"));
+  });
+
   it("routes the composer to the concierge by name, using its generated id", () => {
     renderPage();
     // Resolved by name === "skills-concierge"; the composer is wired to the
