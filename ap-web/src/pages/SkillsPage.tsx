@@ -48,11 +48,16 @@ function scopeLabel(scope: SkillScope, agents: AvailableAgent[]): string {
   return agents.find((agent) => agent.id === scope.id)?.display_name ?? "Employee";
 }
 
-/** The dedicated skills concierge agent, by id then display-name fallback. */
+/**
+ * The dedicated skills concierge built-in. Seeded agents carry a generated
+ * `ag_…` id, so the stable handle is `name` ("skills-concierge"); fall back to
+ * id, then a loose display-name match (display_name can be null on built-ins).
+ */
 function findConcierge(agents: AvailableAgent[]): AvailableAgent | null {
   return (
+    agents.find((a) => a.name === "skills-concierge") ??
     agents.find((a) => a.id === "skills-concierge") ??
-    agents.find((a) => /skills concierge/i.test(a.display_name)) ??
+    agents.find((a) => /skills.?concierge/i.test(a.display_name ?? "")) ??
     null
   );
 }
