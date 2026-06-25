@@ -37,13 +37,18 @@ go-ahead.
 skill is a no-op (idempotent re-run). Use `replace` only for an explicit
 reinstall/update.
 
-**Sources.** The default search is the skills.sh registry + npm. The
-**superchargeclaudecode.com** marketplace is also searchable — pass
+**Sources.** Default search includes skills.sh, npm, and the **ByteDesk GitHub
+catalog** (`github_marketplace`). For ByteDesk-only search pass
+`sys_skill_search(query, sources=["github_marketplace"])`; stage with
+`sys_skill_stage_preview(source="github_marketplace",
+source_ref="ByteDeskAI/bytedesk-marketplace@<plugin>", ...)`. See
+`references/bytedesk-catalog.md` for plugin vs single-skill refs.
+
+The **superchargeclaudecode.com** marketplace is also searchable — pass
 `sys_skill_search(query, sources=["supercharge"])`; each hit's `name`/`source_ref`
-is the marketplace **slug** (e.g. `dogfood`, NOT an `owner/repo@skill` ref). Stage
-it with `sys_skill_stage_preview(source="supercharge", source_ref=<slug>, ...)`.
-The rest of the saga (apply → verify → rollback) is identical. The endpoint
-contract this source is built from is in `references/supercharge-api.md`.
+is the marketplace **slug** (e.g. `dogfood`). Stage with
+`sys_skill_stage_preview(source="supercharge", source_ref=<slug>, ...)`.
+Contracts: `references/supercharge-api.md`, `references/bytedesk-catalog.md`.
 
 ## 3. Apply
 
