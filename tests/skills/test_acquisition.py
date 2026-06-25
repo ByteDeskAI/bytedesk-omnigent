@@ -13,6 +13,7 @@ from omnigent.skills.acquisition import (
     SkillAcquisitionService,
     SkillCommandRunner,
     SkillCommandSpec,
+    _parse_skills_cli_search,
     discover_skill_packages,
 )
 
@@ -25,6 +26,48 @@ def _write_skill(root: Path, name: str = "image-tools") -> Path:
     )
     (skill / "assets" / "icon.bin").write_bytes(b"\x00\x01binary")
     return skill
+
+
+_SKILLS_FIND_STDOUT = (
+    "\n"
+    "\x1b[38;5;81m███████╗██╗  ██╗██╗██╗     ██╗     ███████╗\x1b[0m\n"
+    "\x1b[38;5;81m██╔════╝██║ ██╔╝██║██║     ██║     ██╔════╝\x1b[0m\n"
+    "\n"
+    "\x1b[1mSearch results\x1b[0m\n"
+    "19\n"
+    "\n"
+    "\x1b[38;5;102mInstall with\x1b[0m npx skills add <owner/repo@skill>\n"
+    "\n"
+    "\x1b[38;5;145mcoreyhaines31/marketingskills@seo-audit\x1b[0m "
+    "\x1b[36m145.5K installs\x1b[0m\n"
+    "\x1b[38;5;102m└ https://skills.sh/coreyhaines31/marketingskills/seo-audit\x1b[0m\n"
+    "\n"
+    "\x1b[38;5;145mresciencelab/opc-skills@seo-geo\x1b[0m \x1b[36m31.7K installs\x1b[0m\n"
+    "\x1b[38;5;102m└ https://skills.sh/resciencelab/opc-skills/seo-geo\x1b[0m\n"
+)
+
+
+def test_parse_skills_cli_search_drops_banner_and_extracts_refs() -> None:
+    hits = _parse_skills_cli_search(_SKILLS_FIND_STDOUT, limit=20)
+
+    assert [h.name for h in hits] == [
+        "coreyhaines31/marketingskills@seo-audit",
+        "resciencelab/opc-skills@seo-geo",
+    ]
+    first = hits[0]
+    assert first.source == "skills"
+    assert first.source_ref == "coreyhaines31/marketingskills@seo-audit"
+    assert first.description == "145.5K installs"
+    assert first.url == "https://skills.sh/coreyhaines31/marketingskills/seo-audit"
+    # Banner art, the "Search results"/count header, the "Install with ..."
+    # footer, and the "└ https://..." URL lines must never become results.
+    assert all("█" not in h.name and "Install" not in h.name for h in hits)
+
+
+def test_parse_skills_cli_search_respects_limit() -> None:
+    hits = _parse_skills_cli_search(_SKILLS_FIND_STDOUT, limit=1)
+
+    assert [h.name for h in hits] == ["coreyhaines31/marketingskills@seo-audit"]
 
 
 def test_discover_skill_packages_keeps_full_directory_manifest(tmp_path: Path) -> None:
