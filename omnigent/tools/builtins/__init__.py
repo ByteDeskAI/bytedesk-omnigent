@@ -21,6 +21,7 @@ Public API:
 from __future__ import annotations
 
 from collections.abc import Callable
+from functools import partial
 
 from omnigent.extensions import extension_tool_factories
 from omnigent.spec.types import SkillSpec
@@ -51,6 +52,15 @@ from omnigent.tools.builtins.memory import (
 )
 from omnigent.tools.builtins.read_skill_file import (
     ReadSkillFileTool,
+)
+from omnigent.tools.builtins.skills import (
+    SysSkillApplyTool,
+    SysSkillInstalledTool,
+    SysSkillRemoveTool,
+    SysSkillResolveTargetsTool,
+    SysSkillSearchTool,
+    SysSkillSourcesTool,
+    SysSkillStagePreviewTool,
 )
 from omnigent.tools.builtins.spawn import (
     SysSessionCloseTool,
@@ -89,6 +99,13 @@ __all__ = [
     "SysSessionGetInfoTool",
     "SysSessionListTool",
     "SysSessionSendTool",
+    "SysSkillApplyTool",
+    "SysSkillInstalledTool",
+    "SysSkillRemoveTool",
+    "SysSkillResolveTargetsTool",
+    "SysSkillSearchTool",
+    "SysSkillSourcesTool",
+    "SysSkillStagePreviewTool",
     "SysTimerCancelTool",
     "SysTimerSetTool",
     "UpdateCommentTool",
@@ -173,6 +190,22 @@ def _create_export_agent(config: dict[str, str]) -> Tool:
     return ExportAgentTool()
 
 
+# Skill-acquisition tools (sys_skill_*, BDP-2487). Opt-in: only registered
+# for agents that list them in ``tools.builtins`` (install is privileged).
+# Schema-only — the runner dispatches them over server_client (see
+# ``_SKILL_ACQ_TOOLS`` in omnigent.runner.tool_dispatch). One factory builds
+# any of the seven from its (config-free) class.
+def _create_skill_tool(config: dict[str, str], cls: type[Tool]) -> Tool:
+    """
+    Lazy factory for a schema-only ``sys_skill_*`` tool.
+
+    :param config: Tool config (unused — these tools take no spec config).
+    :param cls: The skill-tool class to instantiate.
+    :returns: An instance of *cls*.
+    """
+    return cls()
+
+
 # Unified registry for every reserved builtin name. The value
 # is either a factory callable (for user-enablable tools) or
 # ``None`` for framework-owned names that occupy the name-space
@@ -199,6 +232,16 @@ _BUILTIN_REGISTRY: dict[str, _BuiltinFactory | None] = {
     "memory_append": lambda config: MemoryAppendTool(),
     "memory_query": lambda config: MemoryQueryTool(),
     "memory_compartments_list": lambda config: MemoryCompartmentsListTool(),
+    # Skill-acquisition (sys_skill_*, BDP-2487). Opt-in install surface for the
+    # Skills Concierge; runner-dispatched over server_client (require_user
+    # mutating routes). Schema-only here; no spec config.
+    "sys_skill_search": partial(_create_skill_tool, cls=SysSkillSearchTool),
+    "sys_skill_sources": partial(_create_skill_tool, cls=SysSkillSourcesTool),
+    "sys_skill_installed": partial(_create_skill_tool, cls=SysSkillInstalledTool),
+    "sys_skill_resolve_targets": partial(_create_skill_tool, cls=SysSkillResolveTargetsTool),
+    "sys_skill_stage_preview": partial(_create_skill_tool, cls=SysSkillStagePreviewTool),
+    "sys_skill_apply": partial(_create_skill_tool, cls=SysSkillApplyTool),
+    "sys_skill_remove": partial(_create_skill_tool, cls=SysSkillRemoveTool),
     # First-party tools (ByteDesk goals/peer/deliberation/outcome/signal/routing)
     # are contributed via the omnigent.extensions seam (ADR-0143 / BDP-2300) and
     # merged here — no ByteDesk import in core.

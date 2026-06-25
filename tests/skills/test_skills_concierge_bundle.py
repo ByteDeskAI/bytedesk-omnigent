@@ -22,14 +22,16 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _BUNDLE_DIR = _REPO_ROOT / "deploy" / "bytedesk" / "agents" / "skills-concierge"
 _SERVER_MANIFEST = _REPO_ROOT / "deploy" / "bytedesk" / "k8s" / "server.yaml"
 
-_SKILLS_TOOLS = {
-    "search",
-    "sources",
-    "installed",
-    "resolve_targets",
-    "stage_preview",
-    "apply_preview",
-    "remove",
+# The sys_skill_* opt-in builtins that replaced the old stdio MCP front
+# (BDP-2487). Listing them in tools.builtins is the opt-in grant.
+_SKILL_BUILTINS = {
+    "sys_skill_search",
+    "sys_skill_sources",
+    "sys_skill_installed",
+    "sys_skill_resolve_targets",
+    "sys_skill_stage_preview",
+    "sys_skill_apply",
+    "sys_skill_remove",
 }
 
 
@@ -53,14 +55,16 @@ def test_concierge_runs_on_claude_sdk(spec) -> None:
     assert spec.executor.config.get("harness") == "claude-sdk"
 
 
-def test_skills_mcp_attached_with_stdio_command_and_allowlist(spec) -> None:
-    servers = {s.name: s for s in spec.mcp_servers}
-    assert "skills" in servers, "skills MCP front must be attached to the Concierge"
-    skills = servers["skills"]
-    assert skills.transport == "stdio"
-    assert skills.command == "python"
-    assert skills.args == ["-m", "bytedesk_omnigent.skills_mcp"]
-    assert set(skills.tool_allowlist) == _SKILLS_TOOLS
+def test_skill_builtins_attached_and_stdio_front_gone(spec) -> None:
+    # The seven sys_skill_* tools must be granted as opt-in builtins.
+    declared = {b.name for b in spec.tools.builtins}
+    assert declared >= _SKILL_BUILTINS, (
+        "the sys_skill_* install builtins must be listed in tools.builtins"
+    )
+    # The old stdio `skills` MCP front must be gone — the runner held no server
+    # credential, so its require_user mutating routes 401'd (BDP-2487).
+    servers = {s.name for s in spec.mcp_servers}
+    assert "skills" not in servers, "the legacy skills stdio MCP front must be removed"
 
 
 def test_probe_surface_is_granted(spec) -> None:
