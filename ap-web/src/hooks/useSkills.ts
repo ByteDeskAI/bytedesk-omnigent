@@ -96,6 +96,39 @@ export interface SearchSkillsPayload {
   command?: SkillCommandBody;
 }
 
+export interface SkillMarketplace {
+  id: string;
+  label: string;
+  source_id: string;
+  kind: string;
+  description: string | null;
+  default: boolean;
+  repo: string | null;
+}
+
+export interface SkillRecommendation {
+  name: string;
+  source: string;
+  source_ref: string;
+  reason: string;
+}
+
+export interface StartSkillsConciergeSessionPayload {
+  target_kind: "organization" | "department" | "employee";
+  target_id: string;
+  target_label?: string | null;
+  target_agent_ids?: string[];
+}
+
+export interface SkillsConciergeSession {
+  session_id: string;
+  agent_id: string;
+  agent_name: string;
+  title: string;
+  prompt: string;
+  web_path: string;
+}
+
 export interface CreateSkillPreviewPayload {
   operation?: "install" | "remove";
   target_agent_ids: string[];
@@ -109,6 +142,8 @@ export interface CreateSkillPreviewPayload {
 
 const SOURCES_KEY = ["skill-sources"];
 const INSTALLED_KEY = ["installed-skills"];
+const MARKETPLACES_KEY = ["skill-marketplaces"];
+const RECOMMENDATIONS_KEY = ["skill-recommendations"];
 
 async function readError(res: Response): Promise<string> {
   try {
@@ -142,6 +177,49 @@ export function useInstalledSkills() {
       return body.data;
     },
     staleTime: 10_000,
+  });
+}
+
+export function useSkillMarketplaces() {
+  return useQuery({
+    queryKey: MARKETPLACES_KEY,
+    queryFn: async () => {
+      const res = await authenticatedFetch("/v1/skills/marketplaces");
+      if (!res.ok) throw new Error(await readError(res));
+      const body = (await res.json()) as { data: SkillMarketplace[] };
+      return body.data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+export function useSkillRecommendations(department?: string | null, title?: string | null) {
+  return useQuery({
+    queryKey: [...RECOMMENDATIONS_KEY, department ?? "", title ?? ""],
+    queryFn: async () => {
+      const params = new URLSearchParams();
+      if (department) params.set("department", department);
+      if (title) params.set("title", title);
+      const res = await authenticatedFetch(`/v1/skills/recommendations?${params.toString()}`);
+      if (!res.ok) throw new Error(await readError(res));
+      const body = (await res.json()) as { data: SkillRecommendation[] };
+      return body.data;
+    },
+    staleTime: 30_000,
+  });
+}
+
+export function useStartSkillsConciergeSession() {
+  return useMutation({
+    mutationFn: async (payload: StartSkillsConciergeSessionPayload) => {
+      const res = await authenticatedFetch("/v1/skills/concierge/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) throw new Error(await readError(res));
+      return (await res.json()) as SkillsConciergeSession;
+    },
   });
 }
 
