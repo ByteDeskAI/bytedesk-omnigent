@@ -121,6 +121,15 @@ patches:
                   # https://omnigent.dev.bytedesk.ai, not the http://*.localhost URL.
                   - name: OMNIGENT_AUTH_ENABLED
                     value: "true"
+                  # The omnigent UI is embedded as a cross-origin iframe in Office
+                  # chat. A SameSite=Lax cookie is NOT sent in a third-party frame,
+                  # so the embedded UI's fetches + the WS /v1/sessions/updates
+                  # upgrade lose the session cookie and 401/403 (UI stuck on
+                  # "queued"). SameSite=None — paired with Secure, already required
+                  # by the https base_url + __Host- prefix — lets the cookie ride in
+                  # the embed (BDP-2501). Local-dev-only, like the accounts switch.
+                  - name: OMNIGENT_COOKIE_SAMESITE
+                    value: "none"
                   - name: OMNIGENT_ACCOUNTS_BASE_URL
                     value: https://omnigent.dev.bytedesk.ai
                   - name: OMNIGENT_ACCOUNTS_INIT_ADMIN_USERNAME
