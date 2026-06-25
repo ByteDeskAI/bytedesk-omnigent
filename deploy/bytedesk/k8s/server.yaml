@@ -75,6 +75,11 @@ spec:
             # the omnigent-bridge-config InfisicalSecret CR.
             - secretRef:
                 name: omnigent-bridge-config-secrets
+            # Agentic Inbox MCP config + webhook verification secret, hydrated
+            # from Infisical bytedesk-agent-configuration /agentic-inbox.
+            - secretRef:
+                name: agentic-inbox-config-secrets
+                optional: true
           env:
             - name: HOST
               value: "0.0.0.0"

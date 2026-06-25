@@ -177,7 +177,7 @@ spec:
             # set inline here. All MUST be in this list or the runner can't
             # authenticate to Infisical and falls back to its local keyring.
             - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
-              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV"
+              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV,AGENTIC_INBOX_MCP_URL,AGENTIC_INBOX_EMAIL_DOMAIN,AGENTIC_INBOX_CF_ACCESS_CLIENT_ID,AGENTIC_INBOX_CF_ACCESS_CLIENT_SECRET"
             # ByteDesk platform MCP (BDP-2169/2182/2199): every agent's inline
             # bytedesk-platform MCP server references these ${VAR}s, expanded by
             # the runner at turn setup. Both names MUST be in the passthrough list
@@ -217,6 +217,13 @@ spec:
             # operator hydrates; the backend then falls back to its local keyring.
             - secretRef:
                 name: omnigent-infisical-secrets
+                optional: true
+            # Agentic Inbox MCP config for persona agents, hydrated from
+            # Infisical bytedesk-agent-configuration /agentic-inbox. These env
+            # names are forwarded to spawned runners by
+            # OMNIGENT_RUNNER_ENV_PASSTHROUGH above.
+            - secretRef:
+                name: agentic-inbox-config-secrets
                 optional: true
           resources:
             requests:

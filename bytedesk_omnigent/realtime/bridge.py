@@ -21,7 +21,8 @@ conversation→agent mapping at the ``session_stream.publish`` turn boundary;
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 from bytedesk_omnigent.realtime import config
 from bytedesk_omnigent.realtime.channel import (
@@ -54,8 +55,9 @@ def emit_presence(agent_id: str, status: str) -> None:
 
 # ── store-method wrappers (factored out so they're unit-testable without a DB) ──
 
+
 def wrap_create(orig: Callable[..., Any]) -> Callable[..., Any]:
-    def create(self, agent_id, name, bundle_location, description=None):  # noqa: ANN001
+    def create(self, agent_id, name, bundle_location, description=None):
         result = orig(self, agent_id, name, bundle_location, description)
         emit_roster("created", agent_id)
         return result
@@ -64,8 +66,8 @@ def wrap_create(orig: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def wrap_update(orig: Callable[..., Any]) -> Callable[..., Any]:
-    def update(self, agent_id, bundle_location):  # noqa: ANN001
-        result = orig(self, agent_id, bundle_location)
+    def update(self, agent_id, bundle_location, *args, **kwargs):
+        result = orig(self, agent_id, bundle_location, *args, **kwargs)
         if result is not None:  # only emit when the update hit a real row
             emit_roster("updated", agent_id)
         return result
@@ -74,7 +76,7 @@ def wrap_update(orig: Callable[..., Any]) -> Callable[..., Any]:
 
 
 def wrap_delete(orig: Callable[..., Any]) -> Callable[..., Any]:
-    def delete(self, agent_id):  # noqa: ANN001
+    def delete(self, agent_id):
         result = orig(self, agent_id)
         if result:  # True == the agent existed and was deleted
             emit_roster("deleted", agent_id)

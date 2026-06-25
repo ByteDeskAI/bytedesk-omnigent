@@ -30,6 +30,19 @@ images:
     newTag: 0.14.0 # pipeline-managed: matches the platform release version
 patches:
   - target:
+      kind: InfisicalSecret
+      name: omnigent-agentic-inbox-config
+    patch: |
+      apiVersion: secrets.infisical.com/v1alpha1
+      kind: InfisicalSecret
+      metadata:
+        name: omnigent-agentic-inbox-config
+      spec:
+        authentication:
+          universalAuth:
+            secretsScope:
+              envSlug: production
+  - target:
       kind: Deployment
       name: omnigent-server
     patch: |

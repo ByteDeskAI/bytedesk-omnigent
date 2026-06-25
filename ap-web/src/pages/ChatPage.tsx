@@ -55,7 +55,7 @@ import { CompactionMarker } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
 import { parseSystemMessage } from "@/lib/systemMessage";
 import { Button } from "@/components/ui/button";
-import { OttoIcon } from "@/components/icons/OttoIcon";
+import { AgentMascotEyes } from "@/components/AgentMascotEyes";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,
@@ -1349,9 +1349,9 @@ function MainAgentSurface({
                   <Message from="assistant" data-testid="working-indicator" aria-hidden="true">
                     <MessageContent>
                       {/* py-0.5 = headroom for the bob: MessageContent is overflow-hidden
-                          and would clip otto's head at the top of the bounce. */}
+                          and would clip the mascot at the top of the bounce. */}
                       <div className="flex items-center gap-1.5 py-0.5">
-                        <OttoIcon className="otto-working h-4 w-auto shrink-0" />
+                        <AgentMascotEyes decorative className="otto-working h-4 w-auto shrink-0" />
                         <Shimmer className="text-xs font-mono" duration={1.5}>
                           Working…
                         </Shimmer>
@@ -1535,7 +1535,7 @@ function WorkingStatusPin({ show, suppress = false }: { show: boolean; suppress?
               !visible && "sr-only",
             )}
           >
-            <OttoIcon className="otto-working h-4 w-auto shrink-0" />
+            <AgentMascotEyes decorative className="otto-working h-4 w-auto shrink-0" />
             <Shimmer className="text-xs font-mono" duration={1.5}>
               Working…
             </Shimmer>

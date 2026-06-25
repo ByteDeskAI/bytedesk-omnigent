@@ -50,6 +50,11 @@ resources:
   # omnigent-bridge-config-secrets (BYTEDESK_TENANT_ID) which server.yaml injects
   # as env for the realtime agent bridge (bytedesk_omnigent/realtime).
   - omnigent-bridge-config-secret.yaml
+  # Infisical-operator-managed Agentic Inbox MCP config. A CR pointing at
+  # bytedesk-agent-configuration /agentic-inbox — the operator hydrates
+  # agentic-inbox-config-secrets (MCP URL, dev email domain, Cloudflare Access
+  # service-token headers) for the server and host.
+  - omnigent-agentic-inbox-config-secret.yaml
   # Infisical-operator-managed signed-principal HMAC secret (BDP-2389). A CR
   # pointing at the dedicated `bytedesk-omnigent` project, path / — the operator
   # hydrates omnigent-principal-secrets (OMNIGENT_BYTEDESK_PRINCIPAL_SECRET)

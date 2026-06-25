@@ -58,7 +58,7 @@ import { useDirectorySessions } from "@/hooks/useDirectorySessions";
 import { useRunnerHealthRegistration } from "@/hooks/RunnerHealthProvider";
 import { useHostFilesystem, type HostFilesystemEntry } from "@/hooks/useHostFilesystem";
 import type { Conversation } from "@/hooks/useConversations";
-import { OttoEyes } from "@/components/OttoEyes";
+import { AgentMascotEyes } from "@/components/AgentMascotEyes";
 import { SkillPills } from "@/components/SkillPills";
 import { ComposerMicButton } from "@/components/ComposerMicButton";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -1254,7 +1254,7 @@ export function NewChatLandingScreen() {
           840 − 80 = 760px max. */}
       <div className="flex w-full max-w-[840px] flex-col items-center gap-8 px-10 pt-8 pb-16">
         <div className="flex flex-col items-center gap-3.5 sm:flex-row">
-          <OttoEyes className="h-18 w-auto shrink-0" />
+          <AgentMascotEyes className="h-18 w-auto shrink-0" />
           <h1 className="text-center text-3xl font-medium text-foreground sm:text-left">
             What should we do?
           </h1>

@@ -878,6 +878,28 @@ def test_parse_mcp_http(
     assert mcp.headers == {"Authorization": "Bearer sk-test-key"}
 
 
+def test_parse_mcp_http_url_expands_env_var(
+    agent_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_URL", "https://mcp.example.com/mcp")
+    mcp_dir = agent_dir / "tools" / "mcp"
+    mcp_dir.mkdir(parents=True)
+    (mcp_dir / "service.yaml").write_text(
+        yaml.dump(
+            {
+                "name": "my-service",
+                "transport": "http",
+                "url": "${MCP_URL}",
+            }
+        )
+    )
+
+    spec = parse(agent_dir)
+
+    assert spec.mcp_servers[0].url == "https://mcp.example.com/mcp"
+
+
 def test_parse_mcp_env_unresolved_var_raises(
     agent_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1040,6 +1062,28 @@ def test_parse_inline_mcp_http_server(tmp_path: Path) -> None:
     assert srv.args == []
     # No allowlist declared → empty (expose all tools), backward-compatible.
     assert srv.tool_allowlist == []
+
+
+def test_parse_inline_mcp_http_url_expands_env_var(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENTIC_INBOX_MCP_URL", "https://inbox.example.com/mcp")
+    config = {
+        "spec_version": 1,
+        "name": "inline-http-env-url",
+        "tools": {
+            "agentic-inbox": {
+                "type": "mcp",
+                "url": "${AGENTIC_INBOX_MCP_URL}",
+            }
+        },
+    }
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+
+    spec = parse(tmp_path)
+
+    assert spec.mcp_servers[0].url == "https://inbox.example.com/mcp"
 
 
 def test_parse_inline_mcp_tool_allowlist(tmp_path: Path) -> None:

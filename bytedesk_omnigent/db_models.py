@@ -47,9 +47,7 @@ class SqlPendingWait(Base):
     key: Mapped[str] = mapped_column(String(256), nullable=False)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     target: Mapped[str | None] = mapped_column(String(256), nullable=True)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="pending"
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     resolved_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     expires_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -83,9 +81,7 @@ class SqlAgentMessage(Base):
     signal_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     payload: Mapped[str] = mapped_column(Text, nullable=False)
-    dead_lettered: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=false()
-    )
+    dead_lettered: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     delivered_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
@@ -124,15 +120,11 @@ class SqlCronTrigger(Base):
     schedule_expr: Mapped[str] = mapped_column(String(128), nullable=False)
     next_fire_at: Mapped[int] = mapped_column(Integer, nullable=False)
     last_fired_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=true()
-    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1", default=1
-    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (
@@ -164,14 +156,51 @@ class SqlIdempotencyKey(Base):
     key: Mapped[str] = mapped_column(String(256), primary_key=True)
     claimed_at: Mapped[int] = mapped_column(Integer, nullable=False)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
-    dead_lettered: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=false()
-    )
+    dead_lettered: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
+    __table_args__ = (Index("ix_idempotency_keys_dead_lettered", "dead_lettered"),)
+
+
+class SqlAgenticInboxEvent(Base):
+    """A persisted Agentic Inbox email trigger event (BDP-2455).
+
+    The Worker sends a signed ``email.received`` webhook after an inbound email is
+    stored. Omnigent records the event before dispatch so retries are idempotent,
+    unmapped mailboxes are visible as dead letters, and a delivered event points
+    back to the session it created.
+    """
+
+    __tablename__ = "agentic_inbox_events"
+
+    event_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    mailbox_id: Mapped[str] = mapped_column(String(320), nullable=False)
+    email_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    message_id: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    sender: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    thread_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    received_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="received")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    dispatched_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
     __table_args__ = (
-        Index("ix_idempotency_keys_dead_lettered", "dead_lettered"),
+        Index("ix_agentic_inbox_events_mailbox_status", "mailbox_id", "status"),
+        Index("ix_agentic_inbox_events_status_updated", "status", "updated_at"),
+        Index("ix_agentic_inbox_events_agent", "agent_id"),
+        CheckConstraint(
+            "status in ('received', 'dispatched', 'dead_lettered', 'failed')",
+            name="ck_agentic_inbox_events_status",
+        ),
     )
 
 
@@ -200,13 +229,9 @@ class SqlToolStep(Base):
     session_id: Mapped[str] = mapped_column(String(128), nullable=False)
     step_key: Mapped[str] = mapped_column(String(256), nullable=False)
     tool_name: Mapped[str] = mapped_column(String(128), nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="pending"
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
-    max_attempts: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1"
-    )
+    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
     timeout_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     deadline_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     result: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -217,9 +242,7 @@ class SqlToolStep(Base):
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint(
-            "session_id", "step_key", name="uq_tool_steps_session_step"
-        ),
+        UniqueConstraint("session_id", "step_key", name="uq_tool_steps_session_step"),
         Index("ix_tool_steps_status_deadline", "status", "deadline_at"),
         CheckConstraint(
             "status in ('pending', 'running', 'completed', 'failed')",
@@ -242,24 +265,16 @@ class SqlWebhookBinding(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     source: Mapped[str] = mapped_column(String(64), nullable=False)
-    match_key: Mapped[str] = mapped_column(
-        String(256), nullable=False, server_default="*"
-    )
+    match_key: Mapped[str] = mapped_column(String(256), nullable=False, server_default="*")
     signal_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    enabled: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, server_default=true()
-    )
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1", default=1
-    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (
-        UniqueConstraint(
-            "source", "match_key", name="uq_webhook_bindings_source_match"
-        ),
+        UniqueConstraint("source", "match_key", name="uq_webhook_bindings_source_match"),
         Index("ix_webhook_bindings_source_enabled", "source", "enabled"),
     )
 
@@ -355,9 +370,7 @@ class SqlScoreboardEntry(Base):
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
-    __table_args__ = (
-        Index("ix_scoreboard_metric_window_value", "metric", "window", "value"),
-    )
+    __table_args__ = (Index("ix_scoreboard_metric_window_value", "metric", "window", "value"),)
 
 
 class SqlPeerMessage(Base):
@@ -385,9 +398,7 @@ class SqlPeerMessage(Base):
     __table_args__ = (
         Index("ix_peer_messages_to_read_seq", "to_agent", "read_at", "seq"),
         Index("ix_peer_messages_topic_seq", "topic", "seq"),
-        CheckConstraint(
-            "kind in ('dm', 'broadcast', 'escalation')", name="ck_peer_messages_kind"
-        ),
+        CheckConstraint("kind in ('dm', 'broadcast', 'escalation')", name="ck_peer_messages_kind"),
     )
 
 
@@ -436,9 +447,7 @@ class SqlDeliberation(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     topic: Mapped[str] = mapped_column(String(256), nullable=False)
     proposal: Mapped[str] = mapped_column(Text, nullable=False)
-    status: Mapped[str] = mapped_column(
-        String(16), nullable=False, server_default="open"
-    )
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="open")
     decision: Mapped[str | None] = mapped_column(Text, nullable=True)
     decided_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
     opened_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
