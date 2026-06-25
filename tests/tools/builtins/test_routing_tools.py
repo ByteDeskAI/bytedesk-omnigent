@@ -11,7 +11,7 @@ import json
 
 from bytedesk_omnigent.goals import SqlAlchemyGoalStore
 from bytedesk_omnigent.outcomes import SqlAlchemyOutcomeLedger
-from bytedesk_omnigent.tools.routing_tools import FindSpecialistTool
+from bytedesk_omnigent.tools.routing_tools import FindSpecialistTool, ResolveAssigneeTool
 from omnigent.tools.base import ToolContext
 
 
@@ -78,3 +78,105 @@ def test_find_specialist_clamps_limit(tmp_path, monkeypatch) -> None:
         FindSpecialistTool().invoke(json.dumps({"metric": "revenue", "limit": 1}), _ctx())
     )
     assert len(out["candidates"]) == 1
+
+
+def test_find_specialist_invalid_limit_falls_back_to_default(tmp_path, monkeypatch) -> None:
+    db = f"sqlite:///{tmp_path / 'org.db'}"
+    ledger = SqlAlchemyOutcomeLedger(db)
+    goals = SqlAlchemyGoalStore(db)
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
+    ledger.record_outcome(agent_id="ag_a", kind="deal_won", metric="revenue", value=1, now=1)
+
+    out = json.loads(
+        FindSpecialistTool().invoke(json.dumps({"metric": "revenue", "limit": "nope"}), _ctx())
+    )
+    assert out["candidates"][0]["agent_id"] == "ag_a"
+
+
+def test_find_specialist_schema_and_metadata() -> None:
+    tool = FindSpecialistTool()
+    assert tool.name() == "find_specialist"
+    assert "self-learning scoreboard" in tool.description()
+    schema = tool.get_schema()
+    assert schema["function"]["name"] == "find_specialist"
+    assert "metric" in schema["function"]["parameters"]["properties"]
+
+
+def test_resolve_assignee_explicit_owner_short_circuits(tmp_path, monkeypatch) -> None:
+    goals = SqlAlchemyGoalStore(f"sqlite:///{tmp_path / 'org.db'}")
+    monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
+
+    out = json.loads(
+        ResolveAssigneeTool().invoke(
+            json.dumps(
+                {
+                    "metric": "revenue",
+                    "roster": [{"agent_id": "ag_a"}],
+                    "explicit_owner": "ag_owner",
+                }
+            ),
+            _ctx(),
+        )
+    )
+    assert out["assignee"] == "ag_owner"
+    assert out["reason"] == "explicit"
+
+
+def test_resolve_assignee_requires_metric() -> None:
+    out = json.loads(
+        ResolveAssigneeTool().invoke(
+            json.dumps({"roster": [{"agent_id": "ag_a"}]}),
+            _ctx(),
+        )
+    )
+    assert "error" in out
+
+
+def test_resolve_assignee_reads_persisted_capabilities(monkeypatch) -> None:
+    class _Store:
+        def get_capabilities(self, agent_id: str) -> tuple[str, ...]:
+            return ("seo.audit",) if agent_id == "ag_a" else ()
+
+    monkeypatch.setattr("omnigent.runtime.get_agent_store", lambda: _Store())
+    monkeypatch.setattr(
+        "bytedesk_omnigent.assignment.resolve_assignee",
+        lambda **_kwargs: type(
+            "R",
+            (),
+            {"assignee": "ag_a", "reason": "ranked", "ranked": [("ag_a", 1.0)]},
+        )(),
+    )
+
+    out = json.loads(
+        ResolveAssigneeTool().invoke(
+            json.dumps(
+                {
+                    "metric": "ships",
+                    "roster": [{"agent_id": "ag_a", "department": "eng"}],
+                    "capability": "seo.audit",
+                }
+            ),
+            _ctx(),
+        )
+    )
+    assert out["assignee"] == "ag_a"
+    assert out["ranked"] == [["ag_a", 1.0]]
+
+
+def test_resolve_assignee_schema_and_metadata() -> None:
+    tool = ResolveAssigneeTool()
+    assert tool.name() == "resolve_assignee"
+    assert "explicit owner" in tool.description()
+    schema = tool.get_schema()
+    assert schema["function"]["name"] == "resolve_assignee"
+    assert "roster" in schema["function"]["parameters"]["properties"]
+
+
+def test_persisted_capabilities_swallows_store_errors(monkeypatch) -> None:
+    def _boom() -> None:
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr("omnigent.runtime.get_agent_store", _boom)
+    from bytedesk_omnigent.tools.routing_tools import _persisted_capabilities
+
+    assert _persisted_capabilities("ag_x") == ()

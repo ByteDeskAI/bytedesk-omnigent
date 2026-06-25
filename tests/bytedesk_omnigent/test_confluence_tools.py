@@ -48,9 +48,7 @@ def _make_tool(handler) -> tuple[BytedeskConfluenceTool, list[httpx.Request]]:
 
     transport = httpx.MockTransport(_capturing)
     client = httpx.Client(base_url=_BASE, transport=transport)
-    adapter = _ConfluenceClient(
-        base_url=_BASE, email=_EMAIL, api_token=_TOKEN, client=client
-    )
+    adapter = _ConfluenceClient(base_url=_BASE, email=_EMAIL, api_token=_TOKEN, client=client)
     return BytedeskConfluenceTool(client=adapter), captured
 
 
@@ -78,9 +76,7 @@ def test_storage_body_blank_is_empty_paragraph():
 
 
 def test_search_sends_basic_auth_header():
-    tool, captured = _make_tool(
-        lambda r: httpx.Response(200, json={"results": []})
-    )
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"results": []}))
     _call(tool, op="search", cql="type=page")
 
     assert captured[0].headers["Authorization"] == _expected_basic()
@@ -125,6 +121,12 @@ def test_search_clamps_limit():
     assert captured[0].url.params["limit"] == "250"
 
 
+def test_search_invalid_limit_falls_back_to_default():
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"results": []}))
+    _call(tool, op="search", cql="type=page", limit="not-a-number")
+    assert captured[0].url.params["limit"] == "20"
+
+
 # ── get_page ─────────────────────────────────────────────────────────────────────
 
 
@@ -162,9 +164,7 @@ def test_get_page_requires_page_id():
 
 
 def test_create_page_posts_v2_with_storage_body():
-    tool, captured = _make_tool(
-        lambda r: httpx.Response(200, json={"id": "999", "title": "New"})
-    )
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"id": "999", "title": "New"}))
 
     result = _call(
         tool,
@@ -234,9 +234,7 @@ def test_create_page_requires_space_and_title():
 
 
 def test_create_page_unresolvable_space_key_errors_without_post():
-    tool, captured = _make_tool(
-        lambda r: httpx.Response(200, json={"results": []})
-    )
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"results": []}))
     result = _call(tool, op="create_page", space_key="NOPE", title="T", body="b")
     assert result["ok"] is False
     assert result["error"] == "space_key_not_found"
@@ -302,13 +300,19 @@ def test_update_page_requires_page_id_and_title():
     assert captured == []
 
 
+def test_update_page_rejects_invalid_version():
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={}))
+    result = _call(tool, op="update_page", page_id="55", title="T", version="nope")
+    assert result["ok"] is False
+    assert result["error"] == "invalid 'version'"
+    assert captured == []
+
+
 # ── add_comment ──────────────────────────────────────────────────────────────────
 
 
 def test_add_comment_posts_footer_comment_with_storage_body():
-    tool, captured = _make_tool(
-        lambda r: httpx.Response(200, json={"id": "c1"})
-    )
+    tool, captured = _make_tool(lambda r: httpx.Response(200, json={"id": "c1"}))
 
     result = _call(tool, op="add_comment", page_id="55", body="looks good")
 
@@ -344,9 +348,7 @@ def test_unknown_op_returns_structured_error():
 
 
 def test_http_4xx_returns_structured_error_not_raised():
-    tool, _ = _make_tool(
-        lambda r: httpx.Response(404, json={"message": "no such page"})
-    )
+    tool, _ = _make_tool(lambda r: httpx.Response(404, json={"message": "no such page"}))
     result = _call(tool, op="get_page", page_id="missing")
     assert result["ok"] is False
     assert result["error"] == "confluence_http_error"
@@ -359,6 +361,32 @@ def test_http_5xx_returns_structured_error_not_raised():
     assert result["ok"] is False
     assert result["error"] == "confluence_http_error"
     assert result["status"] == 500
+
+
+def test_transport_error_returns_request_failed(monkeypatch):
+    def _boom(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("network down")
+
+    tool, _ = _make_tool(_boom)
+    result = _call(tool, op="search", cql="type=page")
+    assert result == {"ok": False, "error": "confluence_request_failed"}
+
+
+def test_http_lazy_client_is_created_without_injected_client(monkeypatch):
+    created: list[str] = []
+    real_client = httpx.Client
+
+    def _fake_client(**kwargs):
+        created.append(kwargs.get("base_url", ""))
+        transport = httpx.MockTransport(lambda r: httpx.Response(200, json={}))
+        return real_client(transport=transport)
+
+    monkeypatch.setattr(httpx, "Client", _fake_client)
+    adapter = _ConfluenceClient(base_url=_BASE, email=_EMAIL, api_token=_TOKEN)
+    first = adapter._http()
+    second = adapter._http()
+    assert first is second
+    assert created == [_BASE]
 
 
 def test_missing_credentials_returns_confluence_not_configured(monkeypatch):

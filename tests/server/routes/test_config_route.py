@@ -57,6 +57,20 @@ def test_descriptors_filter_by_tier() -> None:
     assert all(d["tier"] == 0 for d in resp.json()["data"])
 
 
+def test_descriptors_filter_by_scope() -> None:
+    resp = _client().get("/v1/config/descriptors", params={"scope": "system"})
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert data
+    assert all(d["scope"] == "system" for d in data)
+
+
+def test_descriptors_filter_by_writable() -> None:
+    resp = _client().get("/v1/config/descriptors", params={"writable": "false"})
+    assert resp.status_code == 200
+    assert all(d["writable"] is False for d in resp.json()["data"])
+
+
 def test_get_one_descriptor_and_404() -> None:
     client = _client()
     ok = client.get("/v1/config/descriptors/system.nats.url")
@@ -113,16 +127,12 @@ def test_put_stale_if_match_412() -> None:
     client = _client()
     cur = client.get(_MODEL).json()
     client.put(_MODEL, json={"value": "a"}, headers={"If-Match": f'"{cur["etag"]}"'})
-    stale = client.put(
-        _MODEL, json={"value": "b"}, headers={"If-Match": f'"{cur["etag"]}"'}
-    )
+    stale = client.put(_MODEL, json={"value": "b"}, headers={"If-Match": f'"{cur["etag"]}"'})
     assert stale.status_code == 412, stale.text
 
 
 def test_put_tier0_is_409() -> None:
-    resp = _client().put(
-        "/v1/config/values/system.nats.url", json={"value": "nats://x"}
-    )
+    resp = _client().put("/v1/config/values/system.nats.url", json={"value": "nats://x"})
     assert resp.status_code == 409, resp.text
 
 
@@ -140,15 +150,27 @@ def test_put_schema_violation_400() -> None:
 
 
 def test_put_unknown_404() -> None:
-    assert (
-        _client().put("/v1/config/values/nope.nope", json={"value": "x"}).status_code
-        == 404
-    )
+    assert _client().put("/v1/config/values/nope.nope", json={"value": "x"}).status_code == 404
 
 
 def test_put_requires_auth() -> None:
     client = TestClient(_app(_NoIdentityAuth()), raise_server_exceptions=False)
     assert client.put(_MODEL, json={"value": "x"}).status_code == 401
+
+
+def test_put_rejects_body_without_value_key() -> None:
+    resp = _client().put(_MODEL, json={"nope": "x"})
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_input"
+
+
+def test_put_rejects_non_object_body() -> None:
+    client = _client()
+    resp = client.put(
+        _MODEL, content=b'"just-a-string"', headers={"Content-Type": "application/json"}
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"] == "invalid_input"
 
 
 # ── realtime SSE (BDP-2418) ───────────────────────────────────────────────────
@@ -228,3 +250,60 @@ async def test_sse_requires_auth() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
         resp = await client.get("/v1/config/events")
         assert resp.status_code == 401
+
+
+async def test_sse_emits_heartbeat_on_queue_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Idle SSE connections yield a comment heartbeat when no event arrives."""
+    app = _app(None)
+    start: dict[str, object] = {}
+    body_chunks: list[bytes] = []
+    headers_sent = asyncio.Event()
+    disconnect = asyncio.Event()
+    orig_wait_for = asyncio.wait_for
+
+    async def _timeout_queue_get_only(coro, timeout=None):
+        code_name = getattr(getattr(coro, "cr_code", None), "co_name", "")
+        if code_name == "get":
+            if hasattr(coro, "close"):
+                coro.close()
+            raise asyncio.TimeoutError()
+        return await orig_wait_for(coro, timeout=timeout)
+
+    monkeypatch.setattr(
+        "bytedesk_omnigent.routes.config.asyncio.wait_for", _timeout_queue_get_only
+    )
+
+    async def receive() -> dict[str, object]:
+        await disconnect.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message: dict[str, object]) -> None:
+        if message["type"] == "http.response.start":
+            start.update(message)
+            headers_sent.set()
+        elif message["type"] == "http.response.body":
+            chunk = message.get("body", b"") or b""
+            if chunk:
+                body_chunks.append(chunk)
+                disconnect.set()
+
+    scope = {
+        "type": "http",
+        "http_version": "1.1",
+        "method": "GET",
+        "path": "/v1/config/events",
+        "raw_path": b"/v1/config/events",
+        "headers": [],
+        "query_string": b"",
+        "client": ("test", 0),
+        "server": ("test", 80),
+    }
+    task = asyncio.create_task(app(scope, receive, send))
+    await asyncio.wait_for(headers_sent.wait(), timeout=5)
+    await asyncio.wait_for(task, timeout=5)
+
+    body = b"".join(body_chunks).decode()
+    assert ": heartbeat" in body
+    _ = orig_wait_for  # referenced so linters know we preserve the original

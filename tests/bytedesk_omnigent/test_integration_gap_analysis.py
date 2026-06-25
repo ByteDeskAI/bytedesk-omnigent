@@ -52,6 +52,20 @@ def test_gap_analysis_matches_signals_from_titles_without_exact_slug():
     assert report.open_work[0].title == "feat: add Notion backfill importer for knowledge operator"
 
 
+def test_gap_analysis_drops_signals_with_unresolvable_titles():
+    report = analyze_integration_capability_gaps(
+        open_signals=(
+            IntegrationImplementationSignal(
+                slug=None,
+                source="pr#999",
+                title="totally unrelated random feature title",
+            ),
+        ),
+    )
+    assert report.open_work_count == 0
+    assert report.open_work == ()
+
+
 def test_gap_analysis_output_is_json_ready_and_secret_free():
     report = analyze_integration_capability_gaps(
         implemented_slugs={"slack-command-center"},

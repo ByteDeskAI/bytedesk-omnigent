@@ -11,12 +11,12 @@ from click import ClickException
 
 import omnigent.cli as cli_mod
 from omnigent.cli import (
-    _HostDaemonRecord,
     _bundled_example_path,
     _daemon_record_path,
     _display_config_path,
     _display_path,
     _effective_global_config_path,
+    _HostDaemonRecord,
     _is_removed_ad_hoc_invocation,
     _is_run_shorthand,
     _is_server_url,
@@ -25,6 +25,7 @@ from omnigent.cli import (
     _load_global_config,
     _load_local_config,
     _migrate_legacy_state_dir,
+    _normalize_daemon_target,
     _parse_config_bool,
     _peek_default_agent_harness,
     _read_daemon_record,
@@ -32,6 +33,7 @@ from omnigent.cli import (
     _resolve_auto_open_conversation_from_config,
     _resolve_auto_open_conversation_setting,
     _runner_loopback_host,
+    _save_local_config,
     _server_uvicorn_log_config,
     _should_skip_update_check,
 )
@@ -55,7 +57,9 @@ def test_server_uvicorn_log_config_swaps_formatter() -> None:
     )
 
 
-def test_effective_global_config_path_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_effective_global_config_path_env_override(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path / "cfg-home"))
     assert _effective_global_config_path() == tmp_path / "cfg-home" / "config.yaml"
 
@@ -144,7 +148,7 @@ def test_peek_default_agent_harness_non_dict_root_returns_none(tmp_path: Path) -
 
 def test_bundled_example_path_resolves_polly() -> None:
     path = _bundled_example_path("polly")
-    assert path.endswith("polly") or path.endswith("polly/")
+    assert path.endswith(("polly", "polly/"))
 
 
 @pytest.mark.parametrize(
@@ -158,6 +162,19 @@ def test_bundled_example_path_resolves_polly() -> None:
 )
 def test_is_server_url(value: str, expected: bool) -> None:
     assert _is_server_url(value) is expected
+
+
+@pytest.mark.parametrize(
+    ("server_url", "expected"),
+    [
+        (None, "local"),
+        ("", "local"),
+        ("https://example.com/", "https://example.com"),
+        ("https://example.com", "https://example.com"),
+    ],
+)
+def test_normalize_daemon_target(server_url: str | None, expected: str) -> None:
+    assert _normalize_daemon_target(server_url) == expected
 
 
 @pytest.mark.parametrize(
@@ -271,6 +288,78 @@ def test_migrate_legacy_state_dir_skips_when_env_override(
     assert legacy.exists()
 
 
+def test_migrate_legacy_state_dir_skips_when_legacy_daemon_alive(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = tmp_path / "omnigent"
+    legacy = tmp_path / "omnigents"
+    legacy.mkdir()
+    (legacy / "host.pid").write_text("4242\n")
+    monkeypatch.setattr(cli_mod, "_STATE_DIR", state)
+    monkeypatch.setattr(cli_mod, "_LEGACY_STATE_DIRS", (legacy,))
+    monkeypatch.setattr(cli_mod, "_pid_alive", lambda pid: pid == 4242)
+    monkeypatch.delenv("OMNIGENT_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("OMNIGENT_DATA_DIR", raising=False)
+    _migrate_legacy_state_dir()
+    assert legacy.exists()
+    assert not state.exists()
+    assert "skipping migration" in capsys.readouterr().err
+
+
+def test_migrate_legacy_state_dir_tolerates_malformed_pidfile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = tmp_path / "omnigent"
+    legacy = tmp_path / "omnigents"
+    legacy.mkdir()
+    (legacy / "host.pid").write_text("not-a-pid\n")
+    (legacy / "config.yaml").write_text("old: true\n")
+    monkeypatch.setattr(cli_mod, "_STATE_DIR", state)
+    monkeypatch.setattr(cli_mod, "_LEGACY_STATE_DIRS", (legacy,))
+    monkeypatch.setattr(cli_mod, "_pid_alive", lambda _pid: False)
+    monkeypatch.delenv("OMNIGENT_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("OMNIGENT_DATA_DIR", raising=False)
+    _migrate_legacy_state_dir()
+    assert state.exists()
+    assert "Migrated" in capsys.readouterr().err
+
+
+def test_migrate_legacy_state_dir_warns_on_move_failure(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    state = tmp_path / "omnigent"
+    legacy = tmp_path / "omnigents"
+    legacy.mkdir()
+    monkeypatch.setattr(cli_mod, "_STATE_DIR", state)
+    monkeypatch.setattr(cli_mod, "_LEGACY_STATE_DIRS", (legacy,))
+    monkeypatch.delenv("OMNIGENT_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("OMNIGENT_DATA_DIR", raising=False)
+
+    def _boom(_src: str, _dst: str) -> None:
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(cli_mod.shutil, "move", _boom)
+    _migrate_legacy_state_dir()
+    assert legacy.exists()
+    err = capsys.readouterr().err
+    assert "could not migrate" in err
+    assert "permission denied" in err
+
+
+def test_save_local_config_writes_and_unsets_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    omni = tmp_path / ".omnigent"
+    omni.mkdir()
+    (omni / "config.yaml").write_text("server: http://old\nkeep: yes\n")
+    _save_local_config({"default_agent": "agents/demo.yaml"}, unset_keys=("server",))
+    loaded = yaml.safe_load((omni / "config.yaml").read_text())
+    assert loaded["default_agent"] == "agents/demo.yaml"
+    assert loaded["keep"] == "yes"
+    assert "server" not in loaded
+
+
 def test_record_from_json_roundtrip() -> None:
     raw = {
         "pid": 4242,
@@ -286,7 +375,10 @@ def test_record_from_json_roundtrip() -> None:
 
 
 def test_record_from_json_rejects_malformed() -> None:
-    assert _record_from_json({"pid": "not-int", "target": "local", "mode": "local", "started_at": 1}) is None
+    assert (
+        _record_from_json({"pid": "not-int", "target": "local", "mode": "local", "started_at": 1})
+        is None
+    )
     assert _record_from_json({"pid": 1, "target": "", "mode": "local", "started_at": 1}) is None
 
 
@@ -311,9 +403,7 @@ def test_daemon_record_path_is_stable_for_target() -> None:
     assert a.name.endswith(".json")
 
 
-def test_write_daemon_record_persists(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
+def test_write_daemon_record_persists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     registry = tmp_path / "daemons"
     registry.mkdir(parents=True)
     monkeypatch.setattr(cli_mod, "_HOST_PID_PATH", tmp_path / "host.pid")

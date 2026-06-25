@@ -1,5 +1,6 @@
 """Tests for the outreach compliance floor: suppression store + CAN-SPAM policy
 (BDP-2278 F3, ADR-0142)."""
+
 from __future__ import annotations
 
 from bytedesk_omnigent.compliance import SqlAlchemySuppressionStore
@@ -36,6 +37,21 @@ def _send(name: str, args: dict) -> dict:
     return {"type": "tool_call", "data": {"name": name, "arguments": args}}
 
 
+def test_denies_recipient_list_with_non_string_entry(tmp_path) -> None:
+    evaluate = outreach_compliance(["email\\.send"], is_suppressed=_store(tmp_path).is_suppressed)
+    result = evaluate(
+        _send(
+            "email.send",
+            {
+                "to": ["good@x.com", 42],
+                "unsubscribe_url": "http://x",
+            },
+        )
+    )
+    assert result["result"] == "DENY"
+    assert "non-string" in result["reason"]
+
+
 def test_denies_outreach_without_unsubscribe() -> None:
     evaluate = outreach_compliance(["email\\.send"])
     result = evaluate(_send("email.send", {"to": "a@x.com", "body": "buy now"}))
@@ -46,9 +62,7 @@ def test_denies_outreach_without_unsubscribe() -> None:
 def test_allows_outreach_with_unsubscribe(tmp_path) -> None:
     # Suppression now always runs (BDP-2285); inject an EMPTY store so the
     # not-suppressed precondition is explicit → ALLOW.
-    evaluate = outreach_compliance(
-        ["email\\.send"], is_suppressed=_store(tmp_path).is_suppressed
-    )
+    evaluate = outreach_compliance(["email\\.send"], is_suppressed=_store(tmp_path).is_suppressed)
     args = {"to": "a@x.com", "body": "hi", "unsubscribe_url": "https://x/u"}
     assert evaluate(_send("email.send", args))["result"] == "ALLOW"
 
@@ -63,9 +77,7 @@ def test_denies_suppressed_recipient_via_injected_checker(tmp_path) -> None:
     assert "do-not-contact" in result["reason"]
 
 
-def test_self_resolves_suppression_store_when_no_checker_injected(
-    tmp_path, monkeypatch
-) -> None:
+def test_self_resolves_suppression_store_when_no_checker_injected(tmp_path, monkeypatch) -> None:
     """On the production spec/factory_params path no callable is passed; the policy
     must self-resolve the durable suppression store, NOT silently skip suppression
     (BDP-2285 #1 — it was dead code, so a suppressed recipient was ALLOWed)."""
@@ -101,9 +113,7 @@ def test_denies_suppressed_recipient_in_list_cc_or_comma_joined(tmp_path) -> Non
     )
     # suppressed in a comma-joined string
     assert (
-        evaluate(_send("email.send", {"to": "ok@x.com, a@x.com", "unsubscribe": "u"}))[
-            "result"
-        ]
+        evaluate(_send("email.send", {"to": "ok@x.com, a@x.com", "unsubscribe": "u"}))["result"]
         == "DENY"
     )
 

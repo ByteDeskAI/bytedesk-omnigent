@@ -59,6 +59,11 @@ os.environ.setdefault("OMNIGENT_AUTH_PROVIDER", "header")
 # monkeypatch.delenv-ing this var.
 os.environ.setdefault("OMNIGENT_LOCAL_SINGLE_USER", "1")
 
+# Register ByteDesk ORM models once on the shared declarative Base before
+# pytest-cov's traced import of bytedesk_omnigent.sessions.initiate (which
+# pulls scheduler -> db_models) can re-execute db_models.py and hit
+# "Table 'pending_waits' is already defined" during collection.
+import bytedesk_omnigent.db_models as _bytedesk_db_models  # noqa: F401
 from omnigent.db.utils import _engine_cache, _engine_lock, get_or_create_engine
 from tests import _model_pools
 

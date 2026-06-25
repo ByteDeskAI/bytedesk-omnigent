@@ -220,6 +220,24 @@ def test_post_tool_use_deny_maps_to_additional_context() -> None:
     assert hook_specific["additionalContext"] == "[Policy violation] Sensitive data in output"
 
 
+def test_evaluation_response_unknown_hook_event_returns_none() -> None:
+    """Non-tool hook events ignore policy verdicts — no hook output is emitted."""
+    output = evaluation_response_to_hook_output(
+        "SessionStart",
+        {"result": "POLICY_ACTION_DENY", "reason": "blocked"},
+    )
+    assert output is None
+
+
+def test_post_tool_use_deny_without_reason_returns_none() -> None:
+    """PostToolUse DENY without a reason is a no-op (harness drops empty blocks)."""
+    output = evaluation_response_to_hook_output(
+        "PostToolUse",
+        {"result": "POLICY_ACTION_DENY"},
+    )
+    assert output is None
+
+
 def test_post_tool_use_allow_returns_none() -> None:
     """
     A PostToolUse ALLOW produces no output (nothing to inject).

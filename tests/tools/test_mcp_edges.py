@@ -124,22 +124,29 @@ def _token_exchange_oauth() -> MCPOAuthConfig:
     )
 
 
-def test_resolve_token_exchange_token_returns_cached_value(monkeypatch: pytest.MonkeyPatch) -> None:
-    import omnigent.tools.mcp as mcp_mod
+def test_resolve_token_exchange_token_returns_cached_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import time
 
+    import omnigent.tools.mcp as mcp_mod
+
     oauth = _token_exchange_oauth()
-    key = (oauth.token_url, oauth.client_id, "user-tok", oauth.resource, tuple(oauth.scopes))
+    key = (oauth.token_url, oauth.client_id, "user-tok", None, oauth.resource, tuple(oauth.scopes))
     mcp_mod._token_exchange_cache.clear()
     mcp_mod._token_exchange_cache[key] = ("cached-obo", time.time() + 600)
 
     import httpx
 
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no http")))
+    monkeypatch.setattr(
+        httpx, "post", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no http"))
+    )
     assert _resolve_token_exchange_token(oauth, "user-tok") == "cached-obo"
 
 
-def test_resolve_token_exchange_token_posts_exchange_grant(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_token_exchange_token_posts_exchange_grant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import omnigent.tools.mcp as mcp_mod
 
     mcp_mod._token_exchange_cache.clear()
@@ -187,7 +194,9 @@ def test_resolve_token_exchange_token_http_failure(monkeypatch: pytest.MonkeyPat
         _resolve_token_exchange_token(_token_exchange_oauth(), "user-tok")
 
 
-def test_resolve_token_exchange_token_missing_access_token(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_token_exchange_token_missing_access_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import omnigent.tools.mcp as mcp_mod
 
     mcp_mod._token_exchange_cache.clear()
@@ -206,7 +215,9 @@ def test_resolve_token_exchange_token_missing_access_token(monkeypatch: pytest.M
         _resolve_token_exchange_token(_token_exchange_oauth(), "user-tok")
 
 
-def test_resolve_token_exchange_token_invalid_expires_in_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_token_exchange_token_invalid_expires_in_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     import omnigent.tools.mcp as mcp_mod
 
     mcp_mod._token_exchange_cache.clear()
@@ -257,9 +268,7 @@ async def test_open_http_transport_requires_url() -> None:
 
 @pytest.mark.asyncio
 async def test_open_stdio_transport_requires_command() -> None:
-    conn = McpServerConnection(
-        MCPServerConfig(name="bad", transport="stdio", command=None)
-    )
+    conn = McpServerConnection(MCPServerConfig(name="bad", transport="stdio", command=None))
     stack = AsyncExitStack()
     with pytest.raises(RuntimeError, match="command is None"):
         await conn._open_stdio_transport(stack)

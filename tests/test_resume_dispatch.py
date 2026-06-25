@@ -445,3 +445,212 @@ def test_read_wrapper_label_remote_raises_on_404(
         )
     assert "conv_missing" in excinfo.value.message
     assert "not found" in excinfo.value.message
+
+
+def test_run_resume_picker_selects_and_dispatches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Picker selection flows into runtime dispatch with the chosen id."""
+    monkeypatch.setattr(
+        resume_dispatch,
+        "_pick_conversation_for_resume",
+        lambda *, server: "conv_picked",
+    )
+    captured: dict[str, Any] = {}
+
+    def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr(resume_dispatch, "_dispatch_by_runtime", _capture)
+    resume_dispatch.run_resume(target=None, server="https://example.com")
+    assert captured == {"target": "conv_picked", "server": "https://example.com"}
+
+
+def test_pick_conversation_for_resume_returns_selection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Happy path wires OmnigentClient into the cross-agent picker."""
+
+    class _Client:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_exc: object) -> None:
+            return None
+
+    async def _fake_pick(_client: object) -> str:
+        return "conv_from_picker"
+
+    monkeypatch.setattr(
+        "omnigent.repl._resume_picker.pick_conversation_cross_agent_from_sdk",
+        _fake_pick,
+    )
+    monkeypatch.setattr(
+        "omnigent_client.OmnigentClient",
+        lambda **_kwargs: _Client(),
+    )
+    monkeypatch.setattr(
+        "omnigent.chat._remote_headers",
+        lambda *, server_url: {"Authorization": "Bearer t"},
+    )
+
+    result = resume_dispatch._pick_conversation_for_resume(server="https://example.com/")
+    assert result == "conv_from_picker"
+
+
+def test_pick_conversation_for_resume_wraps_http_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Network failures become actionable ClickException messages."""
+
+    def _raise_http_error(_coro):
+        raise httpx.ConnectError("refused", request=httpx.Request("GET", "https://example.com"))
+
+    monkeypatch.setattr(resume_dispatch.asyncio, "run", _raise_http_error)
+
+    with pytest.raises(click.ClickException) as excinfo:
+        resume_dispatch._pick_conversation_for_resume(server="https://example.com")
+    assert "Failed to load conversations" in excinfo.value.message
+
+
+def test_dispatch_by_runtime_pi_native_remote_routes_to_wrapper(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Remote pi-native conv routes to ``run_pi_native``."""
+    monkeypatch.setattr(
+        resume_dispatch,
+        "_read_wrapper_label_remote",
+        lambda *, server, conv_id: "pi-native-ui",
+    )
+    captured: dict[str, Any] = {}
+
+    def _capture(**kwargs: Any) -> None:
+        captured.update(kwargs)
+
+    monkeypatch.setattr("omnigent.pi_native.run_pi_native", _capture)
+    resume_dispatch._dispatch_by_runtime(target="conv_pi", server="https://example.com/")
+    assert captured["session_id"] == "conv_pi"
+    assert captured["server"] == "https://example.com"
+    assert captured["pi_args"] == ()
+
+
+def test_read_wrapper_label_local_raises_when_missing(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Unknown local conversation ids surface a clear store miss."""
+    import omnigent.chat as chat_mod
+
+    tmp_path / "chat.db"
+    monkeypatch.setattr(chat_mod, "_omnigent_persistent_dir", lambda: tmp_path)
+
+    with pytest.raises(click.ClickException) as excinfo:
+        resume_dispatch._read_wrapper_label_local(conv_id="conv_missing")
+    assert "conv_missing" in excinfo.value.message
+    assert "not found" in excinfo.value.message
+
+
+def test_read_wrapper_label_remote_raises_on_bad_status_and_body(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-200, invalid JSON, and non-object bodies fail loud."""
+
+    def _resp_500(url: str, *, headers: dict[str, str], timeout: float) -> httpx.Response:
+        del url, headers, timeout
+        return httpx.Response(500, text="upstream exploded")
+
+    monkeypatch.setattr(httpx, "get", _resp_500)
+    monkeypatch.setattr("omnigent.chat._remote_headers", lambda *, server_url: {})
+    with pytest.raises(click.ClickException, match="Failed to fetch"):
+        resume_dispatch._read_wrapper_label_remote(server="https://example.com", conv_id="conv_x")
+
+    def _resp_text(url: str, *, headers: dict[str, str], timeout: float) -> httpx.Response:
+        del url, headers, timeout
+        return httpx.Response(200, text="not-json")
+
+    monkeypatch.setattr(httpx, "get", _resp_text)
+    with pytest.raises(click.ClickException, match="non-JSON"):
+        resume_dispatch._read_wrapper_label_remote(server="https://example.com", conv_id="conv_x")
+
+    def _resp_list(url: str, *, headers: dict[str, str], timeout: float) -> httpx.Response:
+        del url, headers, timeout
+        return httpx.Response(200, json=[])
+
+    monkeypatch.setattr(httpx, "get", _resp_list)
+    with pytest.raises(click.ClickException, match="non-object"):
+        resume_dispatch._read_wrapper_label_remote(server="https://example.com", conv_id="conv_x")
+
+
+def test_dispatch_wrapper_returns_false_for_unknown_wrapper() -> None:
+    """Non-native wrapper labels are not dispatched in-process."""
+    assert (
+        resume_dispatch._dispatch_wrapper(
+            wrapper="chat-ui",
+            server=None,
+            session_id="conv_chat",
+        )
+        is False
+    )
+
+
+def test_pick_conversation_for_resume_reraises_click_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ClickException from the picker is not double-wrapped."""
+
+    def _raise_click(_coro):
+        raise click.ClickException("picker cancelled")
+
+    monkeypatch.setattr(resume_dispatch.asyncio, "run", _raise_click)
+    with pytest.raises(click.ClickException, match="picker cancelled"):
+        resume_dispatch._pick_conversation_for_resume(server="https://example.com")
+
+
+def test_pick_conversation_for_resume_wraps_unexpected_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unexpected SDK failures become picker ClickExceptions."""
+
+    def _raise_value(_coro):
+        raise ValueError("sdk exploded")
+
+    monkeypatch.setattr(resume_dispatch.asyncio, "run", _raise_value)
+    with pytest.raises(click.ClickException, match="Picker failed"):
+        resume_dispatch._pick_conversation_for_resume(server="https://example.com")
+
+
+def test_read_wrapper_label_remote_raises_on_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Transport failures while fetching a remote session fail loud."""
+
+    def _boom(*_args, **_kwargs):
+        raise httpx.ConnectError("down", request=httpx.Request("GET", "https://example.com"))
+
+    monkeypatch.setattr(httpx, "get", _boom)
+    monkeypatch.setattr("omnigent.chat._remote_headers", lambda *, server_url: {})
+    with pytest.raises(click.ClickException, match="Failed to reach"):
+        resume_dispatch._read_wrapper_label_remote(server="https://example.com", conv_id="conv_x")
+
+
+def test_read_wrapper_label_remote_ignores_non_string_wrapper_label(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-string wrapper label values are treated as absent."""
+
+    def _fake_get(url: str, *, headers: dict[str, str], timeout: float) -> httpx.Response:
+        del url, headers, timeout
+        return httpx.Response(
+            200,
+            json={"labels": {"omnigent.wrapper": 42}},
+        )
+
+    monkeypatch.setattr(httpx, "get", _fake_get)
+    monkeypatch.setattr("omnigent.chat._remote_headers", lambda *, server_url: {})
+    assert (
+        resume_dispatch._read_wrapper_label_remote(
+            server="https://example.com",
+            conv_id="conv_x",
+        )
+        is None
+    )

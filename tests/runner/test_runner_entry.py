@@ -16,6 +16,7 @@ import pytest
 from omnigent.runner._entry import (
     _DEFAULT_RUNNER_IDLE_TIMEOUT_S,
     _agent_cache_dest,
+    _is_login_redirect_or_unauthorized,
     _load_runner_idle_timeout_s_from_config,
     _make_auth_token_factory,
     _parent_is_orphaned,
@@ -109,6 +110,18 @@ def test_server_url_from_env_strips_configured_value(
     monkeypatch.setenv("RUNNER_SERVER_URL", " http://127.0.0.1:8123 ")
 
     assert _server_url_from_env() == "http://127.0.0.1:8123"
+
+
+def test_is_login_redirect_or_unauthorized_detects_401_and_oidc_redirect() -> None:
+    assert _is_login_redirect_or_unauthorized(httpx.Response(401)) is True
+    redirect = httpx.Response(
+        302,
+        headers={"location": "https://apps.example/oidc/oauth2/v2.0/authorize"},
+    )
+    assert _is_login_redirect_or_unauthorized(redirect) is True
+    benign = httpx.Response(302, headers={"location": "https://apps.example/other"})
+    assert _is_login_redirect_or_unauthorized(benign) is False
+    assert _is_login_redirect_or_unauthorized(httpx.Response(200)) is False
 
 
 def test_make_auth_token_factory_returns_factory_when_databricks_creds_available(

@@ -248,6 +248,86 @@ def test_provider_catalog_is_cached_across_calls(
     assert calls == ["anthropic"]
 
 
+def test_infer_provider_returns_none_for_unknown_model() -> None:
+    assert context_window._infer_provider("unknown-model") is None
+
+
+def test_download_mlflow_provider_catalog_parses_models(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Resp:
+        def read(self) -> bytes:
+            return (
+                b'{"models": {"gpt-x": {"context_window": '
+                b'{"max_input": 1000, "max_output": 200}}}}'
+            )
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_a, **_k: _Resp())
+    catalog = context_window._download_mlflow_provider_catalog("openai")
+    assert catalog is not None
+    assert "gpt-x" in catalog
+
+
+def test_download_mlflow_provider_catalog_returns_none_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a, **_k):
+        raise OSError("network down")
+
+    monkeypatch.setattr("urllib.request.urlopen", _boom)
+    assert context_window._download_mlflow_provider_catalog("openai") is None
+
+
+def test_get_model_context_window_honors_override_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AP_CONTEXT_WINDOW_OVERRIDE", "99999")
+    assert context_window.get_model_context_window("any-model") == 99999
+
+
+def test_get_model_context_window_uses_family_prefix_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OMNIGENT_DISABLE_CATALOG_LOOKUP", raising=False)
+    context_window._catalog_cache.clear()
+    monkeypatch.setattr(
+        context_window,
+        "_fetch_mlflow_provider_catalog",
+        lambda provider: {
+            "claude-sonnet-4-5": {"context_window": {"max_input": 200_000, "max_output": 8_192}},
+            "claude-sonnet-4-6": {"context_window": {"max_input": 200_000, "max_output": 8_192}},
+        },
+    )
+    assert context_window.get_model_context_window("anthropic/claude-sonnet-4-6-new") == 208_192
+
+
+def test_fetch_model_pricing_family_prefix_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OMNIGENT_DISABLE_CATALOG_LOOKUP", raising=False)
+    monkeypatch.setattr(
+        context_window,
+        "_fetch_mlflow_provider_catalog",
+        lambda provider: {
+            "claude-sonnet-4-5": {
+                "pricing": {"input_per_million_tokens": 3.0, "output_per_million_tokens": 15.0}
+            },
+            "claude-sonnet-4-6": {
+                "pricing": {"input_per_million_tokens": 3.0, "output_per_million_tokens": 15.0}
+            },
+        },
+    )
+    pricing = fetch_model_pricing("anthropic/claude-sonnet-4-6-new")
+    assert pricing is not None
+    assert pricing.input_per_token == pytest.approx(3e-6)
+
+
 def test_provider_catalog_caches_fetch_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -9,7 +9,6 @@ import pytest
 import yaml
 
 from omnigent.errors import OmnigentError
-from omnigent.spec.types import Phase, PhaseSelector
 from omnigent.spec.parser import (
     _discover_skills,
     _discover_sub_agents,
@@ -38,6 +37,7 @@ from omnigent.spec.parser import (
     parse_default_policies,
     parse_server_llm,
 )
+from omnigent.spec.types import Phase, PhaseSelector
 from tests.spec.test_parser import _write_supervisor_config
 
 
@@ -187,10 +187,10 @@ def test_parse_os_env_sandbox_egress_rules_rejected_for_none_backend() -> None:
 
 
 def test_parse_os_env_sandbox_egress_allow_private_must_be_bool() -> None:
-    with pytest.raises(OmnigentError, match=r"egress_allow_private_destinations must be a boolean"):
-        _parse_os_env_sandbox(
-            {"type": "linux_bwrap", "egress_allow_private_destinations": "true"}
-        )
+    with pytest.raises(
+        OmnigentError, match=r"egress_allow_private_destinations must be a boolean"
+    ):
+        _parse_os_env_sandbox({"type": "linux_bwrap", "egress_allow_private_destinations": "true"})
 
 
 @pytest.mark.parametrize(
@@ -383,14 +383,10 @@ def test_discover_host_skills_named_subset_filters(tmp_path: Path) -> None:
 def test_discover_host_skills_skips_duplicate_names(tmp_path: Path) -> None:
     claude_dir = tmp_path / ".claude" / "skills" / "from-claude"
     claude_dir.mkdir(parents=True)
-    (claude_dir / "SKILL.md").write_text(
-        "---\nname: dup\ndescription: first\n---\nfrom claude"
-    )
+    (claude_dir / "SKILL.md").write_text("---\nname: dup\ndescription: first\n---\nfrom claude")
     agents_dir = tmp_path / ".agents" / "skills" / "from-agents"
     agents_dir.mkdir(parents=True)
-    (agents_dir / "SKILL.md").write_text(
-        "---\nname: dup\ndescription: second\n---\nfrom agents"
-    )
+    (agents_dir / "SKILL.md").write_text("---\nname: dup\ndescription: second\n---\nfrom agents")
     result = discover_host_skills(tmp_path, ["dup"])
     assert len(result) == 1
     assert result[0].content.strip() == "from claude"
@@ -605,6 +601,20 @@ def test_parse_guardrails_label_scalar_shorthand() -> None:
     spec = _guardrails_yaml("labels:\n  count: 1")
     assert spec is not None and spec.labels is not None
     assert spec.labels["count"].initial == "1"
+
+
+def test_parse_guardrails_label_monotonic_decreasing() -> None:
+    spec = _guardrails_yaml(
+        """
+labels:
+  risk:
+    initial: "low"
+    values: ["low", "high"]
+    monotonic: decreasing
+"""
+    )
+    assert spec is not None and spec.labels is not None
+    assert spec.labels["risk"].monotonic == "decreasing"
 
 
 def test_parse_guardrails_label_invalid_entry_type_rejected() -> None:

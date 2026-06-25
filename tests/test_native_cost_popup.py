@@ -79,6 +79,33 @@ class _FakeResponse:
         return False
 
 
+class _ImmediateThread:
+    """Run watcher targets synchronously so daemon threads do not leak."""
+
+    def __init__(self, target: object, daemon: bool = True) -> None:
+        self._target = target
+
+    def start(self) -> None:
+        if callable(self._target):
+            self._target()
+
+
+class _JsonSnapshotResponse:
+    """Fake GET response whose body is a session snapshot JSON object."""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self._body = json.dumps(payload).encode("utf-8")
+
+    def read(self) -> bytes:
+        return self._body
+
+    def __enter__(self) -> _JsonSnapshotResponse:
+        return self
+
+    def __exit__(self, *exc: object) -> bool:
+        return False
+
+
 def _install_popup_harness(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -333,6 +360,178 @@ def test_wait_for_tmux_client_returns_true_when_client_attached(
     assert native_cost_popup.wait_for_tmux_client("/tmp/x.sock", "main", timeout_s=5.0) is True
 
 
+def test_list_tmux_clients_parses_subprocess_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``_list_tmux_clients`` returns stdout lines when tmux succeeds."""
+
+    class _Result:
+        returncode = 0
+        stdout = "/dev/pts/9\n/dev/pts/10\n"
+
+    monkeypatch.setattr(
+        "subprocess.run",
+        lambda *_a, **_k: _Result(),
+    )
+    assert native_cost_popup._list_tmux_clients("/tmp/x.sock", "main") == [
+        "/dev/pts/9",
+        "/dev/pts/10",
+    ]
+
+
+def test_list_tmux_clients_returns_empty_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Non-zero tmux exit or subprocess errors yield an empty client list."""
+
+    class _Fail:
+        returncode = 1
+        stdout = ""
+
+    monkeypatch.setattr("subprocess.run", lambda *_a, **_k: _Fail())
+    assert native_cost_popup._list_tmux_clients("/tmp/x.sock", "main") == []
+
+    def _boom(*_a, **_k):
+        raise OSError("no tmux")
+
+    monkeypatch.setattr("subprocess.run", _boom)
+    assert native_cost_popup._list_tmux_clients("/tmp/x.sock", "main") == []
+
+
+def test_launch_cost_popup_skips_without_clients(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """No attached clients → no popup subprocesses spawned."""
+    monkeypatch.setattr(native_cost_popup, "_list_tmux_clients", lambda _s, _t: [])
+    launched: list[list[str]] = []
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda argv, **_kw: launched.append(argv) or object(),
+    )
+    native_cost_popup.launch_cost_popup(
+        "/tmp/x.sock",
+        "main",
+        tmp_path / "hook.json",
+        session_id=_SESSION_ID,
+        elicitation_id=_ELICITATION_ID,
+        message=_MESSAGE,
+    )
+    assert launched == []
+
+
+def test_launch_cost_popup_spawns_popup_per_client(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """Each attached tmux client gets a detached ``display-popup`` launcher."""
+    config = tmp_path / "hook.json"
+    config.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        native_cost_popup,
+        "_list_tmux_clients",
+        lambda _s, _t: ["/dev/pts/9", "/dev/pts/10"],
+    )
+    launched: list[list[str]] = []
+
+    class _Proc:
+        pass
+
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda argv, **_kw: launched.append(argv) or _Proc(),
+    )
+    native_cost_popup.launch_cost_popup(
+        "/tmp/x.sock",
+        "main",
+        config,
+        session_id=_SESSION_ID,
+        elicitation_id=_ELICITATION_ID,
+        message=_MESSAGE,
+        policy_name="cost-cap",
+        python_executable="/usr/bin/python3",
+    )
+    assert len(launched) == 2
+    assert all(argv[0] == "tmux" for argv in launched)
+    assert all("/usr/bin/python3" in argv[-1] for argv in launched)
+    assert all("cost-cap" in argv[-1] for argv in launched)
+
+
+def test_read_omnigent_routing_raises_on_missing_file(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="cannot read"):
+        native_cost_popup._read_omnigent_routing(tmp_path / "missing.json")
+
+
+def test_read_omnigent_routing_raises_on_invalid_json(tmp_path: Path) -> None:
+    bad = tmp_path / "bad.json"
+    bad.write_text("not-json", encoding="utf-8")
+    with pytest.raises(SystemExit, match="cannot read"):
+        native_cost_popup._read_omnigent_routing(bad)
+
+
+def test_prompt_verdict_reprompts_on_invalid_answer(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    answers = iter(["maybe", "y"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(answers))
+    assert native_cost_popup._prompt_verdict(_MESSAGE) == "accept"
+    assert "Please type 'y' or 'n'" in capsys.readouterr().out
+
+
+def test_post_verdict_raises_on_http_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib import error as url_error
+
+    def _boom(_req: request.Request, timeout: float | None = None) -> object:
+        raise url_error.HTTPError("http://x", 403, "forbidden", None, None)
+
+    monkeypatch.setattr(
+        native_cost_popup,
+        "request",
+        types.SimpleNamespace(Request=request.Request, urlopen=_boom),
+    )
+    with pytest.raises(SystemExit, match="HTTP 403"):
+        native_cost_popup._post_verdict(
+            ap_server_url=_AP_URL,
+            auth_headers={},
+            session_id=_SESSION_ID,
+            elicitation_id=_ELICITATION_ID,
+            action="accept",
+        )
+
+
+def test_post_verdict_raises_on_url_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    from urllib import error as url_error
+
+    def _boom(_req: request.Request, timeout: float | None = None) -> object:
+        raise url_error.URLError("connection refused")
+
+    monkeypatch.setattr(
+        native_cost_popup,
+        "request",
+        types.SimpleNamespace(Request=request.Request, urlopen=_boom),
+    )
+    with pytest.raises(SystemExit, match="unreachable"):
+        native_cost_popup._post_verdict(
+            ap_server_url=_AP_URL,
+            auth_headers={},
+            session_id=_SESSION_ID,
+            elicitation_id=_ELICITATION_ID,
+            action="decline",
+        )
+
+
+def test_wait_for_tmux_client_polls_until_client_attaches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = {"n": 0}
+
+    def _clients(_s: str, _t: str) -> list[str]:
+        calls["n"] += 1
+        return ["/dev/pts/1"] if calls["n"] >= 2 else []
+
+    monkeypatch.setattr(native_cost_popup, "_list_tmux_clients", _clients)
+    monkeypatch.setattr(native_cost_popup.time, "monotonic", lambda: 0.0)
+    monkeypatch.setattr(native_cost_popup.time, "sleep", lambda _s: None)
+    assert native_cost_popup.wait_for_tmux_client("/tmp/x.sock", "main", timeout_s=5.0) is True
+
+
 def test_wait_for_tmux_client_times_out_when_no_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -348,3 +547,87 @@ def test_wait_for_tmux_client_times_out_when_no_client(
     # timeout_s=0.0 → the deadline has already passed, so it returns without
     # sleeping (keeps the test fast and free of time.sleep).
     assert native_cost_popup.wait_for_tmux_client("/tmp/x.sock", "main", timeout_s=0.0) is False
+
+
+def test_resolution_watcher_exits_when_elicitation_cleared_elsewhere(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fake_exit(_code: int) -> None:
+        raise RuntimeError("watcher-exit")
+
+    def _resolved_snapshot(
+        _req: request.Request,
+        timeout: float | None = None,
+    ) -> _JsonSnapshotResponse:
+        return _JsonSnapshotResponse({"pending_elicitations": []})
+
+    monkeypatch.setattr(native_cost_popup.os, "_exit", _fake_exit)
+    monkeypatch.setattr(native_cost_popup.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(native_cost_popup.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        native_cost_popup,
+        "request",
+        types.SimpleNamespace(Request=request.Request, urlopen=_resolved_snapshot),
+    )
+    with pytest.raises(RuntimeError, match="watcher-exit"):
+        native_cost_popup._start_resolution_watcher(
+            ap_server_url=_AP_URL,
+            auth_headers={},
+            session_id=_SESSION_ID,
+            elicitation_id=_ELICITATION_ID,
+        )
+
+
+def test_resolution_watcher_ignores_transient_poll_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from urllib import error as url_error
+
+    calls = {"n": 0}
+
+    def _fake_exit(_code: int) -> None:
+        raise RuntimeError("watcher-exit")
+
+    def _flaky_snapshot(
+        _req: request.Request,
+        timeout: float | None = None,
+    ) -> _JsonSnapshotResponse:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise url_error.URLError("temporary")
+        return _JsonSnapshotResponse({"pending_elicitations": []})
+
+    monkeypatch.setattr(native_cost_popup.os, "_exit", _fake_exit)
+    monkeypatch.setattr(native_cost_popup.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(native_cost_popup.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        native_cost_popup,
+        "request",
+        types.SimpleNamespace(Request=request.Request, urlopen=_flaky_snapshot),
+    )
+    with pytest.raises(RuntimeError, match="watcher-exit"):
+        native_cost_popup._start_resolution_watcher(
+            ap_server_url=_AP_URL,
+            auth_headers={},
+            session_id=_SESSION_ID,
+            elicitation_id=_ELICITATION_ID,
+        )
+    assert calls["n"] >= 2
+
+
+def test_native_cost_popup_module_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(native_cost_popup, "main", lambda argv=None: 0)
+    monkeypatch.setattr(
+        native_cost_popup.sys,
+        "exit",
+        lambda code: (_ for _ in ()).throw(SystemExit(code)),
+    )
+    source_tail = Path(native_cost_popup.__file__).read_text(encoding="utf-8").splitlines()[-2:]
+    module_globals = dict(native_cost_popup.__dict__)
+    module_globals["__name__"] = "__main__"
+    with pytest.raises(SystemExit) as exc:
+        exec(
+            compile("\n".join(source_tail) + "\n", native_cost_popup.__file__, "exec"),
+            module_globals,
+        )
+    assert exc.value.code == 0
