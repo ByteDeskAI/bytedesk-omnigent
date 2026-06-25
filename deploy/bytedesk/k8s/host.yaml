@@ -169,15 +169,16 @@ spec:
             # built-in HARNESS_CREDENTIAL_ENV_VARS (OPENAI_API_KEY/OPENAI_BASE_URL/
             # ANTHROPIC_*/GEMINI_API_KEY are forwarded by default). Add the
             # openai-agents wrap vars here if you use them instead of OPENAI_*.
-            # INFISICAL_*/OMNIGENT_INFISICAL_* added so the InfisicalBackend
-            # (BDP-2303) can resolve keychain:<name> agent creds from Infisical in
-            # the spawned runner. The two universal-auth secrets come from the
-            # operator-hydrated omnigent-infisical-secrets Secret (envFrom below,
-            # see omnigent-infisical-secret.yaml); the rest are non-secret config
-            # set inline here. All MUST be in this list or the runner can't
-            # authenticate to Infisical and falls back to its local keyring.
+            # OMNIGENT_EXTENSIONS and INFISICAL_*/OMNIGENT_INFISICAL_* are needed
+            # so spawned runners load the ByteDesk extension and its InfisicalBackend
+            # (BDP-2303), then resolve keychain:<name> agent creds from Infisical.
+            # The two universal-auth secrets come from the operator-hydrated
+            # omnigent-infisical-secrets Secret (envFrom below, see
+            # omnigent-infisical-secret.yaml); the rest are non-secret config set
+            # inline here. All MUST be in this list or the runner can't authenticate
+            # to Infisical and falls back to its local keyring.
             - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
-              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV,AGENTIC_INBOX_MCP_URL,AGENTIC_INBOX_EMAIL_DOMAIN,AGENTIC_INBOX_CF_ACCESS_CLIENT_ID,AGENTIC_INBOX_CF_ACCESS_CLIENT_SECRET,GITHUB_MCP_URL"
+              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,OMNIGENT_EXTENSIONS,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV,AGENTIC_INBOX_MCP_URL,AGENTIC_INBOX_EMAIL_DOMAIN,AGENTIC_INBOX_CF_ACCESS_CLIENT_ID,AGENTIC_INBOX_CF_ACCESS_CLIENT_SECRET,GITHUB_MCP_URL"
             # ByteDesk platform MCP (BDP-2169/2182/2199): every agent's inline
             # bytedesk-platform MCP server references these ${VAR}s, expanded by
             # the runner at turn setup. Both names MUST be in the passthrough list
@@ -189,6 +190,11 @@ spec:
             # URL is passed to spawned runners; App credentials stay in github-mcp.
             - name: GITHUB_MCP_URL
               value: http://github-mcp.bytedesk.svc.cluster.local/mcp
+            # Explicitly load ByteDesk's extension on hosts and spawned runners.
+            # Production images also register the entry-point; this env keeps
+            # source-mounted local-dev and host-spawned runner processes aligned.
+            - name: OMNIGENT_EXTENSIONS
+              value: bytedesk_omnigent.extension:BytedeskExtension
             # InfisicalBackend (BDP-2303) non-secret config. The CLIENT_ID/SECRET
             # arrive via the operator-hydrated omnigent-infisical-secrets Secret
             # (envFrom below). Base = local MicroK8s → envSlug development; the prod
