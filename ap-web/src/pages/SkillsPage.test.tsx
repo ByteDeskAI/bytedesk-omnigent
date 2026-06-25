@@ -16,9 +16,10 @@ vi.mock("@/hooks/useSkills", () => ({
   useCreateSkillPreview: vi.fn(),
   useApplySkillPreview: vi.fn(),
 }));
+const { switchTo } = vi.hoisted(() => ({ switchTo: vi.fn() }));
 vi.mock("@/store/chatStore", () => ({
   useChatStore: Object.assign(vi.fn(() => ({})), {
-    getState: () => ({ switchTo: vi.fn() }),
+    getState: () => ({ conversationId: "conv_prev", switchTo }),
   }),
 }));
 // The embedded chat atoms subscribe to the module-level chatStore; stub
@@ -113,6 +114,17 @@ afterEach(() => {
 });
 
 describe("SkillsPage", () => {
+  it("starts a fresh concierge chat on open and restores the prior conversation on close", () => {
+    // On open: stash the caller's active conversation and reset to a fresh chat
+    // so the composer's first send binds to the concierge — not whatever agent
+    // (e.g. Maya) the user last chatted with in the shared global chat store.
+    const { unmount } = renderPage();
+    expect(switchTo).toHaveBeenCalledWith(null);
+    // On close: restore the caller's previous conversation.
+    unmount();
+    expect(switchTo).toHaveBeenCalledWith("conv_prev");
+  });
+
   it("renders the shell, scope selector, conversation, and installed rail", async () => {
     renderPage();
 
