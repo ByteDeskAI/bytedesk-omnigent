@@ -132,7 +132,7 @@ class _BadExt:
 
 
 def test_discover_extensions_registers_contributed(monkeypatch) -> None:
-    import omnigent.pluggable.registry as regmod
+    import omnigent.kernel.pluggable.registry as regmod
 
     monkeypatch.setattr(regmod, "discover_extensions", lambda: [_GoodExt()])
     reg: PluggableRegistry[str] = PluggableRegistry("widget")
@@ -141,7 +141,7 @@ def test_discover_extensions_registers_contributed(monkeypatch) -> None:
 
 
 def test_discover_extensions_isolates_bad_extension(monkeypatch) -> None:
-    import omnigent.pluggable.registry as regmod
+    import omnigent.kernel.pluggable.registry as regmod
 
     # Bad ext first: it must not prevent the good ext from registering.
     monkeypatch.setattr(
@@ -154,7 +154,7 @@ def test_discover_extensions_isolates_bad_extension(monkeypatch) -> None:
 
 
 def test_discover_extensions_skips_ext_without_hook(monkeypatch) -> None:
-    import omnigent.pluggable.registry as regmod
+    import omnigent.kernel.pluggable.registry as regmod
 
     class _NoHook:
         name = "nohook"

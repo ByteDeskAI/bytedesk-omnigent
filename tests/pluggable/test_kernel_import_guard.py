@@ -47,13 +47,13 @@ _REPO_ROOT = pathlib.Path(omnigent.__file__).resolve().parent.parent
 # its composition-root fragment is kernel; the file as a whole mounts domain
 # routes (first-party plugin contributions) and so imports domain code.
 _KERNEL_PURE_FILES = (
-    "omnigent/extensions.py",
-    "omnigent/pluggable/__init__.py",
-    "omnigent/pluggable/registry.py",
-    "omnigent/pluggable/manifest.py",
-    "omnigent/pluggable/errors.py",
-    "omnigent/server/lifespan_phases.py",
-    "omnigent/server/service_registry.py",
+    "omnigent/kernel/extensions.py",
+    "omnigent/kernel/pluggable/__init__.py",
+    "omnigent/kernel/pluggable/registry.py",
+    "omnigent/kernel/pluggable/manifest.py",
+    "omnigent/kernel/pluggable/errors.py",
+    "omnigent/kernel/lifespan_phases.py",
+    "omnigent/kernel/service_registry.py",
 )
 
 # The omnigent modules a kernel file MAY import at module scope: the kernel set
@@ -61,6 +61,18 @@ _KERNEL_PURE_FILES = (
 _ALLOWED_KERNEL_MODULES = frozenset(
     {
         "omnigent",
+        "omnigent.kernel",
+        "omnigent.kernel.extensions",
+        "omnigent.kernel.pluggable",
+        "omnigent.kernel.pluggable.registry",
+        "omnigent.kernel.pluggable.manifest",
+        "omnigent.kernel.pluggable.errors",
+        "omnigent.kernel.lifespan_phases",
+        "omnigent.kernel.service_registry",
+        # Old (pre-BDP-2515) flat paths kept as strangler re-export shims; the
+        # shim files themselves live OUTSIDE _KERNEL_PURE_FILES, so they are not
+        # asserted for purity — but a kernel module is still allowed to resolve
+        # through them transitively until Stage 2 (BDP-2516) deletes the shims.
         "omnigent.extensions",
         "omnigent.pluggable",
         "omnigent.pluggable.registry",
@@ -123,13 +135,13 @@ def test_kernel_file_has_no_nonkernel_module_scope_import(rel_path: str) -> None
 @pytest.mark.parametrize(
     "module",
     [
-        "omnigent.extensions",
-        "omnigent.pluggable",
-        "omnigent.pluggable.registry",
-        "omnigent.pluggable.manifest",
-        "omnigent.pluggable.errors",
-        "omnigent.server.lifespan_phases",
-        "omnigent.server.service_registry",
+        "omnigent.kernel.extensions",
+        "omnigent.kernel.pluggable",
+        "omnigent.kernel.pluggable.registry",
+        "omnigent.kernel.pluggable.manifest",
+        "omnigent.kernel.pluggable.errors",
+        "omnigent.kernel.lifespan_phases",
+        "omnigent.kernel.service_registry",
     ],
 )
 def test_importing_kernel_module_adds_no_nonkernel_omnigent(module: str) -> None:

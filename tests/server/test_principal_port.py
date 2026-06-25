@@ -238,7 +238,7 @@ def test_accounts_provider_none_for_none() -> None:
 
 
 def test_extension_principal_resolvers_default_empty(monkeypatch: pytest.MonkeyPatch) -> None:
-    import omnigent.extensions as ext_mod
+    import omnigent.kernel.extensions as ext_mod
 
     class _ExtNoHook:
         name = "no-hook"
@@ -251,7 +251,7 @@ def test_extension_principal_resolvers_default_empty(monkeypatch: pytest.MonkeyP
 
 
 def test_extension_principal_resolvers_collected(monkeypatch: pytest.MonkeyPatch) -> None:
-    import omnigent.extensions as ext_mod
+    import omnigent.kernel.extensions as ext_mod
 
     resolver = _StubProvider("ext-user")
 

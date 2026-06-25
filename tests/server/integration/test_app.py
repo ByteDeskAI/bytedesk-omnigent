@@ -307,7 +307,7 @@ async def test_v1_info_reports_accounts_through_principal_resolver_wrap(
     :param monkeypatch: Pytest monkeypatch fixture.
     :returns: None.
     """
-    import omnigent.extensions as ext_mod
+    import omnigent.kernel.extensions as ext_mod
     from omnigent.server.accounts_config import AccountsConfig
     from omnigent.server.accounts_store import SqlAlchemyAccountStore
     from omnigent.server.auth import AuthProvider, UnifiedAuthProvider

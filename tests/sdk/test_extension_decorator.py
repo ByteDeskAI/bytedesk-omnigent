@@ -12,7 +12,7 @@ import sys
 
 import pytest
 
-from omnigent.extensions import (
+from omnigent.kernel.extensions import (
     OmnigentExtension,
     extension_background_factories,
     extension_policy_modules,
@@ -348,7 +348,7 @@ def test_kernel_aggregators_consume_synthesised_ext(monkeypatch):
             return None
 
     ext = Aggregated()
-    monkeypatch.setattr("omnigent.extensions.discover_extensions", lambda: [ext])
+    monkeypatch.setattr("omnigent.kernel.extensions.discover_extensions", lambda: [ext])
 
     assert "agg_tool" in extension_tool_factories()
     pmods = extension_policy_modules()

@@ -86,16 +86,21 @@ def test_building_seam_registries_does_not_invoke_discovery() -> None:
     Run in a subprocess so the patch sees a clean import.
     """
     probe = (
-        "import omnigent.pluggable.registry as reg\n"
+        # Patch the canonical kernel registry module — the one
+        # ``PluggableRegistry.discover_extensions`` actually consults after the
+        # BDP-2515 kernel move. Patching the old ``omnigent.pluggable.registry``
+        # strangler shim would no-op (``import *`` does not forward the proxy as a
+        # patchable attribute back onto the canonical module).
+        "import omnigent.kernel.pluggable.registry as reg\n"
         "calls = []\n"
         "reg.discover_extensions = lambda *a, **k: calls.append(1) or []\n"
-        "from omnigent.pluggable.manifest import SEAMS\n"
+        "from omnigent.kernel.pluggable.manifest import SEAMS\n"
         "for seam, accessor, _hook in SEAMS:\n"
         "    accessor()  # build the registry — must not discover\n"
         "assert calls == [], "
         "f'building a seam registry invoked seam discover_extensions(): {len(calls)} call(s)'\n"
         "# And discover_all_extensions DOES drive one discovery per seam:\n"
-        "from omnigent.pluggable.manifest import discover_all_extensions\n"
+        "from omnigent.kernel.pluggable.manifest import discover_all_extensions\n"
         "discover_all_extensions()\n"
         "assert len(calls) == len(SEAMS), "
         "f'discover_all_extensions ran {len(calls)} of {len(SEAMS)} seam discoveries'\n"

@@ -31,7 +31,9 @@ _APP_PY = _REPO_ROOT / "omnigent" / "server" / "app.py"
 _HARNESSES_INIT = _REPO_ROOT / "omnigent" / "runtime" / "harnesses" / "__init__.py"
 _OMNIGENT_COMPAT = _REPO_ROOT / "omnigent" / "spec" / "_omnigent_compat.py"
 _TOOL_DISPATCH = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatch.py"
-_EXTENSIONS = _REPO_ROOT / "omnigent" / "extensions.py"
+# Canonical kernel location post-BDP-2515 (omnigent/extensions.py is now a
+# strangler re-export shim; the extension_*() getter defs live in the kernel).
+_EXTENSIONS = _REPO_ROOT / "omnigent" / "kernel" / "extensions.py"
 _HANDOFF_DOC = _REPO_ROOT / "docs" / "architecture" / "abstraction-spine-handoff.md"
 
 # ── Phase 1 anchor: the create_app *body* app.state key set (app.py 1052–1066). ──

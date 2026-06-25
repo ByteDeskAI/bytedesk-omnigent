@@ -133,7 +133,11 @@ class Host:
         ``OMNIGENT_DISABLED_EXTENSIONS`` — using the kernel's own mechanisms, not
         a parallel list. Restored on exit.
         """
-        import omnigent.extensions as kext
+        # Canonical kernel module (BDP-2515): host-builder swaps the *kernel's*
+        # ``discover_extensions`` symbol so that ``install_extensions`` and every
+        # ``PluggableRegistry.discover_extensions`` (which both consult the kernel
+        # module, not the old strangler shim) see the explicit extensions.
+        import omnigent.kernel.extensions as kext
 
         prev_disabled = os.environ.get(kext.DISABLED_ENV_VAR)
         if self._disabled:
