@@ -660,7 +660,12 @@ class SkillAcquisitionService:
             if selected_skill_names:
                 for name in selected_skill_names:
                     argv.extend(["--skill", name])
-            else:
+            elif "@" not in source_ref:
+                # A bare ``owner/repo`` installs the whole repo. A ref that
+                # names a specific skill (``owner/repo@skill``) is already
+                # scoped — ``--all`` would override that and pull every skill in
+                # the repo (which then dup-collides in discovery). Only fan out
+                # to all skills when no specific skill was named.
                 argv.append("--all")
             return self._runner.run(
                 SkillCommandSpec(argv=tuple(argv), timeout_seconds=120),

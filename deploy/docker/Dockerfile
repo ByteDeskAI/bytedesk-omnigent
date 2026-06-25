@@ -241,10 +241,11 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}"
 
-# curl + ca-certificates for the HEALTHCHECK/outbound HTTPS; gh plus
-# Node/npm/npx for server-side skill search/install source adapters.
+# curl + ca-certificates for the HEALTHCHECK/outbound HTTPS; gh + git plus
+# Node/npm/npx for server-side skill search/install source adapters
+# (`npx skills add` git-clones the skill repo, so git is required, not just gh).
 RUN apt-get update \
- && apt-get install -y --no-install-recommends curl ca-certificates gh \
+ && apt-get install -y --no-install-recommends curl ca-certificates gh git \
  && rm -rf /var/lib/apt/lists/*
 
 COPY --from=node-runtime /usr/local/bin/node /usr/local/bin/node
