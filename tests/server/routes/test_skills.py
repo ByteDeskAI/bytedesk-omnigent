@@ -210,3 +210,49 @@ async def test_installed_route_rejects_missing_agent_filter(
     resp = await client.get("/v1/skills/installed?agent_id=ag_missing")
 
     assert resp.status_code == 404, resp.text
+
+
+async def test_concierge_session_opens_concierge_bound_session_idempotently(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    tmp_path: Path,
+) -> None:
+    concierge_id = _seed_template_agent(db_uri, tmp_path, name="skills-concierge")
+
+    resp = await client.post(
+        "/v1/skills/concierge/sessions",
+        json={
+            "target_kind": "organization",
+            "target_id": "omnigent",
+            "target_label": "the whole organization",
+            "target_agent_ids": [concierge_id],
+        },
+    )
+
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["agent_id"] == concierge_id
+    assert body["agent_name"] == "skills-concierge"
+    assert body["session_id"].startswith("conv_")
+    assert "organization" in body["title"].lower()
+
+    # Idempotent per (user, scope): re-opening the same scope returns the
+    # same session rather than spawning a new one on each mount / scope change.
+    again = await client.post(
+        "/v1/skills/concierge/sessions",
+        json={"target_kind": "organization", "target_id": "omnigent"},
+    )
+    assert again.status_code == 201, again.text
+    assert again.json()["session_id"] == body["session_id"]
+
+
+async def test_concierge_session_404_when_agent_not_registered(
+    client: httpx.AsyncClient,
+) -> None:
+    # No skills-concierge agent seeded in this fresh DB.
+    resp = await client.post(
+        "/v1/skills/concierge/sessions",
+        json={"target_kind": "organization", "target_id": "omnigent"},
+    )
+
+    assert resp.status_code == 404, resp.text
