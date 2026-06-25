@@ -1191,6 +1191,28 @@ def test_login_correct_password_sets_cookie(accounts_app: TestClient) -> None:
     assert "ap_session" in resp.headers.get("set-cookie", "")
 
 
+def test_login_samesite_none_makes_cookie_cross_site_secure(
+    accounts_app: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """OMNIGENT_COOKIE_SAMESITE=none → the login cookie is SameSite=None; Secure.
+
+    The Office chat embed loads omnigent in a cross-origin iframe; a Lax cookie
+    isn't sent in a third-party frame, so the embedded UI + the
+    ``WS /v1/sessions/updates`` upgrade 401/403. Driven through the real
+    ``/auth/login`` route (the boundary an embedded browser hits) so the env flag
+    actually threads to the ``Set-Cookie`` header. SameSite=None forces Secure
+    even on this localhost (http) app (BDP-2501).
+    """
+    monkeypatch.setenv("OMNIGENT_COOKIE_SAMESITE", "none")
+    resp = accounts_app.post(
+        "/auth/login", json={"username": "admin", "password": "admin-pw-12345"}
+    )
+    assert resp.status_code == 200, resp.text
+    cookie = resp.headers.get("set-cookie", "").lower()
+    assert "samesite=none" in cookie
+    assert "secure" in cookie
+
+
 def test_me_unauthed_returns_401(accounts_app: TestClient) -> None:
     """No cookie → /auth/me returns 401."""
     resp = accounts_app.get("/auth/me")

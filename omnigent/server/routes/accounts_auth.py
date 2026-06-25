@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import os
 import re
 import secrets
 import time
@@ -125,6 +126,27 @@ class ChangePasswordRequest(BaseModel):
     new_password: str = Field(min_length=_MIN_PASSWORD_LENGTH, max_length=1024)
 
 
+def _cookie_samesite() -> str:
+    """SameSite policy for the session cookie (BDP-2494).
+
+    Default ``"lax"`` — the CSRF-safe choice for a standalone, top-level deploy.
+    ``samesite="lax"`` is NOT sent by browsers in a cross-origin iframe, so when
+    the omnigent UI is embedded as a third-party frame (the Office chat embed) the
+    cookie is dropped on the embedded UI's fetches and on the ``WS
+    /v1/sessions/updates`` upgrade — surfacing as 401/403 noise and a UI stuck on
+    "queued" (the live updates socket never authenticates). Set
+    ``OMNIGENT_COOKIE_SAMESITE=none`` to opt into ``SameSite=None`` (which the
+    caller pairs with ``Secure``, required by the attribute and already by the
+    ``__Host-`` prefix) so the cookie rides in the cross-origin embed. Opt-in,
+    because ``None`` widens CSRF exposure for non-embedded deploys.
+    """
+    return (
+        "none"
+        if os.environ.get("OMNIGENT_COOKIE_SAMESITE", "lax").strip().lower() == "none"
+        else "lax"
+    )
+
+
 def _set_session_cookie(
     response: Response,
     token: str,
@@ -139,33 +161,29 @@ def _set_session_cookie(
     magic redeem) uses the same attributes — divergence here is
     a recipe for "works in one route but not another" auth bugs.
     """
-    # samesite="lax" is the right CSRF-safe default for a standalone deploy
-    # (top-level navigation to the app's own domain). It does NOT work when the
-    # app is embedded in a cross-origin iframe — e.g. Hugging Face Spaces' preview
-    # pane — because browsers won't send a Lax cookie in a third-party frame, so
-    # login appears to loop. The validated workaround is to open the app at its
-    # direct URL (top-level tab). To support the embedded case, this would need a
-    # "samesite=none; Secure" option gated behind an opt-in env var — deferred, as
-    # it widens CSRF exposure and the direct-URL path already works.
+    samesite = _cookie_samesite()
     response.set_cookie(
         key=cookie_name,
         value=token,
         max_age=max_age_seconds,
         httponly=True,
-        secure=secure,
-        samesite="lax",
+        # SameSite=None is only valid with Secure (and the __Host- prefix already
+        # requires it), so force Secure whenever the embed mode is on.
+        secure=secure or samesite == "none",
+        samesite=samesite,
         path="/",
     )
 
 
 def _clear_session_cookie(response: Response, *, cookie_name: str, secure: bool) -> None:
     """Delete the session cookie. Same attrs as the setter, by design."""
+    samesite = _cookie_samesite()
     response.delete_cookie(
         key=cookie_name,
         path="/",
-        secure=secure,
+        secure=secure or samesite == "none",
         httponly=True,
-        samesite="lax",
+        samesite=samesite,
     )
 
 
