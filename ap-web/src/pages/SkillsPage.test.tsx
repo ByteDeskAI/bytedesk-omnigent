@@ -1,4 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsPage } from "./SkillsPage";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
@@ -54,7 +55,11 @@ const PREVIEW = {
 };
 
 function renderPage() {
-  return render(<SkillsPage />);
+  return render(
+    <MemoryRouter>
+      <SkillsPage />
+    </MemoryRouter>,
+  );
 }
 
 beforeEach(() => {
@@ -162,13 +167,17 @@ afterEach(() => {
 });
 
 describe("SkillsPage", () => {
-  it("renders installed skills and selected template agents", async () => {
+  it("renders the overlay shell and scope selector", async () => {
     renderPage();
 
     expect(screen.getByRole("heading", { name: "Skills" })).toBeInTheDocument();
     expect(screen.getByText("deep-search")).toBeInTheDocument();
-    expect(await screen.findByLabelText(/Demo/)).toBeChecked();
-    expect(screen.getByLabelText(/Helper/)).toBeChecked();
+    expect(await screen.findByRole("button", { name: /Organizational/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Operations/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Engineering/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Demo/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Helper/ })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Close skills/ })).toBeInTheDocument();
   });
 
   it("searches, previews, and applies a selected result", async () => {
@@ -205,15 +214,23 @@ describe("SkillsPage", () => {
     expect(refetchInstalled).toHaveBeenCalled();
   });
 
-  it("does not reselect every agent after Clear", async () => {
+  it("filters available skills and preview targets by selected department scope", async () => {
     renderPage();
 
-    expect(await screen.findByLabelText(/Demo/)).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(await screen.findByText("deep-search")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Engineering/ }));
 
-    expect(screen.getByLabelText(/Demo/)).not.toBeChecked();
-    expect(screen.getByLabelText(/Helper/)).not.toBeChecked();
-    expect(screen.getByRole("button", { name: /Preview install/ })).toBeDisabled();
+    expect(screen.getByText("No skills available for this scope.")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /image-tools/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Preview install/ }));
+
+    expect(previewMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target_agent_ids: ["ag_2"],
+      }),
+      expect.any(Object),
+    );
   });
 
   it("sends only Maya when Maya is the selected target", async () => {
@@ -245,9 +262,7 @@ describe("SkillsPage", () => {
     } as never);
     renderPage();
 
-    expect(await screen.findByLabelText(/Maya Chen/)).toBeChecked();
-    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
-    fireEvent.click(screen.getByLabelText(/Maya Chen/));
+    fireEvent.click(await screen.findByRole("button", { name: /Maya Chen/ }));
     fireEvent.click(screen.getByRole("button", { name: /image-tools/ }));
     fireEvent.click(screen.getByRole("button", { name: /Preview install/ }));
 
@@ -299,9 +314,9 @@ describe("SkillsPage", () => {
     } as never);
     renderPage();
 
-    expect(await screen.findByLabelText(/Maya Chen/)).toBeInTheDocument();
-    expect(screen.queryByLabelText(/Weekly Business Review/)).toBeNull();
-    expect(screen.queryByLabelText(/Codex/)).toBeNull();
+    expect(await screen.findByRole("button", { name: /Maya Chen/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Weekly Business Review/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Codex/ })).toBeNull();
   });
 
   it("disables search for a source that does not support search", () => {
