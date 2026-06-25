@@ -895,6 +895,14 @@ class SqlMemory(Base):
     embedding: Mapped[str | None] = mapped_column(Text, nullable=True)
     embedding_model_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+    # Addressable (keyed) memory (BDP-2457 addressable amendment). A non-null
+    # ``key`` makes this row a deterministic, exact-lookup SLOT (e.g. address
+    # ``org:charter`` → key ``charter`` in ``team/org-context``) rather than an
+    # ambient, decaying, similarity-recalled memory. Keyed rows are excluded from
+    # similarity recall + decay sweep (see ``SqlAlchemyMemoryStore.query`` /
+    # ``sweep``); the partial unique index below enforces a single LIVE slot per
+    # key per compartment.
+    key: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
         Index(
@@ -910,4 +918,16 @@ class SqlMemory(Base):
             "created_at",
         ),
         Index("ix_memories_source_conversation_id", "source_conversation_id"),
+        # One LIVE slot per (compartment, key): keyed put = archive-old + insert,
+        # so only the current slot is non-archived. Partial so ambient (key NULL)
+        # and archived rows are unconstrained. Both SQLite + Postgres honor the
+        # partial predicate.
+        Index(
+            "uq_memories_compartment_key_live",
+            "compartment_id",
+            "key",
+            unique=True,
+            sqlite_where=text("key IS NOT NULL AND archived = 0"),
+            postgresql_where=text("key IS NOT NULL AND archived = false"),
+        ),
     )

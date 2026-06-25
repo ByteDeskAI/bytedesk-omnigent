@@ -232,6 +232,7 @@ class SqlAlchemyMemoryStore:
         salience: float | None = None,
         confidence: float | None = None,
         metadata: str | None = None,
+        key: str | None = None,
         half_life_seconds: int | None = None,
         read_floor: float = _DEFAULT_READ_FLOOR,
         archive_floor: float = _DEFAULT_ARCHIVE_FLOOR,
@@ -239,6 +240,11 @@ class SqlAlchemyMemoryStore:
     ) -> str:
         """Append a memory, creating its compartment on first use.
 
+        :param key: Optional addressable slot key (BDP-2457). A non-null key makes
+            this row a deterministic exact-lookup SLOT excluded from similarity
+            recall + decay sweep; the partial unique index enforces one live slot
+            per (compartment, key). ``None`` (default) is an ordinary ambient
+            memory — unchanged behaviour.
         :returns: The new memory id (``"mem_..."``).
         """
         now = now if now is not None else now_epoch()
@@ -288,10 +294,88 @@ class SqlAlchemyMemoryStore:
                     embedding=embedding,
                     embedding_model_version=embedding_model_version,
                     meta=metadata,
+                    key=key,
                 )
             )
             insert_memory_fts(session, mid, comp.id, st)
         return mid
+
+    # ── addressable (keyed) slots (BDP-2457) ──────────────────────
+    #
+    # A keyed slot is a deterministic exact-lookup row (e.g. address
+    # ``org:charter``) filtered on the indexed ``key`` column — never similarity-
+    # recalled, never decay-swept (see :meth:`query` / the sweep). The partial
+    # unique index ``uq_memories_compartment_key_live`` enforces one live slot per
+    # (compartment, key); a keyed write is archive-prior + ``append(key=...)``.
+
+    def _resolve_compartment_id(
+        self, session, *, scope: str, owner: str, name: str
+    ) -> str | None:
+        """Resolve an EXISTING compartment id (read-only — never creates)."""
+        return session.execute(
+            select(SqlMemoryCompartment.id).where(
+                SqlMemoryCompartment.scope == scope,
+                SqlMemoryCompartment.owner == owner,
+                SqlMemoryCompartment.name == name,
+            )
+        ).scalar_one_or_none()
+
+    def get_keyed(self, *, scope: str, owner: str, name: str, key: str) -> dict | None:
+        """Exact-key lookup of the live addressable slot, or ``None``.
+
+        Filters on the indexed ``key`` column — deterministic, no similarity, no
+        decay. The partial unique index guarantees at most one live slot; ordering
+        by ``created_at`` desc is belt-and-suspenders mid-transition.
+        """
+        with self._session() as session:
+            cid = self._resolve_compartment_id(session, scope=scope, owner=owner, name=name)
+            if cid is None:
+                return None
+            row = (
+                session.execute(
+                    select(SqlMemory)
+                    .where(
+                        SqlMemory.compartment_id == cid,
+                        SqlMemory.key == key,
+                        SqlMemory.archived.is_(False),
+                    )
+                    .order_by(SqlMemory.created_at.desc())
+                )
+                .scalars()
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "memory_id": row.id,
+                "content": row.content,
+                "weight": row.weight,
+                "created_at": row.created_at,
+                "confidence": row.confidence,
+                "source_conversation_id": row.source_conversation_id,
+            }
+
+    def archive_keyed(self, *, scope: str, owner: str, name: str, key: str) -> int:
+        """Archive every live row at *key* in this compartment; returns the count.
+
+        Used by ``unset`` and by keyed overwrite (archive-prior-then-write). Scoped
+        to the resolved compartment, so a caller can only touch a slot in a
+        compartment it can already address.
+        """
+        with self._session() as session:
+            cid = self._resolve_compartment_id(session, scope=scope, owner=owner, name=name)
+            if cid is None:
+                return 0
+            result = session.execute(
+                update(SqlMemory)
+                .where(
+                    SqlMemory.compartment_id == cid,
+                    SqlMemory.key == key,
+                    SqlMemory.archived.is_(False),
+                )
+                .values(archived=True)
+            )
+        return result.rowcount or 0
 
     # ── reinforcement (out-of-band; off the recall path) ──────────
 
@@ -385,6 +469,11 @@ class SqlAlchemyMemoryStore:
                     select(SqlMemory).where(
                         SqlMemory.id.in_(list(candidates)),
                         SqlMemory.archived.is_(False),
+                        # Addressable keyed slots (BDP-2457) are deterministic
+                        # exact-lookup rows, not associative-recall candidates —
+                        # exclude them so they never pollute (or get crowded out
+                        # of) similarity recall. Ambient rows (key NULL) only.
+                        SqlMemory.key.is_(None),
                     )
                 )
                 .scalars()
@@ -577,7 +666,12 @@ class SqlAlchemyMemoryStore:
             }
             rows = (
                 session.execute(
-                    select(SqlMemory).where(SqlMemory.archived.is_(False))
+                    select(SqlMemory).where(
+                        SqlMemory.archived.is_(False),
+                        # Addressable keyed slots (BDP-2457) are durable, deliberate
+                        # references — never decay-evicted. Sweep ambient rows only.
+                        SqlMemory.key.is_(None),
+                    )
                 )
                 .scalars()
                 .all()
