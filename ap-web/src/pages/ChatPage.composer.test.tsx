@@ -564,6 +564,33 @@ describe("Composer placeholder", () => {
   });
 });
 
+describe("Composer cost-routing control", () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      conversationId: "conv_test",
+      skills: [],
+      costControlModeOverride: null,
+    });
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  it("renders for cost-routing sessions", () => {
+    render(<Composer {...composerProps({ costRoutingEligible: true })} />);
+
+    expect(screen.getByRole("button", { name: "Intelligent model router" })).toBeInTheDocument();
+  });
+
+  it("stays hidden for non-cost-routing sessions", () => {
+    render(<Composer {...composerProps({ costRoutingEligible: false })} />);
+
+    expect(screen.queryByRole("button", { name: "Intelligent model router" })).toBeNull();
+  });
+});
+
 // A pending elicitation parks the agent's turn server-side on the verdict
 // Future — a message posted then just sits queued and unread until the card
 // is answered. These tests pin the composer lock that surfaces that state.

@@ -285,15 +285,16 @@ describe("TerminalSession", () => {
   beforeEach(() => {
     lastSocket = null;
     FakeResizeObserver.instances = [];
-    vi.stubGlobal(
-      "WebSocket",
-      class extends FakeWebSocket {
-        constructor(url: string) {
-          super(url);
-          lastSocket = this;
-        }
-      },
-    );
+    function WebSocketMock(url: string) {
+      const socket = new FakeWebSocket(url);
+      lastSocket = socket;
+      return socket;
+    }
+    Object.assign(WebSocketMock, {
+      OPEN: FakeWebSocket.OPEN,
+      CLOSED: FakeWebSocket.CLOSED,
+    });
+    vi.stubGlobal("WebSocket", WebSocketMock);
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   });
 

@@ -1,7 +1,7 @@
 // localStorage-backed recent workspace directories, keyed per host
 // (paths are host-specific). Feeds the combobox "Recent" group.
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 
 const STORAGE_KEY = "omnigent:recent-workspaces";
 const MAX_PER_HOST = 8;
@@ -62,16 +62,13 @@ export interface RecentWorkspaces {
 export function useRecentWorkspaces(hostId: string | null): RecentWorkspaces {
   // Bumped by addRecent to recompute after a write; the host's list is read
   // synchronously below, not hydrated via an effect.
-  const [revision, setRevision] = useState(0);
+  const [, setRevision] = useState(0);
 
   // Read synchronously and keyed on hostId so ``recent`` is always consistent
   // with the current host on the same render. A prior effect-based hydration
   // lagged one render behind hostId, which let a consumer briefly observe the
   // previous host's paths right after a host switch (a cross-host leak).
-  const recent = useMemo(
-    () => (hostId === null ? [] : (readAll()[hostId] ?? [])),
-    [hostId, revision],
-  );
+  const recent = hostId === null ? [] : (readAll()[hostId] ?? []);
 
   const addRecent = useCallback(
     (path: string) => {
