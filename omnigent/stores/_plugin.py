@@ -3,7 +3,7 @@
 Dogfoods the kernel plugin contract for the persistence layer: this plugin
 registers the storage subpackage's *existing* default providers into the three
 storage kernel seams it owns, using the same :class:`~omnigent.sdk` decorator and
-the same :class:`~omnigent.extensions.OmnigentExtension` Protocol a third party
+the same :class:`~omnigent.kernel.extensions.OmnigentExtension` Protocol a third party
 would use. Per the three-tier picture (Section 9.1 "stores" row, Section 10 line
 776, dogfooding argument Section 9.2):
 
@@ -26,14 +26,14 @@ working byte-for-byte once this plugin is the sole registrant.
 **Not boot-wired yet.** This module is import-clean and exposes correct hook
 returns; the Integration phase adds the ``pyproject.toml`` entry-point /
 ``default_extensions()`` wiring. Until then it never double-registers (no seam
-calls its hook), so no :class:`~omnigent.pluggable.errors.RegistryConflict` fires.
+calls its hook), so no :class:`~omnigent.kernel.pluggable.errors.RegistryConflict` fires.
 
 **Circular-import / hot-path safety (kernel rule 4):** every domain import lives
 *inside* a hook method (and inside the per-factory closure where the optional
 backend dependency matters), so importing this module pulls only the SDK facade —
 the FastAPI/SQLAlchemy/fastembed stacks stay off the import path. The factories
 the hooks return are the zero-arg ``() -> provider`` shape the
-:class:`~omnigent.pluggable.PluggableRegistry` stores; locations/URIs are resolved
+:class:`~omnigent.kernel.pluggable.PluggableRegistry` stores; locations/URIs are resolved
 lazily at factory-call time (the same source the composition root uses), never at
 hook-call time, so describe/discover stay side-effect-free.
 """

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from omnigent.pluggable import ProviderNotRegistered
+from omnigent.kernel.pluggable import ProviderNotRegistered
 from omnigent.spec import parse, validate
 from omnigent.spec.source import (
     SEAM,

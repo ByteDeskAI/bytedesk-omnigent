@@ -1,7 +1,7 @@
 """First-party ("core") plugin assembly — the second tier of the three-tier
 microkernel picture (Section 10 of ``docs/EXTENSION_FRAMEWORK_ANALYSIS.md``).
 
-The kernel (``omnigent.extensions``, ``omnigent.pluggable``) is domain-free; the
+The kernel (``omnigent.kernel.extensions``, ``omnigent.kernel.pluggable``) is domain-free; the
 third tier is out-of-core / third-party extensions discovered via entry-points.
 This package is the *middle* tier: the set of first-party plugins that ship in
 the repo and dogfood the very same ``OmnigentExtension`` Protocol + seam
@@ -25,7 +25,7 @@ assume earlier seams are present (e.g. ``omnigent.harnesses`` ``requires``
 **Kept domain-free at import time.** Importing ``omnigent.core`` must not drag
 the FastAPI / store stack onto the runner hot path, so every plugin module is
 imported *inside* :func:`default_extensions`, exactly like the deferred-import
-pattern the kernel uses (``omnigent.pluggable.registry.discover_extensions``).
+pattern the kernel uses (``omnigent.kernel.pluggable.registry.discover_extensions``).
 """
 
 from __future__ import annotations
@@ -34,7 +34,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover — typing only, never imported at runtime
-    from omnigent.extensions import OmnigentExtension
+    from omnigent.kernel.extensions import OmnigentExtension
 
 logger = logging.getLogger(__name__)
 
@@ -76,13 +76,13 @@ def default_extensions() -> list[OmnigentExtension]:
     Each plugin module is imported lazily (deferred domain import) and its class
     instantiated with zero args. A plugin whose module fails to import — or whose
     class is missing or won't construct — is **logged and skipped**, never fatal:
-    the same best-effort isolation ``omnigent.extensions.discover_extensions``
+    the same best-effort isolation ``omnigent.kernel.extensions.discover_extensions``
     applies to third-party extensions, so a broken first-party plugin can never
     break server boot.
 
     :returns: the healthy first-party extension instances, in boot order. The
         list is suitable to pass straight to
-        :func:`omnigent.extensions.install_extensions` (routers) and to
+        :func:`omnigent.kernel.extensions.install_extensions` (routers) and to
         :func:`register_firstparty_seams` (seam contributions); it conforms to
         the same ``OmnigentExtension`` Protocol the kernel already dispatches.
     """
@@ -107,11 +107,11 @@ def default_extensions() -> list[OmnigentExtension]:
 def register_firstparty_seams(extensions: list[OmnigentExtension]) -> None:
     """Register *extensions*' seam contributions through the SAME seam registries.
 
-    Mirrors :meth:`omnigent.pluggable.registry.PluggableRegistry.discover_extensions`
+    Mirrors :meth:`omnigent.kernel.pluggable.registry.PluggableRegistry.discover_extensions`
     — but for an explicit, in-process list of first-party extensions instead of
-    entry-point discovery. It reuses :data:`omnigent.pluggable.manifest.SEAMS`
+    entry-point discovery. It reuses :data:`omnigent.kernel.pluggable.manifest.SEAMS`
     (the single seam declaration) and each seam's own
-    :meth:`~omnigent.pluggable.registry.PluggableRegistry.register`, so no
+    :meth:`~omnigent.kernel.pluggable.registry.PluggableRegistry.register`, so no
     parallel registry or hook table is created here.
 
     For every ``(seam, accessor, hook)`` row it ``hasattr``-probes each extension
@@ -130,8 +130,8 @@ def register_firstparty_seams(extensions: list[OmnigentExtension]) -> None:
     :param extensions: the first-party extensions (typically
         :func:`default_extensions`'s result).
     """
-    from omnigent.pluggable.errors import RegistryConflict
-    from omnigent.pluggable.manifest import SEAMS
+    from omnigent.kernel.pluggable.errors import RegistryConflict
+    from omnigent.kernel.pluggable.manifest import SEAMS
 
     for seam, accessor, hook in SEAMS:
         try:
@@ -180,7 +180,7 @@ def firstparty_background_factories(
 ) -> list:
     """Collect *extensions*' ``background_tasks()`` factories (``hasattr``-probed).
 
-    Mirrors :func:`omnigent.extensions.extension_background_factories` but for the
+    Mirrors :func:`omnigent.kernel.extensions.extension_background_factories` but for the
     explicit first-party list, so the composition root can start first-party
     background loops (``omnigent.metrics``, ``omnigent.memory_maintenance``)
     through the same lifespan task-creation path it already uses for third-party

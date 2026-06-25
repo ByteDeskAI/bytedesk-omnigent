@@ -22,7 +22,7 @@ import httpx
 import jwt
 
 if TYPE_CHECKING:
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 # ── PKCE helpers (RFC 7636) ──────────────────────────────────────
 
@@ -403,7 +403,7 @@ def _build_idp_adapter_registry() -> PluggableRegistry[IdPAdapter]:
     default arm matches the historical ``else`` (any non-GitHub issuer → OIDC
     discovery).
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[IdPAdapter] = PluggableRegistry(
         "idp_adapter", default=("oidc", _DiscoveryOIDCAdapter)

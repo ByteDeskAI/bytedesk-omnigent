@@ -217,7 +217,7 @@ class CompositeAuthProvider(AuthProvider):
     chain so the two stay consistent.
 
     Extension-contributed resolvers (from
-    :func:`omnigent.extensions.extension_principal_resolvers`) are placed
+    :func:`omnigent.kernel.extensions.extension_principal_resolvers`) are placed
     BEFORE the configured provider so an external consumer (e.g. the platform
     supplying identity) can win when it has an answer, while an in-core deploy
     with no resolvers is behavior-identical to the base provider alone.

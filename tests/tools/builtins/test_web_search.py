@@ -372,7 +372,7 @@ def test_unknown_provider_raises_provider_not_registered(
     tool_ctx: ToolContext,
 ) -> None:
     """An unknown (but non-empty) ``search_provider`` raises ProviderNotRegistered."""
-    from omnigent.pluggable import ProviderNotRegistered
+    from omnigent.kernel.pluggable import ProviderNotRegistered
 
     tool = WebSearchTool(
         config={"search_provider": "bing", "api_key": "k"},

@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 
 def _artifact_scheme(location: str) -> str:
@@ -52,7 +52,7 @@ def _build_artifact_store_registry(
     :param location: The artifact location, closed over by each factory so a
         selected backend is constructed for exactly this location.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     def _local() -> Any:  # type: ignore[explicit-any]
         from omnigent.stores.artifact_store.local import LocalArtifactStore
@@ -90,7 +90,7 @@ def _build_artifact_store_registry(
 def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any]  # ArtifactStore protocol (optional deps)
     """Create an artifact store based on the location URI scheme.
 
-    Selection is now a :class:`~omnigent.pluggable.PluggableRegistry` keyed by
+    Selection is now a :class:`~omnigent.kernel.pluggable.PluggableRegistry` keyed by
     URI scheme (default = local), the reference seam for the pluggable framework
     (BDP-2345). Behavior is identical to the historical if/else and to
     ``omnigent.cli._create_artifact_store``: ``dbfs:/Volumes/...`` URIs use

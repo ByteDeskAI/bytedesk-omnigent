@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.policies.registry import _type_matches
 from omnigent.policies.schema_validator import (
     BuiltinTypeMatchValidator,

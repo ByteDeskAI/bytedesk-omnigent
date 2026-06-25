@@ -23,7 +23,7 @@ Mirrors the prototype core-plugin style (``prototype/omnigent_demo/core/``): a
 plain class decorated with the SDK ``@extension`` whose members are stamped with
 seam decorators. The kernel's existing ``discover_extensions`` /
 ``extension_background_factories`` aggregators consume it identically to a
-hand-written :class:`omnigent.extensions.OmnigentExtension`.
+hand-written :class:`omnigent.kernel.extensions.OmnigentExtension`.
 
 All heavy / domain imports are deferred inside the hook method (NON-NEGOTIABLE
 rule 4: keep the kernel domain-free, follow the deferred-import pattern) so
@@ -84,7 +84,7 @@ def factory() -> MetricsExtension:
     """Entry-point / ``OMNIGENT_EXTENSIONS`` factory for the metrics plugin.
 
     The irreducible self-registration hook (Section 12.3): a ``pyproject.toml``
-    ``[project.entry-points."omnigent.extensions"]`` row (or an
+    ``[project.entry-points."omnigent.kernel.extensions"]`` row (or an
     ``OMNIGENT_EXTENSIONS=...:factory`` entry) points here, and the kernel's
     existing ``discover_extensions`` calls it to obtain the instance. Wiring
     that entry point is the Integration phase's job; this callable exists so the

@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from omnigent.tools.base import Tool, ToolContext
 
 if TYPE_CHECKING:
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ class WebSearchProvider(Protocol):
     A provider runs a query using credentials carried in the agent's spec
     config and returns a formatted, human-readable result string. Providers
     are selected by name from ``config["search_provider"]`` via the seam's
-    :class:`~omnigent.pluggable.PluggableRegistry`; new backends (Brave,
+    :class:`~omnigent.kernel.pluggable.PluggableRegistry`; new backends (Brave,
     SearXNG, Tavily, Bing, self-hosted) plug in by registration alone.
     """
 
@@ -259,7 +259,7 @@ def _build_provider_registry() -> PluggableRegistry[WebSearchProvider]:
 
     :returns: The provider registry for the ``web_search`` seam.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[WebSearchProvider] = PluggableRegistry("web_search")
     registry.register("google", _GoogleProvider)
@@ -276,7 +276,7 @@ def _search(query: str, config: dict[str, str]) -> str:
 
     The ``search_provider`` key in config selects a registered
     :class:`WebSearchProvider` via the seam's
-    :class:`~omnigent.pluggable.PluggableRegistry`. No env var fallbacks —
+    :class:`~omnigent.kernel.pluggable.PluggableRegistry`. No env var fallbacks —
     the spec must be self-contained.
 
     :param query: The search query string.

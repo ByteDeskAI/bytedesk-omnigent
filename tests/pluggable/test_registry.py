@@ -1,4 +1,4 @@
-"""Tests for omnigent.pluggable.PluggableRegistry (BDP-2345).
+"""Tests for omnigent.kernel.pluggable.PluggableRegistry (BDP-2345).
 
 The registry is the generic seam scaffold every pluggability ticket builds on:
 register/get/default + an OMNIGENT_USE_<SEAM> override + entry-point discovery
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from omnigent.pluggable import (
+from omnigent.kernel.pluggable import (
     PluggableRegistry,
     ProviderNotRegistered,
     RegistryConflict,

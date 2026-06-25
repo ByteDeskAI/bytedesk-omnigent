@@ -11,7 +11,7 @@ contribution (Section 9.1, the ``policies`` row).
 
 This is an ordinary extension built with the public SDK ``@extension``
 decorator — there is no privileged "core" wiring. Its instances satisfy the
-kernel :class:`omnigent.extensions.OmnigentExtension` Protocol exactly as
+kernel :class:`omnigent.kernel.extensions.OmnigentExtension` Protocol exactly as
 ``BytedeskExtension`` does.
 
 NOT yet wired into boot: discovery + ``load_registry()`` integration is the

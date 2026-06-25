@@ -3,7 +3,7 @@
 This module is the SDK-shaped expression of the first-party harness set: a single
 class, decorated with :func:`omnigent.sdk.extension`, that registers this
 subpackage's *already-existing* default harness descriptors into the kernel
-``harness`` :class:`~omnigent.pluggable.PluggableRegistry` seam through its
+``harness`` :class:`~omnigent.kernel.pluggable.PluggableRegistry` seam through its
 ``harness_descriptors`` hook — the same hook a third-party extension implements
 (Section 9.1 ``harnesses`` row; Section 9.2 dogfooding argument).
 

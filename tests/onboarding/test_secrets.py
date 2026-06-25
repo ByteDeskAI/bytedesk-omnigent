@@ -196,7 +196,7 @@ def test_extension_backends_returns_contributed_backends(monkeypatch) -> None:
     fake = _FakeBackend("contrib", store={"token": "remote"})
     monkeypatch.setattr(s, "_extension_backends", _REAL_EXTENSION_BACKENDS)
     monkeypatch.setattr(
-        "omnigent.extensions.extension_secret_backends",
+        "omnigent.kernel.extensions.extension_secret_backends",
         lambda: [fake],
     )
     assert s._extension_backends() == [fake]
@@ -206,7 +206,7 @@ def test_extension_backends_call_error_returns_empty(monkeypatch) -> None:
     """A broken extension contributor must not break secret resolution."""
     monkeypatch.setattr(s, "_extension_backends", _REAL_EXTENSION_BACKENDS)
     monkeypatch.setattr(
-        "omnigent.extensions.extension_secret_backends",
+        "omnigent.kernel.extensions.extension_secret_backends",
         lambda: (_ for _ in ()).throw(RuntimeError("extension seam unavailable")),
     )
     assert s._extension_backends() == []
@@ -217,7 +217,7 @@ def test_extension_backends_import_failure_is_ignored(tmp_path, monkeypatch):
     monkeypatch.setenv("OMNIGENT_DISABLE_KEYRING", "1")
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr(
-        "omnigent.extensions.extension_secret_backends",
+        "omnigent.kernel.extensions.extension_secret_backends",
         lambda: (_ for _ in ()).throw(RuntimeError("extension seam unavailable")),
     )
     s.reset_backends()

@@ -23,8 +23,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 
-from omnigent.pluggable.errors import ProviderNotRegistered
-from omnigent.pluggable.registry import PluggableRegistry
+from omnigent.kernel.pluggable.errors import ProviderNotRegistered
+from omnigent.kernel.pluggable.registry import PluggableRegistry
 from omnigent.spec.types import SkillSpec
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins.agents import (
@@ -370,13 +370,13 @@ def register_extension_tools() -> None:
     already-registered tool name is skipped by the registry's conflict guard
     (caught per-extension below). Error-isolated per extension so one bad
     extension can never break boot. Discovery is routed through
-    :func:`omnigent.pluggable.registry.discover_extensions`, the lazy proxy that
-    defers the heavy ``omnigent.extensions`` import.
+    :func:`omnigent.kernel.pluggable.registry.discover_extensions`, the lazy proxy that
+    defers the heavy ``omnigent.kernel.extensions`` import.
     """
     import logging
 
-    from omnigent.pluggable.errors import RegistryConflict
-    from omnigent.pluggable.registry import discover_extensions
+    from omnigent.kernel.pluggable.errors import RegistryConflict
+    from omnigent.kernel.pluggable.registry import discover_extensions
 
     logger = logging.getLogger(__name__)
     for ext in discover_extensions():

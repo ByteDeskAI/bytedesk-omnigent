@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnigent.pluggable import (
+from omnigent.kernel.pluggable import (
     ProviderError,
     ProviderNotRegistered,
     ProviderUnavailable,

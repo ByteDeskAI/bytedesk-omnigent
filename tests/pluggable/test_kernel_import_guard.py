@@ -69,18 +69,11 @@ _ALLOWED_KERNEL_MODULES = frozenset(
         "omnigent.kernel.pluggable.errors",
         "omnigent.kernel.lifespan_phases",
         "omnigent.kernel.service_registry",
-        # Old (pre-BDP-2515) flat paths kept as strangler re-export shims; the
-        # shim files themselves live OUTSIDE _KERNEL_PURE_FILES, so they are not
-        # asserted for purity — but a kernel module is still allowed to resolve
-        # through them transitively until Stage 2 (BDP-2516) deletes the shims.
-        "omnigent.extensions",
-        "omnigent.pluggable",
-        "omnigent.pluggable.registry",
-        "omnigent.pluggable.manifest",
-        "omnigent.pluggable.errors",
+        # The bare ``omnigent.server`` package anchor (e.g. ``import
+        # omnigent.server`` for a submodule reference). The pre-BDP-2515 flat
+        # strangler shims were deleted in Stage 2 (BDP-2516); kernel modules now
+        # resolve every seam through the canonical ``omnigent.kernel.*`` paths.
         "omnigent.server",
-        "omnigent.server.lifespan_phases",
-        "omnigent.server.service_registry",
     }
 )
 

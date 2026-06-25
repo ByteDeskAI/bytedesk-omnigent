@@ -174,7 +174,7 @@ def _build_webhook_adapter_registry():
     any source without a bespoke adapter. A deployment registers a source-specific
     adapter (different signing scheme / event header) by name.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)

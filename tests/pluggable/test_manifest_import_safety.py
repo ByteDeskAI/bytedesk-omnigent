@@ -3,7 +3,7 @@
 The just-fixed BDP-2371 regression was a seam module calling
 ``discover_extensions()`` at *import*, which loads the FastAPI-heavy entry-point
 extensions onto the runner hot path. Discovery is now a server-startup concern
-(:func:`omnigent.pluggable.manifest.discover_all_extensions`). These tests pin
+(:func:`omnigent.kernel.pluggable.manifest.discover_all_extensions`). These tests pin
 that invariant from two angles:
 
 1. The runner hot path stays FastAPI-free — the canonical net is
@@ -32,7 +32,7 @@ _FASTAPI_FREE_SEAM_MODULES = (
     "omnigent.stores.factory",
     "omnigent.stores.memory_store.provider",
     "omnigent.spec.source",
-    "omnigent.pluggable.registry",
+    "omnigent.kernel.pluggable.registry",
 )
 
 
@@ -68,7 +68,7 @@ def test_building_seam_registries_does_not_invoke_discovery() -> None:
 
     The contract is "no ``discover_extensions()`` at import/registry-build"
     (BDP-2371): discovery is server-startup-only, run once via
-    :func:`omnigent.pluggable.manifest.discover_all_extensions`. We assert it
+    :func:`omnigent.kernel.pluggable.manifest.discover_all_extensions`. We assert it
     directly on the registry-construction path the manifest accessors use — patch
     the hub's ``discover_extensions`` to record any call, build every seam's
     registry, and require zero calls.
@@ -78,7 +78,7 @@ def test_building_seam_registries_does_not_invoke_discovery() -> None:
     merge in that package's ``__init__`` — a separate, pre-existing ADR-0143 path
     that is not the pluggable-seam regression guarded here.)
 
-    We patch ``omnigent.pluggable.registry.discover_extensions`` — the proxy that
+    We patch ``omnigent.kernel.pluggable.registry.discover_extensions`` — the proxy that
     ONLY ``PluggableRegistry.discover_extensions`` consults — so the assertion is
     isolated to the seam-discovery path and is not confused by the separate
     tool-factory extension merge that ``omnigent.tools.builtins`` runs at import.
@@ -88,7 +88,7 @@ def test_building_seam_registries_does_not_invoke_discovery() -> None:
     probe = (
         # Patch the canonical kernel registry module — the one
         # ``PluggableRegistry.discover_extensions`` actually consults after the
-        # BDP-2515 kernel move. Patching the old ``omnigent.pluggable.registry``
+        # BDP-2515 kernel move. Patching the old ``omnigent.kernel.pluggable.registry``
         # strangler shim would no-op (``import *`` does not forward the proxy as a
         # patchable attribute back onto the canonical module).
         "import omnigent.kernel.pluggable.registry as reg\n"

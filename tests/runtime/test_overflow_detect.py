@@ -13,7 +13,7 @@ import json
 
 import pytest
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.runtime.llm_retry import _detect_context_overflow
 from omnigent.runtime.overflow_detect import (
     AnthropicOverflowDetector,

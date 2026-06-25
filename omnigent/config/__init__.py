@@ -194,7 +194,7 @@ _ADAPTERS: dict[str, ConfigStore] = {
 class ConfigRegistry:
     """The aggregate Settings Registry: descriptors keyed by ``key``.
 
-    Built from :func:`omnigent.extensions.extension_config_descriptors`. Routes
+    Built from :func:`omnigent.kernel.extensions.extension_config_descriptors`. Routes
     a read to the descriptor's storage adapter and redacts secrets (name +
     presence only, never the value).
     """
@@ -240,7 +240,7 @@ class ConfigRegistry:
 
 def build_registry() -> ConfigRegistry:
     """Build the registry from every extension's ``config_descriptors()``."""
-    from omnigent.extensions import extension_config_descriptors
+    from omnigent.kernel.extensions import extension_config_descriptors
 
     registry = ConfigRegistry()
     for descriptor in extension_config_descriptors():

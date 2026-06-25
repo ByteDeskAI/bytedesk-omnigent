@@ -52,7 +52,7 @@ from omnigent.onboarding.provider_config import (
 from omnigent.runtime.credentials.databricks import resolve_databricks_workspace
 
 if TYPE_CHECKING:
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -719,7 +719,7 @@ def _build_listing_fetch_registry() -> PluggableRegistry[_ListingFetch]:
     callables directly — selection is by :func:`_listing_strategy_key`, not by
     the override env, so :meth:`get` is used rather than ``resolve_default``.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[_ListingFetch] = PluggableRegistry(
         "model_listing_fetch",

@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 from urllib.parse import urlparse, urlunparse
 
 if TYPE_CHECKING:
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 from omnigent.runner.identity import strip_runner_auth_secrets
 
@@ -874,7 +874,7 @@ def _build_os_environment_registry() -> PluggableRegistry[_OSEnvBuilder]:
     can register their own builder under a new type name. The registry holds the
     builder callables directly; ``create_os_environment`` passes the spec.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[_OSEnvBuilder] = PluggableRegistry(
         "os_environment",
@@ -886,7 +886,7 @@ def _build_os_environment_registry() -> PluggableRegistry[_OSEnvBuilder]:
 def create_os_environment(spec: OSEnvSpec | None) -> OSEnvironment | None:
     """Instantiate the configured OS environment.
 
-    Selection is a :class:`~omnigent.pluggable.PluggableRegistry` keyed by
+    Selection is a :class:`~omnigent.kernel.pluggable.PluggableRegistry` keyed by
     ``spec.type`` (Abstract Factory). ``caller_process`` is the built-in default;
     an unregistered type raises ``NotImplementedError`` exactly as before.
     """

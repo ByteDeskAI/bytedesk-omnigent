@@ -28,7 +28,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from omnigent.identity.types import Credential
-from omnigent.pluggable.registry import PluggableRegistry
+from omnigent.kernel.pluggable.registry import PluggableRegistry
 
 if TYPE_CHECKING:
     from omnigent.identity.identity import ActingIdentity

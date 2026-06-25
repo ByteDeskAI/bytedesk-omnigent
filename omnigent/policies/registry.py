@@ -85,14 +85,14 @@ def load_registry(
         server config's ``policy_modules`` key. ``None`` and
         ``[]`` both mean no extra modules.
     """
-    from omnigent.extensions import extension_policy_modules
+    from omnigent.kernel.extensions import extension_policy_modules
     from omnigent.policies.builtins import BUILTIN_POLICY_MODULES
 
     _registry.clear()
     _registry_by_handler.clear()
 
     # First-party policy modules (e.g. bytedesk_omnigent.policies.*) are contributed
-    # via the omnigent.extensions seam (ADR-0143 / BDP-2300), not hardcoded here.
+    # via the omnigent.kernel.extensions seam (ADR-0143 / BDP-2300), not hardcoded here.
     all_modules = (
         list(BUILTIN_POLICY_MODULES)
         + extension_policy_modules()

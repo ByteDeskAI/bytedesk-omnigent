@@ -22,7 +22,7 @@ shape as ``assertion_verifiers`` / ``outbound_credential_providers``. The SDK's
 ``@extension`` decorator has no member-decorator for this seam, so the hook is
 written by hand on the class; the decorator only fills in hooks the author did
 *not* define (``_set_if_absent``), leaving this one intact while still making the
-instance conform to :class:`omnigent.extensions.OmnigentExtension`.
+instance conform to :class:`omnigent.kernel.extensions.OmnigentExtension`.
 
 The factories themselves are **not** rewritten here — they are the subpackage's
 already-existing ``_inprocess_factory`` / ``_nats_factory`` (in ``factory.py``),

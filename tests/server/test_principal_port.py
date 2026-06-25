@@ -9,7 +9,7 @@ Covers the foundation laid in increment 1 with ZERO behavior change:
 3. :class:`CompositeAuthProvider` — Chain of Responsibility: first non-None
    resolver wins, fall-through to the configured base, and (no extension
    resolver) behavior-identical to the base provider alone.
-4. :func:`omnigent.extensions.extension_principal_resolvers` — aggregates the
+4. :func:`omnigent.kernel.extensions.extension_principal_resolvers` — aggregates the
    optional ``principal_resolvers()`` hook and defaults to ``[]``.
 """
 

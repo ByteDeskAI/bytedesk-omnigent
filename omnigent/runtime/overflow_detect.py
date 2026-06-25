@@ -9,7 +9,7 @@ each into a registered :class:`OverflowDetector` and runs them as a chain:
   :class:`OverflowTokens` when the body matches its provider's shape, else
   ``None``.
 - :func:`overflow_detector_registry` — a
-  :class:`~omnigent.pluggable.PluggableRegistry` with the built-in detectors
+  :class:`~omnigent.kernel.pluggable.PluggableRegistry` with the built-in detectors
   registered in-module (no extension discovery at import — the runner hot path
   stays fastapi-free).
 - :func:`detect_overflow` — try each registered detector in order; first match
@@ -27,7 +27,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 
 
 @dataclass

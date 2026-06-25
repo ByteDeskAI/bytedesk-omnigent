@@ -73,9 +73,11 @@ _EXPECTED_ALL_APP_STATE_KEYS = (
 )
 
 # ── Phase 5 anchor: dispatch elif chain (tool_dispatch.py 3412–3570). ──
-# 16 set-family branches + 4 predicate tails
+# 17 set-family branches + 4 predicate tails
 # (spec-builtin, spec-local-python, UC-function, else).
-_EXPECTED_SET_FAMILY_BRANCHES = 16
+# 17th set-family branch is _SKILL_ACQ_TOOLS (sys_skill_* acquisition family),
+# a legit tool family added by BDP-2487 (skills as runner builtins).
+_EXPECTED_SET_FAMILY_BRANCHES = 17
 _EXPECTED_PREDICATE_TAILS = 4
 
 # ── Phase 3/lifespan + Phase 1/harness anchors. ──
@@ -243,9 +245,9 @@ def test_dispatch_elif_chain_branch_counts_are_pinned():
     assert "_is_spec_local_python_tool(tool_name, agent_spec)" in src
     assert "_is_uc_function_tool(tool_name, agent_spec)" in src
     assert "_execute_spec_callable_tool(tool_name, args, agent_spec=agent_spec)" in src
-    # Total routing branches quoted by the plan (16 + 4 = 20).
+    # Total routing branches quoted by the plan (17 + 4 = 21).
     assert (
-        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 20
+        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 21
     )
 
 

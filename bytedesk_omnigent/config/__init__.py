@@ -24,7 +24,7 @@ def bytedesk_config_descriptors() -> list[ConfigDescriptor]:
     """The first set of ByteDesk config descriptors (read-only spine)."""
 
     def _loaded_extensions(_ctx: ConfigCtx) -> list[str]:
-        from omnigent.extensions import discover_extensions
+        from omnigent.kernel.extensions import discover_extensions
 
         return sorted(ext.name for ext in discover_extensions())
 

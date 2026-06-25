@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from opentelemetry.sdk.metrics.export import MetricExporter
     from opentelemetry.sdk.trace import ReadableSpan, Span
 
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -521,7 +521,7 @@ def _build_metric_exporter_registry() -> PluggableRegistry[MetricExporter]:
     Factories defer their optional OTel-exporter imports to selection time,
     matching the old lazy ``_create_otlp_metric_exporter`` form.
     """
-    from omnigent.pluggable import PluggableRegistry
+    from omnigent.kernel.pluggable import PluggableRegistry
 
     registry: PluggableRegistry[MetricExporter] = PluggableRegistry(
         "metric_exporter", default=("otlp", _create_otlp_metric_exporter)
@@ -532,9 +532,9 @@ def _build_metric_exporter_registry() -> PluggableRegistry[MetricExporter]:
 def _create_metric_exporter(exporter_name: str) -> MetricExporter:
     """Create the metric exporter registered under *exporter_name*.
 
-    Selection is a :class:`~omnigent.pluggable.PluggableRegistry` keyed by the
+    Selection is a :class:`~omnigent.kernel.pluggable.PluggableRegistry` keyed by the
     OTEL exporter name. ``otlp`` is the default backend; an unknown name raises
-    :class:`~omnigent.pluggable.ProviderNotRegistered` so the caller can keep
+    :class:`~omnigent.kernel.pluggable.ProviderNotRegistered` so the caller can keep
     metrics disabled rather than silently exporting nowhere.
 
     :param exporter_name: The resolved OTEL metrics exporter name (e.g.

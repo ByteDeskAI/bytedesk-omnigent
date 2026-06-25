@@ -116,7 +116,7 @@ class RoutesPlugin:
     """First-party plugin contributing ``omnigent/server/routes/`` factories.
 
     A plain class the :func:`omnigent.sdk.extension` decorator compiles down to
-    an :class:`omnigent.extensions.OmnigentExtension`: the ``@router`` method
+    an :class:`omnigent.kernel.extensions.OmnigentExtension`: the ``@router`` method
     below is gathered into a synthesised
     ``routers(auth_provider=..., permission_store=...)`` that returns the same
     ``list[APIRouter]`` shape ``create_app()`` mounts today.

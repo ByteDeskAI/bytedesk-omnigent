@@ -9,7 +9,7 @@ flag applied — the underlying math (``min(base * 2**exp, max)`` then optional
 
 This module collapses that into a single :class:`BackoffPolicy` Strategy with one
 registered default (:class:`ExpFullJitterBackoff`), swappable via the
-``backoff_policy`` :class:`~omnigent.pluggable.PluggableRegistry`. Both call sites
+``backoff_policy`` :class:`~omnigent.kernel.pluggable.PluggableRegistry`. Both call sites
 delegate here, so the curve lives in one place and can be replaced (e.g. decorrelated
 jitter) without touching the callers.
 
@@ -23,7 +23,7 @@ from __future__ import annotations
 import random
 from typing import Protocol, runtime_checkable
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 
 
 @runtime_checkable

@@ -1,7 +1,7 @@
 """Tests for the harness descriptor registry (BDP-2346).
 
 ``omnigent.runtime.harnesses.descriptors`` is the single source of truth for
-harness identity: a :class:`~omnigent.pluggable.PluggableRegistry` of
+harness identity: a :class:`~omnigent.kernel.pluggable.PluggableRegistry` of
 :class:`HarnessDescriptor` values from which ``_HARNESS_MODULES``, the native
 classification, and alias resolution are projected. These tests pin the registry's
 shape and the projections.
@@ -10,7 +10,7 @@ shape and the projections.
 from __future__ import annotations
 
 from omnigent.harness_aliases import HARNESS_ALIASES
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 from omnigent.runtime.harnesses import _HARNESS_MODULES
 from omnigent.runtime.harnesses.descriptors import (
     HARNESS_DESCRIPTORS,

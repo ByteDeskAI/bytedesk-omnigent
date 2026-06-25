@@ -18,7 +18,7 @@ from omnigent.llms.reasoning_tier import (
     ReasoningTierProvider,
     reasoning_tier_registry,
 )
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 
 # ── Anthropic provider: byte-identical to old _effort_to_budget ──
 

@@ -3,11 +3,7 @@ import { clientsClaim } from "workbox-core";
 import { cleanupOutdatedCaches, precacheAndRoute } from "workbox-precaching";
 import { registerRoute, NavigationRoute } from "workbox-routing";
 import { NetworkOnly, StaleWhileRevalidate } from "workbox-strategies";
-import {
-  buildNotificationClickUrl,
-  parsePushEventData,
-  shouldSuppressPushForFocusedClient,
-} from "./lib/pwa/pushPayload";
+import { handleNotificationClick, handlePushPayload } from "./lib/pwa/swHandlers";
 
 declare const self: ServiceWorkerGlobalScope & {
   __WB_MANIFEST: Array<{ url: string; revision: string | null }>;
@@ -33,49 +29,25 @@ registerRoute(new NavigationRoute(navigationHandler));
 self.addEventListener("push", (event: PushEvent) => {
   event.waitUntil(
     (async () => {
-      let payload: ReturnType<typeof parsePushEventData> = null;
+      let raw: unknown = null;
       try {
-        const raw = event.data?.json();
-        payload = parsePushEventData(raw);
+        raw = event.data?.json();
       } catch {
-        payload = null;
+        raw = null;
       }
-      if (!payload) return;
-
-      const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      const origin = self.location.origin;
-      if (
-        shouldSuppressPushForFocusedClient(
-          clients.map((c) => ({
+      await handlePushPayload(raw, {
+        origin: self.location.origin,
+        matchClients: async () => {
+          const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+          return clients.map((c) => ({
             focused: c.focused,
             visibilityState: c.visibilityState,
             url: c.url,
-          })),
-          payload.sessionId,
-          origin,
-        )
-      ) {
-        return;
-      }
-
-      let envelope: { title?: string; body?: string } = {};
-      try {
-        envelope = (event.data?.json() ?? {}) as { title?: string; body?: string };
-      } catch {
-        envelope = {};
-      }
-      const title = typeof envelope.title === "string" ? envelope.title : "Omnigent";
-      const body =
-        typeof envelope.body === "string"
-          ? envelope.body
-          : payload.kind === "elicitation"
-            ? "Agent is asking for your input."
-            : "Agent finished and is ready for your input.";
-
-      await self.registration.showNotification(title, {
-        body,
-        tag: `omnigent:${payload.sessionId}:${payload.kind}`,
-        data: payload,
+          }));
+        },
+        showNotification: async (title, options) => {
+          await self.registration.showNotification(title, options);
+        },
       });
     })(),
   );
@@ -83,23 +55,23 @@ self.addEventListener("push", (event: PushEvent) => {
 
 self.addEventListener("notificationclick", (event: NotificationEvent) => {
   event.notification.close();
-  const data = parsePushEventData(event.notification.data);
-  const targetUrl = data?.url ?? (data ? buildNotificationClickUrl(data.sessionId) : "/");
-  const absolute = new URL(targetUrl, self.location.origin).href;
-
   event.waitUntil(
-    (async () => {
-      const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-      for (const client of clients) {
-        if (client.url.startsWith(self.location.origin)) {
-          await client.focus();
-          if ("navigate" in client && typeof client.navigate === "function") {
-            await client.navigate(absolute);
-          }
-          return;
-        }
-      }
-      await self.clients.openWindow(absolute);
-    })(),
+    handleNotificationClick(event.notification.data, {
+      origin: self.location.origin,
+      matchClients: async () => {
+        const clients = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        return clients.map((c) => ({
+          focused: c.focused,
+          visibilityState: c.visibilityState,
+          url: c.url,
+          focus: () => c.focus(),
+          navigate:
+            "navigate" in c && typeof c.navigate === "function"
+              ? (url: string) => c.navigate!(url)
+              : undefined,
+        }));
+      },
+      openWindow: (url) => self.clients.openWindow(url),
+    }),
   );
 });

@@ -3,7 +3,7 @@
 This is the single source of truth for harness identity (BDP-2346). Each
 harness is one :class:`HarnessDescriptor` value (``name``, ``aliases``,
 ``is_native``, ``module_path``, ``config_schema``), registered on a
-:class:`~omnigent.pluggable.PluggableRegistry` keyed by canonical id. The four
+:class:`~omnigent.kernel.pluggable.PluggableRegistry` keyed by canonical id. The four
 historical identity facets are *projected from* this registry, not the other way
 around:
 
@@ -43,7 +43,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
-from omnigent.pluggable import PluggableRegistry
+from omnigent.kernel.pluggable import PluggableRegistry
 
 
 @dataclass(frozen=True)
@@ -204,7 +204,7 @@ def harness_descriptors() -> dict[str, Callable[[], HarnessDescriptor]]:
 
     This is the SAME hook a third-party extension implements to contribute a
     harness (the ``harness_descriptors`` entry in
-    :data:`omnigent.pluggable.manifest.SEAMS`): a mapping of canonical id to a
+    :data:`omnigent.kernel.pluggable.manifest.SEAMS`): a mapping of canonical id to a
     zero-arg factory returning the :class:`HarnessDescriptor`. Core dogfoods the
     seam by registering its own built-in harnesses through this hook rather than a
     hard-wired registration loop (Section 9.2): :func:`_build_registry` consumes
@@ -226,7 +226,7 @@ def _build_registry() -> PluggableRegistry[HarnessDescriptor]:
     default impl (it carries no special meaning beyond being a registered name).
     Third-party extensions contribute *additional* harnesses through the same
     ``harness_descriptors`` hook at server startup
-    (:func:`omnigent.pluggable.manifest.discover_all_extensions`), error-isolated
+    (:func:`omnigent.kernel.pluggable.manifest.discover_all_extensions`), error-isolated
     exactly like the artifact-store reference seam.
 
     :returns: The populated :class:`PluggableRegistry`.

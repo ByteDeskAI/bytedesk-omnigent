@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setOmnigentHostConfig } from "@/lib/host";
 import { setAppBadgeCount } from "@/lib/pwa/badging";
 import {
   captureInstallPrompt,
@@ -85,9 +86,25 @@ describe("install prompt capture", () => {
 });
 
 describe("runtime gating", () => {
-  it("does not register PWA in embed mode without fetcher", () => {
+  beforeEach(() => {
+    setOmnigentHostConfig({});
+  });
+
+  afterEach(() => {
+    setOmnigentHostConfig({});
+  });
+
+  it("registers PWA in standalone mode without host fetcher", () => {
     expect(isEmbedMode()).toBe(false);
     expect(shouldRegisterPwa()).toBe(true);
+  });
+
+  it("does not register PWA when host fetcher is installed", () => {
+    setOmnigentHostConfig({
+      fetcher: async () => new Response(null, { status: 200 }),
+    });
+    expect(isEmbedMode()).toBe(true);
+    expect(shouldRegisterPwa()).toBe(false);
   });
 });
 

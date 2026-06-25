@@ -91,7 +91,7 @@ def harness(
 
     Hides :class:`~omnigent.runtime.harnesses.descriptors.HarnessDescriptor`
     construction and the ``{name: () -> descriptor}`` factory shape the
-    ``harness`` :class:`~omnigent.pluggable.PluggableRegistry` seam expects. The
+    ``harness`` :class:`~omnigent.kernel.pluggable.PluggableRegistry` seam expects. The
     descriptor fields are taken from this decorator's args; the method body need
     not return anything (it may simply ``...``).
     """

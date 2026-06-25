@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from omnigent.pluggable.manifest import (
+from omnigent.kernel.pluggable.manifest import (
     SEAMS,
     capability_manifest,
     discover_all_extensions,

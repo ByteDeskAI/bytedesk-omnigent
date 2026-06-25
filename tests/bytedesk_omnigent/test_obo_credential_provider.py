@@ -116,7 +116,7 @@ def test_extension_provider_registers_on_the_outbound_registry(monkeypatch):
     from omnigent.identity.registry import build_outbound_credential_registry
 
     monkeypatch.setattr(
-        "omnigent.pluggable.registry.discover_extensions", lambda: [BytedeskExtension()]
+        "omnigent.kernel.pluggable.registry.discover_extensions", lambda: [BytedeskExtension()]
     )
     reg = build_outbound_credential_registry()
     reg.discover_extensions(hook="outbound_credential_providers")
