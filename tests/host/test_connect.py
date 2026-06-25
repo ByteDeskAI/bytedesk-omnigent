@@ -1887,6 +1887,47 @@ async def test_connected_host_retries_login_redirects_indefinitely(
     assert spy.call_count == 6
 
 
+@pytest.mark.parametrize("status", [401, 403])
+async def test_connected_host_retries_auth_rejection_indefinitely(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """401/403 upgrade rejections after a successful connect never turn fatal.
+
+    A host that already registered and then gets a 401/403 on reconnect is
+    almost always watching a server restart: the server is up enough to answer
+    the upgrade but its auth layer isn't ready yet, so it refuses the host
+    tunnel (a pre-accept WS close that Starlette surfaces as HTTP 403). Before
+    this fix the host classified that transient 403 as permanent, exited 1, and
+    crashlooped on every ``omnigent-server`` roll (BDP-2499). A connected host
+    must keep retrying past the fresh-host fatal point, exactly like the
+    login-redirect path, so a server roll never kills a live host.
+    """
+    monkeypatch.setattr("omnigent.host.connect._RECONNECT_BASE_S", 0.0)
+    # Accepted upgrade first (None) → _ever_connected, then more auth
+    # rejections than the fresh-host fatal threshold, then a cancel to end.
+    # A fresh host would have failed loud on the first rejection.
+    spy = _ConnectSpy(
+        [
+            None,
+            _invalid_status(status),
+            _invalid_status(status),
+            _invalid_status(status),
+            _invalid_status(status),
+            asyncio.CancelledError(),
+        ]
+    )
+    _patch_connect(monkeypatch, spy)
+    host = _host()
+
+    # Returns normally: if the post-connect rejection were misclassified as
+    # fatal this would raise HostConnectError after the first 403 (call_count
+    # 2) instead of riding out the restart.
+    await host.run()
+
+    # 6 = accepted connect + 4 retried rejections + the ending cancel.
+    assert spy.call_count == 6
+
+
 @pytest.mark.parametrize(
     "status,expected",
     [
