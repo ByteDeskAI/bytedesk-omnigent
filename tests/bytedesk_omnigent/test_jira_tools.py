@@ -115,7 +115,7 @@ def test_search_posts_jql_and_normalizes_results():
 
     req = captured[0]
     assert req.method == "POST"
-    assert req.url.path == "/rest/api/3/search"
+    assert req.url.path == "/rest/api/3/search/jql"
     sent = json.loads(req.content)
     assert sent["jql"] == "project = BDP"
     assert sent["maxResults"] == 5
