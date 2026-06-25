@@ -122,6 +122,7 @@ import { useForkDialog } from "@/shell/ForkDialogContext";
 import { supportsEffortControl } from "@/lib/sessionCapabilities";
 import { getCliServerUrl } from "@/lib/host";
 import { SessionImage } from "@/components/SessionImage";
+import { ConversationBubbleList } from "@/components/chat/ConversationBubbleList";
 
 const ATTACHED_RE = /\[Attached:[^\]]*\]\s*/g;
 
@@ -1311,18 +1312,14 @@ function MainAgentSurface({
               hasMoreHistory={hasMoreHistory}
               loadingMoreHistory={loadingMoreHistory}
             />
-            {bubbles.length === 0 && !showWorkingIndicator ? (
-              // Cold launch: a centered spinner instead of the "ready to
-              // type" empty state (the create-then-send path uses the
-              // "row" variant). Two launch shapes land here: a
-              // terminal-first spin-up (gate on isTerminalFirst too —
-              // terminalStartingUp is set for non-terminal-first sessions
-              // as well) and a managed-sandbox launch, whose stage text
-              // renders in the same spot for ANY session type.
-              (terminalFirst?.isTerminalFirst && terminalFirst.terminalStartingUp) ||
-              sandboxLaunching ? (
-                <RunnerStartingIndicator variant="hero" />
-              ) : (
+            <ConversationBubbleList
+              bubbles={bubbles}
+              showWorkingIndicator={showWorkingIndicator}
+              launching={Boolean(
+                (terminalFirst?.isTerminalFirst && terminalFirst.terminalStartingUp) ||
+                  sandboxLaunching,
+              )}
+              emptyState={
                 <ConversationEmptyState>
                   <div className="space-y-1.5">
                     <h3 className="text-2xl font-medium tracking-[-0.02em]">
@@ -1335,40 +1332,8 @@ function MainAgentSurface({
                     </p>
                   </div>
                 </ConversationEmptyState>
-              )
-            ) : (
-              <>
-                {bubbles.map((bubble) => (
-                  <BubbleView key={bubbleKey(bubble)} bubble={bubble} />
-                ))}
-                {/* Working… shimmer between send and first rendered block.
-                    Suppressed when the last bubble is a compaction spinner —
-                    that bubble already owns the "in-progress" slot. aria-hidden:
-                    the pinned pill owns the single aria-live region (see WorkingStatusPin). */}
-                {showWorkingIndicator && (
-                  <Message from="assistant" data-testid="working-indicator" aria-hidden="true">
-                    <MessageContent>
-                      {/* py-0.5 = headroom for the bob: MessageContent is overflow-hidden
-                          and would clip the mascot at the top of the bounce. */}
-                      <div className="flex items-center gap-1.5 py-0.5">
-                        <AgentMascotEyes decorative className="otto-working h-4 w-auto shrink-0" />
-                        <Shimmer className="text-xs font-mono" duration={1.5}>
-                          Working…
-                        </Shimmer>
-                      </div>
-                    </MessageContent>
-                  </Message>
-                )}
-                {/* Terminal-first spin-up cue beneath the just-sent first
-                    message: the prompt bubble renders immediately (no
-                    runner-online send gate), but `showWorkingIndicator` stays
-                    suppressed while the runner is offline, so without this the
-                    user's message sits with no sign anything is happening.
-                    Self-gates to null off the spin-up window; rendered only
-                    when not already showing Working… so the two never stack. */}
-                {!showWorkingIndicator && <RunnerStartingIndicator variant="row" />}
-              </>
-            )}
+              }
+            />
           </ConversationContent>
           <ConversationScrollButton />
           {/* Outside ConversationContent so it's pinned to the viewport, not the scroll. See WorkingStatusPin.
@@ -1869,7 +1834,7 @@ export function JumpToTopButton({
 }
 
 /** Stable React key per bubble. */
-function bubbleKey(bubble: Bubble): string {
+export function bubbleKey(bubble: Bubble): string {
   // Prefer stableKey (the optimistic temp id) for promoted user bubbles
   // so the key holds steady across the optimistic→committed swap on
   // `session.input.consumed` — a changing key remounts the node (flink).
