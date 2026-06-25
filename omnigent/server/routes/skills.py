@@ -51,6 +51,8 @@ class SkillSourceObject(BaseModel):
     supports_search: bool
     supports_preview: bool
     high_risk: bool
+    available: bool = True
+    unavailable_reason: str | None = None
 
 
 class SkillSourcesResponse(BaseModel):

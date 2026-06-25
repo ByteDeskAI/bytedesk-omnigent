@@ -50,6 +50,12 @@ _DEFAULT_TTL_SECONDS = 60 * 60
 _MAX_SKILL_BYTES = 50 * 1024 * 1024
 _MAX_SKILL_FILES = 1_000
 _MAX_COMMAND_OUTPUT_CHARS = 64 * 1024
+_SOURCE_COMMAND_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "skills": ("npx",),
+    "npm": ("npm",),
+    "github": ("git",),
+    "skills-npm": ("npx",),
+}
 
 
 @dataclass(frozen=True)
@@ -209,6 +215,28 @@ class SkillCommandRunner:
                 stdout=_decode_output(exc.stdout or b""),
                 stderr=_decode_output(exc.stderr or b"") + "\ncommand timed out",
             )
+        except FileNotFoundError as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            missing = _command_name(spec)
+            return CommandEvidence(
+                command=list(spec.argv) if spec.argv is not None else str(spec.shell),
+                shell=spec.shell is not None,
+                exit_code=127,
+                duration_ms=duration_ms,
+                stdout="",
+                stderr=f"command not found: {missing or exc.filename or 'unknown'}",
+            )
+        except PermissionError as exc:
+            duration_ms = int((time.monotonic() - started) * 1000)
+            blocked = _command_name(spec)
+            return CommandEvidence(
+                command=list(spec.argv) if spec.argv is not None else str(spec.shell),
+                shell=spec.shell is not None,
+                exit_code=126,
+                duration_ms=duration_ms,
+                stdout="",
+                stderr=f"command not executable: {blocked or exc.filename or 'unknown'}",
+            )
 
 
 class SkillAcquisitionService:
@@ -235,7 +263,7 @@ class SkillAcquisitionService:
 
     def sources(self) -> list[dict[str, object]]:
         """Return the source adapters available to the framework."""
-        return [
+        rows = [
             {
                 "id": "skills",
                 "label": "Agent Skills CLI",
@@ -272,7 +300,7 @@ class SkillAcquisitionService:
                 "id": "configured",
                 "label": "Configured Command",
                 "kind": "command_template",
-                "supports_search": False,
+                "supports_search": True,
                 "supports_preview": True,
                 "high_risk": True,
             },
@@ -280,11 +308,16 @@ class SkillAcquisitionService:
                 "id": "freeform",
                 "label": "Free-form Command",
                 "kind": "freeform_command",
-                "supports_search": False,
+                "supports_search": True,
                 "supports_preview": True,
                 "high_risk": True,
             },
         ]
+        for row in rows:
+            available, reason = _source_availability(str(row["id"]))
+            row["available"] = available
+            row["unavailable_reason"] = reason
+        return rows
 
     def search(
         self,
@@ -300,6 +333,7 @@ class SkillAcquisitionService:
         errors: list[str] = []
         for source in selected:
             try:
+                _ensure_source_available(source)
                 if source == "skills":
                     hits.extend(self._search_skills_cli(query, limit=limit))
                 elif source == "npm":
@@ -592,6 +626,7 @@ class SkillAcquisitionService:
         workspace: Path,
         selected_skill_names: list[str],
     ) -> CommandEvidence | None:
+        _ensure_source_available(source)
         if source in {"freeform", "configured"}:
             if command is None:
                 raise OmnigentError(
@@ -928,6 +963,37 @@ def _command_env(home: Path, workspace: Path) -> dict[str, str]:
     env["DO_NOT_TRACK"] = "1"
     Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
     return env
+
+
+def _command_name(spec: SkillCommandSpec) -> str | None:
+    if spec.argv is not None and spec.argv:
+        return spec.argv[0]
+    return None
+
+
+def _source_availability(source: str) -> tuple[bool, str | None]:
+    missing = [
+        cmd
+        for cmd in _SOURCE_COMMAND_REQUIREMENTS.get(source, ())
+        if shutil.which(cmd) is None
+    ]
+    if not missing:
+        return True, None
+    command_list = ", ".join(f"'{cmd}'" for cmd in missing)
+    return (
+        False,
+        f"required command {command_list} is not installed on the Omnigent server",
+    )
+
+
+def _ensure_source_available(source: str) -> None:
+    available, reason = _source_availability(source)
+    if available:
+        return
+    raise OmnigentError(
+        f"skill source unavailable: {reason}",
+        code=ErrorCode.INVALID_INPUT,
+    )
 
 
 def _decode_output(data: bytes | str) -> str:

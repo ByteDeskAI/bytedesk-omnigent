@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangleIcon,
   CheckCircle2Icon,
@@ -55,19 +55,46 @@ export function SkillsPage() {
   const [selectedResult, setSelectedResult] = useState<SkillSearchResult | null>(null);
   const [preview, setPreview] = useState<SkillPreview | null>(null);
   const [removeSkill, setRemoveSkill] = useState<string | null>(null);
+  const hasDefaultedAgentSelection = useRef(false);
 
-  const agentRows = useMemo(() => agents.data ?? [], [agents.data]);
+  const agentRows = useMemo(
+    () =>
+      (agents.data ?? []).filter(
+        (agent) => agent.workflow !== true && Boolean(agent.department || agent.title),
+      ),
+    [agents.data],
+  );
   useEffect(() => {
-    if (agentRows.length > 0 && selectedAgentIds.length === 0) {
+    if (!hasDefaultedAgentSelection.current && agentRows.length > 0) {
       setSelectedAgentIds(agentRows.map((agent) => agent.id));
+      hasDefaultedAgentSelection.current = true;
     }
-  }, [agentRows, selectedAgentIds.length]);
+  }, [agentRows]);
 
   const sourceRows = sources.data ?? [];
   const activeSource = sourceRows.find((item) => item.id === source);
+  const commandSource = source === "freeform" || source === "configured";
+  const sourceAvailable = activeSource?.available ?? true;
+  const sourceSupportsSearch = activeSource?.supports_search ?? true;
+  const sourceSupportsPreview = activeSource?.supports_preview ?? true;
+  const commandMissing = commandSource && shellCommand.trim().length === 0;
+  const installSourceRef = selectedResult?.source_ref ?? sourceRef.trim();
   const searchResults = search.data?.data ?? [];
   const searchErrors = search.data?.errors ?? [];
   const allSelected = selectedAgentIds.length === agentRows.length && agentRows.length > 0;
+  const searchDisabled =
+    search.isPending ||
+    query.trim().length === 0 ||
+    !sourceAvailable ||
+    !sourceSupportsSearch ||
+    commandMissing;
+  const previewDisabled =
+    previewMutation.isPending ||
+    selectedAgentIds.length === 0 ||
+    !sourceAvailable ||
+    !sourceSupportsPreview ||
+    commandMissing ||
+    (!commandSource && installSourceRef.trim().length === 0);
 
   const installedByName = useMemo(() => {
     const map = new Map<string, number>();
@@ -159,7 +186,14 @@ export function SkillsPage() {
         <main className="flex min-w-0 flex-col gap-4">
           <section className="rounded-lg border border-border bg-background p-4">
             <div className="mb-3 flex flex-wrap items-center gap-2">
-              <Select value={source} onValueChange={setSource}>
+              <Select
+                value={source}
+                onValueChange={(value) => {
+                  setSource(value);
+                  setSelectedResult(null);
+                  setPreview(null);
+                }}
+              >
                 <SelectTrigger className="w-48">
                   <SelectValue placeholder="Source" />
                 </SelectTrigger>
@@ -167,6 +201,7 @@ export function SkillsPage() {
                   {sourceRows.map((item) => (
                     <SelectItem key={item.id} value={item.id}>
                       {item.label}
+                      {item.available === false ? " (unavailable)" : ""}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -177,17 +212,28 @@ export function SkillsPage() {
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search skills"
               />
-              <Button onClick={runSearch} disabled={search.isPending || query.trim().length === 0}>
+              <Button onClick={runSearch} disabled={searchDisabled}>
                 <SearchIcon /> Search
               </Button>
             </div>
+            {!sourceAvailable && (
+              <div className="mb-3 flex items-center gap-2 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                <AlertTriangleIcon className="size-4 shrink-0" />
+                {activeSource?.unavailable_reason ?? "This source is unavailable."}
+              </div>
+            )}
+            {sourceAvailable && !sourceSupportsSearch && (
+              <p className="mb-3 text-xs text-muted-foreground">
+                Search is not supported for this source. Enter a source ref to preview an install.
+              </p>
+            )}
             {activeSource?.high_risk && (
               <div className="mb-3 flex items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
                 <AlertTriangleIcon className="size-4 shrink-0" />
                 Commands run on the Omnigent server in a temporary workspace.
               </div>
             )}
-            {(source === "freeform" || source === "configured") && (
+            {commandSource && (
               <Textarea
                 value={shellCommand}
                 onChange={(event) => setShellCommand(event.target.value)}
@@ -220,7 +266,7 @@ export function SkillsPage() {
               <Button
                 variant="secondary"
                 onClick={createInstallPreview}
-                disabled={previewMutation.isPending || selectedAgentIds.length === 0}
+                disabled={previewDisabled}
               >
                 <PackageIcon /> Preview install
               </Button>

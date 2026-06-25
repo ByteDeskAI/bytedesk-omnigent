@@ -67,6 +67,9 @@ beforeEach(() => {
         description: null,
         harness: "codex",
         skills: [],
+        department: "Operations",
+        title: "Demo Lead",
+        workflow: false,
       },
       {
         id: "ag_2",
@@ -75,6 +78,9 @@ beforeEach(() => {
         description: null,
         harness: "claude-sdk",
         skills: [],
+        department: "Engineering",
+        title: "Helper",
+        workflow: false,
       },
     ],
   } as never);
@@ -87,14 +93,18 @@ beforeEach(() => {
         supports_search: true,
         supports_preview: true,
         high_risk: false,
+        available: true,
+        unavailable_reason: null,
       },
       {
         id: "freeform",
         label: "Free-form Command",
         kind: "freeform_command",
-        supports_search: false,
+        supports_search: true,
         supports_preview: true,
         high_risk: true,
+        available: true,
+        unavailable_reason: null,
       },
     ],
   } as never);
@@ -193,6 +203,130 @@ describe("SkillsPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Apply preview" }));
     expect(applyMutate).toHaveBeenCalledWith({ previewId: "skprev_1" }, expect.any(Object));
     expect(refetchInstalled).toHaveBeenCalled();
+  });
+
+  it("does not reselect every agent after Clear", async () => {
+    renderPage();
+
+    expect(await screen.findByLabelText(/Demo/)).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+
+    expect(screen.getByLabelText(/Demo/)).not.toBeChecked();
+    expect(screen.getByLabelText(/Helper/)).not.toBeChecked();
+    expect(screen.getByRole("button", { name: /Preview install/ })).toBeDisabled();
+  });
+
+  it("sends only Maya when Maya is the selected target", async () => {
+    vi.mocked(useAvailableAgents).mockReturnValue({
+      data: [
+        {
+          id: "ag_maya",
+          name: "chief-of-staff",
+          display_name: "Maya Chen",
+          description: null,
+          harness: "codex",
+          skills: [],
+          department: "Operations",
+          title: "Chief of Staff",
+          workflow: false,
+        },
+        {
+          id: "ag_helper",
+          name: "helper",
+          display_name: "Helper",
+          description: null,
+          harness: "claude-sdk",
+          skills: [],
+          department: "Engineering",
+          title: "Helper",
+          workflow: false,
+        },
+      ],
+    } as never);
+    renderPage();
+
+    expect(await screen.findByLabelText(/Maya Chen/)).toBeChecked();
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }));
+    fireEvent.click(screen.getByLabelText(/Maya Chen/));
+    fireEvent.click(screen.getByRole("button", { name: /image-tools/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Preview install/ }));
+
+    expect(previewMutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        target_agent_ids: ["ag_maya"],
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("shows only employee agents in the target list", async () => {
+    vi.mocked(useAvailableAgents).mockReturnValue({
+      data: [
+        {
+          id: "ag_maya",
+          name: "chief-of-staff",
+          display_name: "Maya Chen",
+          description: null,
+          harness: "codex",
+          skills: [],
+          department: "Operations",
+          title: "Chief of Staff",
+          workflow: false,
+        },
+        {
+          id: "ag_wbr",
+          name: "weekly-business-review",
+          display_name: "Weekly Business Review",
+          description: null,
+          harness: "codex",
+          skills: [],
+          department: "Operations",
+          title: null,
+          workflow: true,
+        },
+        {
+          id: "ag_native",
+          name: "codex-native-ui",
+          display_name: "Codex",
+          description: null,
+          harness: "codex-native",
+          skills: [],
+          department: null,
+          title: null,
+          workflow: false,
+        },
+      ],
+    } as never);
+    renderPage();
+
+    expect(await screen.findByLabelText(/Maya Chen/)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Weekly Business Review/)).toBeNull();
+    expect(screen.queryByLabelText(/Codex/)).toBeNull();
+  });
+
+  it("disables search for a source that does not support search", () => {
+    vi.mocked(skillsHooks.useSkillSources).mockReturnValue({
+      data: [
+        {
+          id: "skills",
+          label: "Agent Skills CLI",
+          kind: "named_adapter",
+          supports_search: false,
+          supports_preview: true,
+          high_risk: false,
+          available: true,
+          unavailable_reason: null,
+        },
+      ],
+    } as never);
+    renderPage();
+
+    fireEvent.change(screen.getByPlaceholderText("Search skills"), {
+      target: { value: "image" },
+    });
+
+    expect(screen.getByRole("button", { name: /Search/ })).toBeDisabled();
+    expect(screen.getByText(/Search is not supported/)).toBeInTheDocument();
   });
 
   it("stages a removal preview from the installed list", () => {
