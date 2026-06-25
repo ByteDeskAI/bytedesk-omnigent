@@ -557,7 +557,7 @@ class SkillAcquisitionService:
                 evidence.stderr.strip() or "skills find failed",
                 code=ErrorCode.INVALID_INPUT,
             )
-        return _parse_line_search("skills", evidence.stdout, limit=limit)
+        return _parse_skills_cli_search(evidence.stdout, limit=limit)
 
     def _search_npm(self, query: str, *, limit: int) -> list[SkillSearchHit]:
         workspace = self._ephemeral_workspace()
@@ -1108,6 +1108,60 @@ def _looks_binary(data: bytes) -> bool:
     except UnicodeDecodeError:
         return True
     return False
+
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+_SKILLS_REF_RE = re.compile(
+    r"^(?P<ref>[A-Za-z0-9._-]+/[A-Za-z0-9._-]+@[A-Za-z0-9._-]+)\s*(?P<meta>.*)$"
+)
+_SKILLS_URL_RE = re.compile(r"https?://\S+")
+
+
+def _parse_skills_cli_search(text: str, *, limit: int) -> list[SkillSearchHit]:
+    """Parse ``skills find`` stdout into hits.
+
+    The Agent Skills CLI surrounds its results with an ANSI-colored ASCII-art
+    banner, a "Search results"/count header, and an "Install with npx skills
+    add ..." footer, then prints each result as two lines::
+
+        owner/repo@skill   145.5K installs
+        └ https://skills.sh/owner/repo/skill
+
+    Only the ``owner/repo@skill`` lines are real results. Everything else
+    (banner art, header, footer, blank separators) is noise — feeding it
+    through the generic line parser turned each banner line into a fake skill.
+    This parser strips ANSI codes, keeps only ref lines (name + source_ref),
+    carries the install-count text as the description, and attaches the
+    following ``└ https://...`` line as the result URL.
+    """
+    rows: list[dict[str, str | None]] = []
+    for raw in text.splitlines():
+        line = _ANSI_ESCAPE_RE.sub("", raw).strip()
+        if not line:
+            continue
+        match = _SKILLS_REF_RE.match(line)
+        if match:
+            rows.append(
+                {
+                    "ref": match.group("ref"),
+                    "meta": match.group("meta").strip() or None,
+                    "url": None,
+                }
+            )
+            continue
+        url_match = _SKILLS_URL_RE.search(line)
+        if url_match and rows and rows[-1]["url"] is None:
+            rows[-1]["url"] = url_match.group(0)
+    return [
+        SkillSearchHit(
+            source="skills",
+            name=row["ref"],
+            description=row["meta"],
+            source_ref=row["ref"],
+            url=row["url"],
+        )
+        for row in rows[:limit]
+    ]
 
 
 def _parse_line_search(source: str, text: str, *, limit: int) -> list[SkillSearchHit]:
