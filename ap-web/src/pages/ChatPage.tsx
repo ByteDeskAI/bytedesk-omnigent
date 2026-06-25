@@ -3542,8 +3542,7 @@ export function Composer({
           </div>
           {/* Cost toggle + agent picker + Send — right side */}
           <div className="flex min-w-0 items-center gap-0.5">
-            {/* Temporarily hidden (#3021): re-enable by removing the false gate. */}
-            {false && costRoutingEligible && (
+            {costRoutingEligible && (
               <IntelligentModelControl
                 value={costControlModeOverride}
                 onChange={(mode) =>

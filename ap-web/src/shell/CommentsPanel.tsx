@@ -88,6 +88,8 @@ export function CommentsPanel({
   const [tab, setTab] = useState<Tab>("open");
   const addCommentTextareaRef = useRef<HTMLTextAreaElement>(null);
   const { width, containerRef, isDesktop, handleProps } = useResizableCommentsPanel();
+  const activeSelectionStartIndex = activeSelection?.start_index ?? null;
+  const activeSelectionEndIndex = activeSelection?.end_index ?? null;
 
   // Editing or deleting a comment is author-only (the backend enforces this
   // too; this just hides the affordances). A comment with no recorded author
@@ -101,22 +103,22 @@ export function CommentsPanel({
   useEffect(() => {
     setBody("");
     if (pendingBodyRef) pendingBodyRef.current = "";
-  }, [activeSelection?.start_index, activeSelection?.end_index]);
+  }, [activeSelectionStartIndex, activeSelectionEndIndex, pendingBodyRef]);
 
   // Auto-focus the textarea when a new pending selection appears (no existing
   // comment at that range) so the user can start typing immediately.
   useEffect(() => {
-    if (!activeSelection) return;
+    if (activeSelectionStartIndex === null || activeSelectionEndIndex === null) return;
     const isExisting = comments.some(
       (c) =>
-        c.start_index === activeSelection.start_index && c.end_index === activeSelection.end_index,
+        c.start_index === activeSelectionStartIndex && c.end_index === activeSelectionEndIndex,
     );
     if (!isExisting) {
       // rAF ensures the textarea has been rendered before we try to focus it.
       const id = requestAnimationFrame(() => addCommentTextareaRef.current?.focus());
       return () => cancelAnimationFrame(id);
     }
-  }, [activeSelection?.start_index, activeSelection?.end_index, comments]);
+  }, [activeSelectionStartIndex, activeSelectionEndIndex, comments]);
 
   return (
     <div
