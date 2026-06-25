@@ -475,10 +475,11 @@ _RUNNER_CONVICTION_POLL_S = 0.25
 # to spawn) the runner — a local CLI-on-PATH + credential check then a
 # subprocess fork — so this is short. A refusal here (harness not
 # configured) is surfaced as a transcript error; a launch proceeds to the
-# longer connect wait below. On timeout we assume "launched" and fall
-# through to the connect wait, preserving the prior fire-and-forget
-# behavior rather than blocking the turn.
-_HOST_LAUNCH_RESULT_TIMEOUT_S = 10.0
+# longer connect wait below. A timeout now signals a NON-DELIVERING host
+# tunnel (BDP-2491): a healthy host ACKs the instant it forks/refuses, so
+# the absence of an ACK within this generous budget means the tunnel is
+# wedged, and the relaunch caller evicts it rather than assuming "launched".
+_HOST_LAUNCH_RESULT_TIMEOUT_S = 15.0
 # Server-side wait budget for Claude's ``PermissionRequest`` hook. Set
 # to one day so a native permission prompt waits ~indefinitely for the
 # user to answer in EITHER the web UI or the terminal, rather than
@@ -5196,11 +5197,21 @@ class _HostLaunchAttempt:
     :param error: Human-readable failure message from the host, e.g.
         ``"harness 'codex' is not configured on host 'laptop' — run
         `omnigent setup` ..."``; ``None`` when there was no error.
+    :param acked: Whether the host acknowledged the launch (sent its result
+        frame) within :data:`_HOST_LAUNCH_RESULT_TIMEOUT_S`. ``True`` for a
+        success, a structured refusal, or a connection-replaced send — all of
+        which are real host responses/decisions. ``False`` ONLY when the host
+        never ACKed within the budget: its tunnel is registered but is not
+        delivering ``host.launch_runner`` frames into dispatch (the wedged-host
+        failure mode, BDP-2491). The relaunch caller treats ``acked=False`` as a
+        host-liveness failure and evicts the dead tunnel instead of waiting out
+        the full connect timeout for a runner that will never appear.
     """
 
     runner_id: str
     error_code: str | None = None
     error: str | None = None
+    acked: bool = True
 
 
 async def _launch_runner_on_host(
@@ -5303,10 +5314,15 @@ async def _launch_runner_on_host(
             timeout=_HOST_LAUNCH_RESULT_TIMEOUT_S,
         )
     except asyncio.TimeoutError:
-        # No result yet — fall through to the caller's connect wait, which
-        # preserves the prior fire-and-forget timing for a slow-but-fine host.
+        # The host never ACKed within the budget. A healthy host ACKs the
+        # instant it forks or refuses, so a missing ACK means this host tunnel
+        # is registered but not delivering launch frames into dispatch (the
+        # wedged-host failure mode). Signal it (``acked=False``) so the relaunch
+        # caller evicts the dead tunnel and fails fast instead of blindly
+        # waiting out the connect timeout for a runner that will never appear
+        # (BDP-2491).
         host_conn.pending_launches.pop(request_id, None)
-        return _HostLaunchAttempt(runner_id=new_runner_id)
+        return _HostLaunchAttempt(runner_id=new_runner_id, acked=False)
     if result.get("status") == "failed":
         return _HostLaunchAttempt(
             runner_id=new_runner_id,
@@ -12076,7 +12092,13 @@ def create_sessions_router(
         # external consumer's sessions are tenant-scoped. ``None`` for
         # single-org / local callers (today's default) — zero behavior
         # change. ``get_principal`` is the 2a Adapter over the auth chain.
-        _principal = auth_provider.get_principal(request)
+        # ``auth_provider`` is None in single-user / local mode (the same
+        # posture ``_require_user`` already tolerates above), so guard the
+        # call — an unguarded ``None.get_principal`` 500s every create in that
+        # mode (and broke the host-launch integration harness).
+        _principal = (
+            auth_provider.get_principal(request) if auth_provider is not None else None
+        )
         tenant_id = _principal.tenant_id if _principal is not None else None
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type == "multipart/form-data":
@@ -16609,6 +16631,9 @@ def create_sessions_router(
             # the RUNNER_UNAVAILABLE raise below, the same as a
             # disconnected CLI session.
             _host_reg = getattr(request.app.state, "host_registry", None)
+            # Set when a non-acking (wedged) host tunnel is evicted below, so we
+            # skip the blind connect wait and fail fast (BDP-2491).
+            _host_evicted = False
             if runner_client is None and _host_reg is not None:
                 _host_conn = _host_reg.get(conv.host_id)
                 if _host_conn is not None:
@@ -16639,7 +16664,27 @@ def create_sessions_router(
                             created_by=_attribution_user(user_id),
                         )
                         return {"queued": True, "item_id": item_id}
-                    relaunched_runner_id = launch_attempt.runner_id
+                    if not launch_attempt.acked:
+                        # The host never ACKed the launch within the budget:
+                        # its tunnel is registered but is not delivering
+                        # ``host.launch_runner`` frames into dispatch (the
+                        # wedged-host failure mode, BDP-2491). Evict it so its
+                        # reconnect loop rebuilds a deliverable tunnel, and fail
+                        # fast (skip the blind 30s connect wait below) — the
+                        # user's next message relaunches on the fresh tunnel,
+                        # instead of every retry waiting out the full timeout
+                        # until someone restarts the host by hand.
+                        if _host_reg.evict(_host_conn):
+                            _logger.warning(
+                                "Evicted non-acking host %s for session %s "
+                                "(launch ACK timeout) — host will reconnect",
+                                conv.host_id,
+                                session_id,
+                            )
+                        _host_evicted = True
+                        relaunched_runner_id = None
+                    else:
+                        relaunched_runner_id = launch_attempt.runner_id
                 else:
                     relaunched_runner_id = None
                     # The host tunnel is gone entirely. A managed
@@ -16665,7 +16710,7 @@ def create_sessions_router(
                         runner_client = await _get_runner_client(session_id, runner_router)
             else:
                 relaunched_runner_id = None
-            if runner_client is None:
+            if runner_client is None and not _host_evicted:
                 _logger.info(
                     "Waiting up to %.0fs for host %s to spawn a runner for session %s",
                     _HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S,

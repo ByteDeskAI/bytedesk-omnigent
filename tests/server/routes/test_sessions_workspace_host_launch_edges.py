@@ -305,6 +305,7 @@ async def test_launch_runner_on_host_records_owner_and_returns_success() -> None
     assert attempt.runner_id
     assert attempt.error is None
     assert attempt.error_code is None
+    assert attempt.acked is True  # BDP-2491: a real result frame is an ACK
     store.replace_runner_id.assert_called_once()
     tunnel.record_launch_owner.assert_called_once_with(attempt.runner_id, "alice@example.com")
     registry.send_text.assert_called_once()
@@ -343,6 +344,9 @@ async def test_launch_runner_on_host_returns_structured_failure_from_host() -> N
 
     assert attempt.error_code == "harness_not_configured"
     assert attempt.error == "harness missing"
+    # BDP-2491: a structured refusal is a real host decision, not a liveness
+    # failure — the host ACKed, so it must NOT be evicted.
+    assert attempt.acked is True
 
 
 async def test_launch_runner_on_host_survives_connection_error() -> None:
@@ -364,11 +368,18 @@ async def test_launch_runner_on_host_survives_connection_error() -> None:
     assert attempt.runner_id
     assert attempt.error is None
     assert conn.pending_launches == {}
+    # BDP-2491: a replaced connection (newest-wins already handled it) is NOT a
+    # liveness failure to evict — a newer conn already owns this host_id.
+    assert attempt.acked is True
 
 
-async def test_launch_runner_on_host_timeout_returns_runner_id_only(
+async def test_launch_runner_on_host_timeout_marks_unacked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # BDP-2491: a host that never sends its launch result frame within the
+    # budget is a wedged/non-delivering tunnel. The attempt carries the runner
+    # id (the binding is already rotated) but is flagged ``acked=False`` so the
+    # relaunch caller evicts the dead host instead of blindly waiting it out.
     conv = _host_conv("conv_timeout")
     store = MagicMock()
     registry = MagicMock()
@@ -388,6 +399,7 @@ async def test_launch_runner_on_host_timeout_returns_runner_id_only(
 
     assert attempt.runner_id
     assert attempt.error is None
+    assert attempt.acked is False
     assert conn.pending_launches == {}
 
 

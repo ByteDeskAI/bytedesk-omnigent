@@ -279,6 +279,39 @@ class HostRegistry:
 
         release_resource("host", host_id)
 
+    def evict(self, conn: HostConnection) -> bool:
+        """Force-retire a wedged host connection (BDP-2491).
+
+        For a host tunnel that is registered but no longer delivering
+        ``host.launch_runner`` frames into the host's dispatch (so launches
+        time out with no result), this drops the registration and poisons the
+        outbound queue with ``None`` — exactly the newest-wins retirement
+        :meth:`register` applies to a stale connection. That completes the
+        sender loop, which trips the tunnel's ``FIRST_COMPLETED`` teardown
+        (cancelling the blocked receive loop, closing the WebSocket, and
+        running :meth:`deregister` + ``release_resource``). The host's
+        reconnect loop then re-establishes a fresh, deliverable tunnel.
+
+        Current-conn-guarded and idempotent: a no-op (returns ``False``) when a
+        newer connection for the same ``host_id`` has already replaced *conn*,
+        so it can never retire a healthy tunnel that reconnected in the
+        meantime. Resource release is left to the teardown's :meth:`deregister`
+        to avoid a double release.
+
+        Must be called on the host WebSocket's owning event loop (same
+        constraint as :meth:`send_text` — ``put_nowait`` is loop-affine).
+
+        :param conn: The host connection to retire.
+        :returns: ``True`` if *conn* was the current registration and was
+            evicted; ``False`` if it had already been replaced.
+        """
+        with self._lock:
+            if self._hosts.get(conn.host_id) is not conn:
+                return False
+            self._hosts.pop(conn.host_id, None)
+            conn.outbound_queue.put_nowait(None)
+        return True
+
     def get(self, host_id: str) -> HostConnection | None:
         """Look up a live host connection.
 
