@@ -99,6 +99,7 @@ COPY pyproject.toml setup.py ./
 COPY LICENSE NOTICE ./
 COPY sdks/ ./sdks/
 COPY omnigent/ ./omnigent/
+COPY bytedesk_omnigent/ ./bytedesk_omnigent/
 # The built-in polly agent's packaged bundle (omnigent/resources/examples/
 # polly) is a symlink into the top-level examples/ tree. Ship examples/ so the
 # symlink resolves at boot; without it the new-session picker silently drops
