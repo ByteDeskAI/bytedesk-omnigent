@@ -171,6 +171,23 @@ export function SkillsPage() {
     targetAgentIds,
   ]);
 
+  // The Skills panel shares the app's single global chat store. The scope-seed
+  // effect above switches to a concierge-bound session once
+  // POST /v1/skills/concierge/sessions exists; until then it fails and the panel
+  // would otherwise inherit whatever conversation the user last had open (e.g. a
+  // chat with Maya). chatStore.send only honors the composer's agentId when
+  // STARTING a conversation — an already-active one keeps its bound agent — so an
+  // inherited conversation silently routes Skills messages to the wrong agent.
+  // Stash the caller's conversation and start a fresh chat on open so the first
+  // send binds to the concierge; restore the previous conversation on close.
+  useEffect(() => {
+    const previousConversationId = useChatStore.getState().conversationId;
+    void useChatStore.getState().switchTo(null);
+    return () => {
+      void useChatStore.getState().switchTo(previousConversationId);
+    };
+  }, []);
+
   const scopeContextAgent = useMemo(() => {
     if (selectedScope.kind === "employee") {
       return agentRows.find((agent) => agent.id === selectedScope.id) ?? null;
