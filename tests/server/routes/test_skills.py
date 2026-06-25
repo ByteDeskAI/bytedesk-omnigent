@@ -55,6 +55,16 @@ def _skill_generator_script() -> str:
     )
 
 
+async def test_marketplaces_route_lists_registry_entries(client: httpx.AsyncClient) -> None:
+    resp = await client.get("/v1/skills/marketplaces")
+
+    assert resp.status_code == 200, resp.text
+    entries = {row["id"]: row for row in resp.json()["data"]}
+    assert "github:ByteDeskAI-bytedesk-marketplace" in entries
+    assert entries["github:ByteDeskAI-bytedesk-marketplace"]["label"] == "ByteDesk Catalog"
+    assert "supercharge" in entries
+
+
 async def test_sources_route_lists_framework_adapters(client: httpx.AsyncClient) -> None:
     resp = await client.get("/v1/skills/sources")
 

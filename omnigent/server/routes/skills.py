@@ -19,6 +19,7 @@ from omnigent.skills.acquisition import (
     SkillPreview,
     SkillSearchHit,
 )
+from omnigent.skills.registry import marketplace_entry_to_dict, skill_marketplace_entries
 from omnigent.stores import AgentStore
 from omnigent.stores.artifact_store import ArtifactStore
 
@@ -63,6 +64,21 @@ class SkillSourceObject(BaseModel):
 class SkillSourcesResponse(BaseModel):
     object: str = "skill_source.list"
     data: list[SkillSourceObject]
+
+
+class SkillMarketplaceObject(BaseModel):
+    id: str
+    label: str
+    source_id: str
+    kind: str
+    description: str | None = None
+    default: bool = False
+    repo: str | None = None
+
+
+class SkillMarketplacesResponse(BaseModel):
+    object: str = "skill_marketplace.list"
+    data: list[SkillMarketplaceObject]
 
 
 class SkillSearchRequest(BaseModel):
@@ -192,6 +208,15 @@ def create_skills_router(
         agent_cache=agent_cache,
         artifact_store=artifact_store,
     )
+
+    @router.get("/skills/marketplaces")
+    async def list_skill_marketplaces() -> SkillMarketplacesResponse:
+        return SkillMarketplacesResponse(
+            data=[
+                SkillMarketplaceObject.model_validate(marketplace_entry_to_dict(entry))
+                for entry in skill_marketplace_entries(acquisition._marketplace_config)
+            ]
+        )
 
     @router.get("/skills/sources")
     async def list_skill_sources() -> SkillSourcesResponse:
