@@ -73,6 +73,7 @@ describe("AccountMenu gating", () => {
     renderMenu();
     await openMenu(/Omnigent/);
     expect(await screen.findByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Goals/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Terminal/ })).not.toBeInTheDocument();
     expect(accountsApi.getMe).not.toHaveBeenCalled();
   });
@@ -84,6 +85,7 @@ describe("AccountMenu gating", () => {
     await openMenu(/Omnigent/);
 
     expect(await screen.findByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Goals/ })).toBeInTheDocument();
     expect(await screen.findByRole("menuitem", { name: /Terminal/ })).toBeInTheDocument();
     expect(accountsApi.getMe).not.toHaveBeenCalled();
   });
@@ -115,6 +117,7 @@ describe("AccountMenu dropdown surface", () => {
 
     expect(await screen.findByRole("menuitem", { name: /Change password/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Goals/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Sign out/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Members/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Policies/ })).not.toBeInTheDocument();

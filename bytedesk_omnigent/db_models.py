@@ -297,6 +297,19 @@ class SqlGoal(Base):
     priority: Mapped[int] = mapped_column(Integer, nullable=False, server_default="3")
     source: Mapped[str | None] = mapped_column(String(64), nullable=True)
     payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    target_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="organization", default="organization"
+    )
+    target_id: Mapped[str] = mapped_column(
+        String(128), nullable=False, server_default="omnigent", default="omnigent"
+    )
+    target_label: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    readiness_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="immediate", default="immediate"
+    )
+    activation_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="ready", default="ready"
+    )
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
     # BDP-2283 (C4 escalation dedup): set when the accountability loop escalates a
@@ -309,9 +322,59 @@ class SqlGoal(Base):
     __table_args__ = (
         Index("ix_goals_status_priority", "status", "priority"),
         Index("ix_goals_owner_status", "owner_agent_id", "status"),
+        Index("ix_goals_target_status", "target_kind", "target_id", "status"),
+        Index("ix_goals_activation_status", "activation_state", "status"),
         CheckConstraint(
             "status in ('open', 'assigned', 'in_progress', 'blocked', 'done')",
             name="ck_goals_status",
+        ),
+        CheckConstraint(
+            "target_kind in ('organization', 'department', 'agent')",
+            name="ck_goals_target_kind",
+        ),
+        CheckConstraint(
+            "readiness_kind in ('immediate', 'dependent', 'deferred')",
+            name="ck_goals_readiness_kind",
+        ),
+        CheckConstraint(
+            "activation_state in ('ready', 'waiting', 'paused')",
+            name="ck_goals_activation_state",
+        ),
+    )
+
+
+class SqlGoalDependency(Base):
+    """A condition that frames when a dependent goal is ready to be claimed.
+
+    Dependencies are deliberately soft references. They can point at another
+    Omnigent goal, a named system state, or a manual checklist item without
+    coupling this table to platform-owned entities.
+    """
+
+    __tablename__ = "goal_dependencies"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    label: Mapped[str] = mapped_column(String(512), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolved_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_goal_dependencies_goal", "goal_id"),
+        Index("ix_goal_dependencies_status", "status"),
+        Index("ix_goal_dependencies_goal_status", "goal_id", "status"),
+        CheckConstraint(
+            "kind in ('manual', 'goal', 'system_state')",
+            name="ck_goal_dependencies_kind",
+        ),
+        CheckConstraint(
+            "status in ('pending', 'satisfied', 'waived')",
+            name="ck_goal_dependencies_status",
         ),
     )
 

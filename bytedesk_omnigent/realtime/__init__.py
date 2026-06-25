@@ -8,9 +8,10 @@ the next surface. Installed once from the extension's background lifespan tasks
 """
 
 from bytedesk_omnigent.realtime.bridge import (
+    emit_goal_change,
     emit_presence,
     emit_roster,
     install as install_realtime_bridge,
 )
 
-__all__ = ["install_realtime_bridge", "emit_roster", "emit_presence"]
+__all__ = ["install_realtime_bridge", "emit_roster", "emit_presence", "emit_goal_change"]

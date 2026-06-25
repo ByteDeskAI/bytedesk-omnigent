@@ -32,6 +32,36 @@ def test_create_list_and_claim_goal_exactly_once(tmp_path) -> None:
     assert store.list_goals(status="done")[0].id == high.id
 
 
+def test_dependent_goal_waits_until_dependencies_resolve(tmp_path) -> None:
+    store = _store(tmp_path)
+    goal = store.create_goal(
+        title="Launch reporting",
+        target_kind="department",
+        target_id="Operations",
+        target_label="Operations",
+        dependencies=[{"kind": "system_state", "label": "warehouse export ready"}],
+        now=100,
+    )
+
+    assert goal.readiness_kind == "dependent"
+    assert goal.activation_state == "waiting"
+    assert store.claim_goal(goal_id=goal.id, owner_agent_id="maya", now=101) is False
+
+    dependency = goal.dependencies[0]
+    store.update_dependency(
+        goal_id=goal.id,
+        dependency_id=dependency.id,
+        status="satisfied",
+        now=102,
+    )
+    ready = store.get_goal(goal_id=goal.id)
+
+    assert ready is not None
+    assert ready.activation_state == "ready"
+    assert ready.dependencies[0].status == "satisfied"
+    assert store.claim_goal(goal_id=goal.id, owner_agent_id="maya", now=103) is True
+
+
 def test_scoreboard_upsert_and_ranking(tmp_path) -> None:
     store = _store(tmp_path)
     now = int(time.time())

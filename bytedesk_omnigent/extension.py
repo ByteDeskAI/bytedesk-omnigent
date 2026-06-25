@@ -71,7 +71,10 @@ class BytedeskExtension:
             create_governance_router(auth_provider=auth_provider),
             create_ingress_router(),
             create_agentic_inbox_router(),
-            create_goals_router(auth_provider=auth_provider),
+            create_goals_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
             create_integration_capabilities_router(auth_provider=auth_provider),
             create_memory_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
@@ -137,6 +140,7 @@ class BytedeskExtension:
             GoalAdvanceTool,
             GoalClaimTool,
             GoalCreateTool,
+            GoalDependencyUpdateTool,
             GoalListTool,
         )
         from bytedesk_omnigent.tools.jira_tools import BytedeskJiraTool
@@ -160,6 +164,7 @@ class BytedeskExtension:
             "goal_list": lambda _c: GoalListTool(),
             "goal_claim": lambda _c: GoalClaimTool(),
             "goal_advance": lambda _c: GoalAdvanceTool(),
+            "goal_dependency_update": lambda _c: GoalDependencyUpdateTool(),
             "deliberation_start": lambda _c: DeliberationStartTool(),
             "deliberation_position": lambda _c: DeliberationPositionTool(),
             "deliberation_decide": lambda _c: DeliberationDecideTool(),

@@ -27,8 +27,8 @@ class _FakeStore:
         self._goals = goals
         self.calls: list[dict] = []
 
-    def list_goals(self, *, status=None, owner_agent_id=None) -> list[Goal]:
-        self.calls.append({"status": status, "owner": owner_agent_id})
+    def list_goals(self, *, status=None, owner_agent_id=None, **kwargs) -> list[Goal]:
+        self.calls.append({"status": status, "owner": owner_agent_id, **kwargs})
         return self._goals
 
 
@@ -64,11 +64,24 @@ def test_list_returns_backlog_in_single_user_mode(monkeypatch) -> None:
     store = _FakeStore([goal])
     monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: store)
     client = TestClient(_app(None))  # single-user mode → open
-    resp = client.get("/v1/goals?status=open")
+    resp = client.get(
+        "/v1/goals?status=open&target_kind=department&target_id=Operations&include_dependencies=true"
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["goals"][0]["id"] == "goal_1"
     assert body["goals"][0]["status"] == "open"
     assert body["goals"][0]["payload"] == {"score": {"total": 9}}
     # The query params thread through to the store filter.
-    assert store.calls == [{"status": "open", "owner": None}]
+    assert store.calls == [
+        {
+            "status": "open",
+            "owner": None,
+            "target_kind": "department",
+            "target_id": "Operations",
+            "readiness_kind": None,
+            "activation_state": None,
+            "ready_only": False,
+            "include_dependencies": True,
+        }
+    ]

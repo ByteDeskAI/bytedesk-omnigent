@@ -27,6 +27,7 @@ import {
   SettingsIcon,
   ShieldCheckIcon,
   SquareTerminalIcon,
+  TargetIcon,
   UserCogIcon,
   UsersIcon,
 } from "lucide-react";
@@ -166,6 +167,11 @@ export function AccountMenu() {
           <DropdownMenuItem asChild>
             <Link to="/skills" className="flex items-center gap-2">
               <PuzzleIcon /> Skills
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/goals" className="flex items-center gap-2">
+              <TargetIcon /> Goals
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
@@ -314,6 +320,11 @@ function LocalOperatorMenu({ terminalEnabled }: { terminalEnabled: boolean }) {
           <DropdownMenuItem asChild>
             <Link to="/skills" className="flex items-center gap-2">
               <PuzzleIcon /> Skills
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/goals" className="flex items-center gap-2">
+              <TargetIcon /> Goals
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
