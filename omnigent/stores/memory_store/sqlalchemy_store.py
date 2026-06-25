@@ -377,6 +377,32 @@ class SqlAlchemyMemoryStore:
             )
         return result.rowcount or 0
 
+    def list_keyed(self, *, scope: str, owner: str, name: str) -> list[dict]:
+        """List every live addressable slot in a compartment (BDP-2459).
+
+        Browse what's stored under an address prefix *without* a query —
+        deterministic, no decay, newest first. Returns ``{key, content, weight}``
+        per live keyed row.
+        """
+        with self._session() as session:
+            cid = self._resolve_compartment_id(session, scope=scope, owner=owner, name=name)
+            if cid is None:
+                return []
+            rows = (
+                session.execute(
+                    select(SqlMemory)
+                    .where(
+                        SqlMemory.compartment_id == cid,
+                        SqlMemory.key.isnot(None),
+                        SqlMemory.archived.is_(False),
+                    )
+                    .order_by(SqlMemory.created_at.desc())
+                )
+                .scalars()
+                .all()
+            )
+            return [{"key": r.key, "content": r.content, "weight": r.weight} for r in rows]
+
     # ── reinforcement (out-of-band; off the recall path) ──────────
 
     def reinforce(self, memory_ids: list[str], *, now: int | None = None) -> int:
@@ -439,9 +465,16 @@ class SqlAlchemyMemoryStore:
         name: str,
         query: str,
         limit: int = 10,
+        kind: str = "ambient",
         now: int | None = None,
     ) -> list[MemoryHit]:
         """Recall memories from a compartment, ranked by decayed weight.
+
+        *kind* (BDP-2459) selects which rows are search candidates: ``"ambient"``
+        = key-NULL decaying memories (the default / historical behaviour);
+        ``"addressable"`` = keyed slots only; ``"all"`` = both. Keyed slots are
+        embedded + FTS-indexed like any row, so semantic/keyword search spans
+        them once they are not filtered out.
 
         Pure read: lexical candidate set within the compartment, decayed by
         ``effective_weight``, sub-``read_floor`` rows dropped, ranked by
@@ -464,18 +497,19 @@ class SqlAlchemyMemoryStore:
             candidates = self._candidates(session, comp, query, limit * 5)
             if not candidates:
                 return []
+            # Keyed slots were excluded from recall in BDP-2457; BDP-2459 makes
+            # that a *kind* choice so search can span ambient + addressable.
+            where_clauses = [
+                SqlMemory.id.in_(list(candidates)),
+                SqlMemory.archived.is_(False),
+            ]
+            if kind == "ambient":
+                where_clauses.append(SqlMemory.key.is_(None))
+            elif kind == "addressable":
+                where_clauses.append(SqlMemory.key.isnot(None))
+            # kind == "all": no key filter — both ambient and keyed rows.
             rows = (
-                session.execute(
-                    select(SqlMemory).where(
-                        SqlMemory.id.in_(list(candidates)),
-                        SqlMemory.archived.is_(False),
-                        # Addressable keyed slots (BDP-2457) are deterministic
-                        # exact-lookup rows, not associative-recall candidates —
-                        # exclude them so they never pollute (or get crowded out
-                        # of) similarity recall. Ambient rows (key NULL) only.
-                        SqlMemory.key.is_(None),
-                    )
-                )
+                session.execute(select(SqlMemory).where(*where_clauses))
                 .scalars()
                 .all()
             )

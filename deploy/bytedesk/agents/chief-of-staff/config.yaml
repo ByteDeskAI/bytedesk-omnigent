@@ -184,37 +184,8 @@ tools:
       - googleworkspace_people_search
       - googleworkspace_directory_user_get
 
-  # ── Shared agent memory (BDP-2457, amends ADR-0132). A stdio MCP front
-  #    (bytedesk_omnigent/memory_mcp.py) the runner spawns; its tools proxy via
-  #    HTTP to the bytedesk extension's /v1/memory/* routes on THIS omnigent
-  #    server (server-resident; owner is server-stamped from the scope/address,
-  #    never the model — the anti-spoof invariant). The model sees:
-  #      memory__recall / memory__append / memory__compartments — ambient,
-  #        decaying, similarity-recalled shared memories.
-  #      memory__memory_get / memory__memory_put / memory__memory_unset —
-  #        addressable exact-key slots (e.g. address 'org:charter'), no decay,
-  #        excluded from similarity recall.
-  #    The front resolves the server URL from OMNIGENT_SERVER_URL (the host pod
-  #    carries it); the route is header/single-user (OMNIGENT_AUTH_ENABLED=0) so
-  #    the runner reaches it as the reserved "local" caller — no oauth needed
-  #    (unlike bytedesk-platform, whose oauth targets the EXTERNAL ByteDesk.Identity
-  #    this same-server route does not honor).
-  #
-  #    Conventions agents converge on (encode in the brief, not the schema):
-  #      • org-wide   → scope: team,  name: org-context   (or address org:<key>)
-  #      • department → scope: topic, name: dept:<id>      (or address dept:<id>:<key>)
-  #      • initiative → scope: topic, name: initiative:<id>
-  #      • agent-private → DISABLED until per-agent identity is forwarded onto MCP
-  #        egress (the route fails closed; see ADR amendment / follow-on).
-  memory:
-    type: mcp
-    transport: stdio
-    command: python
-    args: ["-m", "bytedesk_omnigent.memory_mcp"]
-    tool_allowlist:
-      - recall
-      - append
-      - compartments
-      - memory_get
-      - memory_put
-      - memory_unset
+  # Shared agent memory is NO LONGER mounted per-agent: the bytedesk extension's
+  # default_mcp_servers() injects the `memory` stdio MCP front into EVERY agent
+  # spec at load (BDP-2459), so all agents get memory__search/get/put/append/
+  # list/unset from one place. (An agent could still declare its own `memory`
+  # server here to override — by-name merge in omnigent.spec.load.)

@@ -124,11 +124,33 @@ def _parse_address(address: str) -> tuple[str, str, str, str]:
     )
 
 
+def _parse_prefix(prefix: str) -> tuple[str, str, str]:
+    """Parse a list *prefix* into ``(scope, owner, name)`` — ``org`` or ``dept:<dept>``.
+
+    The browse-by-prefix counterpart to :func:`_parse_address` (no key). Owner is
+    server-stamped from the class (anti-spoof). ``agent:`` is deferred/fail-closed.
+    """
+    raw = (prefix or "").strip()
+    if raw == "org":
+        return "team", _TEAM_OWNER, "org-context"
+    if raw.startswith("dept:"):
+        dept = raw[len("dept:") :]
+        if not dept or ":" in dept:
+            raise ValueError("dept prefix must be 'dept:<dept>' (no ':' in <dept>)")
+        return "topic", _TOPIC_OWNER, f"dept:{dept}"
+    if raw.startswith("agent:") or raw == "agent":
+        raise ValueError(_AGENT_SCOPE_DISABLED)
+    raise ValueError(f"unknown list prefix {raw!r}; expected 'org' or 'dept:<dept>'")
+
+
 class _RecallBody(BaseModel):
     query: str
     scope: str = "team"
     name: str = "org-context"
     limit: int = 10
+    # BDP-2459: which rows to search — "all" (ambient + addressable; the default
+    # for unified search), "ambient", or "addressable".
+    kind: str = "all"
 
 
 class _AppendBody(BaseModel):
@@ -160,6 +182,10 @@ class _UnsetBody(BaseModel):
     address: str
 
 
+class _ListBody(BaseModel):
+    prefix: str = "org"
+
+
 def create_memory_router(auth_provider: AuthProvider | None = None) -> APIRouter:
     """Build the agent-callable shared-memory router.
 
@@ -184,7 +210,8 @@ def create_memory_router(auth_provider: AuthProvider | None = None) -> APIRouter
         provider = get_memory_provider()
         try:
             hits = provider.recall(
-                scope=body.scope, owner=owner, name=body.name, query=body.query, k=int(body.limit)
+                scope=body.scope, owner=owner, name=body.name, query=body.query,
+                k=int(body.limit), kind=body.kind,
             )
         except ValueError as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
@@ -328,5 +355,23 @@ def create_memory_router(auth_provider: AuthProvider | None = None) -> APIRouter
         if cleared == 0:
             return JSONResponse({"address": body.address, "found": False})
         return JSONResponse({"address": body.address, "cleared": cleared})
+
+    @router.post("/memory/list")
+    async def list_slots(request: Request, body: _ListBody) -> JSONResponse:
+        """Browse addressable slots under a prefix (``org`` or ``dept:<dept>``).
+
+        Query-less discovery of the keyed slots in a compartment — deterministic,
+        newest first. The fuzzy counterpart is ``/memory/recall`` (kind=all).
+        """
+        require_user(request, auth_provider)
+        try:
+            scope, owner, name = _parse_prefix(body.prefix)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        from omnigent.runtime import get_memory_store
+
+        slots = get_memory_store().list_keyed(scope=scope, owner=owner, name=name)
+        return JSONResponse({"prefix": body.prefix, "slots": slots})
 
     return router

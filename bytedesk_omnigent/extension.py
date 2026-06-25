@@ -81,6 +81,33 @@ class BytedeskExtension:
             ),
         ]
 
+    # ── default MCP servers (merged into EVERY agent spec, BDP-2459) ──
+    def default_mcp_servers(self) -> list:
+        """The shared-memory stdio MCP front, mounted on EVERY agent.
+
+        A stdio server (``python -m bytedesk_omnigent.memory_mcp``) proxying to
+        this extension's ``/v1/memory/*`` routes — one searchable + addressable
+        shared-memory store across team/dept/org. ``env.PYTHONPATH=/build`` so the
+        spawned subprocess can import ``bytedesk_omnigent`` (the SDK's minimal
+        stdio env omits PYTHONPATH; ``/build`` is the source mount in localDev and
+        the install root in the prod image). Model sees ``memory__search`` /
+        ``memory__get`` / ``memory__put`` / ``memory__append`` / ``memory__list`` /
+        ``memory__unset``. An agent that declares its own ``memory`` server wins
+        (merged by name in :func:`omnigent.spec.load`).
+        """
+        from omnigent.spec.types import MCPServerConfig
+
+        return [
+            MCPServerConfig(
+                name="memory",
+                transport="stdio",
+                command="python",
+                args=["-m", "bytedesk_omnigent.memory_mcp"],
+                env={"PYTHONPATH": "/build"},
+                tool_allowlist=["search", "get", "put", "append", "list", "unset"],
+            )
+        ]
+
     # ── policy modules (scanned by the policy registry) ──────────────
     def policy_modules(self) -> list[str]:
         return [

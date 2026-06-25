@@ -39,9 +39,9 @@ class _StubProvider:
         self.noted: list[list[_Hit]] = []
         self.list_calls: list[dict] = []
 
-    def recall(self, *, scope, owner, name, query, k):
+    def recall(self, *, scope, owner, name, query, k, kind="ambient"):
         self.recall_calls.append(
-            {"scope": scope, "owner": owner, "name": name, "query": query, "k": k}
+            {"scope": scope, "owner": owner, "name": name, "query": query, "k": k, "kind": kind}
         )
         return list(self._hits)
 
@@ -108,6 +108,7 @@ def test_recall_team_scope_stamps_team_owner(monkeypatch) -> None:
             "name": "org-context",
             "query": "release cadence",
             "k": 5,
+            "kind": "all",  # search spans ambient + addressable by default (BDP-2459)
         }
     ]
     # out-of-band reinforcement fired.
@@ -357,6 +358,65 @@ def test_unset_clears_the_slot(real_provider) -> None:
     assert cleared.status_code == 200
     assert cleared.json()["cleared"] == 1
     assert client.post("/v1/memory/get", json={"address": "org:temp"}).json()["found"] is False
+
+
+# ── BDP-2459: search spans ambient + addressable; list; all-agents mount ──────
+
+
+def _search(client, kind: str) -> set[str]:
+    r = client.post("/v1/memory/recall", json={"query": "pricing", "scope": "team", "kind": kind})
+    return {x["content"] for x in r.json().get("results", [])}
+
+
+def test_search_kind_spans_ambient_and_addressable(real_provider) -> None:
+    client = _client()
+    client.post(
+        "/v1/memory/append", json={"content": "pricing rules are flexible", "scope": "team"}
+    )
+    client.post(
+        "/v1/memory/put", json={"address": "org:pricing-sheet", "content": "pricing sheet v2"}
+    )
+
+    both = _search(client, "all")
+    assert "pricing rules are flexible" in both  # ambient
+    assert "pricing sheet v2" in both  # addressable
+    assert _search(client, "ambient") == {"pricing rules are flexible"}
+    assert _search(client, "addressable") == {"pricing sheet v2"}
+
+
+def test_list_browses_keyed_slots_not_ambient(real_provider) -> None:
+    client = _client()
+    client.post("/v1/memory/put", json={"address": "org:charter", "content": "C"})
+    client.post("/v1/memory/put", json={"address": "org:goals", "content": "G"})
+    client.post("/v1/memory/append", json={"content": "ambient note", "scope": "team"})
+
+    r = client.post("/v1/memory/list", json={"prefix": "org"})
+    assert r.status_code == 200
+    slots = r.json()["slots"]
+    assert {s["key"] for s in slots} == {"charter", "goals"}  # keyed only, not ambient
+    assert {s["content"] for s in slots} == {"C", "G"}
+
+
+def test_list_rejects_agent_prefix(real_provider) -> None:
+    r = _client().post("/v1/memory/list", json={"prefix": "agent:maya"})
+    assert r.status_code == 400
+    assert "verified per-agent identity" in r.json()["error"]
+
+
+def test_extension_contributes_memory_default_mount_for_all_agents() -> None:
+    from bytedesk_omnigent.extension import BytedeskExtension
+
+    servers = BytedeskExtension().default_mcp_servers()
+    assert len(servers) == 1
+    m = servers[0]
+    assert m.name == "memory"
+    assert m.transport == "stdio"
+    assert m.command == "python"
+    assert m.args == ["-m", "bytedesk_omnigent.memory_mcp"]
+    # PYTHONPATH=/build so the spawned stdio subprocess can import bytedesk_omnigent
+    # (the SDK's minimal stdio env omits it) — the post-BDP-2457 mount-load fix.
+    assert m.env.get("PYTHONPATH") == "/build"
+    assert set(m.tool_allowlist) == {"search", "get", "put", "append", "list", "unset"}
 
 
 def test_unset_missing_slot_is_not_found(real_provider) -> None:
