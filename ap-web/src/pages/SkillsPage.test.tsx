@@ -29,11 +29,13 @@ function renderPage() {
 
 const EMPLOYEES = [
   {
-    id: "skills-concierge",
+    // Live shape: a seeded built-in carries a generated `ag_…` id and a null
+    // display_name; `name` is the stable handle the page resolves on.
+    id: "ag_d5a1b59732f6819ed9b38132d6170412",
     name: "skills-concierge",
-    display_name: "Skills Concierge",
+    display_name: null,
     description: null,
-    harness: "codex",
+    harness: "claude-sdk",
     skills: [],
     department: "Operations",
     title: "Concierge",
@@ -62,7 +64,9 @@ beforeEach(() => {
       {
         name: "deep-search",
         description: "Search stuff.",
-        agents: [{ id: "skills-concierge", name: "skills-concierge", version: 1 }],
+        agents: [
+          { id: "ag_d5a1b59732f6819ed9b38132d6170412", name: "skills-concierge", version: 1 },
+        ],
       },
     ],
     isLoading: false,
@@ -87,9 +91,13 @@ describe("SkillsPage", () => {
     expect(screen.getByRole("link", { name: /Close skills/ })).toBeInTheDocument();
   });
 
-  it("routes the composer to the skills-concierge agent", () => {
+  it("routes the composer to the concierge by name, using its generated id", () => {
     renderPage();
-    expect(screen.getByTestId("agent-composer")).toHaveTextContent("skills-concierge");
+    // Resolved by name === "skills-concierge"; the composer is wired to the
+    // agent's actual (generated) id, not the name.
+    expect(screen.getByTestId("agent-composer")).toHaveTextContent(
+      "ag_d5a1b59732f6819ed9b38132d6170412",
+    );
   });
 
   it("falls back to a display-name match for the concierge", () => {
