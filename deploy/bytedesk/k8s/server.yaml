@@ -92,6 +92,12 @@ spec:
             - secretRef:
                 name: omnigent-github-token-secrets
                 optional: true
+            # Web Push (VAPID) for standalone PWA notifications when the tab is
+            # closed. Infisical-operator-managed (omnigent-pwa-secrets ←
+            # bytedesk-ai /omnigent-pwa).
+            - secretRef:
+                name: omnigent-pwa-secrets
+                optional: true
           env:
             - name: HOST
               value: "0.0.0.0"

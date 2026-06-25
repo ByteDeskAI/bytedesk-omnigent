@@ -69,6 +69,19 @@ patches:
             secretsScope:
               envSlug: production
   - target:
+      kind: InfisicalSecret
+      name: omnigent-pwa
+    patch: |
+      apiVersion: secrets.infisical.com/v1alpha1
+      kind: InfisicalSecret
+      metadata:
+        name: omnigent-pwa
+      spec:
+        authentication:
+          universalAuth:
+            secretsScope:
+              envSlug: production
+  - target:
       kind: Deployment
       name: omnigent-server
     patch: |
