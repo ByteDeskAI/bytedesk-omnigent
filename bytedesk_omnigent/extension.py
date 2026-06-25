@@ -59,6 +59,7 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
         )
+        from bytedesk_omnigent.routes.memory import create_memory_router
         from bytedesk_omnigent.routes.omni_cli_terminal import (
             create_omni_cli_terminal_router,
         )
@@ -71,6 +72,7 @@ class BytedeskExtension:
             create_agentic_inbox_router(),
             create_goals_router(auth_provider=auth_provider),
             create_integration_capabilities_router(auth_provider=auth_provider),
+            create_memory_router(auth_provider=auth_provider),
             create_tasks_router(auth_provider=auth_provider),
             create_config_router(auth_provider=auth_provider),
             create_omni_cli_terminal_router(

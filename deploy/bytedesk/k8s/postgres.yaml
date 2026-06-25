@@ -36,7 +36,14 @@ spec:
     spec:
       containers:
         - name: postgres
-          image: postgres:16-alpine
+          # pgvector image (PG16 + the `vector` extension) so the FU1 agent-memory
+          # plane (ADR-0132, BDP-2457) can build the vector(384) column + ivfflat
+          # index for SEMANTIC recall. Plain postgres:16-alpine ships no pgvector,
+          # so add_memory_tables probed, found none, and left recall lexical-only.
+          # Same PG16 major → the existing PGDATA volume mounts unchanged.
+          # ponytail: debian (glibc) vs the old alpine (musl) — on an existing prod
+          # volume, REINDEX collation-sensitive text indexes after the swap.
+          image: pgvector/pgvector:pg16
           imagePullPolicy: IfNotPresent
           envFrom:
             - secretRef:

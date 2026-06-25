@@ -139,6 +139,11 @@ RUN test -f ./omnigent/server/static/web-ui/index.html \
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'psycopg[binary]>=3.1,<4'
 # NATS coordination backplane (OMNIGENT_NATS_URL) — lazy-imported at runtime.
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'nats-py>=2.9,<3'
+# Semantic-recall embedder (fastembed BAAI/bge-small-en-v1.5, ONNX on CPU; the
+# `memory` pyproject extra). Installed explicitly like psycopg/nats-py so the
+# server embeds memories LOCALLY — no external inference/LLM call. Lazy-imported
+# on first recall; the bge-small ONNX model downloads on first use (BDP-2457).
+RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'fastembed>=0.4,<1'
 
 # ── Node alias stage ─────────────────────────────────────
 # Pure alias so the host stage can COPY node out of a version-pinned
