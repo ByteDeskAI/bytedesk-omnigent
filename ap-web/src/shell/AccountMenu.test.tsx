@@ -65,13 +65,15 @@ afterEach(() => {
 });
 
 describe("AccountMenu gating", () => {
-  it("renders nothing when accounts mode and terminal mode are off", () => {
+  it("shows the local skills menu when accounts mode and terminal mode are off", async () => {
     vi.mocked(useServerInfo).mockReturnValue({
       ...ACCOUNTS_OFF,
       omni_cli_terminal_enabled: false,
     });
-    const { container } = renderMenu();
-    expect(container).toBeEmptyDOMElement();
+    renderMenu();
+    await openMenu(/Omnigent/);
+    expect(await screen.findByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Terminal/ })).not.toBeInTheDocument();
     expect(accountsApi.getMe).not.toHaveBeenCalled();
   });
 
@@ -81,6 +83,7 @@ describe("AccountMenu gating", () => {
 
     await openMenu(/Omnigent/);
 
+    expect(await screen.findByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
     expect(await screen.findByRole("menuitem", { name: /Terminal/ })).toBeInTheDocument();
     expect(accountsApi.getMe).not.toHaveBeenCalled();
   });
@@ -111,6 +114,7 @@ describe("AccountMenu dropdown surface", () => {
     await openMenu(/alice/);
 
     expect(await screen.findByRole("menuitem", { name: /Change password/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Sign out/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Members/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Policies/ })).not.toBeInTheDocument();

@@ -55,6 +55,7 @@ from omnigent.server.routes.sessions import (
     create_sessions_router,
     set_server_runner_router,
 )
+from omnigent.server.routes.skills import create_skills_router
 from omnigent.server.routes.terminal_attach import create_terminal_attach_router
 from omnigent.server.ws_origin import WebSocketOriginMiddleware
 from omnigent.stores import (
@@ -1813,6 +1814,16 @@ def create_app(
         ),
         prefix="/v1",
         tags=["agents"],
+    )
+    app.include_router(
+        create_skills_router(
+            agent_store,
+            agent_cache,
+            artifact_store,
+            auth_provider=auth_provider,
+        ),
+        prefix="/v1",
+        tags=["skills"],
     )
     app.include_router(
         create_terminal_attach_router(
