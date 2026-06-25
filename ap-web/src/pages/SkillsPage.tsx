@@ -15,9 +15,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
-import { useInstalledSkills } from "@/hooks/useSkills";
+import { useInstalledSkills, useStartSkillsConciergeSession } from "@/hooks/useSkills";
 import { AgentConversation, AgentComposer } from "@/components/chat";
 import { Link } from "@/lib/routing";
+import { useChatStore } from "@/store/chatStore";
 import { cn } from "@/lib/utils";
 
 type SkillScopeKind = "organization" | "department" | "employee";
@@ -65,6 +66,7 @@ function findConcierge(agents: AvailableAgent[]): AvailableAgent | null {
 export function SkillsPage() {
   const agentsQuery = useAvailableAgents();
   const installed = useInstalledSkills();
+  const { mutateAsync: startConciergeSession } = useStartSkillsConciergeSession();
   const agents = useMemo(() => agentsQuery.data ?? [], [agentsQuery.data]);
 
   const [selectedScope, setSelectedScope] = useState<SkillScope>({
@@ -125,6 +127,37 @@ export function SkillsPage() {
 
   const selectedScopeLabel = scopeLabel(selectedScope, agentRows);
   const concierge = useMemo(() => findConcierge(agents), [agents]);
+  const scopeSessionKey = `${selectedScope.kind}:${selectedScope.id}`;
+
+  useEffect(() => {
+    if (!concierge || targetAgentIds.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const session = await startConciergeSession({
+          target_kind: selectedScope.kind,
+          target_id: selectedScope.id,
+          target_label: selectedScopeLabel,
+          target_agent_ids: targetAgentIds,
+        });
+        if (!cancelled) {
+          await useChatStore.getState().switchTo(session.session_id);
+        }
+      } catch {
+        // Scope seed is best-effort; inline chat still works without it.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    concierge,
+    scopeSessionKey,
+    selectedScope.kind,
+    selectedScope.id,
+    selectedScopeLabel,
+    targetAgentIds,
+  ]);
 
   const scopedInstalled = useMemo(
     () =>

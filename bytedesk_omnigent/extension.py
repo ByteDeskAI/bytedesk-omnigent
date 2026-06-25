@@ -90,6 +90,7 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.agentic_inbox import create_agentic_inbox_router
         from bytedesk_omnigent.routes.config import create_config_router
         from bytedesk_omnigent.routes.goals import create_goals_router
+        from bytedesk_omnigent.routes.skills_concierge import create_skills_concierge_router
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
         from bytedesk_omnigent.routes.integration_capabilities import (
@@ -107,6 +108,10 @@ class BytedeskExtension:
             create_ingress_router(),
             create_agentic_inbox_router(),
             create_goals_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
+            create_skills_concierge_router(
                 auth_provider=auth_provider,
                 permission_store=permission_store,
             ),
