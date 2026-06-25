@@ -141,6 +141,13 @@ def discover_all_extensions() -> None:
     re-attempts registration; an already-registered provider is skipped by the
     registry's conflict guard, which is caught per-extension inside
     ``discover_extensions``). The per-call registries are freshly built each run.
+
+    Note: the ``tools`` builtin registry is not a SEAMS row (its providers are
+    config-accepting tool factories, not the zero-arg providers a standard seam
+    holds), so its extension merge is driven separately at server startup via
+    :func:`omnigent.tools.builtins.register_extension_tools`, alongside this call
+    (see ``omnigent.server.app`` / ``omnigent.server.container``). Keeping it out
+    of this loop preserves the one-discovery-per-seam contract.
     """
     for seam, accessor, hook in SEAMS:
         try:

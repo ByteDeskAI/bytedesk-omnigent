@@ -14,21 +14,33 @@ around:
   carries reversed alias spellings).
 - :func:`resolve` — canonical id *or* any alias → descriptor.
 
-Because this is a hard fork (no upstream to stay compatible with), the ByteDesk
-harnesses (e.g. ``hermes`` → ``bytedesk_omnigent.harnesses.hermes_native_harness``)
-are wired directly into the default descriptor set here, in core. That deletes the
-old hardcoded cross-package string literal in ``_HARNESS_MODULES`` while keeping the
-entry present and authoritative.
+Core dogfoods the harness seam (Section 9.2): its own first-party harnesses are
+contributed through the module-level :func:`harness_descriptors` hook — the same
+``{canonical_id: () -> descriptor}`` shape a third-party extension implements —
+which :func:`_build_registry` consumes to populate the registry at import. There is
+no hard-wired registration loop and no privileged "default set" the seam cannot
+express; proving the seam hosts all first-party harnesses proves it hosts a
+third-party one.
+
+The ByteDesk ``hermes`` harness (``bytedesk_omnigent.harnesses.hermes_native_harness``)
+is the cross-package case: it stays in the first-party set here so it is resolvable
+at *import* time (``_HARNESS_MODULES`` and the omnigent allowlist materialize at
+import, before any FastAPI-heavy extension discovery), and the ByteDesk extension
+ALSO declares it through :meth:`BytedeskExtension.harness_descriptors` (BDP-2507) so
+the cross-package contribution path is exercised end-to-end. That contribution is
+idempotent — a no-op when hermes is already registered — so the two never conflict.
+Importing ``bytedesk_omnigent`` from this module would pull FastAPI onto the harness
+import hot path (BDP-2371), so the resolvable copy lives in core.
 
 The registry is keyed by canonical id; :meth:`PluggableRegistry.discover_extensions`
-is consulted with the ``harness_descriptors`` hook so a future extension can
-contribute harnesses error-isolated, exactly like the artifact-store reference seam
-in :mod:`omnigent.stores.factory`. With no extension defining that hook it is a safe
-no-op.
+is consulted at server startup with the ``harness_descriptors`` hook so any
+extension can contribute *additional* harnesses error-isolated, exactly like the
+artifact-store reference seam in :mod:`omnigent.stores.factory`.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from omnigent.pluggable import PluggableRegistry
@@ -62,13 +74,20 @@ class HarnessDescriptor:
     config_schema: object | None = field(default=None)
 
 
-# ── The default harness set (hard fork: ByteDesk harnesses wired in core) ──
+# ── The first-party harness set (dogfooded through the harness_descriptors hook) ──
 #
 # One descriptor per harness. ``module_path`` is the module exporting
 # ``create_app() -> FastAPI``; ``aliases`` are the inline-alias spellings that
 # historically appeared as extra ``_HARNESS_MODULES`` keys pointing at the same
 # module; ``is_native`` marks native-CLI terminal harnesses.
-_DEFAULT_DESCRIPTORS: tuple[HarnessDescriptor, ...] = (
+#
+# These are core's OWN harnesses, contributed through the same
+# ``harness_descriptors()`` hook a third party would implement (Section 9.2
+# dogfooding): :func:`harness_descriptors` projects this tuple into the
+# ``{canonical_id: () -> descriptor}`` hook shape, and :func:`_build_registry`
+# consumes that hook output rather than a hard-wired registration loop. If the
+# seam can host all first-party harnesses it can host a third-party one.
+_FIRST_PARTY_DESCRIPTORS: tuple[HarnessDescriptor, ...] = (
     # claude-sdk harness wrap. See omnigent/inner/claude_sdk_harness.py.
     # User-facing alias "claude" accepted in specs / omnigent dispatch.
     HarnessDescriptor(
@@ -154,8 +173,15 @@ _DEFAULT_DESCRIPTORS: tuple[HarnessDescriptor, ...] = (
         module_path="omnigent.inner.databricks_supervisor_harness",
     ),
     # ByteDesk Hermes Agent bridge (ACP over ``hermes acp``) — Kade Vector's
-    # model-agnostic brain. Wired directly into the default set (hard fork) so
-    # there is no hardcoded cross-package string literal in _HARNESS_MODULES.
+    # model-agnostic brain. Kept here so hermes is resolvable at *import* time
+    # (``_HARNESS_MODULES["hermes"]`` and the omnigent allowlist are materialized
+    # at import, before any FastAPI-heavy extension discovery runs). The ByteDesk
+    # extension ALSO declares it through :meth:`BytedeskExtension.harness_descriptors`
+    # (BDP-2507) so the cross-package contribution path is exercised end-to-end;
+    # that contribution is idempotent — it is a no-op when hermes is already
+    # registered here — so the two never conflict. Importing ``bytedesk_omnigent``
+    # from this module would pull FastAPI onto the harness import hot path, which
+    # the seam deliberately avoids (BDP-2371), so the resolvable copy lives here.
     # See bytedesk_omnigent/harnesses/hermes_native_harness.py.
     HarnessDescriptor(
         name="hermes",
@@ -173,26 +199,50 @@ _DEFAULT_DESCRIPTORS: tuple[HarnessDescriptor, ...] = (
 )
 
 
+def harness_descriptors() -> dict[str, Callable[[], HarnessDescriptor]]:
+    """Core's first-party harnesses, in the ``harness_descriptors`` hook shape.
+
+    This is the SAME hook a third-party extension implements to contribute a
+    harness (the ``harness_descriptors`` entry in
+    :data:`omnigent.pluggable.manifest.SEAMS`): a mapping of canonical id to a
+    zero-arg factory returning the :class:`HarnessDescriptor`. Core dogfoods the
+    seam by registering its own built-in harnesses through this hook rather than a
+    hard-wired registration loop (Section 9.2): :func:`_build_registry` consumes
+    this mapping, so if the seam cannot host all first-party harnesses it cannot
+    host a third-party one either.
+
+    :returns: ``{canonical_id: () -> HarnessDescriptor}`` for every first-party
+        harness, fresh per call.
+    """
+    return {d.name: (lambda d=d: d) for d in _FIRST_PARTY_DESCRIPTORS}
+
+
 def _build_registry() -> PluggableRegistry[HarnessDescriptor]:
     """Build the harness-identity registry, keyed by canonical id.
 
-    Each default descriptor is registered under its canonical id; the first one
-    is the registry's default impl (it carries no special meaning beyond being a
-    registered name). Extensions may contribute additional harnesses via a
-    ``harness_descriptors`` hook returning ``{canonical_id: () -> descriptor}``,
-    error-isolated exactly like the artifact-store reference seam.
+    First-party descriptors are sourced from :func:`harness_descriptors` — the
+    same ``{canonical_id: () -> descriptor}`` hook a third-party extension would
+    implement — and registered one per canonical id; the first is the registry's
+    default impl (it carries no special meaning beyond being a registered name).
+    Third-party extensions contribute *additional* harnesses through the same
+    ``harness_descriptors`` hook at server startup
+    (:func:`omnigent.pluggable.manifest.discover_all_extensions`), error-isolated
+    exactly like the artifact-store reference seam.
 
     :returns: The populated :class:`PluggableRegistry`.
     """
-    head, *rest = _DEFAULT_DESCRIPTORS
+    (head_name, head_factory), *rest = harness_descriptors().items()
     registry: PluggableRegistry[HarnessDescriptor] = PluggableRegistry(
-        "harness", default=(head.name, lambda head=head: head)
+        "harness", default=(head_name, head_factory)
     )
-    for descriptor in rest:
-        registry.register(descriptor.name, lambda d=descriptor: d)
-    # Extension discovery deferred to server startup (Wave-2 composition root):
-    # it loads FastAPI-heavy entry-point extensions; keep off the import hot path.
-    # Hook: 'harness_descriptors'.
+    for name, factory in rest:
+        registry.register(name, factory)
+    # Third-party extension discovery is deferred to server startup (Wave-2
+    # composition root): it loads FastAPI-heavy entry-point extensions; keep off
+    # the import hot path. Hook: 'harness_descriptors'. The ByteDesk extension's
+    # hermes contribution (BDP-2507) is idempotent — hermes is already registered
+    # above from the first-party set, so the contribution skips it without
+    # conflict.
     return registry
 
 
@@ -262,6 +312,7 @@ __all__ = [
     "HarnessDescriptor",
     "HARNESS_REGISTRY",
     "HARNESS_DESCRIPTORS",
+    "harness_descriptors",
     "harness_modules",
     "native_harness_ids",
     "resolve",

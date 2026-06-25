@@ -1049,6 +1049,34 @@ def create_app(
 
             discover_all_extensions()
 
+        # BDP-2506: the ``tools`` builtin registry is not a SEAMS row, so its
+        # extension merge is driven here at the server composition root (not at
+        # import — entry-point discovery loads the FastAPI-heavy hub and must
+        # stay off the runner hot path, BDP-2371). Error-isolated inside the
+        # helper; runs once per boot regardless of the DI path above.
+        from omnigent.tools.builtins import register_extension_tools
+
+        register_extension_tools()
+
+        # BDP-2509: flag-guarded first-party-plugin boot path (default OFF). When
+        # OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy, register the first-party
+        # ("core") plugins' seam contributions through the SAME seam registries
+        # third-party extensions use — IN ADDITION to the discovered ones above.
+        # The instances are built here (deferred domain import) and stashed for
+        # the router-install + background-task stages below. Unset/false: this
+        # block is skipped and boot is byte-for-byte unchanged.
+        _firstparty_extensions: list[Any] = []
+        from omnigent.server.auth import env_var_is_truthy as _env_truthy_fp
+
+        if _env_truthy_fp("OMNIGENT_USE_FIRSTPARTY_PLUGINS"):
+            from omnigent.core import (
+                default_extensions,
+                register_firstparty_seams,
+            )
+
+            _firstparty_extensions = default_extensions()
+            register_firstparty_seams(_firstparty_extensions)
+
         from omnigent.coordination.lifecycle import start_coordination
 
         await start_coordination()
@@ -1107,6 +1135,20 @@ def create_app(
             asyncio.create_task(factory())
             for factory in extension_background_factories()
         ]
+        # BDP-2509: first-party-plugin background loops (e.g. omnigent.metrics,
+        # omnigent.memory_maintenance) started through the SAME lifespan task
+        # path. Only populated when OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy
+        # (``_firstparty_extensions`` is empty otherwise), so the default boot is
+        # unchanged. Cancelled in the finally below with the other bg tasks.
+        if _firstparty_extensions:
+            from omnigent.core import firstparty_background_factories
+
+            _ext_bg_tasks.extend(
+                asyncio.create_task(factory())
+                for factory in firstparty_background_factories(
+                    _firstparty_extensions
+                )
+            )
         try:
             yield
         finally:
@@ -1883,6 +1925,26 @@ def create_app(
         auth_provider=auth_provider,
         permission_store=permission_store,
     )
+
+    # BDP-2509: flag-guarded first-party-plugin router install (default OFF).
+    # When OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy, mount the first-party
+    # ("core") plugins' routers (e.g. omnigent.routes, omnigent.skills) through
+    # the SAME install_extensions() machinery — passing the explicit
+    # default_extensions() list — IN ADDITION to the discovered extensions
+    # above. install_extensions runs the same pre_init/register/post_init
+    # staging and mounts under /v1, so first-party routers go through the
+    # identical path. Unset/false: skipped, boot byte-for-byte unchanged.
+    from omnigent.server.auth import env_var_is_truthy as _env_truthy_fp_routes
+
+    if _env_truthy_fp_routes("OMNIGENT_USE_FIRSTPARTY_PLUGINS"):
+        from omnigent.core import default_extensions
+
+        install_extensions(
+            app,
+            extensions=default_extensions(),
+            auth_provider=auth_provider,
+            permission_store=permission_store,
+        )
 
     # ── Tunnel lifecycle callbacks (Step 8.5 crash recovery) ───
     async def _on_runner_disconnect(runner_id: str) -> None:

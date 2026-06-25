@@ -29,6 +29,42 @@ _TOOL_STEP_RESUME_LOCK = 0x746F6F6C73746570
 #: PG advisory-lock key for the boot-time workflow-orchestrator task seed (BDP-2337).
 _WORKFLOW_TASK_SEED_LOCK = 0x776B666C77746B73
 
+#: Tool-name prefix the ByteDesk extension claims for server-side execution
+#: (the three-tier keyed ``memory__*`` tools — BDP-2458 / BDP-2505).
+_MEMORY_TOOL_PREFIX = "memory__"
+
+
+def _memory_tool_interceptor(
+    tool_name: str,
+    arguments: dict | None,
+    *,
+    caller_agent_id: str | None = None,
+    caller_department: str | None = None,
+) -> str | None:
+    """Server-side handler for ``memory__*`` tool calls (BDP-2505).
+
+    Contributed via :meth:`BytedeskExtension.tool_interceptors` under the
+    ``memory__`` prefix. Returns the JSON result string when *tool_name* is a
+    recognised memory op, or ``None`` to fall through to normal runner dispatch
+    (keeping the prior ``is_memory_tool`` gate semantics — a ``memory__*`` name
+    that is not a known op is NOT intercepted). The heavy memory imports stay
+    deferred inside the body so merely registering the interceptor never pulls
+    the memory stack onto the import path.
+    """
+    from bytedesk_omnigent.memory_tool_intercept import (
+        execute_memory_tool,
+        is_memory_tool,
+    )
+
+    if not is_memory_tool(tool_name):
+        return None
+    return execute_memory_tool(
+        tool_name,
+        arguments,
+        caller_agent_id=caller_agent_id,
+        caller_department=caller_department,
+    )
+
 
 def _health_router() -> APIRouter:
     router = APIRouter()
@@ -214,6 +250,41 @@ class BytedeskExtension:
             return [ByteDeskPrincipalResolver(secret)]
         return []
 
+    # ── harness descriptors (HARNESS_REGISTRY seam, BDP-2507) ─────────
+    def harness_descriptors(self) -> dict[str, Callable[[], object]]:
+        """Contribute ByteDesk's ``hermes`` harness through the harness seam.
+
+        This is the cross-package dogfooding path (Section 9.2): the ByteDesk
+        Hermes Agent bridge (``bytedesk_omnigent.harnesses.hermes_native_harness``
+        — Kade Vector's model-agnostic brain, ACP over ``hermes acp``) is declared
+        here as a ``harness_descriptors`` contribution, exactly the way a third
+        party would add a harness. Discovery runs at server startup via
+        :func:`omnigent.pluggable.manifest.discover_all_extensions`.
+
+        IDEMPOTENT: ``hermes`` is also present in core's first-party descriptor set
+        so it is resolvable at *import* time (``_HARNESS_MODULES`` materializes
+        before FastAPI-heavy extension discovery runs; importing this extension
+        from the harness module would pull FastAPI onto the harness import hot
+        path, BDP-2371). When core has already registered ``hermes`` this hook
+        returns ``{}`` so the seam's conflict guard is never tripped; it only
+        contributes the descriptor on the (future) path where core does not carry
+        it. The descriptor factory imports nothing — ``module_path`` is a plain
+        string the runner imports lazily — so this hook stays import-cheap.
+        """
+        from omnigent.runtime.harnesses.descriptors import (
+            HARNESS_REGISTRY,
+            HarnessDescriptor,
+        )
+
+        if "hermes" in HARNESS_REGISTRY.names():
+            return {}
+        return {
+            "hermes": lambda: HarnessDescriptor(
+                name="hermes",
+                module_path="bytedesk_omnigent.harnesses.hermes_native_harness",
+            )
+        }
+
     # ── identity ports (adr-omnigent-pluggable-identity) ──────────────
     # ByteDesk's inbound trust uses the core HMAC/RSA verifier (via
     # ByteDeskPrincipalResolver) and authz keeps the core default. The OBO
@@ -234,6 +305,25 @@ class BytedeskExtension:
 
     def authorization_providers(self) -> dict[str, Callable[[], object]]:
         return {}
+
+    # ── server-side tool interception (ADR-0143 §5 Step 1, BDP-2505) ────
+    def tool_interceptors(self) -> dict[str, Callable[..., object]]:
+        """Claim the ``memory__*`` tool prefix for server-side execution.
+
+        The three-tier keyed memory tools (``memory__*``) execute on the
+        omnigent server itself, not on the runner: the server owns the memory
+        store AND the verified caller identity, while the shared stdio memory
+        front cannot carry a trustworthy per-agent identity (BDP-2458). This
+        hook replaces the former hard ``from bytedesk_omnigent.memory_tool_intercept
+        import ...`` in ``omnigent/server/routes/sessions.py`` — core now
+        dispatches through the aggregated prefix table and never names
+        ``bytedesk_omnigent`` (ADR-0143 §5 Step 1).
+
+        The handler returns the JSON result string for a handled ``memory__*``
+        op, or ``None`` to fall through to normal runner dispatch (e.g. a
+        ``memory__*`` name that is not one of the recognised ops).
+        """
+        return {_MEMORY_TOOL_PREFIX: _memory_tool_interceptor}
 
     # ── config-control-plane descriptors (Settings Registry, ADR-0150) ─
     def config_descriptors(self) -> list:
