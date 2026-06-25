@@ -155,6 +155,31 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class NotionWebhookAdapter:
+    """Built-in Notion webhook adapter.
+
+    Notion uses an HMAC-SHA256 signature over the raw request body. This adapter
+    accepts the provider-native ``X-Notion-Signature`` header in either bare-hex
+    or ``sha256=<hex>`` form and reads a deterministic binding key from
+    ``X-Notion-Event`` / ``X-Notion-Event-Type`` when present. If Notion sends a
+    payload-only event shape for a workspace, the match key falls back to ``"*"``
+    so deployments can bind a catch-all without weakening signature checks.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-notion-signature")
+        if not provided:
+            return False
+        return verify_hmac_signature(raw_body, secret, provided)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return (
+            _header(headers, "x-notion-event")
+            or _header(headers, "x-notion-event-type")
+            or "*"
+        )
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
@@ -179,6 +204,7 @@ def _build_webhook_adapter_registry():
     registry: PluggableRegistry[WebhookSourceAdapter] = PluggableRegistry(
         "webhook_source", default=("github", GitHubWebhookAdapter)
     )
+    registry.register("notion", NotionWebhookAdapter)
     return registry
 
 
