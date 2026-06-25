@@ -19,6 +19,7 @@ from omnigent.skills.acquisition import (
     SkillPreview,
     SkillSearchHit,
 )
+from omnigent.skills.recommendations import recommend_skills_for_role
 from omnigent.skills.registry import marketplace_entry_to_dict, skill_marketplace_entries
 from omnigent.stores import AgentStore
 from omnigent.stores.artifact_store import ArtifactStore
@@ -79,6 +80,18 @@ class SkillMarketplaceObject(BaseModel):
 class SkillMarketplacesResponse(BaseModel):
     object: str = "skill_marketplace.list"
     data: list[SkillMarketplaceObject]
+
+
+class SkillRecommendationObject(BaseModel):
+    name: str
+    source: str
+    source_ref: str
+    reason: str
+
+
+class SkillRecommendationsResponse(BaseModel):
+    object: str = "skill_recommendation.list"
+    data: list[SkillRecommendationObject]
 
 
 class SkillSearchRequest(BaseModel):
@@ -216,6 +229,23 @@ def create_skills_router(
                 SkillMarketplaceObject.model_validate(marketplace_entry_to_dict(entry))
                 for entry in skill_marketplace_entries(acquisition._marketplace_config)
             ]
+        )
+
+    @router.get("/skills/recommendations")
+    async def list_skill_recommendations(
+        request: Request,
+        department: str | None = None,
+        title: str | None = None,
+        limit: int = 8,
+    ) -> SkillRecommendationsResponse:
+        _require_user(request, auth_provider)
+        rows = recommend_skills_for_role(
+            department=department,
+            title=title,
+            limit=min(max(limit, 1), 20),
+        )
+        return SkillRecommendationsResponse(
+            data=[SkillRecommendationObject.model_validate(row.__dict__) for row in rows]
         )
 
     @router.get("/skills/sources")
