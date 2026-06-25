@@ -345,3 +345,107 @@ def test_resolve_supercharge_rejects_path_traversal(
 
     with pytest.raises(OmnigentError, match="invalid path segment"):
         service._resolve_supercharge("evil", workspace)
+
+
+_FIXTURE_CATALOG = Path(__file__).resolve().parents[1] / "resources" / "skills" / "bytedesk-marketplace-catalog.json"
+
+
+def test_parse_github_marketplace_source_ref_plugin_shape() -> None:
+    owner, repo, plugin_path, skill_name, git_ref = acq._parse_github_marketplace_source_ref(
+        "ByteDeskAI/bytedesk-marketplace@platform-dev"
+    )
+
+    assert owner == "ByteDeskAI"
+    assert repo == "bytedesk-marketplace"
+    assert plugin_path == "platform-dev"
+    assert skill_name is None
+    assert git_ref == "main"
+
+
+def test_parse_github_marketplace_source_ref_skill_path_and_hash_ref() -> None:
+    owner, repo, plugin_path, skill_name, git_ref = acq._parse_github_marketplace_source_ref(
+        "ByteDeskAI/bytedesk-marketplace/platform-dev/bytedesk-architect#develop"
+    )
+
+    assert plugin_path == "platform-dev"
+    assert skill_name == "bytedesk-architect"
+    assert git_ref == "develop"
+
+
+def test_search_github_marketplace_uses_pinned_catalog_fixture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    catalog_bytes = _FIXTURE_CATALOG.read_bytes()
+    url = acq._github_marketplace_catalog_url("ByteDeskAI", "bytedesk-marketplace", "main")
+    monkeypatch.setattr(acq, "urlopen", _fake_urlopen({url: catalog_bytes}))
+
+    hits = _supercharge_service(tmp_path)._search_github_marketplace(
+        "platform architect",
+        repos=("ByteDeskAI/bytedesk-marketplace",),
+        limit=20,
+    )
+
+    names = [hit.name for hit in hits]
+    assert "platform-dev" in names
+    assert "platform-architecture" in names
+    assert all(hit.source == "github_marketplace" for hit in hits)
+    by_name = {hit.name: hit for hit in hits}
+    assert by_name["platform-dev"].source_ref == "ByteDeskAI/bytedesk-marketplace@platform-dev"
+
+
+def test_resolve_github_marketplace_materializes_plugin_skills(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    archive_source = tmp_path / "archive-source"
+    _write_skill(archive_source / "platform-dev" / "skills", name="bytedesk-architect")
+
+    class ArchiveRunner(SkillCommandRunner):
+        spec: SkillCommandSpec | None = None
+
+        def run(self, spec: SkillCommandSpec, cwd: Path) -> CommandEvidence:
+            self.spec = spec
+            with tarfile.open(cwd / acq._GITHUB_ARCHIVE_NAME, "w:gz") as archive:
+                archive.add(archive_source, arcname="ByteDeskAI-bytedesk-marketplace-deadbeef")
+            return CommandEvidence(
+                command=spec.shell or list(spec.argv or ()),
+                shell=spec.shell is not None,
+                exit_code=0,
+                duration_ms=1,
+                stdout="",
+                stderr="",
+            )
+
+    monkeypatch.setattr("omnigent.skills.acquisition.shutil.which", lambda cmd: "gh" if cmd == "gh" else None)
+    runner = ArchiveRunner()
+    service = SkillAcquisitionService(
+        agent_store=None,  # type: ignore[arg-type]
+        agent_cache=None,  # type: ignore[arg-type]
+        artifact_store=None,
+        runner=runner,
+        stage_root=tmp_path,
+    )
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    evidence = service._resolve_source(
+        source="github_marketplace",
+        source_ref="ByteDeskAI/bytedesk-marketplace@platform-dev",
+        command=None,
+        workspace=workspace,
+        selected_skill_names=[],
+    )
+
+    assert evidence is not None and evidence.exit_code == 0
+    assert [package.name for package in discover_skill_packages(workspace)] == ["bytedesk-architect"]
+
+
+def test_github_marketplace_source_registered_with_search(
+    tmp_path: Path,
+) -> None:
+    sources = {row["id"]: row for row in _supercharge_service(tmp_path).sources()}
+
+    assert "github_marketplace" in sources
+    assert sources["github_marketplace"]["supports_search"] is True
+    assert sources["github_marketplace"]["supports_preview"] is True
