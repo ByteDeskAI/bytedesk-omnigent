@@ -224,6 +224,8 @@ export interface FileBlock extends BlockBase {
   readonly fileId: string;
   /** Original filename, or `null` if unknown. */
   readonly filename: string | null;
+  /** MIME content type, or `null` if unknown. */
+  readonly contentType: string | null;
 }
 
 /** Every semantic block emitted by {@link collateBlocks}, as a discriminated union keyed on `kind`. */

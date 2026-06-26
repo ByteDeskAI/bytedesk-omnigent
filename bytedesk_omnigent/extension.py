@@ -189,6 +189,7 @@ class BytedeskExtension:
             GoalDependencyUpdateTool,
             GoalListTool,
         )
+        from bytedesk_omnigent.tools.image_generation_tools import BytedeskGenerateImageTool
         from bytedesk_omnigent.tools.jira_tools import BytedeskJiraTool
         from bytedesk_omnigent.tools.outcome_tools import OutcomeRecordTool
         from bytedesk_omnigent.tools.peer_tools import PeerInboxTool, PeerSendTool
@@ -222,6 +223,7 @@ class BytedeskExtension:
             "bytedesk_confluence": lambda _c: BytedeskConfluenceTool(),
             "bytedesk_github": lambda _c: BytedeskGitHubTool(),
             "bytedesk_slack": lambda _c: BytedeskSlackTool(),
+            "bytedesk_generate_image": lambda _c: BytedeskGenerateImageTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),

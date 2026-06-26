@@ -6,7 +6,9 @@ import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { RenderItem } from "@/lib/renderItems";
+import type { ConversationItem } from "@/lib/conversationItems";
+import { itemsToBlocks } from "@/lib/itemsToBlocks";
+import { buildBubbles, type Bubble, type RenderItem } from "@/lib/renderItems";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { BlockRenderer } from "./BlockRenderer";
 
@@ -87,6 +89,66 @@ describe("BlockRenderer dispatch", () => {
     render(<BlockRenderer items={items} sessionStatus="idle" />);
     const card = screen.getByTestId("terminal-command-card");
     expect(card.getAttribute("data-terminal-kind")).toBe("output");
+  });
+
+  it("renders an image file RenderItem through the session file endpoint", () => {
+    const items: RenderItem[] = [
+      {
+        kind: "file",
+        itemId: "file_item",
+        fileId: "file_img_123",
+        filename: "hero.png",
+        contentType: "image/png",
+      },
+    ];
+
+    render(<BlockRenderer items={items} sessionStatus="idle" conversationId="conv_1" />);
+
+    const img = screen.getByRole("img", { name: "hero.png" });
+    expect(img.getAttribute("src")).toBe(
+      "/v1/sessions/conv_1/resources/files/file_img_123/content",
+    );
+    expect(screen.getByTestId("assistant-file-artifact")).toBeDefined();
+  });
+
+  it("renders a persisted generated-image tool output after history hydration", () => {
+    const persisted: ConversationItem[] = [
+      {
+        id: "fc_img",
+        response_id: "resp_img",
+        type: "function_call",
+        status: "completed",
+        name: "bytedesk_generate_image",
+        arguments: JSON.stringify({ prompt: "Generate a launch hero" }),
+        call_id: "call_img",
+        model: "mara",
+      },
+      {
+        id: "fco_img",
+        response_id: "resp_img",
+        type: "function_call_output",
+        status: "completed",
+        call_id: "call_img",
+        output: JSON.stringify({
+          ok: true,
+          file_id: "file_img_123",
+          filename: "hero.png",
+          content_type: "image/png",
+        }),
+      },
+    ];
+    const bubbles = buildBubbles(itemsToBlocks(persisted), null);
+    const assistant = bubbles[0] as Extract<Bubble, { kind: "assistant" }>;
+
+    render(
+      <BlockRenderer items={assistant.items} sessionStatus="idle" conversationId="conv_1" />,
+    );
+
+    const img = screen.getByRole("img", { name: "hero.png" });
+    expect(img.getAttribute("src")).toBe(
+      "/v1/sessions/conv_1/resources/files/file_img_123/content",
+    );
+    expect(screen.getAllByTestId("assistant-file-artifact")).toHaveLength(1);
   });
 
   it("renders error diagnostics with local wrapping and preserved line breaks", () => {

@@ -258,7 +258,13 @@ export async function* collateBlocks(
         break;
 
       case "response.output_file.done":
-        yield { kind: "file", ctx: ctx(), fileId: e.file_id, filename: e.filename ?? null };
+        yield {
+          kind: "file",
+          ctx: ctx(),
+          fileId: e.file_id,
+          filename: e.filename ?? null,
+          contentType: e.content_type ?? null,
+        };
         break;
 
       // ── Terminal events ──────────────────────────────────

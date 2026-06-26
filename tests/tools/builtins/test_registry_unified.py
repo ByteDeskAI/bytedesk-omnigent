@@ -21,10 +21,13 @@ import pytest
 import omnigent.tools.builtins as _builtins_pkg
 from omnigent.tools.base import Tool
 from omnigent.tools.builtins import (
-    BUILTIN_NAMES,
-    INSTANTIABLE_BUILTINS,
     get_builtin_tool,
+    register_extension_tools,
 )
+
+register_extension_tools()
+BUILTIN_NAMES = _builtins_pkg.BUILTIN_NAMES
+INSTANTIABLE_BUILTINS = _builtins_pkg.INSTANTIABLE_BUILTINS
 
 
 def test_builtin_names_excludes_request_approval() -> None:
@@ -143,6 +146,14 @@ def test_builtin_names_size_matches_registry() -> None:
                 "memory_append",
                 "memory_query",
                 "memory_compartments_list",
+                # Skills Concierge opt-in install surface (BDP-2487).
+                "sys_skill_search",
+                "sys_skill_sources",
+                "sys_skill_installed",
+                "sys_skill_resolve_targets",
+                "sys_skill_stage_preview",
+                "sys_skill_apply",
+                "sys_skill_remove",
                 # Framework-owned (need runtime context, not
                 # user-instantiable). Policy ASKs surface as
                 # MCP-shape elicitations on the SSE stream and
@@ -185,6 +196,7 @@ def test_builtin_names_size_matches_registry() -> None:
                 "find_specialist",
                 # ByteDesk extension tools (ADR-0143 / BDP-2300 seam).
                 "bytedesk_confluence",
+                "bytedesk_generate_image",
                 "bytedesk_github",
                 "bytedesk_jira",
                 "bytedesk_slack",

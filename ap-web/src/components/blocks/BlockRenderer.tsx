@@ -16,9 +16,11 @@
 import type { ReactNode } from "react";
 import { useMemo } from "react";
 import type React from "react";
+import { DownloadIcon, FileIcon } from "lucide-react";
 import { defaultRemarkPlugins } from "streamdown";
 import remarkBreaks from "remark-breaks";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { SessionImage } from "@/components/SessionImage";
 import { useThrottledValue } from "@/hooks/useThrottledValue";
 import type { RenderItem } from "@/lib/renderItems";
 import type { SessionStatus } from "@/lib/types";
@@ -279,9 +281,10 @@ const STREAMING_TAIL = 3;
 interface BlockRendererProps {
   items: RenderItem[];
   sessionStatus: SessionStatus;
+  conversationId?: string | null;
 }
 
-export function BlockRenderer({ items, sessionStatus }: BlockRendererProps) {
+export function BlockRenderer({ items, sessionStatus, conversationId = null }: BlockRendererProps) {
   const rendered: ReactNode[] = [];
   const isAgentActive = sessionStatus === "running" || sessionStatus === "waiting";
   const streamingRunStart = isAgentActive ? findStreamingRunStart(items) : -1;
@@ -320,20 +323,22 @@ export function BlockRenderer({ items, sessionStatus }: BlockRendererProps) {
             <ToolGroupSummary tools={grouped} count={run.length} />
             {standalone.length > 0 && (
               <div className="mt-1 ml-2 space-y-1 border-l pl-3 py-1 peer-data-[state=open]:mt-0">
-                {standalone.map((tool, idx) => renderItem(tool, runStart + idx, false))}
+                {standalone.map((tool, idx) =>
+                  renderItem(tool, runStart + idx, false, conversationId),
+                )}
               </div>
             )}
           </div>,
         );
       } else {
         for (const tool of standalone) {
-          rendered.push(renderItem(tool, runStart, false));
+          rendered.push(renderItem(tool, runStart, false, conversationId));
         }
       }
       continue;
     }
 
-    rendered.push(renderItem(item, i, i === reasoningStreamingIdx));
+    rendered.push(renderItem(item, i, i === reasoningStreamingIdx, conversationId));
   }
 
   return <>{rendered}</>;
@@ -391,7 +396,12 @@ function isInProgressTool(item: RenderItem): boolean {
   return item.kind === "tool" && item.state === "input-available";
 }
 
-function renderItem(item: RenderItem, index: number, isReasoningStreaming: boolean): ReactNode {
+function renderItem(
+  item: RenderItem,
+  index: number,
+  isReasoningStreaming: boolean,
+  conversationId: string | null,
+): ReactNode {
   const key = keyFor(item, index);
   switch (item.kind) {
     case "text":
@@ -432,6 +442,8 @@ function renderItem(item: RenderItem, index: number, isReasoningStreaming: boole
           state="output-available"
         />
       );
+    case "file":
+      return <FileArtifact key={key} item={item} conversationId={conversationId} />;
     case "slash_command":
       return (
         <SlashCommandCard
@@ -497,6 +509,84 @@ function renderItem(item: RenderItem, index: number, isReasoningStreaming: boole
 function keyFor(item: RenderItem, index: number): string {
   if (item.itemId) return `${item.kind}:${item.itemId}`;
   if (item.kind === "tool") return `tool:${item.execution.callId}`;
+  if (item.kind === "file") return `file:${item.fileId}`;
   if (item.kind === "elicitation") return `elicitation:${item.elicitationId}`;
   return `${item.kind}:${index}`;
+}
+
+function FileArtifact({
+  item,
+  conversationId,
+}: {
+  item: Extract<RenderItem, { kind: "file" }>;
+  conversationId: string | null;
+}) {
+  const label = item.filename ?? item.fileId;
+  const path = conversationId
+    ? `/v1/sessions/${encodeURIComponent(conversationId)}/resources/files/${encodeURIComponent(
+        item.fileId,
+      )}/content`
+    : undefined;
+  const isImage = isImageArtifact(item);
+
+  if (isImage && path) {
+    return (
+      <div className="not-prose space-y-1.5" data-testid="assistant-file-artifact">
+        <SessionImage
+          path={path}
+          alt={label}
+          className="max-h-80 max-w-full rounded-md border border-border object-contain"
+        />
+        <ArtifactLabel label={label} path={path} />
+      </div>
+    );
+  }
+
+  const content = (
+    <>
+      <FileIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate">{label}</span>
+      {path && <DownloadIcon className="size-3.5 shrink-0 opacity-70" aria-hidden="true" />}
+    </>
+  );
+
+  if (!path) {
+    return (
+      <div
+        className="not-prose inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted px-2.5 py-1.5 text-muted-foreground text-xs"
+        data-testid="assistant-file-artifact"
+      >
+        {content}
+      </div>
+    );
+  }
+
+  return (
+    <a
+      className="not-prose inline-flex max-w-full items-center gap-1.5 rounded-md border border-border bg-muted px-2.5 py-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground"
+      data-testid="assistant-file-artifact"
+      href={path}
+      download={item.filename ?? undefined}
+    >
+      {content}
+    </a>
+  );
+}
+
+function ArtifactLabel({ label, path }: { label: string; path: string }) {
+  return (
+    <a
+      className="inline-flex max-w-full items-center gap-1.5 text-muted-foreground text-xs transition-colors hover:text-foreground"
+      href={path}
+      download={label}
+    >
+      <DownloadIcon className="size-3.5 shrink-0" aria-hidden="true" />
+      <span className="min-w-0 truncate">{label}</span>
+    </a>
+  );
+}
+
+function isImageArtifact(item: Extract<RenderItem, { kind: "file" }>): boolean {
+  if (item.contentType?.startsWith("image/")) return true;
+  return /\.(png|jpe?g|webp|gif|svg)$/i.test(item.filename ?? "");
 }

@@ -1378,6 +1378,7 @@ describe("BlockStream — status events", () => {
     if (file && file.type === "file") {
       expect(file.fileId).toBe("file_123");
       expect(file.filename).toBe("report.csv");
+      expect(file.contentType).toBe("text/csv");
     }
   });
 

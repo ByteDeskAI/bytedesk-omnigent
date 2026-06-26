@@ -574,7 +574,12 @@ class BlockStream:
                 )
 
             elif isinstance(event, OutputFileDone):
-                yield FileBlock(file_id=event.file_id, filename=event.filename, ctx=_ctx())
+                yield FileBlock(
+                    file_id=event.file_id,
+                    filename=event.filename,
+                    content_type=event.content_type,
+                    ctx=_ctx(),
+                )
 
             # ── Terminal events ──────────────────────
             elif isinstance(

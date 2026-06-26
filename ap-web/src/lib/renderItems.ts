@@ -61,6 +61,13 @@ export type RenderItem =
       data: Record<string, unknown>;
     }
   | {
+      kind: "file";
+      itemId: string | null;
+      fileId: string;
+      filename: string | null;
+      contentType: string | null;
+    }
+  | {
       kind: "slash_command";
       itemId: string | null;
       /** `"skill"` for Skills, `"command"` for surfaced CLI built-ins. */
@@ -500,9 +507,7 @@ function isAssistantSideBlock(b: AnyBlock): boolean {
     // end up in an assistant bubble's item list.
     b.type !== "compaction_loading" &&
     b.type !== "response_start" &&
-    b.type !== "response_end" &&
-    // FileBlock is currently deferred from rendering; skip silently.
-    b.type !== "file"
+    b.type !== "response_end"
   );
 }
 
@@ -588,17 +593,24 @@ function buildAssistantItems(
       // reducer only ever emits one per group, but the schema permits
       // many — preserve that shape).
       for (const ex of b.executions) {
-        items.push(
-          toolItem(
-            ex,
-            b.ctx.itemId,
-            b.ctx.timestamp,
-            // Rid-scoped lookup: a reused callId can't adopt another turn's output.
-            crossBubbleResults.get(`${b.ctx.responseId}:${ex.callId}`),
-            lifecycle,
-            liveToolCallIds.has(ex.callId),
-          ),
+        const renderedTool = toolItem(
+          ex,
+          b.ctx.itemId,
+          b.ctx.timestamp,
+          // Rid-scoped lookup: a reused callId can't adopt another turn's output.
+          crossBubbleResults.get(`${b.ctx.responseId}:${ex.callId}`),
+          lifecycle,
+          liveToolCallIds.has(ex.callId),
         );
+        items.push(renderedTool);
+        const file = fileItemFromToolOutput(
+          renderedTool.output,
+          renderedTool.itemId,
+          renderedTool.execution.callId,
+        );
+        if (file !== null) {
+          items.push(file);
+        }
       }
       i += 1;
       continue;
@@ -611,6 +623,18 @@ function buildAssistantItems(
         toolType: b.toolType,
         label: b.label,
         data: b.data,
+      });
+      i += 1;
+      continue;
+    }
+
+    if (b.type === "file") {
+      items.push({
+        kind: "file",
+        itemId: b.ctx.itemId,
+        fileId: b.fileId,
+        filename: b.filename,
+        contentType: b.contentType,
       });
       i += 1;
       continue;
@@ -752,6 +776,37 @@ function textItem(run: AnyBlock[]): RenderItem {
   return { kind: "text", itemId: null, text, final: false };
 }
 
+function fileItemFromToolOutput(
+  output: string | null,
+  itemId: string | null,
+  callId: string,
+): Extract<RenderItem, { kind: "file" }> | null {
+  if (output === null || output.length > 100_000) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+  if (obj.ok === false) return null;
+  const fileId = stringField(obj, "file_id") ?? stringField(obj, "fileId");
+  if (fileId === null) return null;
+  return {
+    kind: "file",
+    itemId: itemId ? `${itemId}:${callId}:file` : null,
+    fileId,
+    filename: stringField(obj, "filename"),
+    contentType: stringField(obj, "content_type") ?? stringField(obj, "contentType"),
+  };
+}
+
+function stringField(obj: Record<string, unknown>, key: string): string | null {
+  const value = obj[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
 function reasoningItem(run: AnyBlock[]): RenderItem {
   // Duration: span between the first and last block in the reasoning
   // run. Blocks carry monotonic timestamps from `performance.now()`.
@@ -797,7 +852,7 @@ function toolItem(
   result: ToolResultBlock | undefined,
   lifecycle: ActiveResponse["state"],
   isLiveToolCall: boolean,
-): RenderItem {
+): Extract<RenderItem, { kind: "tool" }> {
   const output = result?.output ?? execution.output ?? null;
   const startedAt = startedAtTimestamp > 0 ? startedAtTimestamp : null;
   const duration =
