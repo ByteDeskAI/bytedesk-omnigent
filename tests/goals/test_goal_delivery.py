@@ -340,3 +340,76 @@ def test_jira_webhook_adapter_shared_secret() -> None:
     assert adapter.verify(b"{}", {"x-omnigent-secret": "wrong"}, "s3cret") is False
     assert adapter.verify(b"{}", {}, "s3cret") is False
     assert adapter.match_key({}) == "*"
+
+
+# -- atomic milestone read-modify-write (BDP-2553, ADR-0009) ------------------
+def test_mutate_payload_rereads_current_row_inside_lock(tmp_path) -> None:
+    """The RMW reads the CURRENT row inside the write txn, not a stale snapshot.
+
+    This is the primitive the two-key gate relies on: ``update_goal(payload=...)``
+    computed the whole payload outside the lock and clobbered concurrent writes;
+    ``mutate_payload`` must fold its change onto whatever the row holds NOW.
+    """
+    store = _store(tmp_path)
+    goal = store.create_goal(title="g", payload={"x": 0}, now=100)
+    # A concurrent writer lands first, after our (now stale) ``goal`` snapshot.
+    store.update_goal(goal_id=goal.id, payload={"x": 5}, now=101)
+
+    def _inc(payload: dict) -> None:
+        payload["x"] = payload.get("x", 0) + 1
+
+    updated = store.mutate_payload(goal_id=goal.id, mutator=_inc, now=102)
+    # fresh read (5) + 1 = 6 — NOT the stale (0) + 1 the old code would have written.
+    assert updated is not None and updated.payload["x"] == 6
+    assert store.get_goal(goal_id=goal.id).payload["x"] == 6
+
+
+def test_mutate_payload_missing_goal_returns_none(tmp_path) -> None:
+    store = _store(tmp_path)
+    assert store.mutate_payload(goal_id="goal_nope", mutator=lambda _p: None) is None
+
+
+def test_concurrent_two_key_gate_reaches_done(tmp_path) -> None:
+    """Concurrent PR-merged + Jira-Done on one milestone must both land (BDP-2553).
+
+    Pre-fix, the read-modify-write lost a key under concurrency and the milestone
+    stuck at awaiting_*. With the atomic locked RMW both keys persist → done.
+    """
+    import threading
+
+    store = _store(tmp_path)
+    goal = _make_goal(store)
+    proj = GoalDeliveryProjector(store)
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def _pr() -> None:
+        try:
+            barrier.wait(timeout=10)
+            proj.apply_github_pr_merged(
+                GithubPrEvent(repo="ByteDeskAI/bytedesk-platform", pr_number=987,
+                              head_ref="feature/BDP-1235-x", base_ref="develop"), now=110)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    def _jira() -> None:
+        try:
+            barrier.wait(timeout=10)
+            proj.apply_jira_issue_updated(
+                JiraIssueEvent(issue_key="BDP-1235", issue_type="Task", status="Done",
+                               status_category="done"), now=110)
+        except BaseException as exc:  # noqa: BLE001
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_pr), threading.Thread(target=_jira)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, errors
+    milestone = _milestone(store, goal.id)
+    assert milestone["prMerged"] is True
+    assert milestone["jiraDone"] is True
+    assert milestone["status"] == "done"
+    assert store.get_goal(goal_id=goal.id).status == "done"

@@ -21,10 +21,16 @@ from fastapi.responses import JSONResponse
 def create_goal_delivery_router() -> APIRouter:
     """Build the goal-delivery webhook ingress router (ADR-0154)."""
     from bytedesk_omnigent.ingress import JiraWebhookAdapter, register_webhook_adapter
+    from omnigent.kernel.pluggable.errors import RegistryConflict
 
     # Jira is shared-secret (not HMAC); register its adapter so resolve_webhook_adapter
-    # returns it for source="jira" instead of the GitHub HMAC default.
-    register_webhook_adapter("jira", JiraWebhookAdapter)
+    # returns it for source="jira" instead of the GitHub HMAC default. Idempotent:
+    # building the router more than once (app rebuild / tests) must not raise — the
+    # adapter is already registered, which is the desired end state.
+    try:
+        register_webhook_adapter("jira", JiraWebhookAdapter)
+    except RegistryConflict:
+        pass
 
     router = APIRouter()
 
@@ -62,7 +68,10 @@ def create_goal_delivery_router() -> APIRouter:
         if not isinstance(payload, dict):
             return JSONResponse({"status": "bad_payload"}, status_code=400)
 
+        from bytedesk_omnigent.idempotency import get_idempotency_store
+
         projector = GoalDeliveryProjector(get_goal_store())
+        dedup_key: str | None = None
         if source == "github":
             event = parse_github_pr_event(payload)
             if event is None:
@@ -70,7 +79,8 @@ def create_goal_delivery_router() -> APIRouter:
                     {"status": "ignored", "detail": "not a merged pull_request"},
                     status_code=202,
                 )
-            result = projector.apply_github_pr_merged(event)
+            dedup_key = event.merge_commit_sha
+            apply = lambda: projector.apply_github_pr_merged(event)  # noqa: E731
         elif source == "jira":
             wid = request.headers.get("x-atlassian-webhook-identifier")
             event = parse_jira_issue_event(payload, webhook_identifier=wid)
@@ -79,11 +89,27 @@ def create_goal_delivery_router() -> APIRouter:
                     {"status": "ignored", "detail": "no issue in payload"},
                     status_code=202,
                 )
-            result = projector.apply_jira_issue_updated(event)
+            dedup_key = wid
+            apply = lambda: projector.apply_jira_issue_updated(event)  # noqa: E731
         else:
             return JSONResponse(
                 {"status": "unsupported_source", "detail": source}, status_code=404
             )
+
+        # Idempotent receipt (ADR-0009): a redelivery of an already-applied event is
+        # skipped; an unmatched (404) event is NOT claimed so the source can retry
+        # once its goal exists (BDP-1419). Concurrency is handled by the projector's
+        # atomic milestone RMW (BDP-2553), so the check-then-claim TOCTOU is benign.
+        # A missing dedup key (no merge_commit_sha / webhook id) just skips dedup.
+        idem = get_idempotency_store() if dedup_key else None
+        scope = f"goal-delivery:{source}"
+        if idem is not None and dedup_key is not None and idem.is_claimed(scope=scope, key=dedup_key):
+            return JSONResponse(
+                {"status": "duplicate", "detail": "already processed"}, status_code=200
+            )
+        result = apply()
+        if idem is not None and dedup_key is not None and result.matched:
+            idem.claim(scope=scope, key=dedup_key)
 
         return JSONResponse(
             {
