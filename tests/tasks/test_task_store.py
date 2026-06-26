@@ -46,6 +46,61 @@ def test_create_list_and_claim_task_exactly_once(tmp_path) -> None:
     assert store.list_tasks(status="done")[0].id == high.id
 
 
+def test_claim_task_for_capabilities_gates_required_capability(tmp_path) -> None:
+    store = _store(tmp_path)
+    now = int(time.time())
+    task = store.create_task(
+        title="triage salesforce escalation",
+        priority=1,
+        required_capability="salesforce.case.triage",
+        now=now,
+    )
+
+    # An agent without the declared integration capability cannot remove the
+    # task from the open backlog.
+    assert (
+        store.claim_task_for_capabilities(
+            task_id=task.id,
+            owner_agent_id="generalist",
+            capabilities=("zendesk.ticket.triage",),
+            now=now,
+        )
+        is False
+    )
+    assert store.list_tasks(status="open")[0].id == task.id
+
+    # A matching specialist can claim exactly once.
+    assert (
+        store.claim_task_for_capabilities(
+            task_id=task.id,
+            owner_agent_id="salesforce-specialist",
+            capabilities=("salesforce.case.triage", "crm.ops"),
+            now=now + 1,
+        )
+        is True
+    )
+    assigned = store.list_tasks(status="assigned")
+    assert [t.id for t in assigned] == [task.id]
+    assert assigned[0].owner_agent_id == "salesforce-specialist"
+
+
+def test_claim_task_for_capabilities_allows_unrestricted_task(tmp_path) -> None:
+    store = _store(tmp_path)
+    now = int(time.time())
+    task = store.create_task(title="summarize vendor update", now=now)
+
+    assert (
+        store.claim_task_for_capabilities(
+            task_id=task.id,
+            owner_agent_id="any-agent",
+            capabilities=(),
+            now=now,
+        )
+        is True
+    )
+    assert store.list_tasks(status="assigned")[0].owner_agent_id == "any-agent"
+
+
 def test_assign_task_binds_executor_distinct_from_owner(tmp_path) -> None:
     store = _store(tmp_path)
     now = int(time.time())
