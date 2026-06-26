@@ -55,7 +55,7 @@ export function InboundPage() {
         </div>
       )}
 
-      <ol className="space-y-1.5">
+      <ol className="mc-stagger-children space-y-1.5">
         {events.map((event) => (
           <InboundRow key={event.idempotencyKey} event={event} />
         ))}

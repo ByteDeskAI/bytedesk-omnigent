@@ -841,9 +841,12 @@ function ConversationRow({
           // timestamp in that slot, so reserve extra room for it
           // (pr-44 / md:pr-28). flex-col stacks the name row over the
           // git-branch subtitle row.
-          "relative flex w-full flex-col gap-0.5 rounded-md px-4 py-2 text-left text-sm hover:bg-muted",
+          "relative flex w-full flex-col gap-0.5 rounded-md px-4 py-2 text-left text-sm transition-colors duration-150 hover:bg-muted",
           sessionState?.kind === "awaiting" ? "pr-44 md:pr-28" : "pr-28 md:pr-16",
-          isActive && "bg-muted font-semibold",
+          // Active row: muted fill + a left accent bar (brand blue) so the
+          // current conversation reads at a glance without relying on weight alone.
+          isActive &&
+            "bg-muted font-semibold before:absolute before:top-1/2 before:left-0 before:h-5 before:w-0.5 before:-translate-y-1/2 before:rounded-full before:bg-primary before:content-['']",
         )}
         onClick={onClick}
         // Double-click renames inline (a quick alternative to the kebab's
