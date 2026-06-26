@@ -89,6 +89,7 @@ class BytedeskExtension:
     ) -> list[APIRouter]:
         from bytedesk_omnigent.routes.agentic_inbox import create_agentic_inbox_router
         from bytedesk_omnigent.routes.config import create_config_router
+        from bytedesk_omnigent.routes.goal_delivery import create_goal_delivery_router
         from bytedesk_omnigent.routes.goals import create_goals_router
         from bytedesk_omnigent.routes.skills_concierge import create_skills_concierge_router
         from bytedesk_omnigent.routes.governance import create_governance_router
@@ -106,6 +107,7 @@ class BytedeskExtension:
             _health_router(),
             create_governance_router(auth_provider=auth_provider),
             create_ingress_router(),
+            create_goal_delivery_router(),
             create_agentic_inbox_router(),
             create_goals_router(
                 auth_provider=auth_provider,
