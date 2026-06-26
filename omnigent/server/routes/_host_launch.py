@@ -129,20 +129,33 @@ def resolve_host_launch(
         users' sessions aren't enumerable); 403 if the host is owned by
         a different user; 409 if the host is offline.
     """
-    access = resolve_host_launch_access(
+    host = resolve_host_owner(
         user_id=user_id,
         host_id=host_id,
-        session_id=session_id,
         host_store=host_store,
-        conversation_store=conversation_store,
-        permission_store=permission_store,
     )
-
     conn = host_registry.get(host_id)
     if conn is None:
         raise HTTPException(status_code=409, detail="host is offline")
 
-    return HostLaunchTarget(host=access.host, conn=conn, conv=access.conv)
+    conv = conversation_store.get_conversation(session_id)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="session not found")
+
+    # A runner executes tools as the session's driver, so only the
+    # session owner may bind one. A non-owner has no owner-level grant
+    # and is rejected. 404 (not 403) avoids leaking the existence of
+    # other users' sessions.
+    if permission_store is not None and not check_session_access(
+        user_id,
+        session_id,
+        LEVEL_OWNER,
+        permission_store,
+        conversation_store,
+    ):
+        raise HTTPException(status_code=404, detail="session not found")
+
+    return HostLaunchTarget(host=host, conn=conn, conv=conv)
 
 
 def resolve_host_launch_access(

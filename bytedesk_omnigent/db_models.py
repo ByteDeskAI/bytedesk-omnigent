@@ -137,6 +137,43 @@ class SqlCronTrigger(Base):
     )
 
 
+class SqlFabricOutbox(Base):
+    """Durable SQL-to-NATS outbox for fabric jobs (ADR-0009).
+
+    Producers write a canonical fabric envelope here inside the SQL source of
+    truth before any NATS publish is attempted. The fabric outbox worker replays
+    due rows with ``Nats-Msg-Id = idempotency_key`` and marks rows published only
+    after the adapter confirms the publish. This is the transactional bridge
+    between SQL-owned schedule claims and NATS-owned execution coordination.
+    """
+
+    __tablename__ = "fabric_outbox"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False, unique=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    subject: Mapped[str] = mapped_column(String(256), nullable=False)
+    payload_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, server_default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_attempt_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    published_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_fabric_outbox_status_next_attempt", "status", "next_attempt_at"),
+        Index("ix_fabric_outbox_created", "created_at"),
+        CheckConstraint(
+            "status in ('pending', 'failed', 'published', 'dead_lettered')",
+            name="ck_fabric_outbox_status",
+        ),
+    )
+
+
 class SqlIdempotencyKey(Base):
     """A durable processed-message marker for at-most-once handling (BDP-2251,
     ADR-0142, aligned ADR-0009/0077).

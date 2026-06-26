@@ -10,29 +10,25 @@ from bytedesk_omnigent.extension import BytedeskExtension
 
 
 @pytest.mark.asyncio
-async def test_cron_scheduler_registers_initiator_from_env(
+async def test_cron_scheduler_uses_fabric_outbox_dispatch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     built = object()
-    set_calls: list[object] = []
+    captured: dict[str, object] = {}
 
     async def _noop_loop(*_args: object, **_kwargs: object) -> None:
-        return None
+        captured.update(_kwargs)
+        return
 
-    monkeypatch.setattr("bytedesk_omnigent.sessions.get_session_initiator", lambda: None)
     monkeypatch.setattr(
-        "bytedesk_omnigent.sessions.build_self_call_initiator_from_env",
+        "bytedesk_omnigent.fabric.outbox.build_fabric_cron_dispatch",
         lambda: built,
-    )
-    monkeypatch.setattr(
-        "bytedesk_omnigent.sessions.set_session_initiator",
-        lambda initiator: set_calls.append(initiator),
     )
     monkeypatch.setattr("bytedesk_omnigent.scheduler.cron_scheduler_loop", _noop_loop)
 
     await BytedeskExtension()._cron_scheduler()
 
-    assert set_calls == [built]
+    assert captured["dispatch"] is built
 
 
 @pytest.mark.asyncio
@@ -48,24 +44,23 @@ async def test_seed_workflow_tasks_swallows_store_errors(
 
 
 @pytest.mark.asyncio
-async def test_cron_scheduler_warns_when_initiator_unconfigured(
+async def test_cron_scheduler_logs_fabric_outbox_dispatch(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     async def _noop_loop(*_args: object, **_kwargs: object) -> None:
         return None
 
-    monkeypatch.setattr("bytedesk_omnigent.sessions.get_session_initiator", lambda: None)
     monkeypatch.setattr(
-        "bytedesk_omnigent.sessions.build_self_call_initiator_from_env",
-        lambda: None,
+        "bytedesk_omnigent.fabric.outbox.build_fabric_cron_dispatch",
+        lambda: object(),
     )
     monkeypatch.setattr("bytedesk_omnigent.scheduler.cron_scheduler_loop", _noop_loop)
 
-    with caplog.at_level("WARNING", logger="bytedesk_omnigent.extension"):
+    with caplog.at_level("INFO", logger="bytedesk_omnigent.extension"):
         await BytedeskExtension()._cron_scheduler()
 
-    assert any("no SessionInitiator configured" in r.message for r in caplog.records)
+    assert any("fabric SQL outbox enabled" in r.message for r in caplog.records)
 
 
 @pytest.mark.asyncio

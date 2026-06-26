@@ -1692,6 +1692,19 @@ def create_app(
             }
         return result
 
+    @app.get("/readyz")
+    async def readyz(response: Response) -> dict[str, Any]:
+        """Readiness check backed by mandatory fabric preflight."""
+        from omnigent.fabric.preflight import build_preflight_report
+
+        report = build_preflight_report()
+        if report.status != "pass":
+            response.status_code = 503
+        return {
+            "status": "ok" if report.status == "pass" else "fail",
+            "fabric": report.to_dict(),
+        }
+
     @app.get("/api/version")
     async def version() -> dict[str, str]:
         """
@@ -1831,6 +1844,7 @@ def create_app(
         :returns: ``{"seams": [<describe() + override_env>, ...]}``.
         """
         from omnigent.coordination.lifecycle import coordination_status
+        from omnigent.fabric.preflight import fabric_capabilities
         from omnigent.kernel.pluggable.manifest import capability_manifest
         from omnigent.server.event_schema import (
             EVENT_SCHEMA_VERSION,
@@ -1841,6 +1855,7 @@ def create_app(
         return {
             "seams": capability_manifest(),
             "coordination": coordination_status(),
+            "fabric": fabric_capabilities(),
             "schema": {
                 "events": {
                     "version": EVENT_SCHEMA_VERSION,

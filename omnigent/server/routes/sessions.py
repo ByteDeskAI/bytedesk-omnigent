@@ -84,6 +84,11 @@ from omnigent.entities.conversation import (
 from omnigent.entities.permission import SessionPermission
 from omnigent.entities.session_resources import session_resource_view_to_dict
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.fabric.runner_fabric import (
+    FabricRunnerConflict,
+    HostRunnerAcquisition,
+    HostWorkerRunnerFabric,
+)
 from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE as _HARNESS_NOT_CONFIGURED_ERROR_CODE,
 )
@@ -153,7 +158,6 @@ from omnigent.server.auth import (
     local_single_user_enabled,
 )
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
-from omnigent.server.host_control import HostControlError, request_host_launch_runner
 from omnigent.server.host_registry import HostConnection, HostRegistry, RunnerExitReports
 from omnigent.server.managed_hosts import (
     ManagedHostLaunch,
@@ -5322,23 +5326,6 @@ async def _launch_runner_on_host(
     :returns: The :class:`_HostLaunchAttempt` — the new runner id plus any
         structured refusal from the host.
     """
-    from omnigent.host.frames import HostLaunchRunnerFrame, encode_host_frame
-    from omnigent.runner.identity import token_bound_runner_id
-
-    binding_token = secrets.token_urlsafe(32)
-    new_runner_id = token_bound_runner_id(binding_token)
-
-    # Record the trusted launch owner BEFORE the host spawns the runner,
-    # so it is present the instant the runner's tunnel connects (BDP-2436).
-    if owner is not None and runner_control_registry is not None:
-        runner_control_registry.record_launch_owner(new_runner_id, owner, token=binding_token)
-
-    await asyncio.to_thread(
-        conversation_store.replace_runner_id,
-        conv.id,
-        new_runner_id,
-    )
-
     # Pull workspace from the session row — populated and validated
     # at session create per designs/SESSION_WORKSPACE_SELECTION.md.
     # The check constraint guarantees workspace is non-NULL when
@@ -5351,55 +5338,34 @@ async def _launch_runner_on_host(
             conv.id,
             conv.host_id,
         )
-        return _HostLaunchAttempt(runner_id=new_runner_id)
-    request_id = secrets.token_hex(8)
-    launch_future: asyncio.Future[dict[str, str | None]] = (
-        asyncio.get_running_loop().create_future()
-    )
-    host_conn.pending_launches[request_id] = launch_future
-    launch_frame = encode_host_frame(
-        HostLaunchRunnerFrame(
-            request_id=request_id,
-            binding_token=binding_token,
+        return _HostLaunchAttempt(runner_id=conv.runner_id or "")
+    attempt = await HostWorkerRunnerFabric().ensure_runner(
+        HostRunnerAcquisition(
+            session_id=conv.id,
+            host_id=host_conn.host_id,
             workspace=conv.workspace,
             # Canonical harness (see _resolve_harness) so the host runs the
             # same configuration check it does at create-time launch. None
             # (agent not resolvable) skips the host-side check — fail open.
             harness=_resolve_harness(conv),
+            conversation_store=conversation_store,
+            host_registry=host_registry,
+            owner=owner,
+            runner_control_registry=runner_control_registry,
+            bind_mode="replace",
+            timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
+            host_connection=host_conn,
         )
     )
-    try:
-        host_registry.send_text(host_conn, launch_frame)
-    except ConnectionError:
-        host_conn.pending_launches.pop(request_id, None)
-        _logger.warning(
-            "Host %s connection lost while launching runner for %s",
-            conv.host_id,
-            conv.id,
-        )
-        return _HostLaunchAttempt(runner_id=new_runner_id)
-    try:
-        result = await asyncio.wait_for(
-            launch_future,
-            timeout=_HOST_LAUNCH_RESULT_TIMEOUT_S,
-        )
-    except asyncio.TimeoutError:
-        # The host never ACKed within the budget. A healthy host ACKs the
-        # instant it forks or refuses, so a missing ACK means this host tunnel
-        # is registered but not delivering launch frames into dispatch (the
-        # wedged-host failure mode). Signal it (``acked=False``) so the relaunch
-        # caller evicts the dead tunnel and fails fast instead of blindly
-        # waiting out the connect timeout for a runner that will never appear
-        # (BDP-2491).
-        host_conn.pending_launches.pop(request_id, None)
-        return _HostLaunchAttempt(runner_id=new_runner_id, acked=False)
-    if result.get("status") == "failed":
+    if not attempt.acked:
+        return _HostLaunchAttempt(runner_id=attempt.runner_id, acked=False)
+    if attempt.error_code is not None or attempt.error is not None:
         return _HostLaunchAttempt(
-            runner_id=new_runner_id,
-            error_code=result.get("error_code"),
-            error=result.get("error"),
+            runner_id=attempt.runner_id,
+            error_code=attempt.error_code,
+            error=attempt.error,
         )
-    return _HostLaunchAttempt(runner_id=new_runner_id)
+    return _HostLaunchAttempt(runner_id=attempt.runner_id)
 
 
 async def _launch_runner_on_host_id(
@@ -5418,20 +5384,6 @@ async def _launch_runner_on_host_id(
     ``host_control`` so a REST request served by replica A can launch through a
     host tunnel owned by replica B.
     """
-    from omnigent.runner.identity import token_bound_runner_id
-
-    binding_token = secrets.token_urlsafe(32)
-    new_runner_id = token_bound_runner_id(binding_token)
-
-    if owner is not None and runner_control_registry is not None:
-        runner_control_registry.record_launch_owner(new_runner_id, owner, token=binding_token)
-
-    await asyncio.to_thread(
-        conversation_store.replace_runner_id,
-        conv.id,
-        new_runner_id,
-    )
-
     if conv.workspace is None:  # pragma: no cover — constraint guards
         _logger.error(
             "session %s has host_id=%s but workspace is NULL — schema "
@@ -5439,37 +5391,38 @@ async def _launch_runner_on_host_id(
             conv.id,
             conv.host_id,
         )
-        return _HostLaunchAttempt(runner_id=new_runner_id)
-
-    try:
-        launch = await request_host_launch_runner(
-            host_registry=host_registry,
+        return _HostLaunchAttempt(runner_id=conv.runner_id or "")
+    attempt = await HostWorkerRunnerFabric().ensure_runner(
+        HostRunnerAcquisition(
+            session_id=conv.id,
             host_id=host_id,
-            binding_token=binding_token,
             workspace=conv.workspace,
             harness=_resolve_harness(conv),
+            conversation_store=conversation_store,
+            host_registry=host_registry,
+            owner=owner,
+            runner_control_registry=runner_control_registry,
+            bind_mode="replace",
             timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
         )
-    except HostControlError as exc:
+    )
+    if attempt.error is not None and not attempt.acked:
         _logger.warning(
             "Host %s could not launch runner for %s: %s",
             host_id,
             conv.id,
-            exc.message,
+            attempt.error,
         )
-        return _HostLaunchAttempt(runner_id=new_runner_id, acked=False)
-
-    if not launch.acked:
-        return _HostLaunchAttempt(runner_id=new_runner_id, acked=False)
-
-    result = launch.result
-    if result.get("status") == "failed":
+        return _HostLaunchAttempt(runner_id=attempt.runner_id, acked=False)
+    if not attempt.acked:
+        return _HostLaunchAttempt(runner_id=attempt.runner_id, acked=False)
+    if attempt.error_code is not None or attempt.error is not None:
         return _HostLaunchAttempt(
-            runner_id=new_runner_id,
-            error_code=result.get("error_code"),
-            error=result.get("error"),
+            runner_id=attempt.runner_id,
+            error_code=attempt.error_code,
+            error=attempt.error,
         )
-    return _HostLaunchAttempt(runner_id=new_runner_id)
+    return _HostLaunchAttempt(runner_id=attempt.runner_id)
 
 
 # Strong references to in-flight background managed-launch tasks.
@@ -12531,7 +12484,6 @@ def create_sessions_router(
             host_registry = getattr(request.app.state, "host_registry", None)
             host_store_inst = getattr(request.app.state, "host_store", None)
             if host_registry is not None and host_store_inst is not None:
-                from omnigent.runner.identity import token_bound_runner_id
                 from omnigent.server.routes._host_launch import resolve_host_launch_access
 
                 await asyncio.to_thread(
@@ -12545,60 +12497,52 @@ def create_sessions_router(
                 )
                 if not await asyncio.to_thread(host_store_inst.is_online, launch_host_id):
                     raise HTTPException(status_code=409, detail="host is offline")
-                binding_token = secrets.token_urlsafe(32)
-                runner_id = token_bound_runner_id(binding_token)
-                # Atomic bind (WHERE runner_id IS NULL) closes the TOCTOU.
-                bound = await asyncio.to_thread(
-                    conversation_store.set_runner_id,
-                    resp.id,
-                    runner_id,
-                )
-                if not bound:
-                    raise OmnigentError(
-                        f"Session {resp.id!r} already has a runner bound",
-                        code=ErrorCode.CONFLICT,
-                    )
                 if resp.workspace is None:  # pragma: no cover — schema guards
                     raise OmnigentError(
                         "session has host_id but no workspace; "
                         "schema constraint should have prevented this",
                         code=ErrorCode.INTERNAL_ERROR,
                     )
-                # Record the trusted launch owner BEFORE the host spawns the
-                # runner, so the runner's tunnel can authenticate the instant it
-                # connects (BDP-2436/BDP-2493) — mirrors the relaunch path
-                # (_launch_runner_on_host). Without this, a create-time runner has
-                # no launch_owner record and its tunnel handshake is rejected 403
-                # in accounts mode (the runner reads as "offline" and the session
-                # stays unbound until a later message relaunches it).
                 _create_runner_control_registry = getattr(
                     request.app.state, "runner_control_registry", None
                 )
-                if user_id is not None and _create_runner_control_registry is not None:
-                    _create_runner_control_registry.record_launch_owner(
-                        runner_id,
-                        user_id,
-                        token=binding_token,
-                    )
                 try:
-                    launch = await request_host_launch_runner(
-                        host_registry=host_registry,
-                        host_id=launch_host_id,
-                        binding_token=binding_token,
-                        workspace=resp.workspace,
-                        # Already canonical (see _resolve_harness); lets
-                        # the host refuse an unconfigured harness before
-                        # spawning. None (agent not resolvable) skips the
-                        # host-side check.
-                        harness=resp.harness,
-                        timeout_s=30.0,
+                    launch_attempt = await HostWorkerRunnerFabric().ensure_runner(
+                        HostRunnerAcquisition(
+                            session_id=resp.id,
+                            host_id=launch_host_id,
+                            workspace=resp.workspace,
+                            # Already canonical (see _resolve_harness); lets
+                            # the host refuse an unconfigured harness before
+                            # spawning. None (agent not resolvable) skips the
+                            # host-side check.
+                            harness=resp.harness,
+                            conversation_store=conversation_store,
+                            host_registry=host_registry,
+                            owner=user_id,
+                            runner_control_registry=_create_runner_control_registry,
+                            bind_mode="set",
+                            timeout_s=30.0,
+                        )
                     )
-                    result = launch.result if launch.acked else {
+                except FabricRunnerConflict as exc:
+                    raise OmnigentError(
+                        f"Session {resp.id!r} already has a runner bound",
+                        code=ErrorCode.CONFLICT,
+                    ) from exc
+                if not launch_attempt.acked:
+                    result = {
                         "status": "failed",
-                        "error": "host launch timed out",
+                        "error": launch_attempt.error or "host launch timed out",
                     }
-                except HostControlError as exc:
-                    result = {"status": "failed", "error": exc.message}
+                elif launch_attempt.error_code is not None or launch_attempt.error is not None:
+                    result = {
+                        "status": "failed",
+                        "error": launch_attempt.error,
+                        "error_code": launch_attempt.error_code,
+                    }
+                else:
+                    result = {"status": "ok"}
                 if result.get("status") == "failed":
                     # Lenient on every create-time launch failure, including
                     # an unconfigured harness: the picker's readiness data
@@ -12621,7 +12565,7 @@ def create_sessions_router(
                     # spinner. No-op when we never set it.
                     if _terminal_first_create:
                         _publish_terminal_pending(resp.id, False)
-                resp.runner_id = runner_id
+                resp.runner_id = launch_attempt.runner_id
                 resp.host_id = launch_host_id
 
         return resp
@@ -16774,6 +16718,26 @@ def create_sessions_router(
             return {"queued": True, "item_id": body.data["call_id"]}
         # Item event (message, function_call_output, etc.).
         runner_client = await _get_runner_client(session_id, runner_router)
+        # A token-bound managed runner can still resolve after its sandbox host
+        # has died. Treat that route as stale so the dead-sandbox relaunch path
+        # below gets a chance to provision a new generation.
+        if runner_client is not None and conv.host_id is not None:
+            host_store_for_bound_runner = getattr(request.app.state, "host_store", None)
+            if host_store_for_bound_runner is not None:
+                bound_host = await asyncio.to_thread(
+                    host_store_for_bound_runner.get_host,
+                    conv.host_id,
+                )
+                bound_host_online = await asyncio.to_thread(
+                    host_store_for_bound_runner.is_online,
+                    conv.host_id,
+                )
+                if (
+                    bound_host is not None
+                    and bound_host.sandbox_provider is not None
+                    and not bound_host_online
+                ):
+                    runner_client = None
         # Managed-launch rendezvous: a ``host_type="managed"`` create
         # returns before the sandbox exists, so the first message (the
         # Web UI auto-sends the composer prompt right after navigate)

@@ -234,6 +234,7 @@ omni = "omnigent.cli:main"
 [project.entry-points."omnigent.extensions"]
 bytedesk = "bytedesk_omnigent.extension:BytedeskExtension"
 bytedesk-runtime-flags = "bytedesk_omnigent.runtime_flags.extension:BytedeskRuntimeFlagsExtension"
+bytedesk-fabric = "bytedesk_omnigent.fabric.extension:BytedeskFabricExtension"
 
 # uv path-deps for the sibling SDK packages (renamed in Stage 3).
 [tool.uv.sources]

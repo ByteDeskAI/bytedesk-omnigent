@@ -51,6 +51,38 @@ async def test_health_with_batch_session_ids(client: httpx.AsyncClient) -> None:
     assert "conv_b" in data["sessions"]
 
 
+# ── GET /readyz ─────────────────────────────────────────
+
+
+async def test_readyz_fails_when_fabric_preflight_fails(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OMNIGENT_NATS_URL", raising=False)
+
+    resp = await client.get("/readyz")
+
+    assert resp.status_code == 503
+    data = resp.json()
+    assert data["status"] == "fail"
+    assert data["fabric"]["status"] == "fail"
+    assert data["fabric"]["services"]["omnigent.fabric.control"] == "missing"
+
+
+async def test_readyz_passes_when_fabric_preflight_passes(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://127.0.0.1:4222")
+
+    resp = await client.get("/readyz")
+
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "ok"
+    assert data["fabric"]["services"]["omnigent.fabric.control"] == "1.0.0"
+
+
 # ── GET /api/version ─────────────────────────────────────
 
 
@@ -111,15 +143,35 @@ _EXPECTED_SEAM_DEFAULTS: dict[str, str | None] = {
 }
 
 
-async def test_capabilities_returns_manifest(client: httpx.AsyncClient) -> None:
+async def test_capabilities_returns_manifest(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``GET /v1/_capabilities`` is unauthed 200 and lists every seam's default."""
+    monkeypatch.delenv("OMNIGENT_NATS_URL", raising=False)
+
     resp = await client.get("/v1/_capabilities")
     assert resp.status_code == 200
     data = resp.json()
     seams = {entry["seam"]: entry for entry in data["seams"]}
     assert set(seams) == set(_EXPECTED_SEAM_DEFAULTS)
     coordination = data["coordination"]
+    fabric = data["fabric"]
     assert set(coordination) == {"active", "provider", "replica_id"}
+    assert set(fabric) == {
+        "active",
+        "nats_ready",
+        "service_versions",
+        "schema_hashes",
+        "required_services",
+        "legacy_absence",
+    }
+    assert fabric["active"] is False
+    assert fabric["nats_ready"] is False
+    assert "runner_job" in fabric["schema_hashes"]
+    assert "omnigent.fabric.control" in fabric["required_services"]
+    assert fabric["legacy_absence"]["runner_ws_transport"] is True
+    assert fabric["legacy_absence"]["direct_host_launch_fallback"] is True
     assert coordination["active"] in {True, False}
     if coordination["active"]:
         assert coordination["provider"] in {"inprocess", "nats"}
