@@ -15332,10 +15332,48 @@ def create_sessions_router(
             )
         return conv
 
+    async def _proxy_with_runner_heal(
+        session_id: str,
+        request: Request | None,
+        attempt: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Run a runner-proxy ``attempt`` with dead-runner self-heal.
+
+        Mirrors the ``list_session_resources`` heal+retry+graceful pattern
+        (BDP-2579): when the attempt fails because the runner is unavailable
+        (``RUNNER_UNAVAILABLE`` / ``httpx.ConnectError``), relaunch/fail-over
+        the session's runner and retry ONCE. A heal that still can't reach a
+        runner surfaces a clean ``RUNNER_UNAVAILABLE`` (the API error layer
+        maps it to 503 and the heal already published the graceful
+        ``terminal_pending`` reconnecting state) — never an unhandled 500.
+
+        ``request`` is ``None`` only for internal callers that cannot heal
+        (no FastAPI request to drive the relaunch); those propagate as before.
+
+        :param session_id: Session/conversation identifier.
+        :param request: The incoming FastAPI request (drives the heal), or
+            ``None`` to skip healing.
+        :param attempt: Zero-arg coroutine factory performing the proxied call.
+        :returns: The attempt's result.
+        """
+        try:
+            return await attempt()
+        except (OmnigentError, httpx.ConnectError) as exc:
+            if request is None or not _is_runner_unavailable_error(exc):
+                raise
+            if not await _heal_session_runner(session_id, request):
+                raise OmnigentError(
+                    "runner unavailable for resource access",
+                    code=ErrorCode.RUNNER_UNAVAILABLE,
+                ) from exc
+            return await attempt()
+
     async def _proxy_get_to_runner(
         session_id: str,
         path: str,
         params: dict[str, str] | None = None,
+        *,
+        request: Request | None = None,
     ) -> dict[str, Any]:
         """Proxy a GET request to the runner and return parsed JSON.
 
@@ -15343,72 +15381,101 @@ def create_sessions_router(
         :param path: Runner-relative URL path.
         :param params: Optional query params forwarded to the runner,
             e.g. ``{"order": "asc"}``. ``None`` sends no query string.
+        :param request: The incoming FastAPI request — when set, a dead
+            runner self-heals once before retrying (BDP-2579).
         :returns: Parsed JSON response body.
         :raises HTTPException: 502 on runner failure.
         """
-        runner_client = await _get_runner_client_for_resource_access(
-            session_id,
-        )
-        if runner_client is None:
-            raise HTTPException(
-                status_code=502,
-                detail="no runner available for resource access",
+
+        async def _attempt() -> dict[str, Any]:
+            runner_client = await _get_runner_client_for_resource_access(
+                session_id,
             )
-        try:
-            resp = await runner_client.get(path, params=params, timeout=10.0)
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="runner resource endpoint unavailable",
-            ) from exc
-        if resp.status_code == 404:
-            raise OmnigentError(
-                resp.json().get("error", {}).get("message", "Resource not found"),
-                code=ErrorCode.NOT_FOUND,
-            )
-        if resp.status_code != 200:
+            if runner_client is None:
+                raise HTTPException(
+                    status_code=502,
+                    detail="no runner available for resource access",
+                )
             try:
-                body = resp.json()
-                error = body.get("error", {})
-                msg = error.get("message") or "runner resource endpoint failed"
-            except Exception:  # noqa: BLE001
-                msg = "runner resource endpoint failed"
-            raise HTTPException(status_code=502, detail=msg)
-        return resp.json()
+                resp = await runner_client.get(path, params=params, timeout=10.0)
+            except httpx.HTTPError as exc:
+                # A dead runner (ConnectError) becomes RUNNER_UNAVAILABLE so the
+                # heal wrapper can relaunch+retry (BDP-2579); other transport
+                # errors stay a generic 502.
+                if _is_runner_unavailable_error(exc):
+                    raise OmnigentError(
+                        "runner resource endpoint unavailable",
+                        code=ErrorCode.RUNNER_UNAVAILABLE,
+                    ) from exc
+                raise HTTPException(
+                    status_code=502,
+                    detail="runner resource endpoint unavailable",
+                ) from exc
+            if resp.status_code == 404:
+                raise OmnigentError(
+                    resp.json().get("error", {}).get("message", "Resource not found"),
+                    code=ErrorCode.NOT_FOUND,
+                )
+            if resp.status_code != 200:
+                try:
+                    body = resp.json()
+                    error = body.get("error", {})
+                    msg = error.get("message") or "runner resource endpoint failed"
+                except Exception:  # noqa: BLE001
+                    msg = "runner resource endpoint failed"
+                raise HTTPException(status_code=502, detail=msg)
+            return resp.json()
+
+        return await _proxy_with_runner_heal(session_id, request, _attempt)
 
     async def _proxy_post_to_runner(
         session_id: str,
         path: str,
         body: dict[str, Any],
+        *,
+        request: Request | None = None,
     ) -> tuple[int, dict[str, Any]]:
         """Proxy a POST request to the runner and return status + JSON.
 
         :param session_id: Session/conversation identifier.
         :param path: Runner-relative URL path.
         :param body: JSON body to forward.
+        :param request: The incoming FastAPI request — when set, a dead
+            runner self-heals once before retrying (BDP-2579).
         :returns: Tuple of (status_code, parsed_json_body).
         :raises HTTPException: 502 on transport failure.
         """
-        runner_client = await _get_runner_client_for_resource_access(
-            session_id,
-        )
-        if runner_client is None:
-            raise HTTPException(
-                status_code=502,
-                detail="no runner available for resource access",
+
+        async def _attempt() -> tuple[int, dict[str, Any]]:
+            runner_client = await _get_runner_client_for_resource_access(
+                session_id,
             )
-        try:
-            resp = await runner_client.post(
-                path,
-                json=body,
-                timeout=10.0,
-            )
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail="runner resource endpoint unavailable",
-            ) from exc
-        return resp.status_code, resp.json()
+            if runner_client is None:
+                raise HTTPException(
+                    status_code=502,
+                    detail="no runner available for resource access",
+                )
+            try:
+                resp = await runner_client.post(
+                    path,
+                    json=body,
+                    timeout=10.0,
+                )
+            except httpx.HTTPError as exc:
+                # Dead runner → RUNNER_UNAVAILABLE for the heal wrapper; other
+                # transport errors stay a generic 502 (BDP-2579).
+                if _is_runner_unavailable_error(exc):
+                    raise OmnigentError(
+                        "runner resource endpoint unavailable",
+                        code=ErrorCode.RUNNER_UNAVAILABLE,
+                    ) from exc
+                raise HTTPException(
+                    status_code=502,
+                    detail="runner resource endpoint unavailable",
+                ) from exc
+            return resp.status_code, resp.json()
+
+        return await _proxy_with_runner_heal(session_id, request, _attempt)
 
     async def _proxy_delete_to_runner(
         session_id: str,
@@ -15526,7 +15593,7 @@ def create_sessions_router(
         """
         await _validate_session(session_id, request, LEVEL_READ)
         path = f"/v1/sessions/{session_id}/resources/environments"
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.get(
         "/sessions/{session_id}/resources/environments/{environment_id}",
@@ -15548,7 +15615,7 @@ def create_sessions_router(
         """
         await _validate_session(session_id, request, LEVEL_READ)
         path = f"/v1/sessions/{session_id}/resources/environments/{environment_id}"
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.get(
         "/sessions/{session_id}/resources/terminals",
@@ -15580,7 +15647,9 @@ def create_sessions_router(
             for key, value in request.query_params.items()
             if key in ("limit", "after", "before", "order")
         }
-        return await _proxy_get_to_runner(session_id, path, params=forwarded or None)
+        return await _proxy_get_to_runner(
+            session_id, path, params=forwarded or None, request=request
+        )
 
     @router.post(
         "/sessions/{session_id}/resources/terminals",
@@ -15646,6 +15715,7 @@ def create_sessions_router(
             session_id,
             path,
             body,
+            request=request,
         )
         if status >= 400:
             error = payload.get("error", {})
@@ -15683,7 +15753,7 @@ def create_sessions_router(
         """
         await _validate_session(session_id, request, LEVEL_READ)
         path = f"/v1/sessions/{session_id}/resources/terminals/{terminal_id}"
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.post(
         "/sessions/{session_id}/resources/terminals/{terminal_id}/transfer",
@@ -15727,6 +15797,7 @@ def create_sessions_router(
             session_id,
             path,
             {"target_session_id": target_session_id},
+            request=request,
         )
         if status == 404:
             error = payload.get("error", {})
@@ -16072,7 +16143,7 @@ def create_sessions_router(
         """
         await _validate_session(session_id, request, required_level)
         if method == "GET":
-            return await _proxy_get_to_runner(session_id, path)
+            return await _proxy_get_to_runner(session_id, path, request=request)
         if method == "PUT":
             status, payload = await _proxy_put_to_runner(
                 session_id,
@@ -16090,6 +16161,7 @@ def create_sessions_router(
                 session_id,
                 path,
                 body or {},
+                request=request,
             )
         elif method == "DELETE":
             status, payload = await _proxy_delete_to_runner(
@@ -16142,7 +16214,7 @@ def create_sessions_router(
         qs = urllib.parse.urlencode(params)
         path = f"/v1/sessions/{session_id}/resources/environments/{environment_id}/filesystem?{qs}"
         await _validate_session(session_id, request, LEVEL_READ)
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.get(
         "/sessions/{session_id}/resources/environments/{environment_id}/search",
@@ -16188,7 +16260,7 @@ def create_sessions_router(
         qs = urllib.parse.urlencode(params)
         path = f"/v1/sessions/{session_id}/resources/environments/{environment_id}/search?{qs}"
         await _validate_session(session_id, request, LEVEL_READ)
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.get(
         "/sessions/{session_id}/resources/environments/{environment_id}/changes",
@@ -16213,7 +16285,7 @@ def create_sessions_router(
         """
         path = f"/v1/sessions/{session_id}/resources/environments/{environment_id}/changes"
         await _validate_session(session_id, request, LEVEL_READ)
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.get(
         "/sessions/{session_id}/resources/environments/{environment_id}/diff/{relative_path:path}",
@@ -16243,7 +16315,7 @@ def create_sessions_router(
             f"/{environment_id}/diff/{relative_path}"
         )
         await _validate_session(session_id, request, LEVEL_READ)
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.get(
         "/sessions/{session_id}/resources/environments"
@@ -16285,7 +16357,7 @@ def create_sessions_router(
             f"/{environment_id}/filesystem/{relative_path}?{qs}"
         )
         await _validate_session(session_id, request, LEVEL_READ)
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     @router.put(
         "/sessions/{session_id}/resources/environments"
@@ -16444,7 +16516,7 @@ def create_sessions_router(
         """
         await _validate_session(session_id, request, LEVEL_READ)
         path = f"/v1/sessions/{session_id}/resources/{resource_id}"
-        return await _proxy_get_to_runner(session_id, path)
+        return await _proxy_get_to_runner(session_id, path, request=request)
 
     # ── POST /sessions/{session_id}/events ───────────────────────
 
