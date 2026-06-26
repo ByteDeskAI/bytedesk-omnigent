@@ -42,7 +42,16 @@ GOAL_EVENT_USER_KEY = "__all__"
 TARGET_KINDS = ("organization", "department", "agent")
 READINESS_KINDS = ("immediate", "dependent", "deferred")
 ACTIVATION_STATES = ("ready", "waiting", "paused")
-DEPENDENCY_KINDS = ("manual", "goal", "system_state")
+# ADR-0154 adds milestone/epic/github_pr/jira_issue kinds for goal-delivery DAGs.
+DEPENDENCY_KINDS = (
+    "manual",
+    "goal",
+    "system_state",
+    "milestone",
+    "epic",
+    "github_pr",
+    "jira_issue",
+)
 DEPENDENCY_STATUSES = ("pending", "satisfied", "waived")
 
 _UNSET = object()
