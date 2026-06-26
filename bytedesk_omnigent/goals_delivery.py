@@ -292,6 +292,48 @@ class GoalDeliveryProjector:
         return count
 
 
+def parse_github_pr_event(payload: dict[str, Any]) -> GithubPrEvent | None:
+    """Normalize a GitHub ``pull_request`` webhook body to a merged-PR event.
+
+    Returns ``None`` for any event that is not a *merged* close (PR opened,
+    synchronized, or closed-without-merge) — the route acknowledges those as
+    ignored rather than 404-ing.
+    """
+    if payload.get("action") != "closed":
+        return None
+    pr = payload.get("pull_request") or {}
+    if not pr.get("merged"):
+        return None
+    repo = (payload.get("repository") or {}).get("full_name") or ""
+    return GithubPrEvent(
+        repo=repo,
+        pr_number=int(pr.get("number")),
+        head_ref=(pr.get("head") or {}).get("ref") or "",
+        base_ref=(pr.get("base") or {}).get("ref") or "",
+        merge_commit_sha=pr.get("merge_commit_sha"),
+    )
+
+
+def parse_jira_issue_event(
+    payload: dict[str, Any], *, webhook_identifier: str | None = None
+) -> JiraIssueEvent | None:
+    """Normalize a Jira ``jira:issue_updated`` webhook body to an issue event."""
+    issue = payload.get("issue") or {}
+    key = issue.get("key")
+    if not key:
+        return None
+    fields = issue.get("fields") or {}
+    status = fields.get("status") or {}
+    return JiraIssueEvent(
+        issue_key=key,
+        issue_type=(fields.get("issuetype") or {}).get("name") or "",
+        status=status.get("name") or "",
+        status_category=(status.get("statusCategory") or {}).get("key") or "",
+        parent_epic_key=(fields.get("parent") or {}).get("key"),
+        webhook_identifier=webhook_identifier,
+    )
+
+
 def _ref_matches_pr(ref: str | None, event: GithubPrEvent) -> bool:
     """A ``github_pr`` dependency ``ref`` — ``owner/repo#N`` or a branch name."""
     if not ref:

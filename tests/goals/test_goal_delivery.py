@@ -13,6 +13,8 @@ from bytedesk_omnigent.goals_delivery import (
     GoalDeliveryProjector,
     JiraIssueEvent,
     compute_milestone_status,
+    parse_github_pr_event,
+    parse_jira_issue_event,
 )
 
 
@@ -237,3 +239,64 @@ def test_completed_milestone_unlocks_dependent_goal(tmp_path) -> None:
     assert refreshed.dependencies[0].status == "satisfied"
     assert refreshed.activation_state == "ready"
     _ = upstream
+
+
+# -- webhook fixture parsing (P2/P3) -----------------------------------------
+def test_parse_github_merged_pr_fixture() -> None:
+    payload = {
+        "action": "closed",
+        "pull_request": {
+            "number": 987,
+            "merged": True,
+            "head": {"ref": "feature/BDP-1235-x"},
+            "base": {"ref": "develop"},
+            "merge_commit_sha": "deadbeef",
+        },
+        "repository": {"full_name": "ByteDeskAI/bytedesk-platform"},
+    }
+    event = parse_github_pr_event(payload)
+    assert event == GithubPrEvent(
+        repo="ByteDeskAI/bytedesk-platform", pr_number=987,
+        head_ref="feature/BDP-1235-x", base_ref="develop", merge_commit_sha="deadbeef")
+
+
+def test_parse_github_non_merge_is_ignored() -> None:
+    assert parse_github_pr_event({"action": "opened", "pull_request": {"number": 1}}) is None
+    assert parse_github_pr_event(
+        {"action": "closed", "pull_request": {"number": 1, "merged": False}}
+    ) is None
+
+
+def test_parse_jira_issue_updated_fixture() -> None:
+    payload = {
+        "webhookEvent": "jira:issue_updated",
+        "issue": {
+            "key": "BDP-1235",
+            "fields": {
+                "issuetype": {"name": "Task"},
+                "status": {"name": "Done", "statusCategory": {"key": "done"}},
+                "parent": {"key": "BDP-1234"},
+            },
+        },
+    }
+    event = parse_jira_issue_event(payload, webhook_identifier="wh-1")
+    assert event == JiraIssueEvent(
+        issue_key="BDP-1235", issue_type="Task", status="Done",
+        status_category="done", parent_epic_key="BDP-1234", webhook_identifier="wh-1")
+
+
+def test_github_fixture_drives_projector_end_to_end(tmp_path) -> None:
+    store = _store(tmp_path)
+    proj = GoalDeliveryProjector(store)
+    _make_goal(store)
+    proj.apply_jira_issue_updated(
+        JiraIssueEvent(issue_key="BDP-1235", issue_type="Task", status="Done",
+                       status_category="done"), now=110)
+    event = parse_github_pr_event({
+        "action": "closed",
+        "pull_request": {"number": 987, "merged": True,
+                         "head": {"ref": "feature/BDP-1235-x"}, "base": {"ref": "develop"}},
+        "repository": {"full_name": "ByteDeskAI/bytedesk-platform"},
+    })
+    result = proj.apply_github_pr_merged(event, now=120)
+    assert result.goal_completed is True
