@@ -19,8 +19,7 @@ class NatsRunnerTransport(httpx.AsyncBaseTransport):
     """Route one server-to-runner HTTP request over NATS request/reply.
 
     The transport preserves the existing ``httpx.AsyncClient`` contract used by
-    session/resource routes, but the wire substrate is NATS instead of the
-    removed runner WebSocket tunnel.
+    session/resource routes while using NATS as the runner control substrate.
     """
 
     def __init__(
