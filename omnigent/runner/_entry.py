@@ -980,17 +980,36 @@ def main() -> None:
     )
     # Sentry error + performance telemetry (BDP-2550). Opt-in: no-op unless
     # OMNIGENT_SENTRY_DSN is set (inherited from the host via the runner env
-    # allowlist). Tagged component=runner.
-    from omnigent.runtime.sentry import init_sentry
+    # allowlist). Tagged component=runner. The runner is not an ASGI app, so it
+    # gets an explicit global error handler: the asyncio loop handler reports
+    # unhandled task exceptions, and the top-level except posts a crashing
+    # exception (and flushes) before the process dies.
+    from omnigent.runtime.sentry import (
+        capture_and_flush,
+        init_sentry,
+        install_asyncio_exception_handler,
+    )
 
-    init_sentry("runner")
+    sentry_enabled = init_sentry("runner")
+
+    async def _run_with_global_handler() -> None:
+        if sentry_enabled:
+            install_asyncio_exception_handler()
+        await _run_tunnel_from_env()
+
     try:
-        asyncio.run(_run_tunnel_from_env())
+        asyncio.run(_run_with_global_handler())
     except RuntimeError as exc:
         if not str(exc).startswith(RUNNER_NATS_REJECTION_PREFIX):
+            if sentry_enabled:
+                capture_and_flush(exc)
             raise
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None
+    except Exception as exc:
+        if sentry_enabled:
+            capture_and_flush(exc)
+        raise
 
 
 if __name__ == "__main__":

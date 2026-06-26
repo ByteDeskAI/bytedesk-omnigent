@@ -959,6 +959,14 @@ def create_app(
         :param app_inst: The FastAPI app, used to attach
             per-AP state via ``app_inst.state.*``.
         """
+        # Global error handler for the server's event loop (BDP-2550): report
+        # unhandled asyncio task exceptions — background tasks the FastAPI /
+        # Starlette Sentry integration (which covers request scope) does not see
+        # — to observability. Self-gates to a no-op when Sentry is disabled.
+        from omnigent.runtime.sentry import install_asyncio_exception_handler
+
+        install_asyncio_exception_handler()
+
         # Bump AnyIO default thread limiter from 40 → 200; every
         # ``asyncio.to_thread`` and FastAPI sync route grabs one.
         from anyio import to_thread as _to_thread
@@ -1190,6 +1198,12 @@ def create_app(
 
             :param app_inst: The FastAPI app, for ``app_inst.state.*`` writes.
             """
+            # Global error handler for the server's event loop (BDP-2550) —
+            # parity with ``_lifespan``. Self-gates when Sentry is disabled.
+            from omnigent.runtime.sentry import install_asyncio_exception_handler
+
+            install_asyncio_exception_handler()
+
             ctx = LifespanContext(
                 app=app_inst,
                 agent_store=agent_store,

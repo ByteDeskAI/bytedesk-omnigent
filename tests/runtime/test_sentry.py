@@ -9,9 +9,27 @@ re-tested (that is sentry-sdk's responsibility).
 
 from __future__ import annotations
 
+import asyncio
+import sys
+
 import pytest
 
 from omnigent.runtime import sentry
+
+
+class _FakeSentry:
+    """Stand-in for the ``sentry_sdk`` module so the global-handler helpers are
+    testable without the real SDK installed."""
+
+    def __init__(self) -> None:
+        self.captured: list[BaseException | None] = []
+        self.flushed = 0
+
+    def capture_exception(self, exc: BaseException | None = None) -> None:
+        self.captured.append(exc)
+
+    def flush(self, timeout: float | None = None) -> None:
+        self.flushed += 1
 
 
 @pytest.fixture(autouse=True)
@@ -143,3 +161,78 @@ def test_scrub_transaction_strips_span_data_keeps_op_and_description() -> None:
 def test_scrub_transaction_tolerates_missing_spans() -> None:
     event = {"type": "transaction", "transaction": "GET /healthz"}
     assert sentry._scrub_transaction(event, {}) is event
+
+
+def test_is_enabled_reflects_module_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sentry, "_enabled", False)
+    assert sentry.is_enabled() is False
+    monkeypatch.setattr(sentry, "_enabled", True)
+    assert sentry.is_enabled() is True
+
+
+def test_capture_and_flush_is_noop_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeSentry()
+    monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
+    monkeypatch.setattr(sentry, "_enabled", False)
+
+    sentry.capture_and_flush(ValueError("x"))
+
+    assert fake.captured == []
+    assert fake.flushed == 0
+
+
+def test_capture_and_flush_captures_and_flushes_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeSentry()
+    monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
+    monkeypatch.setattr(sentry, "_enabled", True)
+    boom = ValueError("boom")
+
+    sentry.capture_and_flush(boom)
+
+    assert fake.captured == [boom]
+    assert fake.flushed == 1
+
+
+def test_install_asyncio_handler_is_noop_when_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeSentry()
+    monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
+    monkeypatch.setattr(sentry, "_enabled", False)
+
+    async def _run() -> bool:
+        loop = asyncio.get_running_loop()
+        sentinel = lambda _loop, _ctx: None  # noqa: E731
+        loop.set_exception_handler(sentinel)
+        sentry.install_asyncio_exception_handler()
+        # Disabled → handler not replaced.
+        return loop.get_exception_handler() is sentinel
+
+    assert asyncio.run(_run()) is True
+
+
+def test_install_asyncio_handler_reports_and_chains_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _FakeSentry()
+    monkeypatch.setitem(sys.modules, "sentry_sdk", fake)
+    monkeypatch.setattr(sentry, "_enabled", True)
+    boom = ValueError("loop boom")
+
+    async def _run() -> list[dict]:
+        loop = asyncio.get_running_loop()
+        chained: list[dict] = []
+        loop.set_exception_handler(lambda _loop, ctx: chained.append(ctx))
+        sentry.install_asyncio_exception_handler()
+        loop.call_exception_handler({"message": "task failed", "exception": boom})
+        return chained
+
+    chained = asyncio.run(_run())
+
+    # Reported to Sentry AND chained to the previously-installed handler.
+    assert fake.captured == [boom]
+    assert len(chained) == 1

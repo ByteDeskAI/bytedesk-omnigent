@@ -1566,10 +1566,16 @@ def run_host_process(
     """
     # Sentry error + performance telemetry (BDP-2550). Opt-in: no-op unless
     # OMNIGENT_SENTRY_DSN is set. Initialized first so even identity-load /
-    # connect failures in this process are captured. Tagged component=host.
-    from omnigent.runtime.sentry import init_sentry
+    # connect failures in this process are captured. Tagged component=host. The
+    # host is not an ASGI app, so it gets an explicit global error handler (the
+    # asyncio loop handler + top-level capture below).
+    from omnigent.runtime.sentry import (
+        capture_and_flush,
+        init_sentry,
+        install_asyncio_exception_handler,
+    )
 
-    init_sentry("host")
+    sentry_enabled = init_sentry("host")
 
     from omnigent.host.identity import CONFIG_PATH
 
@@ -1593,11 +1599,23 @@ def run_host_process(
         print(f"This host's log: {_display_log_path(_cli_log)}")
 
     host = HostProcess(identity, server_url)
+
+    async def _run_with_global_handler() -> None:
+        if sentry_enabled:
+            install_asyncio_exception_handler()
+        await host.run()
+
     try:
-        asyncio.run(host.run())
+        asyncio.run(_run_with_global_handler())
     except HostConnectError as exc:
         # Fail loud: a permanent connection failure must not look like the
         # process is still working. Print the cause + fix, then exit non-zero
         # instead of the old behavior of reconnecting silently forever.
+        if sentry_enabled:
+            capture_and_flush(exc)
         print(f"\n✗ Could not connect to {server_url}.\n{exc}", file=sys.stderr, flush=True)
         raise SystemExit(1) from exc
+    except Exception as exc:
+        if sentry_enabled:
+            capture_and_flush(exc)
+        raise
