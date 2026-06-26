@@ -75,6 +75,22 @@ def _to_record(row: SqlInboundEvent) -> InboundEventRecord:
     )
 
 
+def record_to_event(record: InboundEventRecord) -> InboundEvent:
+    """Rebuild a canonical :class:`InboundEvent` from a stored record (reaper replay)."""
+    return InboundEvent(
+        idempotency_key=record.idempotency_key,
+        source=record.source,
+        type=record.type,
+        occurred_at=record.occurred_at,
+        received_at=record.received_at,
+        raw_payload=record.raw_payload,
+        normalized=record.normalized,
+        headers=record.headers,
+        tenant_id=record.tenant_id,
+        event_id=record.event_id,
+    )
+
+
 class SqlAlchemyInboundEventStore:
     """SQLAlchemy-backed inbound-event Message Store (ADR-0155)."""
 
