@@ -106,8 +106,6 @@ patches:
                     value: /build
                   - name: OMNIGENT_EXTENSIONS
                     value: bytedesk_omnigent.extension:BytedeskExtension
-                  - name: OMNIGENT_NATS_URL
-                    value: nats://omnigent-nats:4222
                   # Accounts mode (multi-user login) for local dev. env merges by
                   # name, so this OVERRIDES the base server.yaml OMNIGENT_AUTH_ENABLED=0
                   # — but only in THIS local-dev overlay, which is never reconciled

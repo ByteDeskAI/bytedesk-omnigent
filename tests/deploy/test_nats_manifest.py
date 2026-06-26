@@ -22,6 +22,28 @@ def _server_env() -> dict[str, str]:
     return {entry["name"]: entry["value"] for entry in container["env"] if "value" in entry}
 
 
+def _server_env_from_secret_refs() -> set[str]:
+    docs = list(yaml.safe_load_all(Path("deploy/bytedesk/k8s/server.yaml").read_text()))
+    deployment = next(
+        doc
+        for doc in docs
+        if doc["kind"] == "Deployment" and doc["metadata"]["name"] == "omnigent-server"
+    )
+    container = deployment["spec"]["template"]["spec"]["containers"][0]
+    return {
+        entry["secretRef"]["name"]
+        for entry in container.get("envFrom", [])
+        if "secretRef" in entry
+    }
+
+
+def _runtime_config_infisical_secret() -> dict:
+    docs = list(
+        yaml.safe_load_all(Path("deploy/bytedesk/k8s/omnigent-runtime-config-secret.yaml").read_text())
+    )
+    return next(doc for doc in docs if doc["kind"] == "InfisicalSecret")
+
+
 def test_coordination_and_artifact_nats_are_isolated() -> None:
     """Artifacts must not share the coordination NATS store_dir/PVC."""
     statefulsets = {
@@ -49,8 +71,26 @@ def test_coordination_and_artifact_nats_are_isolated() -> None:
 def test_server_points_artifacts_at_dedicated_nats() -> None:
     env = _server_env()
 
-    assert env["OMNIGENT_NATS_URL"] == "nats://omnigent-nats:4222"
     assert env["ARTIFACT_DIR"] == ("nats://omnigent-nats-artifacts:4222/omnigent-artifacts")
+
+
+def test_server_reads_nats_runtime_config_from_infisical_secret() -> None:
+    env = _server_env()
+    secret_refs = _server_env_from_secret_refs()
+
+    assert "OMNIGENT_NATS_URL" not in env
+    assert "omnigent-runtime-config-secrets" in secret_refs
+
+
+def test_nats_runtime_config_secret_is_infisical_managed() -> None:
+    secret = _runtime_config_infisical_secret()
+    scope = secret["spec"]["authentication"]["universalAuth"]["secretsScope"]
+    managed = secret["spec"]["managedSecretReference"]
+
+    assert scope["projectSlug"] == "bytedesk-agent-configuration"
+    assert scope["envSlug"] == "development"
+    assert scope["secretsPath"] == "/runtime"
+    assert managed["secretName"] == "omnigent-runtime-config-secrets"
 
 
 def test_config_artifact_location_matches_server_env() -> None:
