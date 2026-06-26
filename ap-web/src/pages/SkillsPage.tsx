@@ -27,9 +27,11 @@ import {
   type SkillPreview,
   type SkillSearchResult,
 } from "@/hooks/useSkills";
+import { useHostFilesystem, type HostFilesystemEntry } from "@/hooks/useHostFilesystem";
+import { useHosts } from "@/hooks/useHosts";
 import { AgentConversation, AgentComposer } from "@/components/chat";
 import { Link } from "@/lib/routing";
-import { bindOnlyOnlineRunner } from "@/lib/sessionsApi";
+import { bindOnlyOnlineRunner, launchRunner } from "@/lib/sessionsApi";
 import { useChatStore } from "@/store/chatStore";
 import { cn } from "@/lib/utils";
 
@@ -75,12 +77,30 @@ function findConcierge(agents: AvailableAgent[]): AvailableAgent | null {
   );
 }
 
+function homeWorkspaceFromEntries(entries: HostFilesystemEntry[]): string | null {
+  const first = entries[0];
+  if (!first) return null;
+  const slash = first.path.lastIndexOf("/");
+  if (slash < 0) return null;
+  return slash === 0 ? "/" : first.path.slice(0, slash);
+}
+
 export function SkillsPage() {
   const agentsQuery = useAvailableAgents();
   const installed = useInstalledSkills();
   const marketplaces = useSkillMarketplaces();
   const { mutateAsync: startConciergeSession } = useStartSkillsConciergeSession();
   const agents = useMemo(() => agentsQuery.data ?? [], [agentsQuery.data]);
+  const hosts = useHosts();
+  const onlineHost = useMemo(
+    () => (hosts.data ?? []).find((host) => host.status === "online") ?? null,
+    [hosts.data],
+  );
+  const homeListing = useHostFilesystem(onlineHost?.host_id ?? null, onlineHost ? "" : null);
+  const launchWorkspace = useMemo(
+    () => homeWorkspaceFromEntries(homeListing.data?.entries ?? []),
+    [homeListing.data],
+  );
 
   const [selectedScope, setSelectedScope] = useState<SkillScope>({
     kind: "organization",
@@ -155,11 +175,13 @@ export function SkillsPage() {
         });
         if (!cancelled) {
           await useChatStore.getState().switchTo(session.session_id);
-          // The endpoint creates the session but does not bind a runner (the
-          // create helper leaves runner_id unset). Bind the single online
-          // runner — the same proven path the main new-chat flow uses — so the
-          // concierge can respond on the first send.
-          await bindOnlyOnlineRunner(session.session_id);
+          // Reuse a live runner when one exists; otherwise launch on the
+          // selected host/home workspace so Skills sessions are host-bound and
+          // can use the normal message-time relaunch path.
+          const bound = await bindOnlyOnlineRunner(session.session_id);
+          if (!bound && onlineHost && launchWorkspace) {
+            await launchRunner(onlineHost.host_id, session.session_id, launchWorkspace);
+          }
         }
       } catch {
         // Scope seed is best-effort; inline chat still works without it.
@@ -174,7 +196,10 @@ export function SkillsPage() {
     selectedScope.kind,
     selectedScope.id,
     selectedScopeLabel,
+    startConciergeSession,
     targetAgentIds,
+    onlineHost,
+    launchWorkspace,
   ]);
 
   // The Skills panel shares the app's single global chat store. The scope-seed

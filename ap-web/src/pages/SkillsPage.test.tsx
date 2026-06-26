@@ -3,9 +3,13 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SkillsPage } from "./SkillsPage";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
+import { useHostFilesystem } from "@/hooks/useHostFilesystem";
+import { useHosts } from "@/hooks/useHosts";
 import * as skillsHooks from "@/hooks/useSkills";
 
 vi.mock("@/hooks/useAvailableAgents", () => ({ useAvailableAgents: vi.fn() }));
+vi.mock("@/hooks/useHostFilesystem", () => ({ useHostFilesystem: vi.fn() }));
+vi.mock("@/hooks/useHosts", () => ({ useHosts: vi.fn() }));
 vi.mock("@/hooks/useSkills", () => ({
   useInstalledSkills: vi.fn(),
   useSkillSources: vi.fn(),
@@ -22,8 +26,11 @@ vi.mock("@/store/chatStore", () => ({
     getState: () => ({ conversationId: "conv_prev", switchTo }),
   }),
 }));
-const { bindOnlyOnlineRunner } = vi.hoisted(() => ({ bindOnlyOnlineRunner: vi.fn() }));
-vi.mock("@/lib/sessionsApi", () => ({ bindOnlyOnlineRunner }));
+const { bindOnlyOnlineRunner, launchRunner } = vi.hoisted(() => ({
+  bindOnlyOnlineRunner: vi.fn(),
+  launchRunner: vi.fn(),
+}));
+vi.mock("@/lib/sessionsApi", () => ({ bindOnlyOnlineRunner, launchRunner }));
 // The embedded chat atoms subscribe to the module-level chatStore; stub
 // them so the page test stays a focused structural render.
 vi.mock("@/components/chat", () => ({
@@ -69,9 +76,28 @@ const EMPLOYEES = [
 ];
 
 beforeEach(() => {
+  bindOnlyOnlineRunner.mockResolvedValue({ id: "conv_concierge" });
+  launchRunner.mockResolvedValue({ runnerId: "runner_1" });
   vi.mocked(useAvailableAgents).mockReturnValue({
     data: EMPLOYEES,
     isLoading: false,
+  } as never);
+  vi.mocked(useHosts).mockReturnValue({
+    data: [{ host_id: "host_1", name: "dev", owner: "me", status: "online" }],
+  } as never);
+  vi.mocked(useHostFilesystem).mockReturnValue({
+    data: {
+      entries: [
+        {
+          name: "project",
+          path: "/home/me/project",
+          type: "directory",
+          bytes: null,
+          modified_at: 1,
+        },
+      ],
+      truncated: false,
+    },
   } as never);
   vi.mocked(skillsHooks.useSearchSkills).mockReturnValue({
     mutateAsync: vi.fn(),
@@ -127,7 +153,7 @@ describe("SkillsPage", () => {
     expect(switchTo).toHaveBeenCalledWith("conv_prev");
   });
 
-  it("binds a runner to the concierge session the backend returns", async () => {
+  it("binds an online runner to the concierge session the backend returns", async () => {
     // When POST /v1/skills/concierge/sessions returns a session, the panel
     // switches to it AND binds a runner (the backend creates the session but
     // leaves runner_id unset) so the concierge can answer on the first send.
@@ -147,6 +173,27 @@ describe("SkillsPage", () => {
     await vi.waitFor(() => {
       expect(switchTo).toHaveBeenCalledWith("conv_concierge");
       expect(bindOnlyOnlineRunner).toHaveBeenCalledWith("conv_concierge");
+    });
+    expect(launchRunner).not.toHaveBeenCalled();
+  });
+
+  it("launches the concierge session on an online host when no runner is already online", async () => {
+    bindOnlyOnlineRunner.mockResolvedValue(null);
+    vi.mocked(skillsHooks.useStartSkillsConciergeSession).mockReturnValue({
+      mutateAsync: vi.fn().mockResolvedValue({
+        session_id: "conv_concierge",
+        agent_id: "ag_d5a1b59732f6819ed9b38132d6170412",
+        agent_name: "skills-concierge",
+        title: "Skills",
+        prompt: "",
+        web_path: "/c/conv_concierge",
+      }),
+    } as never);
+
+    renderPage();
+
+    await vi.waitFor(() => {
+      expect(launchRunner).toHaveBeenCalledWith("host_1", "conv_concierge", "/home/me");
     });
   });
 
