@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -99,9 +100,8 @@ class NatsBackplane:
         self._locks_kv = None
 
     def _kv_for(self, bucket: str) -> Any:
-        physical = _LOGICAL_BUCKETS.get(bucket, bucket)
         for logical, name in _LOGICAL_BUCKETS.items():
-            if bucket == logical or bucket == name:
+            if bucket in (logical, name):
                 kv = self._kv.get(logical)
                 if kv is not None:
                     return kv
@@ -120,6 +120,11 @@ class NatsBackplane:
         except (UnicodeDecodeError, json.JSONDecodeError):
             return None
         return parsed if isinstance(parsed, dict) else None
+
+    @staticmethod
+    def _lock_key(lock_name: str) -> str:
+        """Map arbitrary logical lock names onto NATS KV-safe keys."""
+        return f"lock.{hashlib.sha256(lock_name.encode('utf-8')).hexdigest()}"
 
     async def claim_resource(
         self,
@@ -166,10 +171,11 @@ class NatsBackplane:
 
     async def try_acquire(self, lock_name: str, *, ttl_s: float) -> bool:
         kv = await self._locks_bucket(ttl_s)
+        key = self._lock_key(lock_name)
         try:
             # create() adds the key iff it does not exist; an existing (live)
             # lock raises, so exactly one concurrent caller wins.
-            await kv.create(lock_name, self._replica_id.encode("utf-8"))
+            await kv.create(key, self._replica_id.encode("utf-8"))
             return True
         except Exception:  # noqa: BLE001
             # Key already held → not acquired. (A NATS outage also lands here →
@@ -182,7 +188,7 @@ class NatsBackplane:
         if self._locks_kv is None:
             return
         with contextlib.suppress(Exception):
-            await self._locks_kv.delete(lock_name)
+            await self._locks_kv.delete(self._lock_key(lock_name))
 
     async def index_put(
         self,
