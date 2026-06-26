@@ -91,9 +91,8 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.config import create_config_router
         from bytedesk_omnigent.routes.goal_delivery import create_goal_delivery_router
         from bytedesk_omnigent.routes.goals import create_goals_router
-        from bytedesk_omnigent.routes.inbound import create_inbound_router
-        from bytedesk_omnigent.routes.skills_concierge import create_skills_concierge_router
         from bytedesk_omnigent.routes.governance import create_governance_router
+        from bytedesk_omnigent.routes.inbound import create_inbound_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
@@ -101,6 +100,7 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.omni_cli_terminal import (
             create_omni_cli_terminal_router,
         )
+        from bytedesk_omnigent.routes.skills_concierge import create_skills_concierge_router
         from bytedesk_omnigent.scheduler.router import create_schedules_router
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
@@ -402,35 +402,11 @@ class BytedeskExtension:
         await signal_bus_reaper_loop()
 
     async def _cron_scheduler(self) -> None:
+        from bytedesk_omnigent.fabric.outbox import build_fabric_cron_dispatch
         from bytedesk_omnigent.scheduler import cron_scheduler_loop
-        from bytedesk_omnigent.sessions import (
-            build_cron_dispatch,
-            build_self_call_initiator_from_env,
-            get_session_initiator,
-            set_session_initiator,
-        )
 
-        # Register the live session initiator (BDP-2347): without it the cron
-        # clock fires but dispatches nothing (the silent log-only no-op). The
-        # self-call initiator re-enters the runtime via the trusted sessions HTTP
-        # route — the same registry also backs run_task's dispatch. Honour an
-        # already-registered initiator (tests / a future in-process one); else
-        # build one from the env, which fail-closes to None when unconfigured.
-        initiator = get_session_initiator()
-        if initiator is None:
-            initiator = build_self_call_initiator_from_env()
-            if initiator is not None:
-                set_session_initiator(initiator)
-                logger.info("cron dispatch: live SessionInitiator registered")
-            else:
-                logger.warning(
-                    "cron dispatch: no SessionInitiator configured (set %s) — "
-                    "scheduled triggers will log only, not dispatch",
-                    "OMNIGENT_SELF_BASE_URL",
-                )
-
-        dispatch = build_cron_dispatch(initiator) if initiator is not None else None
-        await cron_scheduler_loop(dispatch=dispatch)
+        logger.info("cron dispatch: fabric SQL outbox enabled")
+        await cron_scheduler_loop(dispatch=build_fabric_cron_dispatch())
 
     async def _accountability(self) -> None:
         from bytedesk_omnigent.accountability import accountability_loop

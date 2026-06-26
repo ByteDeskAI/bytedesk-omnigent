@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
-import httpx
 import pytest
 
 from bytedesk_omnigent.harnesses import hermes_native_harness
@@ -23,16 +22,14 @@ from omnigent.inner import (
 from omnigent.policies.types import EvaluationContext, PolicyResult
 from omnigent.runtime.harnesses import _HARNESS_MODULES
 from omnigent.runtime.policies.enforcement import _enforce_policy
-from omnigent.server import _runner_transport
 from omnigent.spec.types import Phase, PolicyAction
-
 
 _HARNESS_API_PATHS = {"/health", "/v1/sessions/{conversation_id}/events"}
 
 
 def _assert_harness_routes(app: Any) -> None:
     paths = {route.path for route in app.routes}  # type: ignore[attr-defined]
-    assert _HARNESS_API_PATHS <= paths
+    assert paths >= _HARNESS_API_PATHS
 
 
 # ── omnigent/inner/*_native_harness.py ───────────────────────────────────────
@@ -175,43 +172,6 @@ def test_hermes_native_executor_factory_respects_model_env(
     ) as ctor:
         hermes_native_harness._build_hermes_native_executor()
     ctor.assert_called_once_with(model="hermes-model")
-
-
-# ── omnigent/server/_runner_transport.py ───────────────────────────────────
-
-
-def test_build_uds_runner_wires_http_and_ws(tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    """HTTP client and WS factory target the shared UDS path."""
-    sock_path = str(tmp_path / "runner.sock")
-    captured: dict[str, Any] = {}
-
-    def fake_unix_connect(
-        path: str | None = None,
-        uri: str | None = None,
-        **kwargs: Any,
-    ) -> str:
-        captured["path"] = path
-        captured["uri"] = uri
-        captured["kwargs"] = kwargs
-        return "FAKE_CM"
-
-    monkeypatch.setattr(
-        "websockets.asyncio.client.unix_connect",
-        fake_unix_connect,
-    )
-
-    client, factory = _runner_transport.build_uds_runner(sock_path)
-    try:
-        assert isinstance(client._transport, httpx.AsyncHTTPTransport)
-        assert client.base_url == httpx.URL("http://runner")
-    finally:
-        client._transport.__dict__.clear()
-
-    result = factory("/v1/sessions/conv_1/events")
-    assert result == "FAKE_CM"
-    assert captured["path"] == sock_path
-    assert captured["uri"] == "ws://runner/v1/sessions/conv_1/events"
-    assert captured["kwargs"].get("open_timeout") == 10
 
 
 # ── omnigent/runtime/policies/enforcement.py ───────────────────────────────

@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import secrets
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -27,18 +26,21 @@ from pydantic import BaseModel
 from omnigent.db.utils import now_epoch
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.fabric.runner_fabric import (
+    FabricRunnerConflict,
+    HostRunnerAcquisition,
+    HostWorkerRunnerFabric,
+)
 from omnigent.harness_aliases import canonicalize_harness
 from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE,
 )
-from omnigent.runner.identity import token_bound_runner_id
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server import host_access
 from omnigent.server.auth import AuthProvider
 from omnigent.server.host_access import can_access_host
 from omnigent.server.host_control import (
     HostControlError,
-    request_host_launch_runner,
     request_host_list_dir,
 )
 from omnigent.server.host_registry import HostRegistry
@@ -286,9 +288,9 @@ def create_hosts_router(
     ) -> dict[str, Any]:
         """Launch a runner on a host for a session.
 
-        Generates a binding token, writes the expected runner_id
-        to the session row, sends the launch command to the host,
-        and waits for the host's acknowledgement.
+        Delegates runner acquisition to the fabric facade, which
+        atomically binds a runner id, sends the launch command to the
+        host worker, and waits for the host's acknowledgement.
 
         :param request: The incoming request (for auth).
         :param host_id: Target host, e.g. ``"host_a1b2c3d4..."``.
@@ -452,43 +454,6 @@ def create_hosts_router(
             await asyncio.to_thread(conversation_store.clear_host_binding, body.session_id)
             await _rollback_worktree()
 
-        binding_token = secrets.token_urlsafe(32)
-        runner_id = token_bound_runner_id(binding_token)
-
-        # Atomic bind (UPDATE ... WHERE runner_id IS NULL): only one
-        # concurrent launch can bind an unbound session; a second (or an
-        # already-bound session) gets False. Closes the TOCTOU.
-        bound = await asyncio.to_thread(
-            conversation_store.set_runner_id,
-            body.session_id,
-            runner_id,
-        )
-        if not bound:
-            await _rollback_worktree()
-            raise HTTPException(
-                status_code=400,
-                detail="session already has a runner bound",
-            )
-        # Persist the validated, canonical workspace (the worktree path
-        # when a worktree was created) alongside host_id, plus git_branch
-        # when branching, so the conversation row satisfies
-        # ck_conversations_workspace_required_for_host. ``workspace`` is the
-        # realpath returned by validate_workspace (W6), or body.workspace
-        # verbatim only in non-production wiring without an agent cache.
-        await asyncio.to_thread(
-            conversation_store.set_host_id,
-            body.session_id,
-            host_id,
-            workspace,
-            git_branch,
-        )
-        if user_id is not None and runner_control_registry is not None:
-            runner_control_registry.record_launch_owner(
-                runner_id,
-                user_id,
-                token=binding_token,
-            )
-
         # Resolve the agent's harness so the host can refuse an
         # unconfigured one before spawning (mirrors POST /v1/sessions).
         # None — no agent cache wired, or no resolvable agent — skips
@@ -496,25 +461,62 @@ def create_hosts_router(
         harness: str | None = None
         if agent_store is not None and agent_cache is not None:
             harness = await _resolve_agent_harness(target.conv, agent_store, agent_cache)
-        try:
-            launch = await request_host_launch_runner(
-                host_registry=host_registry,
-                host_id=host_id,
-                binding_token=binding_token,
-                workspace=workspace,
-                harness=harness,
-                timeout_s=_LAUNCH_RESULT_TIMEOUT_S,
+
+        async def _persist_host_binding(_runner_id: str) -> None:
+            # Persist the validated, canonical workspace (the worktree path
+            # when a worktree was created) alongside host_id, plus git_branch
+            # when branching, so the conversation row satisfies
+            # ck_conversations_workspace_required_for_host. ``workspace`` is the
+            # realpath returned by validate_workspace (W6), or body.workspace
+            # verbatim only in non-production wiring without an agent cache.
+            await asyncio.to_thread(
+                conversation_store.set_host_id,
+                body.session_id,
+                host_id,
+                workspace,
+                git_branch,
             )
-        except HostControlError as exc:
-            await _rollback_failed_launch()
-            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+
+        try:
+            launch = await HostWorkerRunnerFabric().ensure_runner(
+                HostRunnerAcquisition(
+                    session_id=body.session_id,
+                    host_id=host_id,
+                    workspace=workspace,
+                    harness=harness,
+                    conversation_store=conversation_store,
+                    host_registry=host_registry,
+                    owner=user_id,
+                    runner_control_registry=runner_control_registry,
+                    bind_mode="set",
+                    timeout_s=_LAUNCH_RESULT_TIMEOUT_S,
+                    before_launch=_persist_host_binding,
+                )
+            )
+        except FabricRunnerConflict as exc:
+            await _rollback_worktree()
+            raise HTTPException(
+                status_code=400,
+                detail="session already has a runner bound",
+            ) from exc
         if not launch.acked:
             await _rollback_failed_launch()
             raise HTTPException(
-                status_code=504,
-                detail="host did not respond to launch request",
+                status_code=launch.status_code or 504,
+                detail=launch.error or "host did not respond to launch request",
             ) from None
-        result = launch.result
+        runner_id = launch.runner_id
+        result = {
+            "status": "failed",
+            "runner_id": None,
+            "error": launch.error,
+            "error_code": launch.error_code,
+        } if launch.error_code is not None or launch.error is not None else {
+            "status": "ok",
+            "runner_id": runner_id,
+            "error": None,
+            "error_code": None,
+        }
 
         if result.get("status") == "failed":
             await _rollback_failed_launch()
@@ -664,15 +666,12 @@ def create_hosts_router(
         # past the owner check below as None (see get_host above).
         user_id = require_user(request, auth_provider)
 
-        # Access check: load the host record, fail with 404 if it
-        # doesn't exist (don't leak existence), fail with 403 when the
-        # caller can't access it under the visibility scope (ADR-0151) —
-        # external hosts are reachable under org-shared; managed hosts
-        # stay owner-only.
+        # Access check: host filesystem browsing intentionally remains
+        # owner-only even when the host list/launch scope is org-shared.
         host = await asyncio.to_thread(host_store.get_host, host_id)
         if host is None:
             raise HTTPException(status_code=404, detail="host not found")
-        if not can_access_host(host, user_id):
+        if user_id is not None and host.owner != user_id:
             raise HTTPException(status_code=403, detail="not your host")
 
         if "\x00" in path:

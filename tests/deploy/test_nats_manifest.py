@@ -22,8 +22,16 @@ def _server_env() -> dict[str, str]:
     return {entry["name"]: entry["value"] for entry in container["env"] if "value" in entry}
 
 
+def _server_docs() -> list[dict]:
+    return [
+        doc
+        for doc in yaml.safe_load_all(Path("deploy/bytedesk/k8s/server.yaml").read_text())
+        if doc
+    ]
+
+
 def _server_env_from_secret_refs() -> set[str]:
-    docs = list(yaml.safe_load_all(Path("deploy/bytedesk/k8s/server.yaml").read_text()))
+    docs = _server_docs()
     deployment = next(
         doc
         for doc in docs
@@ -80,6 +88,17 @@ def test_server_reads_nats_runtime_config_from_infisical_secret() -> None:
 
     assert "OMNIGENT_NATS_URL" not in env
     assert "omnigent-runtime-config-secrets" in secret_refs
+
+
+def test_server_manifest_removes_peer_forwarding_service() -> None:
+    services = {
+        doc["metadata"]["name"]
+        for doc in _server_docs()
+        if doc["kind"] == "Service"
+    }
+
+    assert "omnigent-server" in services
+    assert "omnigent-server-peer" not in services
 
 
 def test_nats_runtime_config_secret_is_infisical_managed() -> None:
