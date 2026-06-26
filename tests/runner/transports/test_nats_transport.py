@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import base64
+import json
+
 import httpx
 import pytest
 from fastapi import FastAPI
@@ -12,6 +16,7 @@ from omnigent.runner.transports.nats_transport.transport import (
     _encode_http_request,
     decode_http_request,
     encode_http_response,
+    encode_http_stream_body,
 )
 
 
@@ -99,6 +104,85 @@ async def test_nats_runner_transport_adds_launch_auth_token() -> None:
 
 
 @pytest.mark.asyncio
+async def test_nats_runner_transport_streams_response_frames() -> None:
+    class _Msg:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+
+    class _Subscription:
+        def __init__(self) -> None:
+            self.queue: asyncio.Queue[_Msg] = asyncio.Queue()
+            self.unsubscribed = False
+
+        async def next_msg(self, timeout: float = 1.0) -> _Msg:
+            return await asyncio.wait_for(self.queue.get(), timeout=timeout)
+
+        async def unsubscribe(self) -> None:
+            self.unsubscribed = True
+
+    class _Nats:
+        def __init__(self) -> None:
+            self.subscriptions: dict[str, _Subscription] = {}
+            self.published: list[tuple[str, bytes]] = []
+            self.request_payload: bytes | None = None
+            self._inbox_counter = 0
+
+        def new_inbox(self) -> str:
+            self._inbox_counter += 1
+            return f"inbox.{self._inbox_counter}"
+
+        async def subscribe(self, subject: str) -> _Subscription:
+            subscription = _Subscription()
+            self.subscriptions[subject] = subscription
+            return subscription
+
+        async def request(self, subject: str, payload: bytes, timeout: float) -> _Msg:
+            del subject, timeout
+            self.request_payload = payload
+            request = decode_http_request(payload)
+            stream_reply = str(request["stream_reply"])
+            await self.subscriptions[stream_reply].queue.put(
+                _Msg(encode_http_stream_body(body=b"data: ready\\n\\n", more_body=True))
+            )
+            await self.subscriptions[stream_reply].queue.put(
+                _Msg(encode_http_stream_body(body=b"", more_body=False))
+            )
+            return _Msg(
+                encode_http_response(
+                    status_code=200,
+                    headers={"content-type": "text/event-stream"},
+                    stream=True,
+                )
+            )
+
+        async def publish(self, subject: str, payload: bytes) -> None:
+            self.published.append((subject, payload))
+
+        async def drain(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    fake_nats = _Nats()
+    transport = NatsRunnerTransport("runner_1", nats_url="nats://fake")
+    transport._nc = fake_nats  # type: ignore[attr-defined]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        async with client.stream("GET", "/v1/sessions/conv_1/stream") as response:
+            body = await response.aread()
+
+    assert response.status_code == 200
+    assert body == b"data: ready\\n\\n"
+    assert fake_nats.request_payload is not None
+    request = decode_http_request(fake_nats.request_payload)
+    assert request["path"] == "/v1/sessions/conv_1/stream"
+    assert request["stream_reply"] == "inbox.1"
+    assert request["stream_cancel"] == "inbox.2"
+    assert fake_nats.published == [("inbox.2", b'{"type":"cancel"}')]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_nats_http_request_runs_runner_asgi_app() -> None:
     app = FastAPI()
 
@@ -122,3 +206,85 @@ async def test_dispatch_nats_http_request_runs_runner_asgi_app() -> None:
         "body": {"message": "hello"},
         "served_by": "runner",
     }
+
+
+@pytest.mark.asyncio
+async def test_dispatch_nats_http_request_streams_asgi_body_frames() -> None:
+    class _CancelSubscription:
+        def __init__(self) -> None:
+            self.unsubscribed = False
+
+        async def unsubscribe(self) -> None:
+            self.unsubscribed = True
+
+    cancel_subscription = _CancelSubscription()
+    cancel_callbacks: dict[str, object] = {}
+    published: list[tuple[str, bytes]] = []
+
+    async def cancel_subscriber(subject: str, callback: object) -> _CancelSubscription:
+        cancel_callbacks[subject] = callback
+        return cancel_subscription
+
+    async def publisher(subject: str, payload: bytes) -> None:
+        published.append((subject, payload))
+
+    async def app(scope, receive, send) -> None:  # type: ignore[no-untyped-def]
+        assert scope["path"] == "/v1/sessions/conv_1/stream"
+        assert scope["query_string"] == b"cursor=0"
+        assert dict(scope["headers"])[b"authorization"] == b"Bearer launch-token"
+        assert await receive() == {
+            "type": "http.request",
+            "body": b"",
+            "more_body": False,
+        }
+        await send(
+            {
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [(b"content-type", b"text/event-stream")],
+            }
+        )
+        await send(
+            {
+                "type": "http.response.body",
+                "body": b"data: ready\\n\\n",
+                "more_body": True,
+            }
+        )
+        await send({"type": "http.response.body", "body": b"", "more_body": False})
+
+    request = httpx.Request(
+        "GET",
+        "http://runner/v1/sessions/conv_1/stream?cursor=0",
+        headers={"authorization": "Bearer launch-token"},
+    )
+    encoded_request = await _encode_http_request(
+        request,
+        stream_reply="reply.1",
+        stream_cancel="cancel.1",
+    )
+
+    encoded_response = await dispatch_nats_http_request(
+        app,
+        encoded_request,
+        stream_publisher=publisher,
+        cancel_subscriber=cancel_subscriber,
+    )
+    response = _decode_http_response(encoded_response, request=request)
+
+    for _ in range(10):
+        if len(published) >= 2:
+            break
+        await asyncio.sleep(0)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream"
+    assert cancel_callbacks.keys() == {"cancel.1"}
+    assert cancel_subscription.unsubscribed is True
+    assert [subject for subject, _payload in published] == ["reply.1", "reply.1"]
+    first_frame = json.loads(published[0][1])
+    assert base64.b64decode(first_frame["body_b64"]) == b"data: ready\\n\\n"
+    assert first_frame["more_body"] is True
+    second_frame = json.loads(published[1][1])
+    assert base64.b64decode(second_frame["body_b64"]) == b""
+    assert second_frame["more_body"] is False

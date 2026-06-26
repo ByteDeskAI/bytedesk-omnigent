@@ -52,6 +52,7 @@ from omnigent.stores.permission_store import PermissionStore
 _logger = logging.getLogger(__name__)
 
 _LAUNCH_RESULT_TIMEOUT_S = 30.0
+_LAUNCH_RUNNER_READY_TIMEOUT_S = 15.0
 # Per-call timeout for host.list_dir round-trips. Listing is a single
 # scandir + sort on the host side; 5s is generous for transient
 # network slowness without making the picker feel hung.
@@ -146,6 +147,9 @@ def create_hosts_router(
     permission_store: PermissionStore | None = None,
     agent_store: AgentStore | None = None,
     agent_cache: AgentCache | None = None,
+    runner_control_registry: Any | None = None,
+    runner_router: Any | None = None,
+    runner_exit_reports: Any | None = None,
 ) -> APIRouter:
     """Build the router for host REST endpoints.
 
@@ -166,6 +170,13 @@ def create_hosts_router(
         :func:`omnigent.server.app.create_app` always supplies it.
     :param agent_cache: Agent-spec cache used to read the agent's
         ``os_env.cwd`` boundary. Paired with ``agent_store``.
+    :param runner_control_registry: Runner control-plane registry used
+        to record the server-minted launch token for NATS dispatch.
+        ``None`` preserves minimal test wiring.
+    :param runner_router: Runner router used to probe the launched
+        runner's NATS control plane before returning.
+    :param runner_exit_reports: Optional crash-report store used to
+        abort the readiness wait if the host reports runner exit.
     :returns: A FastAPI router with host endpoints.
     """
     router = APIRouter()
@@ -471,6 +482,12 @@ def create_hosts_router(
             workspace,
             git_branch,
         )
+        if user_id is not None and runner_control_registry is not None:
+            runner_control_registry.record_launch_owner(
+                runner_id,
+                user_id,
+                token=binding_token,
+            )
 
         # Resolve the agent's harness so the host can refuse an
         # unconfigured one before spawning (mirrors POST /v1/sessions).
@@ -513,6 +530,17 @@ def create_hosts_router(
             raise HTTPException(
                 status_code=502,
                 detail=f"host failed to launch runner: {result.get('error')}",
+            )
+        if runner_router is not None:
+            from omnigent.server.routes.sessions import _wait_for_runner_client
+
+            await _wait_for_runner_client(
+                body.session_id,
+                runner_router,
+                runner_control_registry,
+                runner_id=runner_id,
+                timeout_s=_LAUNCH_RUNNER_READY_TIMEOUT_S,
+                runner_exit_reports=runner_exit_reports,
             )
 
         return {
