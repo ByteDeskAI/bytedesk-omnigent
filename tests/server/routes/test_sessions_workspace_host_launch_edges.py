@@ -307,7 +307,10 @@ async def test_launch_runner_on_host_records_owner_and_returns_success() -> None
     assert attempt.error_code is None
     assert attempt.acked is True  # BDP-2491: a real result frame is an ACK
     store.replace_runner_id.assert_called_once()
-    tunnel.record_launch_owner.assert_called_once_with(attempt.runner_id, "alice@example.com")
+    tunnel.record_launch_owner.assert_called_once()
+    args, kwargs = tunnel.record_launch_owner.call_args
+    assert args == (attempt.runner_id, "alice@example.com")
+    assert isinstance(kwargs.get("token"), str)
     registry.send_text.assert_called_once()
 
 

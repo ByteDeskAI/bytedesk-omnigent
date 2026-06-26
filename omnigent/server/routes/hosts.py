@@ -30,18 +30,20 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.harness_aliases import canonicalize_harness
 from omnigent.host.frames import (
     HARNESS_NOT_CONFIGURED_ERROR_CODE,
-    HostLaunchRunnerFrame,
-    HostListDirFrame,
-    encode_host_frame,
 )
 from omnigent.runner.identity import token_bound_runner_id
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server import host_access
 from omnigent.server.auth import AuthProvider
 from omnigent.server.host_access import can_access_host
-from omnigent.server.host_registry import HostConnection, HostRegistry
+from omnigent.server.host_control import (
+    HostControlError,
+    request_host_launch_runner,
+    request_host_list_dir,
+)
+from omnigent.server.host_registry import HostRegistry
 from omnigent.server.routes._auth_helpers import require_user
-from omnigent.server.routes._host_launch import resolve_host_launch
+from omnigent.server.routes._host_launch import resolve_host_launch_access
 from omnigent.server.schemas import SessionGitOptions
 from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.host_store import HostStore, host_is_live
@@ -56,78 +58,6 @@ _LAUNCH_RESULT_TIMEOUT_S = 30.0
 _LIST_DIR_TIMEOUT_S = 5.0
 _LIST_DIR_DEFAULT_LIMIT = 20
 _LIST_DIR_MAX_LIMIT = 1000
-
-
-async def _proxy_list_dir(
-    *,
-    host_registry: HostRegistry,
-    host_conn: HostConnection,
-    path: str,
-    limit: int,
-    after: str | None,
-    before: str | None,
-) -> dict[str, Any]:
-    """
-    Send a ``host.list_dir`` frame and await the result.
-
-    Mirrors the structure of the workspace validator's
-    ``_ask_host_stat``: enqueue the frame, register a future on
-    the host connection's ``pending_list_dirs`` map, await with a
-    timeout, and clean up in a finally block. The host's WS
-    receive loop in ``host_tunnel.py`` resolves the future when
-    the result frame arrives.
-
-    :param host_registry: Server-side registry; used to enqueue
-        the outbound frame on the host's send queue.
-    :param host_conn: Live host connection.
-    :param path: Absolute or tilde-prefixed path. The host
-        expands ``~`` itself.
-    :param limit: Max entries per page; clamped by the route.
-    :param after: Optional forward-pagination cursor (entry path).
-    :param before: Optional backward-pagination cursor.
-    :returns: Dict with the result fields:
-        ``status`` (``"ok"`` or ``"failed"``), ``entries`` (list
-        of dicts), ``has_more`` (bool), ``error`` (string or
-        ``None``).
-    :raises HTTPException: 504 on timeout, 502 on connection drop
-        or unexpected I/O failure on the host.
-    """
-    request_id = secrets.token_hex(8)
-    loop = asyncio.get_running_loop()
-    future: asyncio.Future[dict[str, Any]] = loop.create_future()
-    host_conn.pending_list_dirs[request_id] = future
-
-    frame = encode_host_frame(
-        HostListDirFrame(
-            request_id=request_id,
-            path=path,
-            limit=limit,
-            after=after,
-            before=before,
-        )
-    )
-    try:
-        try:
-            host_registry.send_text(host_conn, frame)
-        except ConnectionError as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"host '{host_conn.host_id}' connection lost",
-            ) from exc
-        try:
-            return await asyncio.wait_for(future, timeout=_LIST_DIR_TIMEOUT_S)
-        except asyncio.TimeoutError as exc:
-            raise HTTPException(
-                status_code=504,
-                detail=(
-                    f"host '{host_conn.host_id}' did not respond to list_dir "
-                    f"within {_LIST_DIR_TIMEOUT_S:.0f}s"
-                ),
-            ) from exc
-    finally:
-        # Cleanup runs on every path so a cancelled caller doesn't
-        # leave an orphan in the pending dict.
-        host_conn.pending_list_dirs.pop(request_id, None)
 
 
 class LaunchRunnerRequest(BaseModel):
@@ -367,16 +297,15 @@ def create_hosts_router(
         # Authorize against BOTH the host and the session before
         # spawning anything (see _host_launch for the threat model).
         target = await asyncio.to_thread(
-            resolve_host_launch,
+            resolve_host_launch_access,
             user_id=user_id,
             host_id=host_id,
             session_id=body.session_id,
             host_store=host_store,
-            host_registry=host_registry,
             conversation_store=conversation_store,
             permission_store=permission_store,
         )
-        conn = target.conn
+        conn = host_registry.get(host_id)
 
         # W6: validate the requested workspace against the agent's
         # os_env.cwd sandbox boundary BEFORE binding — the same check
@@ -420,6 +349,11 @@ def create_hosts_router(
         git_branch: str | None = None
         worktree = None  # CreatedWorktree | None — set when body.git is used
         if body.git is not None:
+            if conn is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="host git worktree operations require the host tunnel on this replica",
+                )
             from omnigent.host.git_worktree import (
                 WorktreeError,
                 validate_branch_name,
@@ -464,6 +398,7 @@ def create_hosts_router(
             """
             if worktree is None:
                 return
+            assert conn is not None
             from omnigent.server.routes._host_worktree import (
                 WorktreeProxyError,
                 remove_worktree_on_host,
@@ -537,10 +472,6 @@ def create_hosts_router(
             git_branch,
         )
 
-        request_id = secrets.token_hex(8)
-        future: asyncio.Future[dict[str, str | None]] = asyncio.get_running_loop().create_future()
-        conn.pending_launches[request_id] = future
-
         # Resolve the agent's harness so the host can refuse an
         # unconfigured one before spawning (mirrors POST /v1/sessions).
         # None — no agent cache wired, or no resolvable agent — skips
@@ -548,36 +479,25 @@ def create_hosts_router(
         harness: str | None = None
         if agent_store is not None and agent_cache is not None:
             harness = await _resolve_agent_harness(target.conv, agent_store, agent_cache)
-        launch_frame = encode_host_frame(
-            HostLaunchRunnerFrame(
-                request_id=request_id,
+        try:
+            launch = await request_host_launch_runner(
+                host_registry=host_registry,
+                host_id=host_id,
                 binding_token=binding_token,
                 workspace=workspace,
                 harness=harness,
+                timeout_s=_LAUNCH_RESULT_TIMEOUT_S,
             )
-        )
-        try:
-            host_registry.send_text(conn, launch_frame)
-        except ConnectionError:
-            conn.pending_launches.pop(request_id, None)
+        except HostControlError as exc:
             await _rollback_failed_launch()
-            raise HTTPException(
-                status_code=409,
-                detail="host connection was replaced",
-            ) from None
-
-        try:
-            result = await asyncio.wait_for(
-                future,
-                timeout=_LAUNCH_RESULT_TIMEOUT_S,
-            )
-        except asyncio.TimeoutError:
-            conn.pending_launches.pop(request_id, None)
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
+        if not launch.acked:
             await _rollback_failed_launch()
             raise HTTPException(
                 status_code=504,
                 detail="host did not respond to launch request",
             ) from None
+        result = launch.result
 
         if result.get("status") == "failed":
             await _rollback_failed_launch()
@@ -733,18 +653,18 @@ def create_hosts_router(
                 detail="path must not contain NUL bytes",
             )
 
-        conn = host_registry.get(host.host_id)
-        if conn is None:
-            raise HTTPException(status_code=409, detail="host is offline")
-
-        result = await _proxy_list_dir(
-            host_registry=host_registry,
-            host_conn=conn,
-            path=path,
-            limit=limit,
-            after=after,
-            before=before,
-        )
+        try:
+            result = await request_host_list_dir(
+                host_registry=host_registry,
+                host_id=host.host_id,
+                path=path,
+                limit=limit,
+                after=after,
+                before=before,
+                timeout_s=_LIST_DIR_TIMEOUT_S,
+            )
+        except HostControlError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.message) from exc
 
         if result.get("status") == "failed":
             # Unexpected I/O failure on the host.

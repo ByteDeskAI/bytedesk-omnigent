@@ -15,7 +15,12 @@ from httpx import ASGITransport, AsyncClient
 
 from omnigent.host.frames import (
     HostHelloFrame,
+    HostLaunchRunnerFrame,
     HostLaunchRunnerResultFrame,
+    HostListDirEntry,
+    HostListDirFrame,
+    HostListDirResultFrame,
+    decode_host_frame,
     encode_host_frame,
 )
 from omnigent.server.auth import LEVEL_OWNER
@@ -366,6 +371,90 @@ async def test_list_and_get_host_report_online_from_other_replica(
     )
 
 
+async def test_filesystem_request_proxies_to_host_on_other_replica(
+    host_api_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
+    db_uri: str,
+) -> None:
+    """
+    Verify host filesystem browsing works when the REST request lands
+    on a replica that does not own the host WebSocket.
+    """
+    from omnigent.coordination import lifecycle as coord_lifecycle
+    from omnigent.coordination.inprocess import InProcessBackplane
+
+    bp = InProcessBackplane("replica-host-api")
+    await bp.start()
+    coord_lifecycle._backplane = bp  # type: ignore[attr-defined]
+    coord_lifecycle._loop = asyncio.get_running_loop()  # type: ignore[attr-defined]
+    try:
+        app_b, registry_b, _hs, _cs = host_api_app
+        comm = await _connect_host(app_b, registry_b)
+        for _ in range(100):
+            if await bp.resolve_resource("host", _HOST_ID) is not None:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("host ownership was not claimed in coordination")
+        await asyncio.sleep(0.01)
+
+        registry_a = HostRegistry()
+        app_a = FastAPI()
+        app_a.include_router(
+            create_hosts_router(
+                registry_a,
+                HostStore(db_uri),
+                SqlAlchemyConversationStore(db_uri),
+            ),
+            prefix="/v1",
+        )
+        assert registry_a.get(_HOST_ID) is None
+
+        async def _reply_to_list_dir() -> None:
+            for _ in range(20):
+                output = await comm.receive_output(timeout=2.0)
+                if output["type"] != "websocket.send":
+                    continue
+                frame = decode_host_frame(output["text"])
+                if isinstance(frame, HostListDirFrame):
+                    await comm.send_input(
+                        {
+                            "type": "websocket.receive",
+                            "text": encode_host_frame(
+                                HostListDirResultFrame(
+                                    request_id=frame.request_id,
+                                    status="ok",
+                                    entries=[
+                                        HostListDirEntry(
+                                            name="repo",
+                                            path="/home/local/repo",
+                                            type="directory",
+                                            bytes=None,
+                                            modified_at=123,
+                                        )
+                                    ],
+                                )
+                            ),
+                        }
+                    )
+                    return
+            raise AssertionError("Host never received list_dir frame")
+
+        responder = asyncio.create_task(_reply_to_list_dir())
+        async with AsyncClient(
+            transport=ASGITransport(app=app_a),
+            base_url="http://test",
+        ) as client:
+            resp = await client.get(f"/v1/hosts/{_HOST_ID}/filesystem")
+        await responder
+
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["data"][0]["name"] == "repo"
+    finally:
+        coord_lifecycle.reset_for_tests()
+        await bp.stop()
+
+
 async def test_list_hosts_reports_offline_after_disconnect(
     host_api_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
 ) -> None:
@@ -468,6 +557,85 @@ async def test_launch_runner_happy_path(
         "runner_id should be written to the session row before sending the launch frame"
     )
     assert updated_conv.host_id == _HOST_ID, "host_id should be written to the session row"
+
+
+async def test_launch_runner_proxies_to_host_on_other_replica(
+    host_api_app: tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore],
+    db_uri: str,
+) -> None:
+    """Verify runner launch reaches a host tunnel owned by another replica."""
+    from omnigent.coordination import lifecycle as coord_lifecycle
+    from omnigent.coordination.inprocess import InProcessBackplane
+
+    bp = InProcessBackplane("replica-host-launch")
+    await bp.start()
+    coord_lifecycle._backplane = bp  # type: ignore[attr-defined]
+    coord_lifecycle._loop = asyncio.get_running_loop()  # type: ignore[attr-defined]
+    try:
+        app_b, registry_b, _hs, conv_store = host_api_app
+        comm = await _connect_host(app_b, registry_b)
+        for _ in range(100):
+            if await bp.resolve_resource("host", _HOST_ID) is not None:
+                break
+            await asyncio.sleep(0.01)
+        else:
+            pytest.fail("host ownership was not claimed in coordination")
+        await asyncio.sleep(0.01)
+
+        registry_a = HostRegistry()
+        app_a = FastAPI()
+        app_a.include_router(
+            create_hosts_router(
+                registry_a,
+                HostStore(db_uri),
+                SqlAlchemyConversationStore(db_uri),
+            ),
+            prefix="/v1",
+        )
+        assert registry_a.get(_HOST_ID) is None
+        conv = conv_store.create_conversation(agent_id=None)
+
+        async def _reply_to_launch() -> None:
+            for _ in range(20):
+                output = await comm.receive_output(timeout=2.0)
+                if output["type"] != "websocket.send":
+                    continue
+                frame = decode_host_frame(output["text"])
+                if isinstance(frame, HostLaunchRunnerFrame):
+                    await comm.send_input(
+                        {
+                            "type": "websocket.receive",
+                            "text": encode_host_frame(
+                                HostLaunchRunnerResultFrame(
+                                    request_id=frame.request_id,
+                                    status="launched",
+                                    runner_id="runner_token_remote",
+                                )
+                            ),
+                        }
+                    )
+                    return
+            raise AssertionError("Host never received launch frame")
+
+        responder = asyncio.create_task(_reply_to_launch())
+        async with AsyncClient(
+            transport=ASGITransport(app=app_a),
+            base_url="http://test",
+        ) as client:
+            resp = await client.post(
+                f"/v1/hosts/{_HOST_ID}/runners",
+                json={"session_id": conv.id, "workspace": "/tmp/test-workspace"},
+            )
+        await responder
+
+        assert resp.status_code == 200, resp.text
+        assert resp.json()["runner_id"].startswith("runner_token_")
+        updated = conv_store.get_conversation(conv.id)
+        assert updated is not None
+        assert updated.host_id == _HOST_ID
+    finally:
+        coord_lifecycle.reset_for_tests()
+        await bp.stop()
 
 
 async def test_launch_runner_harness_not_configured_returns_412(

@@ -46,6 +46,14 @@ class HostLaunchTarget:
     conv: Conversation
 
 
+@dataclass
+class HostLaunchAccess:
+    """A host + session pair the caller is authorized to launch on."""
+
+    host: Host
+    conv: Conversation
+
+
 def resolve_host_owner(
     *,
     user_id: str | None,
@@ -121,15 +129,43 @@ def resolve_host_launch(
         users' sessions aren't enumerable); 403 if the host is owned by
         a different user; 409 if the host is offline.
     """
-    host = resolve_host_owner(
+    access = resolve_host_launch_access(
         user_id=user_id,
         host_id=host_id,
+        session_id=session_id,
         host_store=host_store,
+        conversation_store=conversation_store,
+        permission_store=permission_store,
     )
 
     conn = host_registry.get(host_id)
     if conn is None:
         raise HTTPException(status_code=409, detail="host is offline")
+
+    return HostLaunchTarget(host=access.host, conn=conn, conv=access.conv)
+
+
+def resolve_host_launch_access(
+    *,
+    user_id: str | None,
+    host_id: str,
+    session_id: str,
+    host_store: HostStore,
+    conversation_store: ConversationStore,
+    permission_store: PermissionStore | None,
+) -> HostLaunchAccess:
+    """
+    Resolve launch authorization without requiring a local host tunnel.
+
+    Multi-replica servers may receive the request on a replica that does not
+    own the host WebSocket. Those callers still need the same host/session
+    authorization before forwarding the command to the owner replica.
+    """
+    host = resolve_host_owner(
+        user_id=user_id,
+        host_id=host_id,
+        host_store=host_store,
+    )
 
     conv = conversation_store.get_conversation(session_id)
     if conv is None:
@@ -148,4 +184,4 @@ def resolve_host_launch(
     ):
         raise HTTPException(status_code=404, detail="session not found")
 
-    return HostLaunchTarget(host=host, conn=conn, conv=conv)
+    return HostLaunchAccess(host=host, conv=conv)

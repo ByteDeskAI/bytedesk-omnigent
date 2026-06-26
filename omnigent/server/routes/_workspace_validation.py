@@ -24,13 +24,11 @@ returns.
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import secrets
 from typing import Any
 
-from omnigent.host.frames import HostStatFrame, encode_host_frame
-from omnigent.server.host_registry import HostConnection, HostRegistry
+from omnigent.server.host_control import HostControlError, request_host_stat
+from omnigent.server.host_registry import HostRegistry
 
 _logger = logging.getLogger(__name__)
 
@@ -69,7 +67,7 @@ class WorkspaceValidationError(Exception):
 async def _ask_host_stat(
     *,
     host_registry: HostRegistry,
-    host_conn: HostConnection,
+    host_id: str,
     path: str,
 ) -> dict[str, Any]:
     """
@@ -77,7 +75,7 @@ async def _ask_host_stat(
 
     :param host_registry: Server-side registry; used to enqueue the
         outbound frame on the host's send queue.
-    :param host_conn: Live host connection.
+    :param host_id: Stable host identifier.
     :param path: Absolute or tilde-prefixed path, e.g.
         ``"/Users/corey/universe"`` or ``"~/foo"``. The host
         expands ``~`` itself — the server never does.
@@ -93,33 +91,23 @@ async def _ask_host_stat(
         rather than re-raised so the route's generic exception
         handler doesn't swallow filesystem-error context.
     """
-    request_id = secrets.token_hex(8)
-    loop = asyncio.get_event_loop()
-    future: asyncio.Future[dict[str, Any]] = loop.create_future()
-    host_conn.pending_stats[request_id] = future
-
-    frame = encode_host_frame(HostStatFrame(request_id=request_id, path=path))
     try:
-        try:
-            host_registry.send_text(host_conn, frame)
-        except ConnectionError as exc:
+        result = await request_host_stat(
+            host_registry=host_registry,
+            host_id=host_id,
+            path=path,
+            timeout_s=_STAT_TIMEOUT_S,
+        )
+    except HostControlError as exc:
+        if exc.status_code == 409:
+            if "connection" in exc.message:
+                raise WorkspaceValidationError(
+                    f"host '{host_id}' connection lost during stat"
+                ) from exc
             raise WorkspaceValidationError(
-                f"host '{host_conn.host_id}' connection lost during stat"
+                f"host '{host_id}' is offline; reconnect the host and try again"
             ) from exc
-
-        try:
-            result = await asyncio.wait_for(future, timeout=_STAT_TIMEOUT_S)
-        except asyncio.TimeoutError as exc:
-            raise WorkspaceValidationError(
-                f"host '{host_conn.host_id}' did not respond to stat within {_STAT_TIMEOUT_S:.0f}s"
-            ) from exc
-    finally:
-        # Clean up the pending entry on every path. The receive
-        # loop in host_tunnel.py also pops on success, so
-        # pop(..., None) is a no-op when both fire — but if the
-        # caller is cancelled mid-await, this is the only
-        # cleanup path that runs.
-        host_conn.pending_stats.pop(request_id, None)
+        raise WorkspaceValidationError(exc.message) from exc
 
     if result.get("status") == "failed":
         raise WorkspaceValidationError(
@@ -222,19 +210,12 @@ async def validate_workspace(
 
     display_host = host_name_for_errors or host_id
 
-    # Step 0: host must be online.
-    host_conn = host_registry.get(host_id)
-    if host_conn is None:
-        raise WorkspaceValidationError(
-            f"host '{display_host}' is offline; reconnect the host and try again"
-        )
-
     # Step 4: stat the workspace. Done before the boundary check so
     # a missing workspace surfaces directly (more useful error than
     # "workspace is outside boundary that doesn't exist").
     workspace_stat = await _ask_host_stat(
         host_registry=host_registry,
-        host_conn=host_conn,
+        host_id=host_id,
         path=workspace,
     )
     if not workspace_stat.get("exists"):
@@ -258,7 +239,7 @@ async def validate_workspace(
         # on realpaths (symlinks in either side resolved away).
         boundary_stat = await _ask_host_stat(
             host_registry=host_registry,
-            host_conn=host_conn,
+            host_id=host_id,
             path=spec_cwd or "",  # _is_relative_cwd handled None above
         )
         if not boundary_stat.get("exists"):
@@ -296,7 +277,7 @@ async def validate_workspace(
         subdir_path = canonical_workspace.rstrip("/") + "/" + subdir
         subdir_stat = await _ask_host_stat(
             host_registry=host_registry,
-            host_conn=host_conn,
+            host_id=host_id,
             path=subdir_path,
         )
         if not subdir_stat.get("exists"):

@@ -70,7 +70,7 @@ class CoordinationBackplane(Protocol):
     ) -> None:
         """Fan-out an event to other replicas."""
 
-    async def subscribe(
+    def subscribe(
         self,
         subject: str,
         *,
