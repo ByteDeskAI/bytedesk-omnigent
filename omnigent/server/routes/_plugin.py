@@ -9,7 +9,7 @@ can host every first-party router it can host anyone's, and core gains no
 privileged route set.
 
 This module is the first step of that migration: it declares a first-party
-:class:`RoutesPlugin` via the :mod:`omnigent.sdk` ``@extension`` facade whose
+:class:`RoutesExtension` via the :mod:`omnigent.sdk` ``@extension`` facade whose
 ``@router`` methods return this subpackage's **existing** concrete router
 factories. It does **not** move or rewrite any factory — it only re-registers
 them through the seam (the providers stay exactly where they are in
@@ -112,7 +112,7 @@ STORE_BACKED_ROUTE_FACTORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
 
 
 @extension(name="omnigent.routes")
-class RoutesPlugin:
+class RoutesExtension:
     """First-party plugin contributing ``omnigent/server/routes/`` factories.
 
     A plain class the :func:`omnigent.sdk.extension` decorator compiles down to
@@ -147,4 +147,4 @@ class RoutesPlugin:
         return create_policy_registry_router(auth_provider=auth_provider)
 
 
-__all__ = ["RoutesPlugin", "STORE_BACKED_ROUTE_FACTORIES"]
+__all__ = ["RoutesExtension", "STORE_BACKED_ROUTE_FACTORIES"]

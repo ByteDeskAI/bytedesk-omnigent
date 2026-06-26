@@ -1,4 +1,4 @@
-"""First-party plugin — ``omnigent.metrics`` (BDP-2509, Section 9.1 metrics row).
+"""First-party plugin — ``omnigent.metrics`` (BDP-2509/BDP-2516, Section 9.1 metrics row).
 
 The ``omnigent/server/performance_metrics.py`` subpackage's periodic
 metrics-publish loop, expressed as a first-party plugin that registers its
@@ -12,12 +12,16 @@ Section 9.1 row::
     | omnigent/server/performance_metrics.py | omnigent.metrics | background_tasks | kernel only |
     | publish_server_metrics_periodically becomes a background task contributed by this plugin. |
 
-This file is **additive and off the boot path**: it is *not* yet wired into
-``create_app`` / the lifespan orchestrator (the Integration phase does that —
-Section 9.3). It only has to import cleanly and expose a correct
-``background_tasks()`` hook return. Today the same loop is started inline by
-``MetricsPublishPhase`` / ``create_app``; this plugin does not move, rewrite, or
-disable that — it merely re-exposes the *existing* provider through the seam.
+BDP-2516 (Integration, safe slice): this plugin is now the **authoritative**
+boot path for the metrics-publish loop — ``create_app`` starts it unconditionally
+through :func:`omnigent.core.firstparty_background_task_extensions` (no flag), and
+the old inline ``asyncio.create_task(publish_server_metrics_periodically(...))``
+in ``_lifespan`` / ``MetricsPublishPhase`` has been removed. To preserve parity
+with the inline path — which threaded the ``create_app``-constructed
+``server_metrics`` / ``server_metrics_otel`` (the SAME instances the HTTP
+middleware records into) — this plugin accepts those instances via constructor
+injection. When constructed with no args (the flag-gated discovery shadow / unit
+tests) it falls back to fresh subpackage defaults, exactly as before.
 
 Mirrors the prototype core-plugin style (``prototype/omnigent_demo/core/``): a
 plain class decorated with the SDK ``@extension`` whose members are stamped with
@@ -32,7 +36,15 @@ importing this module stays kernel-light and circular-import-safe.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from omnigent.sdk import background, extension
+
+if TYPE_CHECKING:  # pragma: no cover — typing only, deferred at runtime
+    from omnigent.server.performance_metrics import (
+        ServerMetricsOtelPublisher,
+        ServerPerformanceMetrics,
+    )
 
 
 @extension(name="omnigent.metrics", requires=())
@@ -45,24 +57,36 @@ class MetricsExtension:
     kernel (``extension_background_factories`` / ``ExtensionBackgroundTasksPhase``)
     calls each factory at lifespan start to obtain the awaitable it supervises
     and cancels at shutdown.
+
+    :param server_metrics: the live request tracker the HTTP middleware records
+        into. On the authoritative boot path (BDP-2516) ``create_app`` injects
+        the instance it constructed so the published snapshots reflect real
+        traffic. ``None`` ⇒ the loop self-constructs a fresh default (the
+        flag-gated discovery shadow and unit tests).
+    :param server_metrics_otel: the OTel snapshot publisher. Same injection
+        contract as ``server_metrics``.
     """
+
+    def __init__(
+        self,
+        server_metrics: ServerPerformanceMetrics | None = None,
+        server_metrics_otel: ServerMetricsOtelPublisher | None = None,
+    ) -> None:
+        self._server_metrics = server_metrics
+        self._server_metrics_otel = server_metrics_otel
 
     @background
     async def publish_server_metrics_loop(self) -> None:
         """Periodic server-metrics publish loop (the subpackage default provider).
 
-        Lazily imports ``omnigent.server.performance_metrics`` and reuses its
-        *existing* concrete defaults — ``ServerPerformanceMetrics`` (the
-        in-memory request tracker) and ``ServerMetricsOtelPublisher`` (the OTel
-        snapshot publisher) — then delegates to the existing
-        ``publish_server_metrics_periodically`` coroutine. Nothing is moved or
-        rewritten; the provider is registered *through* the seam (dogfooding).
-
-        Both default classes construct with all-default arguments, so the loop
-        is self-contained — no runtime-injected dependency is required for this
-        seam contribution. (When the Integration phase wires this onto the boot
-        path it may instead share the ``create_app``-constructed metrics tracker;
-        that is out of scope here and intentionally not done.)
+        Delegates to the existing ``publish_server_metrics_periodically``
+        coroutine in ``omnigent.server.performance_metrics`` (lazily imported to
+        keep this module kernel-light). When ``create_app`` injected the live
+        ``server_metrics`` / ``server_metrics_otel`` (BDP-2516 authoritative
+        path), those are threaded through so the loop snapshots the SAME tracker
+        the HTTP middleware records into. Without injection it falls back to
+        fresh subpackage defaults — preserving the prior discovery-shadow
+        behaviour.
 
         The coroutine runs until cancelled by the lifespan supervisor.
         """
@@ -72,8 +96,12 @@ class MetricsExtension:
             publish_server_metrics_periodically,
         )
 
-        metrics = ServerPerformanceMetrics()
-        otel_publisher = ServerMetricsOtelPublisher()
+        metrics = self._server_metrics
+        if metrics is None:
+            metrics = ServerPerformanceMetrics()
+        otel_publisher = self._server_metrics_otel
+        if otel_publisher is None:
+            otel_publisher = ServerMetricsOtelPublisher()
         await publish_server_metrics_periodically(
             metrics,
             otel_publisher=otel_publisher,

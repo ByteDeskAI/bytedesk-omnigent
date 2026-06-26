@@ -199,9 +199,12 @@ def test_default_phases_topo_sort_and_reverse_matches_finally_order() -> None:
     assert names.index("runner_router") < names.index("subagent_block_notifier")
 
     teardown_order = [p.name for p in reversed(ordered)]
+    # BDP-2516: the standalone metrics_publish / memory_maintenance phases were
+    # folded into extension_background_tasks (those loops are now authoritative
+    # first-party plugins started through the same seam path), mirroring the
+    # monolithic _lifespan which now folds both into the single _ext_bg_tasks
+    # list. They are therefore absent from the default DAG's teardown order.
     expected_finally = [
-        "metrics_publish",
-        "memory_maintenance",
         "extension_background_tasks",
         "managed_launch_cancel",
         "subagent_block_notifier",

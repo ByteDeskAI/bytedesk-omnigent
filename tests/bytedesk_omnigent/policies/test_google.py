@@ -1,6 +1,6 @@
 """
 Tests for the built-in Google Workspace policies
-(:mod:`omnigent.policies.builtins.google`) — the three sibling factories
+(:mod:`bytedesk_omnigent.policies.google`) — the three sibling factories
 ``gdrive_policy`` / ``gmail_policy`` / ``gcalendar_policy`` in one module.
 
 Layers per policy:
@@ -22,7 +22,7 @@ from typing import Any
 
 import pytest
 
-from omnigent.policies.builtins.google import (
+from bytedesk_omnigent.policies.google import (
     CREATED_DRAFTS_STATE_KEY,
     CREATED_FILES_STATE_KEY,
     gcalendar_policy,
@@ -38,9 +38,9 @@ from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConver
 from tests.policies.builtins.helpers import tool_call_event as tc
 from tests.policies.builtins.helpers import tool_result_event as tr
 
-_DRIVE_HANDLER = "omnigent.policies.builtins.google.gdrive_policy"
-_GMAIL_HANDLER = "omnigent.policies.builtins.google.gmail_policy"
-_CAL_HANDLER = "omnigent.policies.builtins.google.gcalendar_policy"
+_DRIVE_HANDLER = "bytedesk_omnigent.policies.google.gdrive_policy"
+_GMAIL_HANDLER = "bytedesk_omnigent.policies.google.gmail_policy"
+_CAL_HANDLER = "bytedesk_omnigent.policies.google.gcalendar_policy"
 _DOC_ID = "1AbCdefGHIjklMNOpqrSTUvwxyz0123456789"
 _DOC_URL = f"https://docs.google.com/document/d/{_DOC_ID}/edit?tab=t.0"
 

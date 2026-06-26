@@ -57,7 +57,7 @@ YAML usage::
       github_guard:
         type: function
         function:
-          path: omnigent.policies.builtins.github.github_policy
+          path: bytedesk_omnigent.policies.github.github_policy
           arguments:
             read_all: false
             read_repos: ["my-org/service-a", "my-org/service-b"]
@@ -1094,7 +1094,7 @@ def _worse(
 
 POLICY_REGISTRY: list[dict[str, Any]] = [  # type: ignore[explicit-any]
     {
-        "handler": "omnigent.policies.builtins.github.github_policy",
+        "handler": "bytedesk_omnigent.policies.github.github_policy",
         "kind": "factory",
         "name": "GitHub Repo & Branch Access",
         "description": (

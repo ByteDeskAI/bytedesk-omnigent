@@ -40,7 +40,6 @@ from omnigent.server.mcp_pool import ServerMcpPool
 from omnigent.server.performance_metrics import (
     ServerMetricsOtelPublisher,
     ServerPerformanceMetrics,
-    publish_server_metrics_periodically,
     set_request_duration_for_access_log,
 )
 from omnigent.server.routes.agents_write import create_agents_write_router
@@ -1109,21 +1108,6 @@ def create_app(
                         exc,
                     )
 
-        metrics_publish_task = asyncio.create_task(
-            publish_server_metrics_periodically(
-                server_metrics,
-                otel_publisher=server_metrics_otel,
-            )
-        )
-
-        # FU1 (BDP-2147, ADR-0132): periodic agent-memory maintenance —
-        # flush reinforcement then run the decay/eviction sweep, guarded by a
-        # PG advisory lock (no-op on SQLite). Single-replica today; the lock
-        # keeps it correct under a future shared registry.
-        from omnigent.runtime.memory_maintenance import memory_maintenance_loop
-
-        memory_maintenance_task = asyncio.create_task(memory_maintenance_loop())
-
         # BDP-2300 (ADR-0143): start first-party extension background loops — the
         # signal-bus reaper, cron heartbeat, accountability loop, and the one-shot
         # tool-step resume sweep — via the generic omnigent.kernel.extensions seam. They
@@ -1135,14 +1119,36 @@ def create_app(
             asyncio.create_task(factory())
             for factory in extension_background_factories()
         ]
-        # BDP-2509: first-party-plugin background loops (e.g. omnigent.metrics,
-        # omnigent.memory_maintenance) started through the SAME lifespan task
-        # path. Only populated when OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy
-        # (``_firstparty_extensions`` is empty otherwise), so the default boot is
-        # unchanged. Cancelled in the finally below with the other bg tasks.
-        if _firstparty_extensions:
-            from omnigent.core import firstparty_background_factories
+        # BDP-2516: the omnigent.metrics + omnigent.memory_maintenance loops are
+        # now AUTHORITATIVE first-party plugins — started UNCONDITIONALLY (no
+        # OMNIGENT_USE_FIRSTPARTY_PLUGINS flag) through the SAME lifespan task
+        # path as the extension loops above. This replaces the former inline
+        # asyncio.create_task(publish_server_metrics_periodically(...)) +
+        # memory_maintenance_loop() callsites. The metrics loop is injected with
+        # the live server_metrics / server_metrics_otel (the SAME instances the
+        # HTTP middleware records into) so snapshots reflect real traffic — exact
+        # parity with the removed inline callsite. Cancelled in the finally below
+        # with the other bg tasks.
+        from omnigent.core import (
+            firstparty_background_factories,
+            firstparty_background_task_extensions,
+        )
 
+        _bg_task_extensions = firstparty_background_task_extensions(
+            server_metrics=server_metrics,
+            server_metrics_otel=server_metrics_otel,
+        )
+        _ext_bg_tasks.extend(
+            asyncio.create_task(factory())
+            for factory in firstparty_background_factories(_bg_task_extensions)
+        )
+        # BDP-2509: the OTHER first-party-plugin background loops (if any) started
+        # through the SAME lifespan task path. Only populated when
+        # OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy (``_firstparty_extensions`` is
+        # empty otherwise); metrics + memory_maintenance are excluded from that
+        # shadow list (they are authoritative above), so no double-start. Cancelled
+        # in the finally below with the other bg tasks.
+        if _firstparty_extensions:
             _ext_bg_tasks.extend(
                 asyncio.create_task(factory())
                 for factory in firstparty_background_factories(
@@ -1155,12 +1161,6 @@ def create_app(
             from omnigent.coordination.lifecycle import stop_coordination
 
             await stop_coordination()
-            metrics_publish_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await metrics_publish_task
-            memory_maintenance_task.cancel()
-            with suppress(asyncio.CancelledError):
-                await memory_maintenance_task
             for _bg in _ext_bg_tasks:
                 _bg.cancel()
                 with suppress(asyncio.CancelledError):

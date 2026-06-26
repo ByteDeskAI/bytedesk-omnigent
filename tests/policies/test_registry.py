@@ -220,10 +220,11 @@ def test_is_registered_handler_includes_extra_modules() -> None:
     adds the module to ``policy_modules`` rather than naming an arbitrary
     callable at the API.
     """
-    # The built-in google module is normally scanned; load with it as an
-    # explicit extra to prove extra_modules entries are registered too.
-    load_registry(extra_modules=["omnigent.policies.builtins.google"])
-    assert is_registered_handler("omnigent.policies.builtins.google.gdrive_policy") is True
+    # The extension google module (BDP-2517: now shipped by bytedesk_omnigent,
+    # not core) is loaded as an explicit extra to prove extra_modules entries
+    # are registered too.
+    load_registry(extra_modules=["bytedesk_omnigent.policies.google"])
+    assert is_registered_handler("bytedesk_omnigent.policies.google.gdrive_policy") is True
     # Re-scan without extras leaves built-ins intact (idempotent reload).
     load_registry()
     assert is_registered_handler("omnigent.policies.builtins.safety.ask_on_os_tools") is True

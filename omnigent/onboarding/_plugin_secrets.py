@@ -33,7 +33,7 @@ from ..sdk import extension
 
 
 @extension(name="omnigent.secrets")
-class SecretsPlugin:
+class SecretsExtension:
     """First-party plugin contributing the default :class:`LocalBackend`.
 
     The ``secret_backends`` seam has no SDK member-decorator (there is no

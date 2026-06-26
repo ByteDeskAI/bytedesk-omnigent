@@ -46,7 +46,7 @@ from omnigent.sdk import extension
 
 
 @extension(name="omnigent.spec")
-class SpecPlugin:
+class SpecExtension:
     """First-party ``omnigent.spec`` plugin — registers the default spec source.
 
     Registers this subpackage's existing :class:`FilesystemSpecSource` into the
@@ -81,4 +81,4 @@ class SpecPlugin:
         return {"filesystem": lambda: FilesystemSpecSource()}
 
 
-__all__ = ["SpecPlugin"]
+__all__ = ["SpecExtension"]

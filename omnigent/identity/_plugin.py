@@ -40,7 +40,7 @@ from omnigent.sdk import extension
 
 
 @extension(name="omnigent.identity")
-class IdentityPlugin:
+class IdentityExtension:
     """First-party plugin: register the in-box identity defaults into their seams.
 
     The three identity-port hooks below are *not* SDK member-decorator seams
@@ -86,4 +86,4 @@ class IdentityPlugin:
         return {"owner_allow": OwnerAllowAuthorizer}
 
 
-__all__ = ["IdentityPlugin"]
+__all__ = ["IdentityExtension"]

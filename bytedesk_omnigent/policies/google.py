@@ -61,12 +61,12 @@ YAML usage::
       gdrive_guard:
         type: function
         function:
-          path: omnigent.policies.builtins.google.gdrive_policy
+          path: bytedesk_omnigent.policies.google.gdrive_policy
           arguments: {read_all: false, read_files: ["1AbC..."], allow_create: true}
       gmail_guard:
         type: function
         function:
-          path: omnigent.policies.builtins.google.gmail_policy
+          path: bytedesk_omnigent.policies.google.gmail_policy
           arguments: {allow_send: false}
 """
 
@@ -857,7 +857,7 @@ def gcalendar_policy(
 
 POLICY_REGISTRY: list[dict[str, Any]] = [  # type: ignore[explicit-any]
     {
-        "handler": "omnigent.policies.builtins.google.gdrive_policy",
+        "handler": "bytedesk_omnigent.policies.google.gdrive_policy",
         "kind": "factory",
         "name": "Google Drive / Docs / Sheets Access",
         "description": (
@@ -904,7 +904,7 @@ POLICY_REGISTRY: list[dict[str, Any]] = [  # type: ignore[explicit-any]
         },
     },
     {
-        "handler": "omnigent.policies.builtins.google.gmail_policy",
+        "handler": "bytedesk_omnigent.policies.google.gmail_policy",
         "kind": "factory",
         "name": "Gmail Access",
         "description": (
@@ -945,7 +945,7 @@ POLICY_REGISTRY: list[dict[str, Any]] = [  # type: ignore[explicit-any]
         },
     },
     {
-        "handler": "omnigent.policies.builtins.google.gcalendar_policy",
+        "handler": "bytedesk_omnigent.policies.google.gcalendar_policy",
         "kind": "factory",
         "name": "Google Calendar Access",
         "description": (

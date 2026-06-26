@@ -37,8 +37,6 @@ from __future__ import annotations
 BUILTIN_POLICY_MODULES = [
     "omnigent.policies.builtins.safety",
     "omnigent.policies.builtins.cost",
-    "omnigent.policies.builtins.google",
-    "omnigent.policies.builtins.github",
     "omnigent.policies.builtins.working_dir",
     "omnigent.policies.builtins.risk_score",
     "omnigent.policies.builtins.routing",

@@ -28,7 +28,7 @@ from ..sdk import extension
 
 
 @extension(name="omnigent.policies")
-class PoliciesPlugin:
+class PoliciesExtension:
     """Registers this subpackage's built-in policy modules into the ``policies``
     seam via the ``policy_modules`` hook.
 
@@ -50,4 +50,4 @@ class PoliciesPlugin:
         return list(BUILTIN_POLICY_MODULES)
 
 
-__all__ = ["PoliciesPlugin"]
+__all__ = ["PoliciesExtension"]

@@ -1,10 +1,10 @@
-"""Edge-case coverage for :mod:`omnigent.policies.builtins.github`."""
+"""Edge-case coverage for :mod:`bytedesk_omnigent.policies.github`."""
 
 from __future__ import annotations
 
 import pytest
 
-from omnigent.policies.builtins.github import (
+from bytedesk_omnigent.policies.github import (
     _classify_gh,
     _classify_git,
     _classify_mcp_tool,
@@ -16,7 +16,7 @@ from omnigent.policies.builtins.github import (
     github_policy,
 )
 from omnigent.policies.schema import PolicyEvent
-from tests.policies.builtins.test_github import _sh
+from tests.bytedesk_omnigent.policies.test_github import _sh
 from tests.policies.builtins.helpers import tool_call_event as tc
 
 
@@ -87,7 +87,7 @@ def test_env_only_shell_segment_abstains() -> None:
 
 def test_excessive_shell_nesting_abstains(monkeypatch: pytest.MonkeyPatch) -> None:
     """Beyond ``MAX_SHELL_NESTING`` shell unwrapping stops."""
-    monkeypatch.setattr("omnigent.policies.builtins.github.MAX_SHELL_NESTING", 0)
+    monkeypatch.setattr("bytedesk_omnigent.policies.github.MAX_SHELL_NESTING", 0)
     policy = github_policy()
     assert policy(_sh('bash -c "git push origin main"')) is None
 

@@ -166,6 +166,8 @@ class BytedeskExtension:
             "bytedesk_omnigent.policies.dry_run",
             "bytedesk_omnigent.policies.delegation",
             "bytedesk_omnigent.policies.outreach_compliance",
+            "bytedesk_omnigent.policies.google",
+            "bytedesk_omnigent.policies.github",
         ]
 
     # ── builtin tool factories (merged into core _BUILTIN_REGISTRY) ───

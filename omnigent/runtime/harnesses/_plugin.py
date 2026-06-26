@@ -39,7 +39,7 @@ from omnigent.sdk import extension
 
 
 @extension(name="omnigent.harnesses", requires=("omnigent.stores",))
-class HarnessesPlugin:
+class HarnessesExtension:
     """The built-in harnesses, contributed through the ``harness`` seam.
 
     ``requires=("omnigent.stores",)`` mirrors the boot-order dependency in the
@@ -68,4 +68,4 @@ class HarnessesPlugin:
         return harness_descriptors()
 
 
-__all__ = ["HarnessesPlugin"]
+__all__ = ["HarnessesExtension"]
