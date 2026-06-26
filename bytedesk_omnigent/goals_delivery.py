@@ -191,36 +191,50 @@ class GoalDeliveryProjector:
         set_jira: bool | None = None,
         pr_number: int | None = None,
     ) -> ProjectionResult:
-        payload = copy.deepcopy(goal.payload or {})
-        milestone = _milestones(payload)[index]
-        was_done = milestone.get("status") == "done"
+        captured: dict[str, Any] = {}
 
-        if set_pr is not None:
-            milestone["prMerged"] = bool(set_pr)
-            if pr_number is not None:
-                milestone.setdefault("delivery", {}).setdefault("github", {})[
-                    "prNumber"
-                ] = pr_number
-        if set_jira is not None:
-            milestone["jiraDone"] = bool(set_jira)
+        def _mutate(payload: dict[str, Any]) -> None:
+            milestones = _milestones(payload)
+            if index >= len(milestones):
+                # Milestone list shifted between the match read and the locked write.
+                captured["missing"] = True
+                return
+            milestone = milestones[index]
+            captured["was_done"] = milestone.get("status") == "done"
+            if set_pr is not None:
+                milestone["prMerged"] = bool(set_pr)
+                if pr_number is not None:
+                    milestone.setdefault("delivery", {}).setdefault("github", {})[
+                        "prNumber"
+                    ] = pr_number
+            if set_jira is not None:
+                milestone["jiraDone"] = bool(set_jira)
+            new_status = compute_milestone_status(
+                jira_done=bool(milestone.get("jiraDone")),
+                pr_merged=bool(milestone.get("prMerged")),
+                current=milestone.get("status", "pending"),
+            )
+            milestone["status"] = new_status
+            captured["new_status"] = new_status
+            captured["milestone_key"] = _jira_task_key(milestone)
 
-        new_status = compute_milestone_status(
-            jira_done=bool(milestone.get("jiraDone")),
-            pr_merged=bool(milestone.get("prMerged")),
-            current=milestone.get("status", "pending"),
-        )
-        milestone["status"] = new_status
-        self._store.update_goal(goal_id=goal.id, payload=payload, now=now)
+        # Atomic read-modify-write under the store's write lock: the payload is
+        # re-read inside the same transaction, so a concurrent PR-merged + Jira-Done
+        # for this milestone can't lose a key (the two-key gate, BDP-2553 / ADR-0009).
+        updated = self._store.mutate_payload(goal_id=goal.id, mutator=_mutate, now=now)
+        if updated is None or captured.get("missing"):
+            return _NOT_MATCHED
 
-        milestone_key = _jira_task_key(milestone)
-        milestone_completed = new_status == "done" and not was_done
+        new_status = captured["new_status"]
+        milestone_key = captured["milestone_key"]
+        milestone_completed = new_status == "done" and not captured["was_done"]
         goal_completed = False
         if milestone_completed:
             # Unlock dependent goals waiting on this milestone (two-key gate passed).
             self._satisfy_dependencies(
                 lambda d: d.kind == "milestone" and d.ref == milestone_key, now
             )
-            goal_completed = self._maybe_complete_goal(goal.id, payload, now)
+            goal_completed = self._maybe_complete_goal(goal.id, updated.payload or {}, now)
 
         return ProjectionResult(
             matched=True,
@@ -235,25 +249,33 @@ class GoalDeliveryProjector:
     def _record_step(
         self, goal: Any, index: int, step_key: str, is_done: bool, now: int
     ) -> ProjectionResult:
-        payload = copy.deepcopy(goal.payload or {})
-        milestone = _milestones(payload)[index]
-        done = list(milestone.get("stepsDone") or [])
-        changed = False
-        if is_done and step_key not in done:
-            done.append(step_key)
-            changed = True
-        elif not is_done and step_key in done:
-            done.remove(step_key)
-            changed = True
-        milestone["stepsDone"] = done
-        if changed:
-            self._store.update_goal(goal_id=goal.id, payload=payload, now=now)
+        captured: dict[str, Any] = {}
+
+        def _mutate(payload: dict[str, Any]) -> None:
+            milestones = _milestones(payload)
+            if index >= len(milestones):
+                captured["missing"] = True
+                return
+            milestone = milestones[index]
+            done = list(milestone.get("stepsDone") or [])
+            if is_done and step_key not in done:
+                done.append(step_key)
+            elif not is_done and step_key in done:
+                done.remove(step_key)
+            milestone["stepsDone"] = done
+            captured["milestone_key"] = _jira_task_key(milestone)
+            captured["milestone_status"] = milestone.get("status")
+
+        # Atomic RMW so concurrent subtask updates can't drop a step (BDP-2553).
+        updated = self._store.mutate_payload(goal_id=goal.id, mutator=_mutate, now=now)
+        if updated is None or captured.get("missing"):
+            return _NOT_MATCHED
         return ProjectionResult(
             matched=True,
             http_status=202,
             goal_id=goal.id,
-            milestone_key=_jira_task_key(milestone),
-            milestone_status=milestone.get("status"),
+            milestone_key=captured["milestone_key"],
+            milestone_status=captured["milestone_status"],
             detail="step progress",
         )
 

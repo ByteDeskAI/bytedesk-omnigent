@@ -456,6 +456,42 @@ class SqlAlchemyGoalStore:
             _publish_goal_event("updated", goal, occurred_at=now)
         return goal
 
+    def mutate_payload(
+        self,
+        *,
+        goal_id: str,
+        mutator: Any,
+        now: int | None = None,
+    ) -> Goal | None:
+        """Atomic read-modify-write of ``goal.payload`` under the write lock (ADR-0009).
+
+        ``mutator(payload: dict) -> None`` mutates the payload **in place** inside
+        the same transaction that re-reads the row, so a concurrent writer cannot
+        lose an update. ``update_goal(payload=...)`` computes the whole payload
+        *outside* the lock and clobbers concurrent writes — use this for any
+        delivery transition that flips one key of a shared payload (e.g. the
+        two-key milestone gate, BDP-2553). Single-writer on both dialects: the
+        ``immediate`` session takes SQLite's write lock before the read, and
+        ``with_for_update`` serializes the row on Postgres.
+        """
+        now = now_epoch() if now is None else now
+        goal: Goal | None = None
+        with self._write_session() as session:
+            row = session.get(SqlGoal, goal_id, with_for_update=True)
+            if row is None:
+                return None
+            payload = _loads(row.payload) or {}
+            mutator(payload)
+            row.payload = json.dumps(payload)
+            row.updated_at = now
+            self._refresh_activation(session, row, now)
+            dependencies = self._dependency_rows(session, [goal_id]).get(goal_id, ())
+            session.flush()
+            goal = _to_goal(row, dependencies)
+        if goal is not None:
+            _publish_goal_event("updated", goal, occurred_at=now)
+        return goal
+
     def activate_goal(self, *, goal_id: str, now: int | None = None) -> Goal | None:
         """Manually make a goal claimable, overriding deferred/dependent framing."""
         return self.update_goal(
