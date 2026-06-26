@@ -280,6 +280,25 @@ class ConversationStore(ABC):
         """
         ...
 
+    def owner_for_runner(self, runner_id: str) -> str | None:
+        """
+        Return the ``created_by`` owner of the session bound to ``runner_id``.
+
+        Cross-replica resolution of a runner's launch owner from the shared
+        store (BDP-2572). A runner's in-memory launch-owner record
+        (``RunnerControlRegistry``) is per-replica, so a runner whose HTTP
+        callback (spec resolution, ``/agent/contents``, ``/items``) lands on a
+        server replica that did not launch it has no local record →
+        ``RunnerTokenAuthProvider`` 401s → ``spec_resolver_failed`` at 2+
+        replicas. The session→runner binding lives in the shared DB, so this
+        resolves the owner regardless of which replica handles the callback.
+        Returns ``None`` when no session is bound to ``runner_id`` (e.g. a
+        forged / never-launched runner id), preserving the auth invariant that
+        an unlaunched runner authenticates as nobody. Default ``None`` for store
+        impls that do not back cross-replica auth.
+        """
+        return None
+
     @abstractmethod
     def get_session_connectivity(
         self, conversation_ids: list[str]

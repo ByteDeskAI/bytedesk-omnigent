@@ -3888,6 +3888,35 @@ def test_get_session_owner_none_when_no_grants(
     assert conversation_store.get_session_owner(conv.id) is None
 
 
+def test_owner_for_runner_resolves_owner_cross_replica(
+    conversation_store: SqlAlchemyConversationStore,
+    db_uri: str,
+) -> None:
+    """BDP-2572: owner_for_runner resolves the launch owner from the shared DB
+    (session→runner→owner) so a runner callback that lands on a server replica
+    that did not launch it can still authenticate (no more spec_resolver_failed
+    at 2+ replicas)."""
+    from omnigent.stores.permission_store.sqlalchemy_store import (
+        SqlAlchemyPermissionStore,
+    )
+
+    conv = conversation_store.create_conversation(runner_id="runner_xrep_1")
+    perms = SqlAlchemyPermissionStore(db_uri)
+    perms.ensure_user("grace@example.com")
+    perms.grant("grace@example.com", conv.id, 4)  # LEVEL_OWNER
+
+    assert conversation_store.owner_for_runner("runner_xrep_1") == "grace@example.com"
+
+
+def test_owner_for_runner_none_when_runner_unbound(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """No session bound to the runner id (forged / never-launched) → None, so
+    the auth invariant (an unlaunched runner authenticates as nobody) holds."""
+    assert conversation_store.owner_for_runner("runner_never_launched") is None
+    assert conversation_store.owner_for_runner("") is None
+
+
 def test_get_session_owner_excludes_public_sentinel(
     conversation_store: SqlAlchemyConversationStore,
     db_uri: str,

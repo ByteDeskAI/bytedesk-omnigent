@@ -932,7 +932,16 @@ def create_app(
         auth_provider = CompositeAuthProvider(
             auth_provider,
             _principal_head_resolvers,  # type: ignore[arg-type]
-            tail_resolvers=[RunnerTokenAuthProvider(runner_control_registry)],
+            tail_resolvers=[
+                RunnerTokenAuthProvider(
+                    runner_control_registry,
+                    # BDP-2572: cross-replica runner-owner resolution. The
+                    # per-replica in-memory launch record misses when a runner's
+                    # callback lands on a replica that did not launch it; fall
+                    # back to the shared store's session→runner→owner binding.
+                    owner_fallback=conversation_store.owner_for_runner,
+                ),
+            ],
         )
 
     @asynccontextmanager
