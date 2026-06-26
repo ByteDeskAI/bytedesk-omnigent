@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
-from .credentials import InMemoryRunnerCredentialStore
+from .credentials import (
+    InMemoryRunnerCredentialStore,
+    NatsRunnerCredentialStore,
+    RunnerLaunchCredential,
+    create_runner_credential_store_from_env,
+)
 from .manifest import DEFAULT_FABRIC_MANIFEST, FabricManifest
 from .models import (
     AuditEvent,
@@ -53,14 +58,17 @@ __all__ = [
     "InMemoryRunnerCredentialStore",
     "LeaseRecord",
     "LifecycleEvent",
+    "NatsRunnerCredentialStore",
     "PlacementDecision",
     "QuarantineRecord",
     "ReplaySimulationRequired",
     "RunnerAcquisitionResult",
     "RunnerHeartbeat",
     "RunnerJob",
+    "RunnerLaunchCredential",
     "SchedulerJob",
     "TimelineEvent",
     "WarmFirstPlacementStrategy",
+    "create_runner_credential_store_from_env",
     "fabric_schema_hash",
 ]

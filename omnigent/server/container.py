@@ -82,10 +82,11 @@ class Core(containers.DeclarativeContainer):
     ``runner_router = RunnerRouter(...)`` today).
     """
 
-    # Caller-supplied dependencies. ``conversation_store`` is set by
-    # ``create_app`` from the store it already built; nothing else in the
-    # composition root takes a constructor argument.
-    config = providers.Configuration()
+    # Caller-supplied dependencies. ``create_app`` supplies runtime objects it
+    # already built; use object dependencies instead of Configuration so the
+    # provider does not deepcopy SQL/NATS-backed instances.
+    conversation_store = providers.Dependency()
+    runner_credential_store = providers.Dependency(default=None)
 
     # ── Singletons (process-lifetime services) ──────────────────────────
     # Order mirrors the inline construction in ``create_app`` so the object
@@ -96,7 +97,8 @@ class Core(containers.DeclarativeContainer):
     runner_router = providers.Singleton(
         RunnerRouter,
         registry=runner_control_registry,
-        conversation_store=config.conversation_store,
+        conversation_store=conversation_store,
+        credential_store=runner_credential_store,
     )
 
     host_registry = providers.Singleton(HostRegistry)
@@ -155,7 +157,10 @@ def request_scope(container: Core) -> Iterator[Core]:
         pass
 
 
-def build_core_container(conversation_store: Any) -> Core:
+def build_core_container(
+    conversation_store: Any,
+    runner_credential_store: Any | None = None,
+) -> Core:
     """Build and configure the :class:`Core` container for one app.
 
     :param conversation_store: The conversation store ``create_app`` already
@@ -166,7 +171,8 @@ def build_core_container(conversation_store: Any) -> Core:
         resolve the same object graph ``create_app`` builds inline.
     """
     container = Core()
-    container.config.conversation_store.from_value(conversation_store)
+    container.conversation_store.override(providers.Object(conversation_store))
+    container.runner_credential_store.override(providers.Object(runner_credential_store))
     return container
 
 

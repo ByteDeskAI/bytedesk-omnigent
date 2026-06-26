@@ -35,6 +35,7 @@ class HostRunnerAcquisition:
     host_registry: Any
     owner: str | None = None
     runner_control_registry: Any | None = None
+    runner_credential_store: Any | None = None
     bind_mode: BindMode = "replace"
     timeout_s: float = 15.0
     host_connection: Any | None = None
@@ -110,6 +111,15 @@ class HostWorkerRunnerFabric:
                 runner_id,
                 acquisition.owner,
                 token=binding_token,
+            )
+        if (
+            acquisition.owner is not None
+            and acquisition.runner_credential_store is not None
+        ):
+            await acquisition.runner_credential_store.record_launch_token(
+                runner_id,
+                acquisition.owner,
+                binding_token,
             )
 
         try:

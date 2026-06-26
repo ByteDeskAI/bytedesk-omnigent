@@ -11,6 +11,7 @@ from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.coordination.lifecycle import reset_for_tests
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.fabric.credentials import RunnerLaunchCredential
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runner.transports.nats_transport import NatsRunnerTransport
 
@@ -66,6 +67,14 @@ class _ConversationStore:
         return self._conversations.get(conversation_id)
 
 
+class _CredentialStore:
+    def __init__(self, credentials: dict[str, RunnerLaunchCredential]) -> None:
+        self._credentials = credentials
+
+    async def lookup_launch_token(self, runner_id: str) -> RunnerLaunchCredential | None:
+        return self._credentials.get(runner_id)
+
+
 def _hello(*, harnesses: list[str]) -> _Hello:
     return _Hello(harnesses=harnesses)
 
@@ -118,6 +127,37 @@ async def test_aclient_for_session_resources_launch_record_uses_direct_nats() ->
         transport = routed.client._transport  # type: ignore[attr-defined]
         assert isinstance(transport, NatsRunnerTransport)
         assert transport._auth_token == "launch-token"  # type: ignore[attr-defined]
+    finally:
+        await router.aclose()
+
+
+@pytest.mark.asyncio
+async def test_aclient_for_session_resources_hydrates_shared_launch_credential() -> None:
+    registry = _RunnerRegistry()
+    store = _ConversationStore({"conv_test": _conversation(runner_id="runner_remote")})
+    credential_store = _CredentialStore(
+        {
+            "runner_remote": RunnerLaunchCredential(
+                runner_id="runner_remote",
+                owner="alice",
+                token="shared-launch-token",
+                expires_unix_ms=9_999,
+            )
+        }
+    )
+    router = RunnerRouter(
+        registry=registry,
+        conversation_store=store,
+        credential_store=credential_store,
+    )
+
+    try:
+        routed = await router.aclient_for_session_resources("conv_test")
+        assert routed.runner_id == "runner_remote"
+        assert registry.launch_token("runner_remote") == "shared-launch-token"
+        transport = routed.client._transport  # type: ignore[attr-defined]
+        assert isinstance(transport, NatsRunnerTransport)
+        assert transport._auth_token == "shared-launch-token"  # type: ignore[attr-defined]
     finally:
         await router.aclose()
 

@@ -21,6 +21,7 @@ class _FakeJetStream:
     kv: list[dict] = field(default_factory=list)
     object_stores: list[dict] = field(default_factory=list)
     published: list[tuple[str, bytes, dict[str, str]]] = field(default_factory=list)
+    kv_records: dict[tuple[str, str], bytes] = field(default_factory=dict)
 
     async def ensure_stream(self, config: dict) -> None:
         self.streams.append(config)
@@ -37,6 +38,15 @@ class _FakeJetStream:
     async def request(self, subject: str, payload: bytes, timeout_s: float) -> bytes:
         del payload, timeout_s
         return f"reply:{subject}".encode()
+
+    async def kv_put(self, bucket: str, key: str, payload: bytes) -> None:
+        self.kv_records[(bucket, key)] = payload
+
+    async def kv_get(self, bucket: str, key: str) -> bytes | None:
+        return self.kv_records.get((bucket, key))
+
+    async def kv_delete(self, bucket: str, key: str) -> None:
+        self.kv_records.pop((bucket, key), None)
 
 
 class _Config:
@@ -278,3 +288,17 @@ async def test_request_service_uses_adapter_request_reply() -> None:
     reply = await adapter.request("omnigent.fabric.control.preflight", b"{}", timeout_s=0.5)
 
     assert reply == b"reply:omnigent.fabric.control.preflight"
+
+
+@pytest.mark.asyncio
+async def test_kv_helpers_delegate_through_adapter() -> None:
+    fake = _FakeJetStream()
+    adapter = NatsFabricAdapter("nats://test", client=fake)
+
+    await adapter.kv_put("bucket", "runner_1", b"secret")
+
+    assert await adapter.kv_get("bucket", "runner_1") == b"secret"
+
+    await adapter.kv_delete("bucket", "runner_1")
+
+    assert await adapter.kv_get("bucket", "runner_1") is None

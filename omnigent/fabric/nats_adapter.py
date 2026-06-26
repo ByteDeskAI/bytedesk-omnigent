@@ -48,6 +48,18 @@ class NatsFabricAdapter:
         client = await self._ensure_client()
         return await client.request(subject, payload, timeout_s)
 
+    async def kv_put(self, bucket: str, key: str, payload: bytes) -> None:
+        client = await self._ensure_client()
+        await client.kv_put(bucket, key, payload)
+
+    async def kv_get(self, bucket: str, key: str) -> bytes | None:
+        client = await self._ensure_client()
+        return await client.kv_get(bucket, key)
+
+    async def kv_delete(self, bucket: str, key: str) -> None:
+        client = await self._ensure_client()
+        await client.kv_delete(bucket, key)
+
     async def serve_service_host(
         self,
         host: NatsServiceHost,
@@ -203,3 +215,26 @@ class _NatsPyJetStreamClient:
     async def request(self, subject: str, payload: bytes, timeout_s: float) -> bytes:
         msg = await self._nc.request(subject, payload, timeout=timeout_s)
         return bytes(msg.data)
+
+    async def kv_put(self, bucket: str, key: str, payload: bytes) -> None:
+        kv = await self._js.key_value(bucket)
+        await kv.put(key, payload)
+
+    async def kv_get(self, bucket: str, key: str) -> bytes | None:
+        try:
+            kv = await self._js.key_value(bucket)
+            entry = await kv.get(key)
+        except Exception as exc:
+            if _is_not_found_error(exc):
+                return None
+            raise
+        value = getattr(entry, "value", None)
+        return bytes(value) if value is not None else None
+
+    async def kv_delete(self, bucket: str, key: str) -> None:
+        try:
+            kv = await self._js.key_value(bucket)
+            await kv.delete(key)
+        except Exception as exc:
+            if not _is_not_found_error(exc):
+                raise

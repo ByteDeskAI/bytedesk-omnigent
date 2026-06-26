@@ -150,6 +150,7 @@ def create_hosts_router(
     agent_store: AgentStore | None = None,
     agent_cache: AgentCache | None = None,
     runner_control_registry: Any | None = None,
+    runner_credential_store: Any | None = None,
     runner_router: Any | None = None,
     runner_exit_reports: Any | None = None,
 ) -> APIRouter:
@@ -175,6 +176,8 @@ def create_hosts_router(
     :param runner_control_registry: Runner control-plane registry used
         to record the server-minted launch token for NATS dispatch.
         ``None`` preserves minimal test wiring.
+    :param runner_credential_store: Shared fabric credential store used
+        to make launch tokens visible to every server replica.
     :param runner_router: Runner router used to probe the launched
         runner's NATS control plane before returning.
     :param runner_exit_reports: Optional crash-report store used to
@@ -488,6 +491,7 @@ def create_hosts_router(
                     host_registry=host_registry,
                     owner=user_id,
                     runner_control_registry=runner_control_registry,
+                    runner_credential_store=runner_credential_store,
                     bind_mode="set",
                     timeout_s=_LAUNCH_RESULT_TIMEOUT_S,
                     before_launch=_persist_host_binding,
