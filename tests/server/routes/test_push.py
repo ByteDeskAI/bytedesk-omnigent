@@ -9,6 +9,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from omnigent.db.db_models import SqlPushSubscription
 from omnigent.server.push.attention import should_notify_new_elicitation, should_notify_turn_end
 from omnigent.server.push.sender import build_push_payload
 from omnigent.server.push.service import PushNotificationService
@@ -16,7 +17,10 @@ from omnigent.server.push.vapid import generate_ephemeral_vapid_keys
 from omnigent.server.routes.push import create_push_router
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
-from omnigent.stores.push_subscription_store.sqlalchemy_store import SqlAlchemyPushSubscriptionStore
+from omnigent.stores.push_subscription_store.sqlalchemy_store import (
+    SqlAlchemyPushSubscriptionStore,
+    _upsert_insert_for_engine,
+)
 
 
 def test_attention_predicates_match_idle_transitions() -> None:
@@ -83,6 +87,31 @@ def test_subscription_crud(push_client: TestClient) -> None:
         headers={"Content-Type": "application/json"},
     )
     assert delete_res.status_code == 204
+
+
+def test_subscription_upsert_uses_postgres_insert_for_postgres_engine() -> None:
+    from sqlalchemy.dialects import postgresql
+
+    class _Dialect:
+        name = "postgresql"
+
+    class _Engine:
+        dialect = _Dialect()
+
+    stmt = _upsert_insert_for_engine(_Engine())(SqlPushSubscription).values(
+        user_id="alice@example.com",
+        endpoint="https://push.example/sub/1",
+        p256dh="abc",
+        auth="def",
+    )
+    upsert = stmt.on_conflict_do_update(
+        index_elements=[SqlPushSubscription.endpoint],
+        set_={"user_id": "alice@example.com", "p256dh": "abc", "auth": "def"},
+    )
+
+    compiled = str(upsert.compile(dialect=postgresql.dialect()))
+
+    assert "ON CONFLICT" in compiled
 
 
 def test_dispatcher_sends_on_turn_end(db_uri: str) -> None:
