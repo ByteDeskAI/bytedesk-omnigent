@@ -207,6 +207,60 @@ def test_github_default_adapter_verifies_hmac_and_reads_event() -> None:
     assert adapter.match_key({}) == "*"  # absent → catch-all
 
 
+def test_github_default_adapter_reads_real_github_event_header() -> None:
+    """GitHub webhooks carry routing in ``X-GitHub-Event``; the first-party
+    adapter must resolve that header directly so repository events can wake
+    Omnigent bindings without a ByteDesk-specific shim."""
+    adapter = GitHubWebhookAdapter()
+    body = b'{"action":"opened","issue":{"number":123}}'
+    secret = "github-webhook-secret"
+    sig = _sign(body, secret)
+
+    assert adapter.verify(body, {"X-Hub-Signature-256": "sha256=" + sig}, secret) is True
+    assert adapter.match_key({"X-GitHub-Event": "issues"}) == "issues"
+
+
+def test_process_inbound_delivers_real_github_event_header(tmp_path) -> None:
+    """A GitHub issue event signed with GitHub's standard headers resolves the
+    ``github/issues`` binding and wakes the parked agent session."""
+    db = f"sqlite:///{tmp_path / 'github-ingress.db'}"
+    bus = SqlAlchemySignalBus(db)
+    store = IngressBindingStore(db)
+    now = int(time.time())
+    secret = "github-webhook-secret"
+    bus.register_wait(
+        signal_id="github:issue:123",
+        session_id="sess-gh",
+        key="subscribe:github:issues",
+        kind="subscribe",
+        target="github",
+        now=now,
+    )
+    store.register_binding(
+        source="github", match_key="issues", signal_id="github:issue:123", now=now
+    )
+    body = b'{"action":"opened","issue":{"number":123}}'
+
+    result = process_inbound(
+        source="github",
+        raw_body=body,
+        headers={
+            "X-Hub-Signature-256": "sha256=" + _sign(body, secret),
+            "X-GitHub-Event": "issues",
+            "X-GitHub-Delivery": "delivery-123",
+        },
+        secret=secret,
+        store=store,
+        bus=bus,
+        payload={"action": "opened", "issue": {"number": 123}},
+        now=now + 1,
+    )
+
+    assert result.status is IngressStatus.DELIVERED
+    assert result.http_status == 202
+    assert result.signal_id == "github:issue:123"
+
+
 def test_resolve_webhook_adapter_defaults_to_github() -> None:
     """A source with no bespoke adapter falls back to the GitHub default (BDP-2354)."""
     assert isinstance(resolve_webhook_adapter("anything"), GitHubWebhookAdapter)

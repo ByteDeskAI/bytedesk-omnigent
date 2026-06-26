@@ -139,7 +139,8 @@ class GitHubWebhookAdapter:
 
     Reads the signature from ``X-Omnigent-Signature`` (preferred) or GitHub's
     ``X-Hub-Signature-256`` (bare hex or ``sha256=<hex>``); the event name from
-    ``X-Omnigent-Event`` (``"*"`` when absent). Headers are read
+    GitHub's standard ``X-GitHub-Event`` header or the legacy
+    ``X-Omnigent-Event`` shim (``"*"`` when absent). Headers are read
     case-insensitively.
     """
 
@@ -152,7 +153,7 @@ class GitHubWebhookAdapter:
         return verify_hmac_signature(raw_body, secret, provided)
 
     def match_key(self, headers: Mapping[str, str]) -> str:
-        return _header(headers, "x-omnigent-event") or "*"
+        return _header(headers, "x-github-event") or _header(headers, "x-omnigent-event") or "*"
 
 
 class JiraWebhookAdapter:
