@@ -13,6 +13,7 @@ from bytedesk_omnigent.goals_delivery import (
     GoalDeliveryProjector,
     JiraIssueEvent,
     compute_milestone_status,
+    normalize_delivery_contract,
     parse_github_pr_event,
     parse_jira_issue_event,
 )
@@ -300,3 +301,30 @@ def test_github_fixture_drives_projector_end_to_end(tmp_path) -> None:
     })
     result = proj.apply_github_pr_merged(event, now=120)
     assert result.goal_completed is True
+
+
+# -- Concierge delivery contract (P4) ----------------------------------------
+def test_normalize_delivery_contract_fills_fingerprints() -> None:
+    draft_payload = {
+        "jiraEpicKey": "BDP-1234",
+        "hierarchy": {"milestones": [{"taskKey": "BDP-1235", "title": "API"}]},
+    }
+    out = normalize_delivery_contract(draft_payload)
+    m = out["hierarchy"]["milestones"][0]
+    assert m["delivery"]["jira"]["taskKey"] == "BDP-1235"
+    assert m["delivery"]["github"]["baseBranch"] == "develop"
+    assert m["delivery"]["github"]["prNumber"] is None
+    assert m["status"] == "pending"
+    assert m["jiraDone"] is False and m["prMerged"] is False
+    assert m["steps"] == []
+    # idempotent + non-destructive of an existing contract
+    again = normalize_delivery_contract(out)
+    again["hierarchy"]["milestones"][0]["delivery"]["github"]["branch"] = "feature/x"
+    assert normalize_delivery_contract(again)["hierarchy"]["milestones"][0][
+        "delivery"
+    ]["github"]["branch"] == "feature/x"
+
+
+def test_normalize_delivery_contract_noop_without_milestones() -> None:
+    assert normalize_delivery_contract({"jiraEpicKey": "BDP-1"}) == {"jiraEpicKey": "BDP-1"}
+    assert normalize_delivery_contract(None) is None

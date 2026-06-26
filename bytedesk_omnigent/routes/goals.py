@@ -421,18 +421,25 @@ def create_goals_router(
         await _require_admin(request, auth_provider, permission_store)
         from bytedesk_omnigent.goals import get_goal_store
 
+        from bytedesk_omnigent.goals_delivery import normalize_delivery_contract
+
         draft = body.draft
-        payload = {
-            **(draft.payload or {}),
-            "goal_planning": {
-                "session_id": session_id,
-                "outcome": draft.outcome,
-                "acceptance_criteria": draft.acceptance_criteria,
-                "assumptions": draft.assumptions,
-                "source_refs": draft.source_refs,
-                "source_ids": body.source_ids,
-            },
-        }
+        # ADR-0154 P4: stamp the delivery contract (both fingerprints + initial
+        # two-key gate state) on every milestone so webhook delivery can project
+        # onto it. A draft without a milestone hierarchy is unaffected.
+        payload = normalize_delivery_contract(
+            {
+                **(draft.payload or {}),
+                "goal_planning": {
+                    "session_id": session_id,
+                    "outcome": draft.outcome,
+                    "acceptance_criteria": draft.acceptance_criteria,
+                    "assumptions": draft.assumptions,
+                    "source_refs": draft.source_refs,
+                    "source_ids": body.source_ids,
+                },
+            }
+        )
         try:
             goal = get_goal_store().create_goal(
                 title=draft.title,
