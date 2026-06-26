@@ -33,6 +33,21 @@ The serving store defaults to NATS JetStream KV, using
 `omnigent.flags.changed` for update notifications. An explicit in-memory store
 exists for tests and narrow local runs only; it is not a production fallback.
 
+NATS-upgrade rollout choices are represented as seeded runtime flags, not new
+`OMNIGENT_USE_*` environment variables. The ByteDesk runtime-flags extension
+creates missing defaults during server lifespan startup without overwriting live
+operator edits:
+
+- `runtime.message_bus.mode`: `inprocess | nats`
+- `runtime.session_events.mode`: `local | nats_core | jetstream`
+- `runtime.presence.store`: `local | nats_kv`
+- `runtime.realtime.publisher`: `redis | dual | nats`
+- `runtime.session_initiator`: `http | nats`
+
+Environment variables remain valid only for deployment bootstrap and secrets
+such as `OMNIGENT_NATS_URL` and the runtime flag store bootstrap mode. They are
+not the rollout control surface for these NATS conversion decisions.
+
 Runner server-to-runner HTTP dispatch now resolves through a pluggable transport
 factory and defaults to NATS request/reply:
 
