@@ -21,6 +21,18 @@ async def test_claim_and_resolve_resource() -> None:
 
 
 @pytest.mark.asyncio
+async def test_try_acquire_is_noop_true_for_single_replica() -> None:
+    # The in-process backplane has no peer replica, so the heal lock always
+    # acquires (no-op); release never raises (BDP-2579 F1).
+    bp = InProcessBackplane("replica-a")
+    await bp.start()
+    assert await bp.try_acquire("session-heal:conv_1", ttl_s=30.0) is True
+    assert await bp.try_acquire("session-heal:conv_1", ttl_s=30.0) is True
+    await bp.release("session-heal:conv_1")
+    await bp.stop()
+
+
+@pytest.mark.asyncio
 async def test_index_put_get_delete_and_prefix() -> None:
     bp = InProcessBackplane("replica-a")
     await bp.start()

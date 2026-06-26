@@ -55,6 +55,16 @@ class InProcessBackplane:
         with self._lock:
             self._registry.pop(self._reg_key(kind, resource_id), None)
 
+    async def try_acquire(self, lock_name: str, *, ttl_s: float) -> bool:
+        # Single-replica: there is no second replica to coordinate with, so the
+        # lock always succeeds. In-process concurrency is coalesced by the
+        # caller's own single-flight (BDP-2579 F1).
+        del lock_name, ttl_s
+        return True
+
+    async def release(self, lock_name: str) -> None:
+        del lock_name
+
     async def index_put(
         self,
         bucket: str,

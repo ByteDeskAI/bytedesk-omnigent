@@ -1929,6 +1929,72 @@ class SqlAlchemyConversationStore(ConversationStore):
             row.updated_at = now_epoch()
             return _to_conversation(row, _fetch_labels(session, conversation_id))
 
+    def cas_runner_id(
+        self,
+        conversation_id: str,
+        expected_runner_id: str,
+        new_runner_id: str,
+    ) -> bool:
+        """
+        Compare-and-swap ``runner_id`` (rung-1 heal repin).
+
+        See :meth:`ConversationStore.cas_runner_id`. One ``UPDATE`` whose
+        ``WHERE`` matches the id AND the expected (dead) runner id; the DB
+        serializes concurrent healers so exactly one transitions the row.
+
+        :param conversation_id: Conversation to repin.
+        :param expected_runner_id: Dead runner id the row must still hold.
+        :param new_runner_id: New runner id to bind.
+        :returns: ``True`` if the swap applied; ``False`` if the row moved.
+        """
+        from sqlalchemy import update
+
+        with self._session() as session:
+            stmt = (
+                update(SqlConversation)
+                .where(SqlConversation.id == conversation_id)
+                .where(SqlConversation.runner_id == expected_runner_id)
+                .values(runner_id=new_runner_id, updated_at=now_epoch())
+            )
+            result = session.execute(stmt)
+            return result.rowcount == 1
+
+    def cas_host_and_runner(
+        self,
+        conversation_id: str,
+        expected_host_id: str,
+        expected_runner_id: str,
+        new_host_id: str,
+        new_runner_id: str,
+    ) -> bool:
+        """
+        Compare-and-swap ``(host_id, runner_id)`` together (rung-2 failover).
+
+        See :meth:`ConversationStore.cas_host_and_runner`. One ``UPDATE``
+        guarding BOTH columns so the host/runner pair never splits across a
+        failover hop. ``workspace`` is untouched (stays non-null, satisfying
+        ``ck_conversations_workspace_required_for_host``); the caller ensures
+        ``new_host_id`` exists (the ``host_id`` FK).
+
+        :returns: ``True`` if the swap applied; ``False`` if either column moved.
+        """
+        from sqlalchemy import update
+
+        with self._session() as session:
+            stmt = (
+                update(SqlConversation)
+                .where(SqlConversation.id == conversation_id)
+                .where(SqlConversation.host_id == expected_host_id)
+                .where(SqlConversation.runner_id == expected_runner_id)
+                .values(
+                    host_id=new_host_id,
+                    runner_id=new_runner_id,
+                    updated_at=now_epoch(),
+                )
+            )
+            result = session.execute(stmt)
+            return result.rowcount == 1
+
     def clear_runner_id(self, conversation_id: str) -> Conversation:
         """
         Null out ``conversations.runner_id``. Atomic last-write-wins.

@@ -10,6 +10,7 @@ ResourceKind = Literal["runner", "host"]
 KV_REGISTRY = "omnigent-coord-registry"
 KV_PENDING = "omnigent-pending-index"
 KV_PRESENCE = "omnigent-presence"
+KV_LOCKS = "omnigent-coord-locks"
 STREAM_COORD_EVENTS = "OMNIGENT_COORD_EVENTS"
 
 
@@ -41,6 +42,20 @@ class CoordinationBackplane(Protocol):
 
     async def release_resource(self, kind: ResourceKind, resource_id: str) -> None:
         """Drop a resource claim (idempotent)."""
+
+    async def try_acquire(self, lock_name: str, *, ttl_s: float) -> bool:
+        """Atomically acquire a named cross-replica mutex.
+
+        Unlike :meth:`claim_resource` (last-write-wins presence), this is a real
+        create-only lock: exactly one of N concurrent callers across all
+        replicas gets ``True``; the rest get ``False``. A crashed holder's lock
+        self-expires after ``ttl_s`` so the work is never stranded. The
+        single-replica/in-process backplane always returns ``True`` (no-op
+        lock). See BDP-2579 F1.
+        """
+
+    async def release(self, lock_name: str) -> None:
+        """Release a lock acquired via :meth:`try_acquire` (idempotent)."""
 
     async def index_put(
         self,

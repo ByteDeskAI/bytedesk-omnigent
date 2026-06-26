@@ -886,6 +886,63 @@ class ConversationStore(ABC):
         ...
 
     @abstractmethod
+    def cas_runner_id(
+        self,
+        conversation_id: str,
+        expected_runner_id: str,
+        new_runner_id: str,
+    ) -> bool:
+        """
+        Atomically repin ``runner_id`` only if it still equals ``expected``.
+
+        Single ``UPDATE ... WHERE id=:id AND runner_id=:expected`` so a
+        rung-1 self-heal relaunch (BDP-2579 F3) never clobbers a binding
+        another writer already moved (a concurrent heal on a peer replica,
+        or a user re-bind). Unlike :meth:`replace_runner_id` (last-write-wins),
+        the swap is compare-and-swap: exactly one healer wins the repin.
+
+        :param conversation_id: Conversation to repin, e.g. ``"conv_abc123"``.
+        :param expected_runner_id: The dead runner id the row must still
+            hold for the swap to apply, e.g. ``"runner_dead"``.
+        :param new_runner_id: The freshly-launched runner id to bind, e.g.
+            ``"runner_new"``.
+        :returns: ``True`` if this call won the swap (row still held
+            ``expected``); ``False`` if the row moved or doesn't exist (no
+            write performed).
+        """
+        ...
+
+    @abstractmethod
+    def cas_host_and_runner(
+        self,
+        conversation_id: str,
+        expected_host_id: str,
+        expected_runner_id: str,
+        new_host_id: str,
+        new_runner_id: str,
+    ) -> bool:
+        """
+        Atomically repin ``(host_id, runner_id)`` together — host failover.
+
+        Single ``UPDATE ... WHERE id=:id AND host_id=:eh AND runner_id=:er``
+        guarding BOTH columns so a rung-2 failover (BDP-2579 F3) never splits
+        the host/runner pair across a hop: either both move to the new host's
+        runner, or neither does. ``workspace`` is left untouched (kept
+        non-null to respect ``ck_conversations_workspace_required_for_host``);
+        the caller must ensure ``new_host_id`` references an existing host row
+        (the ``host_id`` FK).
+
+        :param conversation_id: Conversation to repin, e.g. ``"conv_abc123"``.
+        :param expected_host_id: The failed host id the row must still hold.
+        :param expected_runner_id: The dead runner id the row must still hold.
+        :param new_host_id: The failover-target host id (row must exist).
+        :param new_runner_id: The freshly-launched runner id on the new host.
+        :returns: ``True`` if this call won the swap (row still held BOTH
+            expected values); ``False`` otherwise (no write performed).
+        """
+        ...
+
+    @abstractmethod
     def clear_runner_id(self, conversation_id: str) -> Conversation:
         """
         Null out ``conversations.runner_id``.

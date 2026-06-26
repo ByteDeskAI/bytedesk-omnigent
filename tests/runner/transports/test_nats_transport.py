@@ -256,6 +256,57 @@ async def test_nats_runner_transport_uses_read_timeout_for_stream_frames() -> No
 
 
 @pytest.mark.asyncio
+async def test_nats_runner_transport_stream_wraps_dead_runner_as_connect_error() -> None:
+    """A dead runner subject (NoRespondersError) on the stream path must
+    surface as ``httpx.ConnectError`` — the same uniform dead-runner signal
+    the unary path emits — so the heal detector catches both read paths
+    identically (BDP-2579 F2)."""
+
+    # Stand-in for ``nats.errors.NoRespondersError`` so the test runs without
+    # the optional ``nats-py`` extra (the dev env omits it; transport.py imports
+    # nats lazily). The stream path wraps ANY request exception into
+    # ConnectError, so a named stand-in exercises the identical code path.
+    class _NoRespondersError(Exception):
+        pass
+
+    class _DeadNats:
+        def __init__(self) -> None:
+            self._inbox_counter = 0
+            self.unsubscribed = False
+
+        def new_inbox(self) -> str:
+            self._inbox_counter += 1
+            return f"inbox.{self._inbox_counter}"
+
+        async def subscribe(self, subject: str) -> object:
+            del subject
+
+            class _Sub:
+                async def unsubscribe(_self) -> None:
+                    return None
+
+            return _Sub()
+
+        async def request(self, subject: str, payload: bytes, timeout: float) -> object:
+            del subject, payload, timeout
+            raise _NoRespondersError
+
+        async def drain(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    transport = NatsRunnerTransport("runner_dead", nats_url="nats://fake")
+    transport._nc = _DeadNats()  # type: ignore[attr-defined]
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        with pytest.raises(httpx.ConnectError):
+            async with client.stream("GET", "/v1/sessions/conv_1/stream"):
+                pass
+
+
+@pytest.mark.asyncio
 async def test_dispatch_nats_http_request_runs_runner_asgi_app() -> None:
     app = FastAPI()
 

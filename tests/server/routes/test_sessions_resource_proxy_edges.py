@@ -81,9 +81,24 @@ async def test_proxy_get_session_resources_raises_on_malformed_body() -> None:
     assert "malformed" in str(exc.value.detail)
 
 
-async def test_proxy_get_session_resources_raises_on_transport_error() -> None:
+async def test_proxy_get_session_resources_raises_runner_unavailable_on_dead_runner() -> None:
+    # A dead runner (ConnectError, the uniform BDP-2579 F2 signal) now surfaces
+    # as RUNNER_UNAVAILABLE so the read path can self-heal instead of 502-storm.
+    from omnigent.errors import ErrorCode, OmnigentError
+
     client = AsyncMock()
     client.get = AsyncMock(side_effect=httpx.ConnectError("runner offline"))
+
+    with pytest.raises(OmnigentError) as exc:
+        await _proxy_get_session_resources_to_runner(client, "conv_down")
+
+    assert exc.value.code == ErrorCode.RUNNER_UNAVAILABLE
+
+
+async def test_proxy_get_session_resources_raises_502_on_other_http_error() -> None:
+    # A non-connect HTTP error is still a generic 502 (not a dead runner).
+    client = AsyncMock()
+    client.get = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
 
     with pytest.raises(HTTPException) as exc:
         await _proxy_get_session_resources_to_runner(client, "conv_down")

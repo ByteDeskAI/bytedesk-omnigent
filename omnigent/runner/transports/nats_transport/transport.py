@@ -105,10 +105,17 @@ class NatsRunnerTransport(httpx.AsyncBaseTransport):
         )
         try:
             raw_response = (await nc.request(subject, payload, timeout=timeout_s)).data
-        except Exception:
+        except Exception as exc:
             with contextlib.suppress(Exception):
                 await subscription.unsubscribe()
-            raise
+            # Wrap nats errors (NoRespondersError = dead runner subject,
+            # TimeoutError, …) into httpx.ConnectError so the stream path fails
+            # the SAME way the unary path does (handle_async_request above), and
+            # the heal detector catches both read paths uniformly (BDP-2579 F2).
+            raise httpx.ConnectError(
+                f"runner {self._runner_id!r} unavailable over NATS: {exc}",
+                request=request,
+            ) from exc
         if not _encoded_http_response_is_stream(raw_response):
             with contextlib.suppress(Exception):
                 await subscription.unsubscribe()
