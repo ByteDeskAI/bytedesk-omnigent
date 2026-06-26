@@ -42,6 +42,12 @@ from omnigent.host.frames import (
     decode_host_frame,
     encode_host_frame,
 )
+from omnigent.host.keepalive import (
+    PingFrame,
+    PongFrame,
+    decode_keepalive_frame,
+    encode_keepalive_frame,
+)
 from omnigent.host.git_worktree import (
     WorktreeError,
     create_worktree,
@@ -58,12 +64,6 @@ from omnigent.runner.identity import (
     RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR,
     RUNNER_WORKSPACE_ENV_VAR,
     token_bound_runner_id,
-)
-from omnigent.runner.transports.ws_tunnel.frames import (
-    PingFrame,
-    PongFrame,
-    decode_frame,
-    encode_frame,
 )
 
 _logger = logging.getLogger(__name__)
@@ -1500,11 +1500,11 @@ class HostProcess:
             # Not a host frame — it may be a runner ping (the tunnel
             # multiplexes both frame families over one socket).
             try:
-                runner_frame = decode_frame(raw)
+                runner_frame = decode_keepalive_frame(raw)
             except ValueError:
                 return
             if isinstance(runner_frame, PingFrame):
-                await ws.send(encode_frame(PongFrame(ts=runner_frame.ts)))
+                await ws.send(encode_keepalive_frame(PongFrame(ts=runner_frame.ts)))
             return
         await self._dispatch_host_frame(ws, frame)
 

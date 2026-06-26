@@ -32,7 +32,7 @@ from omnigent.runner._entry import (
     _server_url_from_env,
     main,
 )
-from omnigent.runner.transports.ws_tunnel.serve import RUNNER_TUNNEL_REJECTION_PREFIX
+from omnigent.runner.transports.nats_transport.serve import RUNNER_NATS_REJECTION_PREFIX
 
 
 class _TrackingTerminalRegistry:
@@ -934,6 +934,10 @@ async def test_runner_shutdown_closes_terminal_registry(
         "omnigent.terminals.TerminalRegistry",
         _terminal_registry_factory,
     )
+    # This test patches the shared httpx module to observe runner shutdown.
+    # Import runner.app first so third-party type annotations see real httpx.
+    import omnigent.runner.app  # noqa: F401
+
     monkeypatch.setattr(entry_mod.httpx, "AsyncClient", _async_client_factory)
     monkeypatch.setattr(entry_mod.httpx, "Client", _sync_client_factory)
     monkeypatch.setattr(entry_mod, "_make_auth_token_factory", lambda: None)
@@ -1145,30 +1149,30 @@ async def test_resolve_agent_spec_from_server_raises_for_non_404_errors(
     assert "/v1/sessions/conv_test/agent/contents" in message
 
 
-def test_main_reports_tunnel_rejection_without_traceback(
+def test_main_reports_control_plane_rejection_without_traceback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Fatal tunnel rejections are rendered as concise CLI errors.
+    """Fatal control-plane rejections are rendered as concise CLI errors.
 
     :param monkeypatch: Pytest monkeypatch fixture.
     :param capsys: Pytest stdout/stderr capture fixture.
     :returns: None.
     """
 
-    async def _raise_tunnel_rejection() -> None:
-        """Raise the RuntimeError shape emitted by ``serve_tunnel``.
+    async def _raise_control_plane_rejection() -> None:
+        """Raise the RuntimeError shape emitted by the NATS control plane.
 
         :returns: None.
         :raises RuntimeError: Always, matching fatal server rejection.
         """
         raise RuntimeError(
-            f"{RUNNER_TUNNEL_REJECTION_PREFIX}(HTTP 401); check remote server authentication"
+            f"{RUNNER_NATS_REJECTION_PREFIX}(HTTP 401); check remote server authentication"
         )
 
     monkeypatch.setattr(
         "omnigent.runner._entry._run_tunnel_from_env",
-        _raise_tunnel_rejection,
+        _raise_control_plane_rejection,
     )
 
     with pytest.raises(SystemExit) as exc_info:
@@ -1177,9 +1181,9 @@ def test_main_reports_tunnel_rejection_without_traceback(
     assert exc_info.value.code == 1
     stderr = capsys.readouterr().err
     # The CLI should expose the actionable rejection message without
-    # dumping the asyncio/serve_tunnel traceback onto stderr.
+    # dumping the asyncio/control-plane traceback onto stderr.
     assert stderr == (
-        f"error: {RUNNER_TUNNEL_REJECTION_PREFIX}(HTTP 401); check remote server authentication\n"
+        f"error: {RUNNER_NATS_REJECTION_PREFIX}(HTTP 401); check remote server authentication\n"
     )
     assert "Traceback" not in stderr
 

@@ -27,7 +27,7 @@ its asserts) whenever a phase intentionally moves an anchor.
 Today `create_app` (`omnigent/server/app.py:734`–`1072`, **2032 lines** in the file)
 does five jobs inline:
 
-1. constructs the cross-cutting singletons (`TunnelRegistry`, `RunnerRouter`,
+1. constructs the cross-cutting singletons (`RunnerControlRegistry`, `RunnerRouter`,
    `HostRegistry`, `ServerMcpPool`, `ServerPerformanceMetrics`, …) and stashes the
    factory-body key set on `app.state.*` (`app.py:1052`–`1066`); the
    `app.state.harness_process_manager` write happens later inside `_lifespan`
@@ -80,7 +80,7 @@ and a discovery/install split that stays unit-testable with injected fakes.
 
 | Abstraction | New file | Replaces (inline today) | Shape |
 |---|---|---|---|
-| **ServiceRegistry** | `omnigent/server/spine/services.py` | the factory-body `app.state.*` block `app.py:1052`–`1066` (`tunnel_registry`, `runner_router`, `auth_provider`, `assertion_signer`, `host_registry`, `host_store`, `sandbox_config`, `managed_launches`, `server_metrics`, `server_metrics_otel`, `di_container`, `service_registry`) — **not** `harness_process_manager`, which is set inside `_lifespan` (`app.py:915`) and belongs to Phase 3 | a dict-like registry of named singletons + a `bind(app)` that copies each into `app.state` (so existing `request.app.state.*` reads are byte-for-byte unchanged) |
+| **ServiceRegistry** | `omnigent/server/spine/services.py` | the factory-body `app.state.*` block `app.py:1052`–`1066` (`runner_control_registry`, `runner_router`, `auth_provider`, `assertion_signer`, `host_registry`, `host_store`, `sandbox_config`, `managed_launches`, `server_metrics`, `server_metrics_otel`, `di_container`, `service_registry`) — **not** `harness_process_manager`, which is set inside `_lifespan` (`app.py:915`) and belongs to Phase 3 | a dict-like registry of named singletons + a `bind(app)` that copies each into `app.state` (so existing `request.app.state.*` reads are byte-for-byte unchanged) |
 | **HarnessProvider** | `omnigent/server/spine/harness_provider.py` | the harness selection/start in `_lifespan` (`app.py:909`–`916`) and the registry read of `_HARNESS_MODULES` (`runtime/harnesses/__init__.py:34`) | `Protocol` with `process_manager() -> HarnessProcessManager` + `modules() -> dict[str,str]`; default impl returns `_HARNESS_MODULES` so behavior is identical |
 | **StoreBootstrapper** | `omnigent/server/spine/store_bootstrapper.py` | the hand construction in `cli.py:2934`–`2940` | a builder that takes `db_uri` + `art_loc` and returns a frozen `StoreBundle` (agent/file/conversation/comment/policy/permission/artifact); `create_app` gains **one** optional `stores: StoreBundle \| None = None` kwarg (additive — the 9 existing params stay for back-compat) |
 
@@ -114,10 +114,10 @@ existing `env_var_is_truthy` helper (already imported in this module,
 `app.py:971`).
 
 **Dual-path test approach:** the contract test asserts that, for both flag values, the
-resulting `app.state` exposes the **same key set** (`{tunnel_registry, runner_router,
-auth_provider, assertion_signer, host_registry, host_store, sandbox_config,
-managed_launches, server_metrics, server_metrics_otel, di_container,
-service_registry}`) and that each value is the same object identity passed in. The
+resulting `app.state` exposes the **same key set** (`{runner_control_registry,
+runner_router, auth_provider, assertion_signer, host_registry, host_store,
+sandbox_config, managed_launches, server_metrics, server_metrics_otel,
+di_container, service_registry}`) and that each value is the same object identity passed in. The
 registry impl is unit-tested in isolation with injected fakes (no FastAPI app needed
 for the dict semantics) — the `discover/bind` split mirrors
 `omnigent/extensions.py`'s `discover_extensions`/`install_extensions`.

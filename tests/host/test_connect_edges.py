@@ -34,8 +34,13 @@ from omnigent.host.frames import (
     encode_host_frame,
 )
 from omnigent.host.git_worktree import CreatedWorktree, WorktreeError
+from omnigent.host.keepalive import (
+    PingFrame,
+    PongFrame,
+    decode_keepalive_frame,
+    encode_keepalive_frame,
+)
 from omnigent.host.identity import HostIdentity
-from omnigent.runner.transports.ws_tunnel.frames import PingFrame, PongFrame, decode_frame, encode_frame
 from tests.host.test_connect import _ConnectSpy, _patch_connect
 
 
@@ -552,12 +557,12 @@ async def test_serve_frames_ignores_recv_timeout(monkeypatch: pytest.MonkeyPatch
 async def test_handle_raw_message_replies_to_runner_ping() -> None:
     host = _host()
     tunnel = _SendOnceTunnel()
-    ping = encode_frame(PingFrame(ts=1700000000))
+    ping = encode_keepalive_frame(PingFrame(ts=1700000000))
 
     await host._handle_raw_message(tunnel, ping)  # type: ignore[arg-type]
 
     assert len(tunnel.sent) == 1
-    pong = decode_frame(tunnel.sent[0])
+    pong = decode_keepalive_frame(tunnel.sent[0])
     assert isinstance(pong, PongFrame)
     assert pong.ts == 1700000000
 

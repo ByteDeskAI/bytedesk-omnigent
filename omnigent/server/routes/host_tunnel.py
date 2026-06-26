@@ -36,13 +36,13 @@ from omnigent.host.frames import (
     HostStopRunnerResultFrame,
     decode_host_frame,
 )
-from omnigent.host.identity import MANAGED_HOST_TOKEN_HEADER
-from omnigent.runner.transports.ws_tunnel.frames import (
+from omnigent.host.keepalive import (
     PingFrame,
     PongFrame,
-    decode_frame,
-    encode_frame,
+    decode_keepalive_frame,
+    encode_keepalive_frame,
 )
+from omnigent.host.identity import MANAGED_HOST_TOKEN_HEADER
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.host_registry import (
     HostConnection,
@@ -335,13 +335,12 @@ async def _receive_loop(
         try:
             frame = decode_host_frame(raw)
         except ValueError:
-            # The tunnel multiplexes host frames (host.*) and runner
-            # keepalive frames (ping/pong) on the same socket.  Pong
-            # replies are expected — the server sends pings via
-            # encode_frame(PingFrame(...)) and the host responds with
-            # a pong using the runner-tunnel encoding.
+            # The tunnel multiplexes host frames (host.*) and keepalive
+            # frames (ping/pong) on the same socket. Pong replies are
+            # expected: the server sends pings and the host responds
+            # with a pong using the shared keepalive encoding.
             try:
-                runner_frame = decode_frame(raw)
+                runner_frame = decode_keepalive_frame(raw)
             except ValueError as inner_exc:
                 _logger.warning(
                     "Host %s sent malformed frame; dropping: %s",
@@ -503,7 +502,7 @@ async def _ping_loop(
         # last-seen so the freshness gate keeps it in the online set.
         await asyncio.to_thread(host_store.heartbeat, host_id)
         try:
-            ping_text = encode_frame(PingFrame(ts=int(time.time() * 1000)))
+            ping_text = encode_keepalive_frame(PingFrame(ts=int(time.time() * 1000)))
             conn.outbound_queue.put_nowait(ping_text)
         except Exception:  # noqa: BLE001
             return

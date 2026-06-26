@@ -233,6 +233,7 @@ omni = "omnigent.cli:main"
 # routers — keeping ByteDesk functionality out of upstream-tracked core.
 [project.entry-points."omnigent.extensions"]
 bytedesk = "bytedesk_omnigent.extension:BytedeskExtension"
+bytedesk-runtime-flags = "bytedesk_omnigent.runtime_flags.extension:BytedeskRuntimeFlagsExtension"
 
 # uv path-deps for the sibling SDK packages (renamed in Stage 3).
 [tool.uv.sources]

@@ -314,15 +314,15 @@ def test_raise_server_failed_handles_unreadable_log(tmp_path: Path) -> None:
     assert "python -m omnigent server" in msg
 
 
-def test_wait_for_server_waits_for_runner_tunnel_status(
+def test_wait_for_server_waits_for_runner_transport_status(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Local chat startup waits until the runner's WS tunnel is online.
+    Local chat startup waits until the runner transport is online.
 
     Without this, the server can respond before the runner finishes
-    reconnecting to ``/v1/runners/{id}/tunnel`` and the first prompt
-    races into ``WSTunnelTransport`` while the runner is still offline.
+    binding to the server control plane and the first prompt races into
+    ``runner transport`` while the runner is still offline.
     """
 
     class _Resp:

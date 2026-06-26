@@ -42,7 +42,6 @@ from omnigent.server.performance_metrics import (
     ServerPerformanceMetrics,
     set_request_duration_for_access_log,
 )
-from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
 from omnigent.server.routes.sessions import (
     SessionLiveness,
     set_server_runner_router,
@@ -770,8 +769,8 @@ def create_app(
         file content).
     :param agent_cache: Cache for loaded agent specs and working
         directories.
-    :param runner_tunnel_tokens: Optional allow-list of binding
-        tokens accepted by the runner WebSocket tunnel route, e.g.
+    :param runner_tunnel_tokens: Optional allow-list of runner launch
+        binding tokens accepted by the server control plane, e.g.
         ``frozenset({"uA6Zz..."})``. ``None`` accepts any
         token-bound runner id, which is the shared remote-server
         behavior.
@@ -821,8 +820,8 @@ def create_app(
     # Head resolvers for the principal Chain of Responsibility — extension-
     # contributed resolvers that may supply identity AHEAD of the configured
     # provider (BDP-2388). Collected here but the composite is NOT built yet:
-    # the runner-token tail resolver (BDP-2437) needs the tunnel_registry, which
-    # is constructed further below, so the single composite is assembled there
+    # the runner-token tail resolver (BDP-2437) needs the runner control registry,
+    # which is constructed further below, so the single composite is assembled there
     # (search "BDP-2437: assemble the principal composite"). Until then
     # ``auth_provider`` stays the raw configured provider so the accounts
     # bootstrap immediately below sees it directly.
@@ -865,8 +864,8 @@ def create_app(
                 cookie_secret=_accounts_cfg.cookie_secret,
             )
 
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.runner.routing import RunnerRouter
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
     from omnigent.server.auth import env_var_is_truthy as _env_truthy_di
     from omnigent.server.host_registry import HostRegistry, RunnerExitReports
 
@@ -884,7 +883,7 @@ def create_app(
         from omnigent.server.container import build_core_container
 
         _di_container = build_core_container(conversation_store)
-        tunnel_registry = _di_container.tunnel_registry()
+        runner_control_registry = _di_container.runner_control_registry()
         runner_router = _di_container.runner_router()
         host_registry = _di_container.host_registry()
         # Shared between the host tunnel and the runner status endpoint.
@@ -893,9 +892,9 @@ def create_app(
         server_metrics = _di_container.server_metrics()
         server_metrics_otel = _di_container.server_metrics_otel()
     else:
-        tunnel_registry = TunnelRegistry()
+        runner_control_registry = RunnerControlRegistry()
         runner_router = RunnerRouter(
-            registry=tunnel_registry,
+            registry=runner_control_registry,
             conversation_store=conversation_store,
         )
         host_registry = HostRegistry()
@@ -914,8 +913,8 @@ def create_app(
         server_metrics = ServerPerformanceMetrics()
         server_metrics_otel = ServerMetricsOtelPublisher()
 
-    # BDP-2437: assemble the principal composite now that ``tunnel_registry``
-    # exists. The configured provider stays the ``_base`` (so
+    # BDP-2437: assemble the principal composite now that the runner control
+    # registry exists. The configured provider stays the ``_base`` (so
     # ``unwrap_auth_base`` / ``accounts_provider`` keep seeing the accounts/OIDC
     # provider — never displaced); extension resolvers run ahead of it; the
     # runner-token resolver runs strictly AFTER it as a tail fallback for system
@@ -933,7 +932,7 @@ def create_app(
         auth_provider = CompositeAuthProvider(
             auth_provider,
             _principal_head_resolvers,  # type: ignore[arg-type]
-            tail_resolvers=[RunnerTokenAuthProvider(tunnel_registry)],
+            tail_resolvers=[RunnerTokenAuthProvider(runner_control_registry)],
         )
 
     @asynccontextmanager
@@ -1009,12 +1008,7 @@ def create_app(
         )
         set_resource_registry(resource_reg)
 
-        # Install the tunnel-backed WS factory so browser terminal
-        # attach can proxy frames over the same persistent WebSocket
-        # the runner already uses for HTTP.
-        from omnigent.server._runner_ws_tunnel import make_tunnel_ws_factory
-
-        set_runner_ws_factory(make_tunnel_ws_factory(runner_router, tunnel_registry))
+        set_runner_ws_factory(None)
 
         # MCP execution moved to the runner (designs/RUNNER_MCP.md);
         # SessionFilesystemRegistry moved to the runner. Both
@@ -1203,7 +1197,7 @@ def create_app(
                 agent_cache=agent_cache,
                 conversation_store=conversation_store,
                 runner_router=runner_router,
-                tunnel_registry=tunnel_registry,
+                runner_control_registry=runner_control_registry,
                 mcp_pool=_mcp_pool,
                 server_metrics=server_metrics,
                 server_metrics_otel=server_metrics_otel,
@@ -1225,10 +1219,7 @@ def create_app(
     from omnigent.runtime import telemetry
 
     telemetry.instrument_fastapi_app(app)
-    # Expose the registry on app.state so integration tests and
-    # diagnostics can verify that the production app wires the route
-    # and WSTunnelTransport to the same session registry.
-    app.state.tunnel_registry = tunnel_registry
+    app.state.runner_control_registry = runner_control_registry
     app.state.runner_router = runner_router
     app.state.runner_exit_reports = runner_exit_reports
     # The fully-assembled principal composite (BDP-2437) — the runner-token tail
@@ -1285,7 +1276,7 @@ def create_app(
         from omnigent.kernel.service_registry import ServiceRegistry
 
         _service_registry = ServiceRegistry()
-        _service_registry.register(tunnel_registry)
+        _service_registry.register(runner_control_registry)
         _service_registry.register(runner_router)
         _service_registry.register(host_registry)
         _service_registry.register(server_metrics)
@@ -1508,8 +1499,8 @@ def create_app(
         connectivity = conversation_store.get_session_connectivity(ids)
 
         def _runner_up(conn: SessionConnectivity) -> bool:
-            """A bound runner whose tunnel is currently registered."""
-            return conn.runner_id is not None and tunnel_registry.get(conn.runner_id) is not None
+            """A bound runner whose control-plane route is known."""
+            return conn.runner_id is not None and runner_router.runner_is_online(conn.runner_id)
 
         # Resolve host liveness for every bound host in one query, so
         # ``host_online`` can be reported even when the runner tunnel is
@@ -1975,24 +1966,6 @@ def create_app(
                 routed.client,
                 conversation_store,
             )
-
-    from omnigent.server.routes.peer_tunnel import create_peer_tunnel_router
-
-    app.include_router(create_peer_tunnel_router(tunnel_registry))
-
-    # WS tunnel endpoint for runners (RUNNER.md §2-3).
-    app.include_router(
-        create_runner_tunnel_router(
-            tunnel_registry,
-            allowed_tunnel_tokens=runner_tunnel_tokens,
-            on_runner_disconnect=_on_runner_disconnect,
-            on_runner_connect=_on_runner_connect,
-            auth_provider=auth_provider,
-            runner_exit_reports=runner_exit_reports,
-        ),
-        prefix="/v1",
-        tags=["runners"],
-    )
 
     # Host tunnel + REST endpoints (DAEMON_API.md). Mounted only when a
     # host_store is configured: the routers call host_store on every

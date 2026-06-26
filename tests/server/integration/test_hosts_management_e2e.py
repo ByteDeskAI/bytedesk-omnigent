@@ -21,10 +21,10 @@ import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
-from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+from omnigent.runner.control_registry import RunnerControlRegistry
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
 from omnigent.server.routes.hosts import create_hosts_router
-from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
+from omnigent.server.routes.runners import create_runners_router
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
@@ -36,16 +36,16 @@ pytestmark = pytest.mark.asyncio
 @pytest.fixture()
 def management_app(
     db_uri: str,
-) -> tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry]:
+) -> tuple[FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry]:
     """FastAPI app with host + runner routes for management tests.
 
     :param db_uri: SQLite URI from the shared fixture.
-    :returns: Tuple of (app, host_registry, host_store, conv_store, tunnel_registry).
+    :returns: Tuple of (app, host_registry, host_store, conv_store, runner_registry).
     """
     host_registry = HostRegistry()
     host_store = HostStore(db_uri)
     conv_store = SqlAlchemyConversationStore(db_uri)
-    tunnel_registry = TunnelRegistry()
+    runner_registry = RunnerControlRegistry()
     reports = RunnerExitReports()
     app = FastAPI()
     app.include_router(
@@ -53,10 +53,10 @@ def management_app(
         prefix="/v1",
     )
     app.include_router(
-        create_runner_tunnel_router(tunnel_registry, runner_exit_reports=reports),
+        create_runners_router(runner_registry, runner_exit_reports=reports),
         prefix="/v1",
     )
-    return app, host_registry, host_store, conv_store, tunnel_registry
+    return app, host_registry, host_store, conv_store, runner_registry
 
 
 # ── Runner list / status (no runners connected) ─────────
@@ -64,7 +64,7 @@ def management_app(
 
 async def test_list_runners_empty(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """GET /v1/runners returns an empty data list when no runners are connected.
@@ -83,7 +83,7 @@ async def test_list_runners_empty(
 
 async def test_runner_status_unknown_runner_offline(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """GET /v1/runners/{id}/status returns online=false for a nonexistent runner.
@@ -103,7 +103,7 @@ async def test_runner_status_unknown_runner_offline(
 
 async def test_runner_status_unknown_runner_no_error_field(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """GET /v1/runners/{id}/status omits the error field when no exit report exists.
@@ -125,7 +125,7 @@ async def test_runner_status_unknown_runner_no_error_field(
 
 async def test_get_host_detail_includes_runners_field(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """GET /v1/hosts/{id} includes a 'runners' list in the response.
@@ -150,7 +150,7 @@ async def test_get_host_detail_includes_runners_field(
 
 async def test_launch_runner_missing_session_id_returns_422(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """POST /v1/hosts/{id}/runners with missing session_id returns 422.
@@ -171,7 +171,7 @@ async def test_launch_runner_missing_session_id_returns_422(
 
 async def test_launch_runner_missing_workspace_returns_422(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """POST /v1/hosts/{id}/runners with missing workspace returns 422.
@@ -193,7 +193,7 @@ async def test_launch_runner_missing_workspace_returns_422(
 
 async def test_list_hosts_stale_host_reported_offline(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """GET /v1/hosts reports a host as offline when last_seen_at is stale.
@@ -248,7 +248,7 @@ async def test_list_hosts_stale_host_reported_offline(
 
 async def test_get_host_detail_offline_status(
     management_app: tuple[
-        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, TunnelRegistry
+        FastAPI, HostRegistry, HostStore, SqlAlchemyConversationStore, RunnerControlRegistry
     ],
 ) -> None:
     """GET /v1/hosts/{id} returns status=offline for an offline host.

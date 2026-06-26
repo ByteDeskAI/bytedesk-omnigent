@@ -31,10 +31,10 @@ from __future__ import annotations
 import sys
 import types as _pytypes
 from collections.abc import Callable
+from inspect import Parameter, signature
 from typing import Any, get_type_hints
 
 from .contrib import (
-    CONTRIB_ATTR,
     _SEAM_BACKGROUND,
     _SEAM_HARNESS,
     _SEAM_INTERCEPTOR,
@@ -42,6 +42,7 @@ from .contrib import (
     _SEAM_ROUTER,
     _SEAM_SERVICE,
     _SEAM_TOOL,
+    CONTRIB_ATTR,
 )
 from .di import Container
 
@@ -152,7 +153,7 @@ def _inject_call(self: Any, bound: Callable) -> Any:
 
 
 # ── synthesised hook builders ──────────────────────────────────────────────
-def _make_tool_factories(tools: list[str]) -> Callable[[Any], dict]:
+def _make_tool_factories() -> Callable[[Any], dict]:
     def tool_factories(self) -> dict[str, Callable[[object], object]]:
         out: dict[str, Callable[[object], object]] = {}
         for attr_name, meta in _contribs_of(self):
@@ -222,15 +223,12 @@ def _make_routers() -> Callable[..., list]:
             if meta["seam"] != _SEAM_ROUTER:
                 continue
             bound = getattr(self, attr_name)
-            # Forward auth_provider / permission_store only if the method takes
-            # them (back-compat with the install_extensions TypeError retry).
-            try:
-                result = bound(auth_provider=auth_provider, permission_store=permission_store)
-            except TypeError:
-                try:
-                    result = bound(auth_provider=auth_provider)
-                except TypeError:
-                    result = bound()
+            result = _call_router_factory(
+                self,
+                bound,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            )
             if result is None:
                 continue
             if isinstance(result, list):
@@ -242,7 +240,32 @@ def _make_routers() -> Callable[..., list]:
     return routers
 
 
-def _make_policy_modules(ext_name: str, policy_attrs: list[str]) -> Callable[[Any], list]:
+def _call_router_factory(
+    self: Any,
+    bound: Callable,
+    *,
+    auth_provider: Any,
+    permission_store: Any,
+) -> Any:
+    """Invoke a ``@router`` method with SDK DI plus server-provided args."""
+    kwargs = _ensure_container(self)._build_kwargs(bound)
+    sig = signature(bound)
+    params = sig.parameters
+    if _accepts_named(params, "auth_provider"):
+        kwargs["auth_provider"] = auth_provider
+    if _accepts_named(params, "permission_store"):
+        kwargs["permission_store"] = permission_store
+    return bound(**kwargs)
+
+
+def _accepts_named(params: dict[str, Parameter], name: str) -> bool:
+    """Return whether a callable signature accepts a named keyword."""
+    if name in params:
+        return True
+    return any(param.kind is Parameter.VAR_KEYWORD for param in params.values())
+
+
+def _make_policy_modules(ext_name: str) -> Callable[[Any], list]:
     def policy_modules(self) -> list[str]:
         mod_name = _build_policy_module(self, ext_name)
         return [mod_name] if mod_name else []
@@ -327,17 +350,15 @@ def extension(name: str, *, requires: tuple[str, ...] = ()) -> Callable[[type], 
         cls._omnigent_sdk_contribs = contribs  # type: ignore[attr-defined]
 
         seams = {meta["seam"] for _a, meta in contribs}
-        tool_attrs = [a for a, m in contribs if m["seam"] == _SEAM_TOOL]
-        policy_attrs = [a for a, m in contribs if m["seam"] == _SEAM_POLICY]
 
         def _set_if_absent(attr: str, fn: Callable) -> None:
             if attr not in cls.__dict__:
                 setattr(cls, attr, fn)
 
         if _SEAM_TOOL in seams:
-            _set_if_absent("tool_factories", _make_tool_factories(tool_attrs))
+            _set_if_absent("tool_factories", _make_tool_factories())
         if _SEAM_POLICY in seams:
-            _set_if_absent("policy_modules", _make_policy_modules(name, policy_attrs))
+            _set_if_absent("policy_modules", _make_policy_modules(name))
         if _SEAM_HARNESS in seams:
             _set_if_absent("harness_descriptors", _make_harness_descriptors())
         if _SEAM_BACKGROUND in seams:
@@ -353,11 +374,11 @@ def extension(name: str, *, requires: tuple[str, ...] = ()) -> Callable[[type], 
         # behaviour-neutral default (empty collection / no-op lifecycle hook),
         # identical to what a complete hand-written extension exposes.
         for hook in _DICT_HOOKS:
-            _set_if_absent(hook, lambda self: {})
+            _set_if_absent(hook, lambda _self: {})
         for hook in _LIST_HOOKS:
-            _set_if_absent(hook, lambda self: [])
+            _set_if_absent(hook, lambda _self: [])
         for hook in _LIFECYCLE_HOOKS:
-            _set_if_absent(hook, lambda self, host: None)
+            _set_if_absent(hook, lambda _self, _host: None)
 
         return cls
 

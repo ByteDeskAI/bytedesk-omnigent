@@ -56,8 +56,8 @@ from typing import Any
 
 from dependency_injector import containers, providers
 
+from omnigent.runner.control_registry import RunnerControlRegistry
 from omnigent.runner.routing import RunnerRouter
-from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
 from omnigent.server.managed_hosts import ManagedLaunchTracker
 from omnigent.server.mcp_pool import ServerMcpPool
@@ -91,11 +91,11 @@ class Core(containers.DeclarativeContainer):
     # Order mirrors the inline construction in ``create_app`` so the object
     # graph is identical when resolved.
 
-    tunnel_registry = providers.Singleton(TunnelRegistry)
+    runner_control_registry = providers.Singleton(RunnerControlRegistry)
 
     runner_router = providers.Singleton(
         RunnerRouter,
-        registry=tunnel_registry,
+        registry=runner_control_registry,
         conversation_store=config.conversation_store,
     )
 

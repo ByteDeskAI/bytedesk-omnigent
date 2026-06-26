@@ -22,8 +22,8 @@ import pytest
 from dependency_injector import containers
 from fastapi import FastAPI
 
+from omnigent.runner.control_registry import RunnerControlRegistry
 from omnigent.runner.routing import RunnerRouter
-from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import create_app
 from omnigent.server.container import Core
@@ -43,7 +43,7 @@ from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
 # must resolve to. The boot must hold exactly one of each, regardless of which
 # construction path produced it.
 _COMPOSITION_ROOT_STATE: dict[str, type] = {
-    "tunnel_registry": TunnelRegistry,
+    "runner_control_registry": RunnerControlRegistry,
     "runner_router": RunnerRouter,
     "host_registry": HostRegistry,
     "server_metrics": ServerPerformanceMetrics,
@@ -127,15 +127,15 @@ def test_boot_parity_off_equals_on(
         assert type(getattr(off.state, name)) is type(getattr(on.state, name)) is typ, name
 
     # Internal wiring parity: each boot's runner router is wired to that boot's
-    # tunnel registry (Singleton resolution must not create a second registry).
-    assert off.state.runner_router._registry is off.state.tunnel_registry
-    assert on.state.runner_router._registry is on.state.tunnel_registry
+    # control registry (Singleton resolution must not create a second registry).
+    assert off.state.runner_router._registry is off.state.runner_control_registry
+    assert on.state.runner_router._registry is on.state.runner_control_registry
 
     # The container path holds exactly one of each singleton (memoized).
     container = on.state.di_container
-    assert container.tunnel_registry() is container.tunnel_registry()
+    assert container.runner_control_registry() is container.runner_control_registry()
     assert container.runner_router() is on.state.runner_router
-    assert container.tunnel_registry() is on.state.tunnel_registry
+    assert container.runner_control_registry() is on.state.runner_control_registry
     assert container.managed_launches() is on.state.managed_launches
 
     # Mounted route surface is identical (the flag changes construction, not

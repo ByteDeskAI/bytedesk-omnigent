@@ -411,7 +411,7 @@ async def test_session_snapshot_uses_router_when_singleton_unset(
     singleton; in any router-only setup that singleton is ``None``,
     so status silently defaulted to ``"idle"`` even when the runner
     had an active turn — which is exactly the cold-start race that
-    flaked ``test_native_session_happy_path_via_ws_tunnel``.
+    flaked the native-session happy path when runner routing cold-started.
     """
     from omnigent.server.routes import sessions as _mod
 

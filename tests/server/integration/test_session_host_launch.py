@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
-import time
 from typing import Any
 
 import httpx
@@ -38,7 +37,6 @@ from omnigent.host.frames import (
     decode_host_frame,
     encode_host_frame,
 )
-from omnigent.runner.transports.ws_tunnel.frames import HelloFrame
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import create_app
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
@@ -55,37 +53,6 @@ pytestmark = pytest.mark.asyncio
 
 _HOST_ID = "host_weblaunch_test"
 _WORKSPACE = "/work/repo"
-
-
-class _NoopRunnerWS:
-    """Minimal runner WebSocket fake for registering a tunnel session."""
-
-    async def send_text(self, data: str) -> None:
-        """Accept outbound tunnel frames without sending them anywhere."""
-        del data
-
-    async def receive_text(self) -> str:
-        """Block forever; tests do not drive runner inbound frames."""
-        return await asyncio.Future()
-
-
-def _runner_hello() -> HelloFrame:
-    """Build a runner hello frame for test tunnel registrations.
-
-    :returns: Hello frame with generic native harness capabilities.
-    """
-    return HelloFrame(
-        runner_version="0.1.0-test",
-        frame_protocol_version=1,
-        harnesses=[
-            "claude-native",
-            "claude-sdk",
-            "codex",
-            "codex-native",
-            "openai-agents",
-        ],
-        envs=[],
-    )
 
 
 @pytest.fixture()
@@ -160,30 +127,6 @@ async def _connect_host(app: FastAPI) -> ApplicationCommunicator:
     while registry.get(_HOST_ID) is None:
         await asyncio.sleep(0.01)
     return comm
-
-
-async def _wait_for_runner_connect_waiter(
-    app: FastAPI,
-    runner_id: str,
-    *,
-    timeout_s: float = 1.0,
-) -> None:
-    """Wait until the app registry has a connect waiter for a runner.
-
-    :param app: FastAPI app whose ``state.tunnel_registry`` is under
-        test.
-    :param runner_id: Runner id expected to have one waiter, e.g.
-        ``"runner_token_abc123"``.
-    :param timeout_s: Maximum seconds to wait, e.g. ``1.0``.
-    :returns: None.
-    :raises AssertionError: If no waiter appears before the timeout.
-    """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        if app.state.tunnel_registry.connect_waiter_count(runner_id) > 0:
-            return
-        await asyncio.sleep(0.01)
-    raise AssertionError(f"runner {runner_id!r} did not get a connect waiter")
 
 
 async def _serve_one_launch(
@@ -1092,21 +1035,16 @@ async def test_host_session_message_waits_for_bound_runner_before_relaunch(
     monkeypatch.setattr(sessions_module, "_ensure_runner_relay_ready", _noop_relay_ready)
 
     try:
-        post_task = asyncio.create_task(
-            client.post(
-                f"/v1/sessions/{session_id}/events",
-                json={
-                    "type": "message",
-                    "data": {
-                        "role": "user",
-                        "content": [{"type": "input_text", "text": "hi"}],
-                    },
+        resp = await client.post(
+            f"/v1/sessions/{session_id}/events",
+            json={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hi"}],
                 },
-            )
+            },
         )
-        await _wait_for_runner_connect_waiter(app, original_runner_id)
-        app.state.tunnel_registry.register(original_runner_id, _NoopRunnerWS(), _runner_hello())
-        resp = await post_task
     finally:
         await fake_runner.aclose()
 
@@ -1123,9 +1061,6 @@ async def test_host_session_message_waits_for_bound_runner_before_relaunch(
     assert conv.runner_id == original_runner_id, (
         f"runner_id should stay on the originally launched runner "
         f"{original_runner_id!r}; got {conv.runner_id!r}"
-    )
-    assert app.state.tunnel_registry.connect_waiter_count(original_runner_id) == 0, (
-        "connect waiter should be removed after the runner registers"
     )
     assert runner_paths and runner_paths[0] == "/v1/sessions", (
         f"the reused runner still needs session init before message forward; "
@@ -1223,7 +1158,7 @@ async def test_relaunch_posts_session_init_before_forwarding_message(
     async def _staged_wait_for_runner_client(
         session_id_arg: str,
         runner_router_arg: object,
-        tunnel_registry_arg: object,
+        runner_control_registry_arg: object,
         *,
         runner_id: str | None,
         timeout_s: float,
@@ -1234,14 +1169,15 @@ async def test_relaunch_posts_session_init_before_forwarding_message(
         :param session_id_arg: Session id being routed, e.g.
             ``"conv_abc123"``.
         :param runner_router_arg: Real app runner router (unused here).
-        :param tunnel_registry_arg: Real app tunnel registry (unused here).
+        :param runner_control_registry_arg: Real app runner control registry
+            (unused here).
         :param runner_id: Relaunched runner id expected to connect.
         :param timeout_s: Wait budget requested by the route.
         :param runner_exit_reports: Crash-report store (unused here; the
             relaunched runner connects, so no conviction short-circuit).
         :returns: The recording fake runner client.
         """
-        del runner_router_arg, tunnel_registry_arg, timeout_s, runner_exit_reports
+        del runner_router_arg, runner_control_registry_arg, timeout_s, runner_exit_reports
         assert session_id_arg == session_id
         assert runner_id is not None and runner_id.startswith("runner_token_")
         return fake_runner

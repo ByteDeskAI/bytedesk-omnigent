@@ -56,7 +56,7 @@ from omnigent.runner.identity import (
     RUNNER_WORKSPACE_ENV_VAR,
     token_bound_runner_id,
 )
-from omnigent.runner.transports.ws_tunnel.limits import RUNNER_TUNNEL_MAX_MESSAGE_BYTES
+from omnigent.server.websocket_limits import CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES
 
 
 @pytest.fixture(autouse=True)
@@ -854,7 +854,9 @@ def test_server_command_reads_tunnel_token_and_does_not_spawn_runner(
 
     assert result.exit_code == 0, result.output
     assert captured.get("uvicorn_called") is True
-    assert captured["uvicorn_kwargs"]["ws_max_size"] == RUNNER_TUNNEL_MAX_MESSAGE_BYTES
+    assert (
+        captured["uvicorn_kwargs"]["ws_max_size"] == CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES
+    )
     assert (
         captured["uvicorn_kwargs"]["log_config"]["formatters"]["access"]["()"]
         == "omnigent.server.performance_metrics.RequestDurationAccessFormatter"

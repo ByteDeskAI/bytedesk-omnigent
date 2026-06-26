@@ -250,7 +250,7 @@ async def test_reconnect_with_dead_runner_triggers_relaunch(
 
     # Simulate a session that was bound to a runner on this host,
     # but the runner died (not in the reconnecting host's runners
-    # list, not in the TunnelRegistry).
+    # list, not in the runner control registry).
     conv = conv_store.create_conversation(
         agent_id=None,
         runner_id="runner_token_dead",

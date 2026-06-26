@@ -5347,7 +5347,7 @@ async def test_stop_session_surfaces_runner_failure_as_error(
         if request.method != "POST":
             return httpx.Response(204)
         if failure_mode == "bare_connection_error":
-            # What WSTunnelTransport raises when the tunnel closes mid-request.
+            # What runner transport raises when the tunnel closes mid-request.
             raise ConnectionError("tunnel closed mid-request")
         # Shape the runner's _handle_claude_native_stop 503 emits when
         # kill_session can't reach the tmux pane.
@@ -5469,7 +5469,7 @@ async def test_interrupt_forward_failure_lifts_stop_fence(
             if failure_mode == "transport_error":
                 raise httpx.ConnectError("runner unreachable")
             if failure_mode == "bare_connection_error":
-                # What WSTunnelTransport raises when the tunnel closes mid-request.
+                # What runner transport raises when the tunnel closes mid-request.
                 raise ConnectionError("tunnel closed mid-request")
             return httpx.Response(503, json={"error": "claude_native_interrupt_failed"})
         return httpx.Response(204)

@@ -152,6 +152,8 @@ def router(prefix: str = "") -> Callable[[Callable], Callable]:
     synthesised ``routers(auth_provider=..., permission_store=...)`` collects
     every ``@router`` method's output into one flat list. The method may declare
     ``auth_provider`` / ``permission_store`` params and they are forwarded.
+    Other annotated params are injected from the extension's SDK container, so
+    routers can depend on services contributed with ``@provides``.
     """
     return _mark(_SEAM_ROUTER, prefix=prefix)
 
@@ -188,11 +190,11 @@ def provides(
 
 __all__ = [
     "CONTRIB_ATTR",
-    "tool",
+    "background",
     "harness",
     "policy",
-    "background",
-    "router",
-    "tool_interceptor",
     "provides",
+    "router",
+    "tool",
+    "tool_interceptor",
 ]

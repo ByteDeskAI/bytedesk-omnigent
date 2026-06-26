@@ -14,6 +14,7 @@ from fastapi import FastAPI, Request
 from opentelemetry.util.types import Attributes
 from starlette.types import Scope
 
+from omnigent.runner.identity import OMNIGENT_INTERNAL_WS_ORIGIN
 from omnigent.server.performance_metrics import (
     RequestDurationAccessFormatter,
     ServerMetricsOtelPublisher,
@@ -257,8 +258,7 @@ def _websocket_scope(path: str) -> Scope:
     """
     Build a minimal ASGI WebSocket scope for metrics tests.
 
-    :param path: WebSocket path, e.g.
-        ``"/v1/runners/metrics-runner/tunnel"``.
+    :param path: WebSocket path.
     :returns: ASGI WebSocket scope accepted by FastAPI.
     """
     return {
@@ -268,7 +268,7 @@ def _websocket_scope(path: str) -> Scope:
         "path": path,
         "raw_path": path.encode("ascii"),
         "query_string": b"",
-        "headers": [],
+        "headers": [(b"origin", OMNIGENT_INTERNAL_WS_ORIGIN.encode("ascii"))],
         "client": ("127.0.0.1", 50000),
         "server": ("testserver", 80),
         "subprotocols": [],
@@ -626,16 +626,33 @@ async def test_create_app_websocket_metrics_count_accepted_connections(
     app: FastAPI,
 ) -> None:
     """
-    ``create_app`` wires metrics middleware into real WebSocket handling.
+    ``create_app`` wires the metrics middleware into WebSocket handling.
 
-    The runner tunnel route accepts before waiting for its hello frame,
-    which lets the test observe the active counter while the accepted
-    WebSocket remains open.
+    The middleware is then driven around a minimal ASGI WebSocket app so the
+    active counter can be observed while the accepted connection remains open.
     """
+    from omnigent.server import app as server_app
+
+    async def _accepting_ws_app(scope, receive, send) -> None:
+        assert scope["type"] == "websocket"
+        event = await receive()
+        assert event["type"] == "websocket.connect"
+        await send({"type": "websocket.accept", "headers": []})
+        await receive()
+
+    assert any(
+        middleware.cls is server_app._WebSocketMetricsMiddleware
+        for middleware in app.user_middleware
+    )
+
     before = app.state.server_metrics.snapshot()
+    instrumented = server_app._WebSocketMetricsMiddleware(
+        _accepting_ws_app,
+        metrics=app.state.server_metrics,
+    )
     communicator = ApplicationCommunicator(
-        app,
-        _websocket_scope("/v1/runners/metrics-runner/tunnel"),
+        instrumented,
+        _websocket_scope("/__metrics_ws"),
     )
 
     try:

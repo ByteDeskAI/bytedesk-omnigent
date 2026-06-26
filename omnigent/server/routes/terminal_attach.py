@@ -17,12 +17,10 @@ Terminal state lives in whichever process owns the
   :func:`omnigent.runner.create_runner_app`, so the registry is
   shared. The server resolves the terminal id locally and bridges
   the PTY in-process.
-- **Out-of-process runner** over the WebSocket tunnel: the runner
-  owns the tmux socket. The server proxies WebSocket frames over
-  the tunnel via a multiplexed WS channel
-  (``omnigent/server/_runner_ws_tunnel.py``), and the runner's
-  resource-addressed WS route runs ``tmux attach`` and bridges the
-  PTY.
+- **Out-of-process runner**: the runner owns the tmux socket. A
+  pluggable WebSocket connector may proxy browser frames to the
+  runner's resource-addressed attach route. When no connector is
+  installed, only the local in-process terminal registry is used.
 
 The proxy uses a factory configured via
 :func:`omnigent.runtime.set_runner_ws_factory` in the server

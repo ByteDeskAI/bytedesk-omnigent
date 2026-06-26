@@ -134,7 +134,7 @@ async def client(accounts_app: FastAPI) -> AsyncIterator[httpx.AsyncClient]:
 def _record_launch_owner(app: FastAPI, token: str, owner: str) -> str:
     """Record a trusted launch owner for a token-bound runner id; return the id."""
     runner_id = token_bound_runner_id(token)
-    app.state.tunnel_registry.record_launch_owner(runner_id, owner)
+    app.state.runner_control_registry.record_launch_owner(runner_id, owner)
     return runner_id
 
 
@@ -250,7 +250,7 @@ async def test_runner_token_authenticates_only_as_launch_owner(
 
     # And each resolves to its OWN owner against the live registry — a runner
     # authenticates only AS the owner it was launched for.
-    provider = RunnerTokenAuthProvider(accounts_app.state.tunnel_registry)
+    provider = RunnerTokenAuthProvider(accounts_app.state.runner_control_registry)
 
     def _conn(tok: str) -> HTTPConnection:
         raw = [(RUNNER_TUNNEL_TOKEN_HEADER.lower().encode(), tok.encode())]

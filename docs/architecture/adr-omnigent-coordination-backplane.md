@@ -47,16 +47,17 @@ Stream delivery is at-least-once; consumers dedupe on `(conversation_id, event_i
 - NATS broker clustering in MVP (JetStream PVC fixes process-state loss; broker HA is phase 4)
 - Sharing the same NATS store_dir/PVC for coordination and agent artifacts
 
-## Cross-replica runner dispatch (peer tunnel)
+## Cross-replica runner dispatch
 
-When the local ``TunnelRegistry`` misses a pinned runner, ``RunnerRouter.aclient_*``
-calls ``resolve_resource("runner", id)``. If the owner replica differs, dispatch
-uses ``PeerTunnelTransport`` → ``GET/POST …/v1/_coord/peer/tunnel/runner/{id}/{path}``
-on the peer pod (per-pod DNS via headless Service ``omnigent-server-peer``,
-``OMNIGENT_PEER_URL_TEMPLATE`` default
-``http://{replica_id}.omnigent-server-peer:8000``). Loop guard: if resolve
-returns this replica but the local tunnel is absent, return ``runner_unavailable``
-(do not forward to self).
+Superseded by the runtime flags / NATS control-plane ADR. When the local
+runner registry misses a pinned runner, ``RunnerRouter.aclient_*`` may still
+call ``resolve_resource("runner", id)`` to distinguish a missing runner from
+stale coordination ownership. It no longer forwards HTTP through a peer
+WebSocket tunnel. Runner HTTP dispatch uses the configured runner transport
+factory and the default factory is NATS request/reply. If a runner has
+coordination ownership but no local launch-token record, dispatch returns
+``runner_unavailable`` so the caller can rebind the session instead of
+silently falling back to legacy WebSocket forwarding.
 
 ## Consequences
 

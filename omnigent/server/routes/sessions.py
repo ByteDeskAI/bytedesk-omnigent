@@ -113,7 +113,6 @@ from omnigent.runner.identity import (
     token_bound_runner_id,
 )
 from omnigent.runner.routing import RunnerRouter
-from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
 from omnigent.runtime import (
     event_hub,
     get_agent_cache,
@@ -5056,21 +5055,19 @@ async def _get_runner_client(
 async def _wait_for_runner_client(
     session_id: str,
     runner_router: RunnerRouter | None,
-    tunnel_registry: TunnelRegistry | None,
+    runner_control_registry: Any | None,
     *,
     runner_id: str | None,
     timeout_s: float,
     runner_exit_reports: RunnerExitReports | None = None,
 ) -> httpx.AsyncClient | None:
     """
-    Wait until a runner connects, then resolve the session's runner client.
+    Wait until a runner answers over the configured control plane.
 
-    The tunnel registry owns the event-driven "runner connected" signal.
-    After that signal fires, this helper intentionally resolves through
-    :func:`_get_runner_client` instead of constructing a client directly
-    from the registry session: the router re-checks the conversation's
-    current ``runner_id`` binding and preserves the existing ownership /
-    capability checks.
+    The NATS runner transport has no WebSocket-style "connected" callback,
+    so readiness is an HTTP health probe through :func:`_get_runner_client`.
+    The router re-checks the conversation's current ``runner_id`` binding
+    on each attempt and preserves the existing ownership checks.
 
     When ``runner_exit_reports`` is supplied, the wait also ends the
     moment the daemon reports this runner died (``host.runner_exited``).
@@ -5085,8 +5082,8 @@ async def _wait_for_runner_client(
         e.g. ``"conv_abc123"``.
     :param runner_router: The ``RunnerRouter`` instance, or ``None`` for
         in-process test setups.
-    :param tunnel_registry: The server's ``TunnelRegistry`` instance, or
-        ``None`` in test setups without runner tunnels.
+    :param runner_control_registry: Deprecated runner-tunnel registry slot. Accepted
+        for caller compatibility; NATS readiness does not use it.
     :param runner_id: Runner id expected to connect, e.g.
         ``"runner_0123456789abcdef"``.
     :param timeout_s: Maximum seconds to wait, e.g. ``3.0``.
@@ -5098,29 +5095,28 @@ async def _wait_for_runner_client(
     """
     if runner_id is None:
         return None
-    if tunnel_registry is None:
+    del runner_control_registry
+    if runner_router is None:
         return await _get_runner_client(session_id, runner_router)
-    if runner_exit_reports is None:
-        session = await tunnel_registry.wait_for_runner(runner_id, timeout_s=timeout_s)
-        return None if session is None else await _get_runner_client(session_id, runner_router)
-    # Race the event-driven connect signal against the crash-report poll;
-    # whichever resolves first wins. A report means the runner is busted —
-    # stop waiting and let the caller fail the turn now.
-    connect_task = asyncio.ensure_future(
-        tunnel_registry.wait_for_runner(runner_id, timeout_s=timeout_s)
-    )
+    deadline = time.monotonic() + max(timeout_s, 0.0)
+    while True:
+        if runner_exit_reports is not None and runner_exit_reports.get(runner_id) is not None:
+            return None
+        client = await _get_runner_client(session_id, runner_router)
+        if client is not None and await _runner_client_ready(client):
+            return client
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        await asyncio.sleep(min(_RUNNER_CONVICTION_POLL_S, remaining))
+
+
+async def _runner_client_ready(client: httpx.AsyncClient) -> bool:
     try:
-        while not connect_task.done():
-            if runner_exit_reports.get(runner_id) is not None:
-                return None
-            await asyncio.wait({connect_task}, timeout=_RUNNER_CONVICTION_POLL_S)
-    finally:
-        if not connect_task.done():
-            connect_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await connect_task
-    session = connect_task.result()
-    return None if session is None else await _get_runner_client(session_id, runner_router)
+        response = await client.get("/health", timeout=_RUNNER_CONVICTION_POLL_S)
+    except (httpx.HTTPError, OSError, RuntimeError):
+        return False
+    return response.status_code == 200
 
 
 async def _validate_session_workspace(
@@ -5294,7 +5290,7 @@ async def _launch_runner_on_host(
     host_conn: HostConnection,
     *,
     owner: str | None = None,
-    tunnel_registry: TunnelRegistry | None = None,
+    runner_control_registry: Any | None = None,
 ) -> _HostLaunchAttempt:
     """
     Ask a host to spawn a runner for a session and capture the result.
@@ -5320,7 +5316,7 @@ async def _launch_runner_on_host(
         from the handshake. ``None`` (no-auth / single-user mode) records
         nothing; the loopback runner resolves to the reserved local
         identity at connect as before.
-    :param tunnel_registry: Runner-tunnel registry to record the launch
+    :param runner_control_registry: Runner-tunnel registry to record the launch
         owner in. ``None`` (minimal test wirings) skips recording.
     :returns: The :class:`_HostLaunchAttempt` — the new runner id plus any
         structured refusal from the host.
@@ -5333,8 +5329,8 @@ async def _launch_runner_on_host(
 
     # Record the trusted launch owner BEFORE the host spawns the runner,
     # so it is present the instant the runner's tunnel connects (BDP-2436).
-    if owner is not None and tunnel_registry is not None:
-        tunnel_registry.record_launch_owner(new_runner_id, owner)
+    if owner is not None and runner_control_registry is not None:
+        runner_control_registry.record_launch_owner(new_runner_id, owner, token=binding_token)
 
     await asyncio.to_thread(
         conversation_store.replace_runner_id,
@@ -5445,7 +5441,8 @@ async def _run_managed_launch(
     conversation_store: ConversationStore,
     host_store: HostStore,
     host_registry: HostRegistry | None,
-    tunnel_registry: TunnelRegistry | None,
+    runner_control_registry: Any | None,
+    runner_router: RunnerRouter | None = None,
     relaunch_host: Host | None = None,
 ) -> None:
     """
@@ -5489,9 +5486,11 @@ async def _run_managed_launch(
     :param host_store: Persistent host registrations.
     :param host_registry: Live host tunnels, used to send the
         launch-runner frame. ``None`` in minimal test wirings.
-    :param tunnel_registry: Runner-tunnel registry used to await the
-        launched runner's connection. ``None`` in minimal test
-        wirings (the rendezvous then settles at frame-send).
+    :param runner_control_registry: Deprecated runner-tunnel registry slot.
+        Retained for callsite compatibility while runner readiness is
+        probed through ``runner_router``.
+    :param runner_router: Router used to probe the launched runner over
+        the NATS control plane before settling readiness.
     :param relaunch_host: Existing managed host row to relaunch a new
         sandbox generation for, or ``None`` for a first launch (a
         fresh host identity is minted).
@@ -5516,7 +5515,8 @@ async def _run_managed_launch(
         conversation_store=conversation_store,
         host_store=host_store,
         host_registry=host_registry,
-        tunnel_registry=tunnel_registry,
+        runner_control_registry=runner_control_registry,
+        runner_router=runner_router,
     )
 
 
@@ -5614,7 +5614,8 @@ async def _bind_and_launch_managed_runner(
     conversation_store: ConversationStore,
     host_store: HostStore,
     host_registry: HostRegistry | None,
-    tunnel_registry: TunnelRegistry | None,
+    runner_control_registry: Any | None,
+    runner_router: RunnerRouter | None = None,
 ) -> None:
     """
     Bind a provisioned managed host to its session and launch a runner.
@@ -5636,9 +5637,10 @@ async def _bind_and_launch_managed_runner(
     :param host_store: Persistent host registrations.
     :param host_registry: Live host tunnels, used to send the
         launch-runner frame. ``None`` in minimal test wirings.
-    :param tunnel_registry: Runner-tunnel registry used to await the
-        launched runner's connection. ``None`` in minimal test
-        wirings (the rendezvous then settles at frame-send).
+    :param runner_control_registry: Deprecated runner-tunnel registry slot.
+        Retained for compatibility while readiness is probed over NATS.
+    :param runner_router: Router used to probe the launched runner's
+        control-plane readiness. ``None`` in minimal test wirings.
     """
     from omnigent.server.managed_hosts import terminate_managed_host
 
@@ -5681,7 +5683,7 @@ async def _bind_and_launch_managed_runner(
                 host_registry,
                 host_conn,
                 owner=owner,
-                tunnel_registry=tunnel_registry,
+                runner_control_registry=runner_control_registry,
             )
             if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                 # The sandbox image should bake in the harness, but if the
@@ -5693,13 +5695,16 @@ async def _bind_and_launch_managed_runner(
                 _publish_sandbox_status(session_id, "failed", reason)
                 return
             runner_id = launch_attempt.runner_id
-    if runner_id is not None and tunnel_registry is not None:
-        # Wait for the runner tunnel before settling so a rendezvoused
-        # message POST resolves its runner client on the first try. A
-        # timeout still settles successfully — the host is bound, and
-        # post_event's normal host-relaunch path owns dead runners.
-        await tunnel_registry.wait_for_runner(
-            runner_id,
+    if runner_id is not None and runner_router is not None:
+        # Wait for the runner control plane before settling so a rendezvoused
+        # message POST resolves its runner client on the first try. A timeout
+        # still settles successfully — the host is bound, and post_event's
+        # normal host-relaunch path owns dead runners.
+        await _wait_for_runner_client(
+            session_id,
+            runner_router,
+            runner_control_registry,
+            runner_id=runner_id,
             timeout_s=_HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S,
         )
     tracker.finish(session_id)
@@ -5880,7 +5885,8 @@ def _kick_managed_relaunch(
             conversation_store=conversation_store,
             host_store=host_store,
             host_registry=getattr(app_state, "host_registry", None),
-            tunnel_registry=getattr(app_state, "tunnel_registry", None),
+            runner_control_registry=getattr(app_state, "runner_control_registry", None),
+            runner_router=getattr(app_state, "runner_router", None),
             relaunch_host=host,
         )
     )
@@ -6241,9 +6247,8 @@ def _native_terminal_ensure_transport_error(
     explicitly instead of falling back to the old forward-and-wait path.
 
     :param exc: Transport exception from the ensure request, e.g.
-        ``httpx.ConnectError("connection refused")`` or the bare
-        ``ConnectionError("tunnel closed before request completed")``
-        that ``WSTunnelTransport`` raises on tunnel close.
+        ``httpx.ConnectError("connection refused")`` or a bare
+        ``ConnectionError`` raised by a runner transport.
     :param display_name: Human-readable runtime name, e.g. ``"Codex"``.
     :returns: Error data suitable for a persisted ``type="error"``
         conversation item.
@@ -6316,9 +6321,8 @@ async def _ensure_native_terminal_ready(
             timeout=10.0,
         )
     except (httpx.HTTPError, ConnectionError) as exc:
-        # WSTunnelTransport raises bare ConnectionError on tunnel close
-        # ("tunnel closed before request completed"); without this clause
-        # a runner tunnel drop escaped to the catch-all handler and the
+        # Runner transports may raise bare ConnectionError; without this clause
+        # a runner transport drop escaped to the catch-all handler and the
         # web client showed an opaque 500 ``internal_error`` instead of
         # the durable ensure-failure turn error below.
         _logger.warning(
@@ -6766,9 +6770,9 @@ async def _forward_native_terminal_message(
             resp.text[:500],
         )
     except (httpx.HTTPError, ConnectionError) as exc:
-        # WSTunnelTransport raises bare ConnectionError on tunnel close;
-        # map it to the same 502 as an httpx transport failure so a
-        # runner tunnel drop mid-forward doesn't escape as an opaque 500.
+        # Runner transports may raise bare ConnectionError; map it to the
+        # same 502 as an httpx transport failure so a runner drop mid-forward
+        # doesn't escape as an opaque 500.
         _logger.warning(
             "%s terminal message forward failed for session=%s",
             display_name,
@@ -6981,7 +6985,7 @@ async def _stop_session_via_runner(
             timeout=5.0,
         )
     except (httpx.HTTPError, ConnectionError) as exc:
-        # WSTunnelTransport raises bare ConnectionError on tunnel close.
+        # Runner transports may raise bare ConnectionError.
         raise OmnigentError(
             f"Could not reach the runner to stop session {session_id!r}: {exc}",
             code=ErrorCode.RUNNER_UNAVAILABLE,
@@ -8707,8 +8711,8 @@ async def _relay_runner_stream(
                     session_stream.publish(session_id, event)
 
     except (httpx.HTTPError, ConnectionError):
-        # WSTunnelTransport raises bare ConnectionError on tunnel
-        # close; treat the same as HTTPError so the task exits
+        # Runner transports may raise bare ConnectionError; treat it the
+        # same as HTTPError so the task exits
         # gracefully instead of leaving an unretrieved exception.
         _logger.warning(
             "Relay: ended for session=%s",
@@ -12428,7 +12432,12 @@ def create_sessions_router(
                     conversation_store=conversation_store,
                     host_store=host_store_for_managed,
                     host_registry=getattr(request.app.state, "host_registry", None),
-                    tunnel_registry=getattr(request.app.state, "tunnel_registry", None),
+                    runner_control_registry=getattr(
+                        request.app.state,
+                        "runner_control_registry",
+                        None,
+                    ),
+                    runner_router=getattr(request.app.state, "runner_router", None),
                 )
             )
             _managed_launch_tasks.add(launch_task)
@@ -12507,9 +12516,15 @@ def create_sessions_router(
                 # no launch_owner record and its tunnel handshake is rejected 403
                 # in accounts mode (the runner reads as "offline" and the session
                 # stays unbound until a later message relaunches it).
-                _create_tunnel_registry = getattr(request.app.state, "tunnel_registry", None)
-                if user_id is not None and _create_tunnel_registry is not None:
-                    _create_tunnel_registry.record_launch_owner(runner_id, user_id)
+                _create_runner_control_registry = getattr(
+                    request.app.state, "runner_control_registry", None
+                )
+                if user_id is not None and _create_runner_control_registry is not None:
+                    _create_runner_control_registry.record_launch_owner(
+                        runner_id,
+                        user_id,
+                        token=binding_token,
+                    )
                 host_registry.send_text(conn, launch_frame)
                 try:
                     result = await asyncio.wait_for(future, timeout=30.0)
@@ -16347,7 +16362,7 @@ def create_sessions_router(
                     )
                     interrupt_delivered = interrupt_resp.status_code < 400
                 except (httpx.HTTPError, ConnectionError):
-                    # WSTunnelTransport raises bare ConnectionError on tunnel close.
+                    # Runner transports may raise bare ConnectionError.
                     _logger.exception(
                         "Interrupt forward failed for %r",
                         session_id,
@@ -16722,7 +16737,7 @@ def create_sessions_router(
         # instead of launching a replacement.
         _runner_needs_session_init = False
         if runner_client is None and conv.host_id is not None:
-            _tunnel_registry = getattr(request.app.state, "tunnel_registry", None)
+            _runner_control_registry = getattr(request.app.state, "runner_control_registry", None)
             # A just-created host session already has a runner_id before
             # the runner's tunnel is registered. The Web UI can post the
             # first message during that gap; wait briefly for the pinned
@@ -16738,7 +16753,7 @@ def create_sessions_router(
                 runner_client = await _wait_for_runner_client(
                     session_id,
                     runner_router,
-                    _tunnel_registry,
+                    _runner_control_registry,
                     runner_id=conv.runner_id,
                     timeout_s=_HOST_BOUND_RUNNER_CONNECT_GRACE_S,
                     runner_exit_reports=runner_exit_reports,
@@ -16766,7 +16781,7 @@ def create_sessions_router(
                         _host_reg,
                         _host_conn,
                         owner=user_id,
-                        tunnel_registry=_tunnel_registry,
+                        runner_control_registry=_runner_control_registry,
                     )
                     if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                         # The host refused: the agent's harness isn't
@@ -16843,7 +16858,7 @@ def create_sessions_router(
                 runner_client = await _wait_for_runner_client(
                     session_id,
                     runner_router,
-                    _tunnel_registry,
+                    _runner_control_registry,
                     runner_id=relaunched_runner_id,
                     timeout_s=_HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S,
                     runner_exit_reports=runner_exit_reports,

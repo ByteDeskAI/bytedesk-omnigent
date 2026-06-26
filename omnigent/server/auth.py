@@ -449,7 +449,7 @@ class UnifiedAuthProvider(AuthProvider):
 
 
 class _LaunchOwnerRegistry(Protocol):
-    """The slice of :class:`TunnelRegistry` the runner-token provider needs.
+    """The slice of runner launch ownership the token provider needs.
 
     Typed as a :class:`Protocol` so :class:`RunnerTokenAuthProvider` does not
     import the runner transport stack at module load and stays unit-testable

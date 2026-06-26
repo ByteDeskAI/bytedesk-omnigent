@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from fastapi import HTTPException
 
@@ -219,7 +220,7 @@ async def test_bind_and_launch_managed_runner_tears_down_when_session_deleted(
         conversation_store=store,
         host_store=host_store,
         host_registry=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert terminated == ["host_managed"]
@@ -273,7 +274,7 @@ async def test_bind_and_launch_managed_runner_fails_on_harness_not_configured(
         conversation_store=store,
         host_store=MagicMock(),
         host_registry=registry,
-        tunnel_registry=MagicMock(),
+        runner_control_registry=MagicMock(),
     )
 
     entry = tracker.get("conv_harness")
@@ -298,7 +299,9 @@ async def test_bind_and_launch_managed_runner_finishes_when_runner_connects(
     registry = MagicMock()
     registry.get = MagicMock(return_value=MagicMock())
     tunnel = MagicMock()
-    tunnel.wait_for_runner = AsyncMock(return_value="tunnel-session")
+    runner_router = MagicMock()
+    waited: dict[str, Any] = {}
+    client = httpx.AsyncClient()
 
     async def _fake_launch(*_args: Any, **_kwargs: Any) -> _HostLaunchAttempt:
         return _HostLaunchAttempt(runner_id="runner_ok")
@@ -306,6 +309,16 @@ async def test_bind_and_launch_managed_runner_finishes_when_runner_connects(
     monkeypatch.setattr(
         "omnigent.server.routes.sessions._launch_runner_on_host",
         _fake_launch,
+    )
+
+    async def _fake_wait_for_runner_client(*args: Any, **kwargs: Any) -> httpx.AsyncClient:
+        waited["args"] = args
+        waited["kwargs"] = kwargs
+        return client
+
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions._wait_for_runner_client",
+        _fake_wait_for_runner_client,
     )
     stages: list[str] = []
     monkeypatch.setattr(
@@ -324,13 +337,17 @@ async def test_bind_and_launch_managed_runner_finishes_when_runner_connects(
         conversation_store=store,
         host_store=MagicMock(),
         host_registry=registry,
-        tunnel_registry=tunnel,
+        runner_control_registry=tunnel,
+        runner_router=runner_router,
     )
 
     assert tracker.get("conv_ready") is None
-    tunnel.wait_for_runner.assert_awaited_once_with("runner_ok", timeout_s=30.0)
+    assert waited["args"][:3] == ("conv_ready", runner_router, tunnel)
+    assert waited["kwargs"]["runner_id"] == "runner_ok"
+    assert waited["kwargs"]["timeout_s"] == 30.0
     assert "connecting" in stages
     assert stages[-1] == "ready"
+    await client.aclose()
 
 
 async def test_run_managed_launch_returns_when_provision_fails(
@@ -363,7 +380,7 @@ async def test_run_managed_launch_returns_when_provision_fails(
         conversation_store=MagicMock(),
         host_store=MagicMock(),
         host_registry=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert bind_called is False
@@ -401,7 +418,7 @@ async def test_run_managed_launch_calls_bind_after_provision(
         conversation_store=MagicMock(),
         host_store=MagicMock(),
         host_registry=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert bind_called is True
@@ -463,7 +480,7 @@ async def test_bind_and_launch_managed_runner_finishes_without_host_registry() -
         conversation_store=store,
         host_store=MagicMock(),
         host_registry=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert tracker.get("conv_no_registry") is None
@@ -511,7 +528,7 @@ async def test_bind_and_launch_managed_runner_skips_launch_when_host_offline(
         conversation_store=store,
         host_store=MagicMock(),
         host_registry=registry,
-        tunnel_registry=MagicMock(),
+        runner_control_registry=MagicMock(),
     )
 
     assert launch_called is False
@@ -551,7 +568,7 @@ async def test_bind_and_launch_managed_runner_delete_skips_terminate_when_host_m
         conversation_store=store,
         host_store=host_store,
         host_registry=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert terminated is False
@@ -591,7 +608,7 @@ async def test_run_managed_launch_passes_relaunch_host_to_provision(
         conversation_store=MagicMock(),
         host_store=MagicMock(),
         host_registry=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
         relaunch_host=relaunch,
     )
 

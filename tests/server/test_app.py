@@ -61,46 +61,18 @@ async def test_version_returns_installed_package_version(
     )
 
 
-class _StubWebSocket:
-    """
-    Minimal real ``WebSocketLike`` for registering a runner tunnel.
-
-    The tunnel registry only stores this object; ``_bulk_session_liveness``
-    reads tunnel presence via ``TunnelRegistry.get(...) is not None`` and
-    never sends or receives on it. A real class (not ``MagicMock``) is
-    used so any unexpected I/O call raises loudly rather than silently
-    succeeding — but in this test the socket is never driven.
-    """
-
-    async def send_text(self, data: str) -> None:
-        """Unused — the liveness path never sends. Fails loud if reached."""
-        raise AssertionError("the liveness test must not send on the tunnel socket")
-
-    async def receive_text(self) -> str:
-        """Unused — the liveness path never receives. Fails loud if reached."""
-        raise AssertionError("the liveness test must not receive on the tunnel socket")
-
-
 def _register_live_runner(app: FastAPI, runner_id: str) -> None:
     """
-    Register a live runner tunnel on the app's registry.
-
-    Mirrors what the runner-tunnel WS route does on connect: it adds a
-    :class:`RunnerSession` to ``app.state.tunnel_registry`` so
-    ``_bulk_session_liveness`` reads the runner as up
-    (``runner_online=True``). Uses the registry's real ``register`` API
-    with a minimal real WS stub and a real :class:`HelloFrame`.
+    Record a launched runner on the app's control registry.
 
     :param app: The FastAPI app returned by ``create_app`` (carries the
-        registry on ``app.state.tunnel_registry``).
+        registry on ``app.state.runner_control_registry``).
     :param runner_id: Runner id to register, e.g. ``"rnr_live"``.
     """
-    from omnigent.runner.transports.ws_tunnel.frames import HelloFrame
-
-    app.state.tunnel_registry.register(
+    app.state.runner_control_registry.record_launch_owner(
         runner_id,
-        _StubWebSocket(),
-        HelloFrame(runner_version="0.0.0-test", frame_protocol_version=1),
+        "alice@example.com",
+        token=f"{runner_id}-token",
     )
 
 
@@ -173,7 +145,7 @@ async def test_health_batch_reports_strict_runner_and_host_liveness(
     ``_bulk_session_liveness``. The four states the open-session view
     must distinguish:
 
-    (a) runner tunnel up  → runner_online True;
+    (a) runner control plane known → runner_online True;
     (b) runner down + host online → runner_online False, host_online True
         (the runner-down-but-host-can-relaunch state — strict
         ``runner_online`` does NOT fold in host optimism);
@@ -183,27 +155,27 @@ async def test_health_batch_reports_strict_runner_and_host_liveness(
 
     Also pins that a deliberately-stopped session is NOT special-cased
     (the stopped marker is retired in this workstream): it reads purely
-    by tunnel/host state, same as any other host-bound session.
+    by runner/host state, same as any other host-bound session.
     """
     wired = _build_liveness_app(db_uri, tmp_path)
     app = wired.app
     conversation_store = wired.conversation_store
 
-    # (a) runner tunnel up: bind a runner and register its tunnel.
+    # (a) runner control plane known: bind a runner and record its launch.
     runner_up = conversation_store.create_conversation(runner_id="rnr_live")
     _register_live_runner(app, "rnr_live")
-    # (b) runner bound but tunnel NOT registered, host online.
+    # (b) runner bound but no control-plane record, host online.
     runner_down_host_up = conversation_store.create_conversation(
         runner_id="rnr_dead", host_id="host_live", workspace="/tmp/ws"
     )
-    # (c) runner bound but tunnel down, host offline (unknown host id).
+    # (c) runner bound but no control-plane record, host offline.
     runner_down_host_down = conversation_store.create_conversation(
         runner_id="rnr_dead2", host_id="host_offline", workspace="/tmp/ws"
     )
-    # (d) runner bound but tunnel down, NO host binding.
+    # (d) runner bound but no control-plane record, NO host binding.
     runner_down_no_host = conversation_store.create_conversation(runner_id="rnr_dead3")
     # A stopped, host-bound session with a dead runner must read by
-    # tunnel/host state only — the stopped marker is no longer consulted by
+    # runner/host state only — the stopped marker is no longer consulted by
     # liveness. Bind a (down) runner so this isn't the no-runner terminal.
     stopped = conversation_store.create_conversation(
         runner_id="rnr_dead4", host_id="host_live", workspace="/tmp/ws"
@@ -229,9 +201,9 @@ async def test_health_batch_reports_strict_runner_and_host_liveness(
     assert body["status"] == "ok"
     sessions = body["sessions"]
 
-    # (a) Live runner tunnel ⇒ reachable. host_online None (no host_id).
+    # (a) Known runner control plane => reachable. host_online None (no host_id).
     # A failure here means the strict _runner_up check stopped reading the
-    # tunnel registry, or the registration path changed.
+    # control registry, or the registration path changed.
     assert sessions[runner_up.id] == {"runner_online": True, "host_online": None}
     # (b) Dead runner, live host: strict runner_online is False (no
     # host-relaunch optimism), but host_online surfaces the live host so

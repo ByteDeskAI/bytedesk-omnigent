@@ -2890,12 +2890,10 @@ def server(
 
     import uvicorn
 
-    from omnigent.runner.transports.ws_tunnel.limits import (
-        RUNNER_TUNNEL_MAX_MESSAGE_BYTES,
-    )
     from omnigent.server.app import create_app
     from omnigent.server.auth import create_auth_provider
     from omnigent.server.server_config import config_str_list
+    from omnigent.server.websocket_limits import CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
     from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
     from omnigent.stores.conversation_store.sqlalchemy_store import (
@@ -3147,7 +3145,7 @@ def server(
             host=host,
             port=port,
             log_config=_server_uvicorn_log_config(),
-            ws_max_size=RUNNER_TUNNEL_MAX_MESSAGE_BYTES,
+            ws_max_size=CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES,
             timeout_graceful_shutdown=_SERVER_GRACEFUL_SHUTDOWN_TIMEOUT_S,
         )
     finally:

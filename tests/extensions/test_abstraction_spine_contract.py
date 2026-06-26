@@ -42,7 +42,7 @@ _HANDOFF_DOC = _REPO_ROOT / "docs" / "architecture" / "abstraction-spine-handoff
 # breaks any router that reads request.app.state.<key>.
 _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
     {
-        "tunnel_registry",
+        "runner_control_registry",
         "runner_router",
         "auth_provider",
         "host_registry",

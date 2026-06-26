@@ -1193,8 +1193,9 @@ async def test_runner_exited_report_surfaces_in_runner_status(
     "check the logs directory".
     """
     from omnigent.host.frames import HostRunnerExitedFrame
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.server.host_registry import RunnerExitReports
-    from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
+    from omnigent.server.routes.runners import create_runners_router
 
     registry = HostRegistry()
     host_store = HostStore(db_uri)
@@ -1204,10 +1205,8 @@ async def test_runner_exited_report_surfaces_in_runner_status(
         create_host_tunnel_router(registry, host_store, runner_exit_reports=reports),
         prefix="/v1",
     )
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
-
     app.include_router(
-        create_runner_tunnel_router(TunnelRegistry(), runner_exit_reports=reports),
+        create_runners_router(RunnerControlRegistry(), runner_exit_reports=reports),
         prefix="/v1",
     )
 
