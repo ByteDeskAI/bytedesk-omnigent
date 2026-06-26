@@ -20,6 +20,12 @@ from fastapi.responses import JSONResponse
 
 def create_goal_delivery_router() -> APIRouter:
     """Build the goal-delivery webhook ingress router (ADR-0154)."""
+    from bytedesk_omnigent.ingress import JiraWebhookAdapter, register_webhook_adapter
+
+    # Jira is shared-secret (not HMAC); register its adapter so resolve_webhook_adapter
+    # returns it for source="jira" instead of the GitHub HMAC default.
+    register_webhook_adapter("jira", JiraWebhookAdapter)
+
     router = APIRouter()
 
     @router.post("/goal-delivery/{source}")
@@ -40,7 +46,14 @@ def create_goal_delivery_router() -> APIRouter:
             )
         raw = await request.body()
         adapter = resolve_webhook_adapter(source)
-        if not adapter.verify(raw, request.headers, secret):
+        headers: dict[str, str] = dict(request.headers)
+        # Jira can't set custom headers — bridge its ?secret= URL query into the
+        # X-Omnigent-Secret header the JiraWebhookAdapter checks.
+        if source == "jira" and "x-omnigent-secret" not in {k.lower() for k in headers}:
+            query_secret = request.query_params.get("secret")
+            if query_secret:
+                headers["x-omnigent-secret"] = query_secret
+        if not adapter.verify(raw, headers, secret):
             return JSONResponse({"status": "bad_signature"}, status_code=401)
         try:
             payload = json.loads(raw) if raw else None

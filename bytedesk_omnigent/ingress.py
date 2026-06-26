@@ -155,6 +155,25 @@ class GitHubWebhookAdapter:
         return _header(headers, "x-omnigent-event") or "*"
 
 
+class JiraWebhookAdapter:
+    """Jira webhook adapter (ADR-0154): shared-secret, not HMAC.
+
+    Jira Cloud webhooks are **not** HMAC-signed and cannot carry custom headers,
+    so authenticity is a constant-time compare of a shared secret carried in the
+    ``X-Omnigent-Secret`` header (the goal-delivery route bridges Jira's
+    ``?secret=`` URL query into that header, since Jira can only vary the URL).
+    ``jira:issue_updated`` carries no per-event name header, so the match key is
+    the catch-all ``"*"``.
+    """
+
+    def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        provided = _header(headers, "x-omnigent-secret")
+        return bool(provided) and hmac.compare_digest(provided, secret)
+
+    def match_key(self, headers: Mapping[str, str]) -> str:
+        return "*"
+
+
 def _header(headers: Mapping[str, str], name: str) -> str:
     """Case-insensitive header lookup (Starlette ``Headers`` is already CI, but a
     plain dict in tests is not) — returns ``""`` when absent."""
