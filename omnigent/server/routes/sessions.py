@@ -195,6 +195,7 @@ from omnigent.server.routes._content_type import (
     require_json_or_multipart_content_type,
 )
 from omnigent.server.routes._host_worktree import CreatedWorktree
+from omnigent.server.runner_heal_config import RunnerHealConfig, load_runner_heal_config
 from omnigent.server.schemas import (
     AgentObject,
     ChildSessionSummary,
@@ -802,6 +803,16 @@ _session_todos_cache: dict[str, list[dict[str, Any]]] = {}
 # the key is deleted on clear so the dict never accumulates stale ``False``
 # entries for every session that ever spun up a terminal.
 _session_terminal_pending_cache: dict[str, bool] = {}
+# Self-heal single-flight (BDP-2579 rung-1/3): concurrent read-path heals for
+# one session coalesce onto one in-flight task (the cross-replica try_acquire
+# lock coalesces across replicas; this dict coalesces within a replica). The
+# check-then-create below has no await between get and create_task, so it is
+# race-free on the event loop.
+_heal_inflight: dict[str, asyncio.Task[bool]] = {}
+# Bad-host circuit-breaker cooldown (BDP-2579 F5), process-local fallback used
+# only when no coordination backplane is active; a live backplane stores the
+# cooldown in the shared index so every replica's selector skips the host.
+_host_cooldowns: dict[str, int] = {}
 # Managed-sandbox launch progress keyed by session id. Written by
 # _publish_sandbox_status as the background launch pipeline advances;
 # read by _build_session_response to populate the ``sandbox_status``
@@ -5286,6 +5297,11 @@ class _HostLaunchAttempt:
     error_code: str | None = None
     error: str | None = None
     acked: bool = True
+    # False only on the self-heal CAS path (BDP-2579 F3): a ``repin`` callback
+    # was supplied and lost the compare-and-swap (the row moved under us — a
+    # concurrent heal or user rebind), so no launch frame was sent. Default True
+    # for every non-heal caller (they pre-stamp via ``replace_runner_id``).
+    repinned: bool = True
 
 
 async def _launch_runner_on_host(
@@ -5296,6 +5312,7 @@ async def _launch_runner_on_host(
     *,
     owner: str | None = None,
     runner_control_registry: Any | None = None,
+    repin: Callable[[str], bool] | None = None,
 ) -> _HostLaunchAttempt:
     """
     Ask a host to spawn a runner for a session and capture the result.
@@ -5355,8 +5372,13 @@ async def _launch_runner_on_host(
             bind_mode="replace",
             timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
             host_connection=host_conn,
+            # Self-heal CAS swap (BDP-2579 F3) — the fabric runs ``repin``
+            # in place of its bind and aborts (no launch frame) if it loses.
+            repin=repin,
         )
     )
+    if not attempt.repinned:
+        return _HostLaunchAttempt(runner_id=attempt.runner_id, repinned=False)
     if not attempt.acked:
         return _HostLaunchAttempt(runner_id=attempt.runner_id, acked=False)
     if attempt.error_code is not None or attempt.error is not None:
@@ -5376,13 +5398,15 @@ async def _launch_runner_on_host_id(
     *,
     owner: str | None = None,
     runner_control_registry: Any | None = None,
+    repin: Callable[[str], bool] | None = None,
 ) -> _HostLaunchAttempt:
     """
     Ask a host to spawn a runner when its tunnel may live on another replica.
 
     Mirrors :func:`_launch_runner_on_host` but routes through
     ``host_control`` so a REST request served by replica A can launch through a
-    host tunnel owned by replica B.
+    host tunnel owned by replica B. ``repin`` follows the same self-heal CAS
+    contract as :func:`_launch_runner_on_host` (BDP-2579 F3).
     """
     if conv.workspace is None:  # pragma: no cover — constraint guards
         _logger.error(
@@ -5404,8 +5428,12 @@ async def _launch_runner_on_host_id(
             runner_control_registry=runner_control_registry,
             bind_mode="replace",
             timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
+            # Self-heal CAS swap (BDP-2579 F3) — see _launch_runner_on_host.
+            repin=repin,
         )
     )
+    if not attempt.repinned:
+        return _HostLaunchAttempt(runner_id=attempt.runner_id, repinned=False)
     if attempt.error is not None and not attempt.acked:
         _logger.warning(
             "Host %s could not launch runner for %s: %s",
@@ -6002,6 +6030,385 @@ async def _ensure_runner_session_initialized(
         )
 
 
+def _is_runner_unavailable_error(exc: BaseException) -> bool:
+    """Uniform dead-runner detector for the read paths (BDP-2579 F2).
+
+    Both read paths now surface a dead runner the same way: the NATS transport
+    wraps unary AND stream nats errors into :class:`httpx.ConnectError`, and the
+    resolve path raises ``OmnigentError(RUNNER_UNAVAILABLE)``.
+    """
+    if isinstance(exc, httpx.ConnectError):
+        return True
+    return isinstance(exc, OmnigentError) and exc.code == ErrorCode.RUNNER_UNAVAILABLE
+
+
+async def _record_host_cooldown(host_id: str, cooldown_s: float) -> None:
+    """Mark a wedged host as cooled-down so the selector skips it (BDP-2579 F5)."""
+    from omnigent.db.utils import now_epoch
+
+    expires_at = now_epoch() + int(cooldown_s)
+    try:
+        from omnigent.coordination.lifecycle import get_active_backplane
+
+        backplane = get_active_backplane()
+    except Exception:  # noqa: BLE001 — coordination optional
+        backplane = None
+    if backplane is not None:
+        with contextlib.suppress(Exception):
+            await backplane.index_put(
+                "registry", f"host-cooldown.{host_id}", {"expires_at": expires_at}
+            )
+            return
+    _host_cooldowns[host_id] = expires_at
+
+
+async def _hosts_in_cooldown() -> set[str]:
+    """Set of host ids still within their circuit-breaker cooldown window."""
+    from omnigent.db.utils import now_epoch
+
+    now = now_epoch()
+    try:
+        from omnigent.coordination.lifecycle import get_active_backplane
+
+        backplane = get_active_backplane()
+    except Exception:  # noqa: BLE001
+        backplane = None
+    out: set[str] = set()
+    if backplane is not None:
+        with contextlib.suppress(Exception):
+            entries = await backplane.index_list_prefix("registry", "host-cooldown.")
+            for key, val in entries.items():
+                exp = val.get("expires_at")
+                if isinstance(exp, int) and exp > now:
+                    out.add(key[len("host-cooldown.") :])
+            return out
+    for host_id, exp in list(_host_cooldowns.items()):
+        if exp > now:
+            out.add(host_id)
+        else:
+            _host_cooldowns.pop(host_id, None)
+    return out
+
+
+async def _heal_session_runner(session_id: str, request: Request) -> bool:
+    """Self-heal a session whose runner died (BDP-2579 rungs 1–3).
+
+    Single-flighted: concurrent read-path heals for one session coalesce onto
+    one in-flight task (the ``_run_session_heal`` work runs once); across
+    replicas the cross-replica lock inside ``_run_session_heal`` coalesces.
+
+    :returns: ``True`` when the session has a live runner again (caller
+        re-resolves the client and retries); ``False`` when the heal exhausted
+        every rung and left the session in the graceful ``terminal_pending``
+        reconnecting state (caller must NOT 503-storm).
+    """
+    existing = _heal_inflight.get(session_id)
+    if existing is not None and not existing.done():
+        return await existing
+    task = asyncio.create_task(
+        _run_session_heal(session_id, request), name=f"heal-{session_id}"
+    )
+    _heal_inflight[session_id] = task
+    try:
+        return await task
+    finally:
+        if _heal_inflight.get(session_id) is task:
+            _heal_inflight.pop(session_id, None)
+
+
+async def _run_session_heal(session_id: str, request: Request) -> bool:
+    """The actual heal pipeline (one runner per session at a time)."""
+    from omnigent.runtime import get_runner_router
+
+    cfg = load_runner_heal_config()
+    app_state = request.app.state
+    conversation_store: ConversationStore = app_state.conversation_store
+    runner_router = getattr(app_state, "runner_router", None) or get_runner_router()
+    host_registry = getattr(app_state, "host_registry", None)
+    host_store = getattr(app_state, "host_store", None)
+    runner_control_registry = getattr(app_state, "runner_control_registry", None)
+    runner_exit_reports = getattr(app_state, "runner_exit_reports", None)
+
+    try:
+        from omnigent.coordination.lifecycle import get_active_backplane
+
+        backplane = get_active_backplane()
+    except Exception:  # noqa: BLE001
+        backplane = None
+
+    lock_name = f"session-heal:{session_id}"
+    lock_ttl = cfg.relaunch_attempt_timeout_s * cfg.relaunch_max_attempts + 30.0
+    acquired = True
+    if backplane is not None:
+        with contextlib.suppress(Exception):
+            acquired = await backplane.try_acquire(lock_name, ttl_s=lock_ttl)
+    if not acquired:
+        # A peer replica owns the heal — its CAS repin is the observable result.
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        client = await _wait_for_runner_client(
+            session_id,
+            runner_router,
+            runner_control_registry,
+            runner_id=conv.runner_id if conv is not None else None,
+            timeout_s=cfg.reconnect_hold_timeout_s,
+            runner_exit_reports=runner_exit_reports,
+        )
+        return client is not None
+
+    try:
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if conv is None or conv.runner_id is None or conv.host_id is None:
+            return False  # nothing to heal (no host-bound runner)
+
+        # Liveness gate: never heal a runner that is actually fine (a peer
+        # replica may have just repaired it while we waited for the lock).
+        existing_client = await _get_runner_client(session_id, runner_router)
+        if existing_client is not None and await _runner_client_ready(existing_client):
+            return True
+
+        host = (
+            await asyncio.to_thread(host_store.get_host, conv.host_id)
+            if host_store is not None
+            else None
+        )
+
+        # Managed sessions never cross-host failover (fresh sandbox = work-tree
+        # loss); relaunch a new sandbox generation under the same host identity.
+        if host is not None and host.sandbox_provider is not None:
+            try:
+                healed = await _maybe_relaunch_managed_sandbox(
+                    session_id=session_id,
+                    conv=conv,
+                    app_state=app_state,
+                    conversation_store=conversation_store,
+                )
+            except OmnigentError:
+                healed = False
+            if healed:
+                _publish_terminal_pending(session_id, False)
+                _publish_runner_recovered_status(session_id)
+                return True
+            _publish_terminal_pending(session_id, True)
+            return False
+
+        # ── Rung 1: relaunch on the bound host (plain session) ──
+        # Owner = the session's created_by (the host-pool tenancy + the runner's
+        # trusted launch owner); resolved via the still-bound runner id.
+        owner = await asyncio.to_thread(
+            conversation_store.owner_for_runner, conv.runner_id
+        )
+        expected_runner = conv.runner_id
+        wedged = False
+        for attempt_no in range(max(cfg.relaunch_max_attempts, 1)):
+
+            def _repin(new_rid: str, _exp: str = expected_runner) -> bool:
+                return conversation_store.cas_runner_id(conv.id, _exp, new_rid)
+
+            host_conn = host_registry.get(conv.host_id) if host_registry is not None else None
+            if host_conn is not None:
+                attempt = await _launch_runner_on_host(
+                    conv,
+                    conversation_store,
+                    host_registry,
+                    host_conn,
+                    owner=owner,
+                    runner_control_registry=runner_control_registry,
+                    repin=_repin,
+                )
+            elif host_registry is not None:
+                attempt = await _launch_runner_on_host_id(
+                    conv,
+                    conversation_store,
+                    host_registry,
+                    conv.host_id,
+                    owner=owner,
+                    runner_control_registry=runner_control_registry,
+                    repin=_repin,
+                )
+            else:
+                break
+
+            if not attempt.repinned:
+                # The row moved under us (a concurrent heal / rebind won). Defer
+                # to that writer's runner rather than launch a competing one.
+                client = await _wait_for_runner_client(
+                    session_id,
+                    runner_router,
+                    runner_control_registry,
+                    runner_id=None,
+                    timeout_s=cfg.reconnect_hold_timeout_s,
+                    runner_exit_reports=runner_exit_reports,
+                )
+                if client is not None:
+                    return True
+                break
+            expected_runner = attempt.runner_id
+            if not attempt.acked:
+                # BDP-2491 wedged host: a registered tunnel that never ACKs.
+                # This is the host-wedge signal for rung 2.
+                wedged = True
+                if host_conn is not None and host_registry is not None:
+                    with contextlib.suppress(Exception):
+                        host_registry.evict(host_conn)
+                break
+            client = await _wait_for_runner_client(
+                session_id,
+                runner_router,
+                runner_control_registry,
+                runner_id=attempt.runner_id,
+                timeout_s=cfg.relaunch_attempt_timeout_s,
+                runner_exit_reports=runner_exit_reports,
+            )
+            if client is not None:
+                _publish_terminal_pending(session_id, False)
+                _publish_runner_recovered_status(session_id)
+                return True
+            await asyncio.sleep(min(0.5 * (attempt_no + 1), 2.0))
+
+        # ── Rung 2: host failover (PLAIN only, behind failover.enabled) ──
+        if cfg.failover_enabled and host_store is not None:
+            healed = await _failover_to_new_host(
+                conv=conv,
+                owner=owner,
+                bad_host_id=conv.host_id,
+                expected_runner=expected_runner,
+                wedged=wedged,
+                cfg=cfg,
+                conversation_store=conversation_store,
+                host_store=host_store,
+                host_registry=host_registry,
+                runner_router=runner_router,
+                runner_control_registry=runner_control_registry,
+                runner_exit_reports=runner_exit_reports,
+            )
+            if healed:
+                _publish_terminal_pending(session_id, False)
+                _publish_runner_recovered_status(session_id)
+                return True
+
+        # ── Rung 3: graceful "offline / reconnecting" (never a 503 storm) ──
+        _publish_terminal_pending(session_id, True)
+        return False
+    finally:
+        if backplane is not None and acquired:
+            with contextlib.suppress(Exception):
+                await backplane.release(lock_name)
+
+
+async def _failover_to_new_host(
+    *,
+    conv: Conversation,
+    owner: str | None,
+    bad_host_id: str,
+    expected_runner: str,
+    wedged: bool,
+    cfg: RunnerHealConfig,
+    conversation_store: ConversationStore,
+    host_store: HostStore,
+    host_registry: HostRegistry | None,
+    runner_router: RunnerRouter | None,
+    runner_control_registry: Any | None,
+    runner_exit_reports: RunnerExitReports | None,
+) -> bool:
+    """Rung 2: select a live capability-matching host and atomically repin.
+
+    Trips the bad-host circuit-breaker ONLY when the failure was the
+    ``acked=False`` host-wedge (a healthy host can run a crash-looping runner —
+    never cooldown for a runner-only failure). Repins ``(host_id, runner_id)``
+    together via ``cas_host_and_runner`` so the pair never splits across a hop
+    (BDP-2579 F4/F5).
+    """
+    from omnigent.stores.host_store import LiveHostSelector
+
+    if wedged:
+        await _record_host_cooldown(bad_host_id, cfg.failover_host_cooldown_s)
+        # Evict only on the owning replica; a host owned by another replica is
+        # excluded via the shared cooldown index instead.
+        if host_registry is not None:
+            bad_conn = host_registry.get(bad_host_id)
+            if bad_conn is not None:
+                with contextlib.suppress(Exception):
+                    host_registry.evict(bad_conn)
+
+    selector = LiveHostSelector()
+    harness = _resolve_harness(conv)
+    excluded = {bad_host_id} | await _hosts_in_cooldown()
+    current_host = bad_host_id
+    current_runner = expected_runner
+
+    for _hop in range(max(cfg.failover_max_hops, 1)):
+        candidates = await asyncio.to_thread(host_store.list_hosts, owner)
+        target = selector.select(
+            candidates, harness=harness, exclude_host_ids=excluded
+        )
+        if target is None:
+            return False
+
+        def _repin(
+            new_rid: str,
+            _eh: str = current_host,
+            _er: str = current_runner,
+            _nh: str = target.host_id,
+        ) -> bool:
+            return conversation_store.cas_host_and_runner(
+                conv.id, _eh, _er, _nh, new_rid
+            )
+
+        if host_registry is None:
+            return False
+        attempt = await _launch_runner_on_host_id(
+            conv,
+            conversation_store,
+            host_registry,
+            target.host_id,
+            owner=owner,
+            runner_control_registry=runner_control_registry,
+            repin=_repin,
+        )
+        if not attempt.repinned:
+            client = await _wait_for_runner_client(
+                session_id=conv.id,
+                runner_router=runner_router,
+                runner_control_registry=runner_control_registry,
+                runner_id=None,
+                timeout_s=cfg.reconnect_hold_timeout_s,
+                runner_exit_reports=runner_exit_reports,
+            )
+            return client is not None
+        # The row now points at (target.host_id, attempt.runner_id).
+        current_host = target.host_id
+        current_runner = attempt.runner_id
+        if not attempt.acked:
+            # The failover target is also wedged — cooldown it and hop again.
+            await _record_host_cooldown(target.host_id, cfg.failover_host_cooldown_s)
+            if host_registry is not None:
+                tconn = host_registry.get(target.host_id)
+                if tconn is not None:
+                    with contextlib.suppress(Exception):
+                        host_registry.evict(tconn)
+            excluded = {bad_host_id, target.host_id} | await _hosts_in_cooldown()
+            continue
+        client = await _wait_for_runner_client(
+            session_id=conv.id,
+            runner_router=runner_router,
+            runner_control_registry=runner_control_registry,
+            runner_id=attempt.runner_id,
+            timeout_s=cfg.relaunch_attempt_timeout_s,
+            runner_exit_reports=runner_exit_reports,
+        )
+        if client is not None:
+            _logger.info(
+                "Session %s failed over from host %s to host %s (runner %s)",
+                conv.id,
+                bad_host_id,
+                target.host_id,
+                attempt.runner_id,
+            )
+            return True
+        excluded = {bad_host_id, target.host_id} | await _hosts_in_cooldown()
+    return False
+
+
 async def _get_runner_client_for_resource_access(
     session_id: str,
 ) -> httpx.AsyncClient | None:
@@ -6091,6 +6498,14 @@ async def _proxy_get_session_resources_to_runner(
             session_id,
             exc,
         )
+        # A dead runner (ConnectError, the uniform BDP-2579 F2 signal) is
+        # surfaced as RUNNER_UNAVAILABLE so the read path can self-heal instead
+        # of 502-storming; other HTTP errors stay a generic 502.
+        if _is_runner_unavailable_error(exc):
+            raise OmnigentError(
+                "runner session-resources endpoint unavailable",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            ) from exc
         raise HTTPException(
             status_code=502,
             detail="runner session-resources endpoint unavailable",
@@ -14752,12 +15167,29 @@ def create_sessions_router(
                     "Session not found",
                     code=ErrorCode.NOT_FOUND,
                 )
-        runner_client = await _get_runner_client_for_resource_access(session_id)
-        if runner_client is not None:
-            page = await _proxy_get_session_resources_to_runner(
-                runner_client, session_id, resource_type=type
-            )
-        else:
+        page: SessionResourcePaginatedList | None = None
+        try:
+            runner_client = await _get_runner_client_for_resource_access(session_id)
+            if runner_client is not None:
+                page = await _proxy_get_session_resources_to_runner(
+                    runner_client, session_id, resource_type=type
+                )
+        except OmnigentError as exc:
+            # Eager session-open ``GET /resources`` against a dead runner must
+            # self-heal, not 503-storm (BDP-2579 rung 1/3). Relaunch/fail-over,
+            # then retry the proxy once; if it still can't reach a runner, fall
+            # through to the local-registry/file-store view so the client gets a
+            # benign (possibly empty) page instead of an error loop.
+            if not _is_runner_unavailable_error(exc):
+                raise
+            if await _heal_session_runner(session_id, request):
+                healed_client = await _get_runner_client_for_resource_access(session_id)
+                if healed_client is not None:
+                    with contextlib.suppress(OmnigentError, HTTPException):
+                        page = await _proxy_get_session_resources_to_runner(
+                            healed_client, session_id, resource_type=type
+                        )
+        if page is None:
             from omnigent.entities.session_resources import (
                 list_session_resources_from_terminal_registry,
             )
@@ -17243,12 +17675,36 @@ def create_sessions_router(
             session_id,
             runner_router,
         )
-        await _ensure_runner_relay_ready(
-            session_id,
-            conv.runner_id,
-            runner_client,
-            conversation_store,
-        )
+        try:
+            await _ensure_runner_relay_ready(
+                session_id,
+                conv.runner_id,
+                runner_client,
+                conversation_store,
+            )
+        except OmnigentError as exc:
+            # A dead runner on the eager session-open stream must self-heal, not
+            # 503-storm (BDP-2579 rung 1/3). Relaunch/fail-over the runner, then
+            # rebind the relay once; if it still can't come up, serve the local
+            # session stream degraded — the heal set the reconnecting state
+            # (terminal_pending), so the UI shows "reconnecting", never a loop.
+            if not _is_runner_unavailable_error(exc):
+                raise
+            if await _heal_session_runner(session_id, request):
+                conv = (
+                    await asyncio.to_thread(
+                        conversation_store.get_conversation, session_id
+                    )
+                    or conv
+                )
+                runner_client = await _get_runner_client(session_id, runner_router)
+                with contextlib.suppress(OmnigentError):
+                    await _ensure_runner_relay_ready(
+                        session_id,
+                        conv.runner_id,
+                        runner_client,
+                        conversation_store,
+                    )
 
         async def _resource_snapshot() -> list[dict[str, Any]]:
             """Gather current resource state to emit as snapshot-on-connect.

@@ -14,7 +14,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from sqlalchemy import Engine, select, update
 from sqlalchemy import delete as sql_delete
@@ -96,6 +98,76 @@ def host_is_live(host: Host, now: int | None = None) -> bool:
     """
     ref = now if now is not None else now_epoch()
     return host.status == "online" and host.updated_at >= ref - HOST_LIVENESS_TTL_S
+
+
+def _host_supports_harness(host: Host, harness: str | None) -> bool:
+    """Whether *host* can run a session's *harness* for a failover target.
+
+    ``harness=None`` (unresolvable) skips the check — fail open. A set harness
+    requires the host to have *reported* it ready (``configured_harnesses`` is
+    not ``None`` and maps the harness to ``True``); an unknown (older host that
+    never reported) is treated as not-capable so failover never lands a session
+    on a host that can't run it (BDP-2579 F4).
+    """
+    if harness is None:
+        return True
+    if host.configured_harnesses is None:
+        return False
+    return host.configured_harnesses.get(harness) is True
+
+
+@runtime_checkable
+class HostSelector(Protocol):
+    """Strategy for picking a failover-target host (ADR-0008, BDP-2579 F4).
+
+    Pluggable so an ADR-0151 org-shared-pool / load-aware policy can swap in
+    without touching the heal path.
+    """
+
+    def select(
+        self,
+        candidates: Iterable[Host],
+        *,
+        harness: str | None,
+        exclude_host_ids: set[str],
+        now: int | None = None,
+    ) -> Host | None:
+        """Return the best failover target, or ``None`` when none qualifies."""
+        ...
+
+
+class LiveHostSelector:
+    """Default selector: first live, plain, harness-capable, non-excluded host.
+
+    ``candidates`` is already tenancy-scoped by the caller
+    (``list_hosts(conv.created_by)`` — owner pool); this filters by
+    :func:`host_is_live`, ``sandbox_provider is None`` (managed hosts never
+    take a cross-host failover — fresh sandbox = work-tree loss), harness
+    capability, and the exclude set (failed host + cooldown). The candidate
+    order is the deterministic tiebreak (``list_hosts`` returns most-recently
+    active first).
+    """
+
+    def select(
+        self,
+        candidates: Iterable[Host],
+        *,
+        harness: str | None,
+        exclude_host_ids: set[str],
+        now: int | None = None,
+    ) -> Host | None:
+        ref = now if now is not None else now_epoch()
+        for host in candidates:
+            if host.host_id in exclude_host_ids:
+                continue
+            if host.sandbox_provider is not None:
+                continue
+            if not host_is_live(host, ref):
+                continue
+            if not _host_supports_harness(host, harness):
+                continue
+            return host
+        return None
 
 
 _logger = logging.getLogger(__name__)

@@ -9,6 +9,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from omnigent.coordination.protocol import (
+    KV_LOCKS,
     KV_PENDING,
     KV_PRESENCE,
     KV_REGISTRY,
@@ -35,6 +36,7 @@ class NatsBackplane:
         self._nc: Any = None
         self._js: Any = None
         self._kv: dict[str, Any] = {}
+        self._locks_kv: Any = None
         self._started = False
 
     @property
@@ -94,6 +96,7 @@ class NatsBackplane:
         self._nc = None
         self._js = None
         self._kv.clear()
+        self._locks_kv = None
 
     def _kv_for(self, bucket: str) -> Any:
         physical = _LOGICAL_BUCKETS.get(bucket, bucket)
@@ -141,6 +144,45 @@ class NatsBackplane:
 
     async def release_resource(self, kind: ResourceKind, resource_id: str) -> None:
         await self.index_delete("registry", f"{kind}.{resource_id}")
+
+    async def _locks_bucket(self, ttl_s: float) -> Any:
+        """Lazily open/create the dedicated locks KV bucket.
+
+        The bucket carries a key TTL (``KeyValueConfig(ttl=...)``) so a crashed
+        lock holder's key self-expires — releasing the mutex without an explicit
+        ``release`` (BDP-2579 F1). Created on first acquire with that call's
+        ``ttl_s``; an already-existing bucket keeps its creation-time TTL.
+        """
+        if self._locks_kv is None:
+            from nats.js.api import KeyValueConfig
+
+            try:
+                self._locks_kv = await self._js.key_value(KV_LOCKS)
+            except Exception:  # noqa: BLE001 — bucket may not exist yet
+                self._locks_kv = await self._js.create_key_value(
+                    config=KeyValueConfig(bucket=KV_LOCKS, history=1, ttl=ttl_s)
+                )
+        return self._locks_kv
+
+    async def try_acquire(self, lock_name: str, *, ttl_s: float) -> bool:
+        kv = await self._locks_bucket(ttl_s)
+        try:
+            # create() adds the key iff it does not exist; an existing (live)
+            # lock raises, so exactly one concurrent caller wins.
+            await kv.create(lock_name, self._replica_id.encode("utf-8"))
+            return True
+        except Exception:  # noqa: BLE001
+            # Key already held → not acquired. (A NATS outage also lands here →
+            # nobody heals, but the runner transport is down anyway then.)
+            # ponytail: any-exception=False; tighten to KeyWrongLastSequenceError
+            # only if a transient KV error must not block a heal.
+            return False
+
+    async def release(self, lock_name: str) -> None:
+        if self._locks_kv is None:
+            return
+        with contextlib.suppress(Exception):
+            await self._locks_kv.delete(lock_name)
 
     async def index_put(
         self,

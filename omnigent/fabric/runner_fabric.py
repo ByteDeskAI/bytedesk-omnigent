@@ -39,6 +39,12 @@ class HostRunnerAcquisition:
     timeout_s: float = 15.0
     host_connection: Any | None = None
     before_launch: Callable[[str], Awaitable[None] | None] | None = None
+    # Self-heal compare-and-swap (BDP-2579 F3). When set, the fabric runs this
+    # callback IN PLACE OF its set/replace bind: the caller owns the swap and
+    # returns False if the session row already moved (a concurrent heal or user
+    # rebind). On False the fabric aborts — no launch frame is sent — and
+    # surfaces ``repinned=False``. None keeps the default set/replace bind.
+    repin: Callable[[str], bool] | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +54,9 @@ class RunnerAcquisitionResult:
     error_code: str | None = None
     error: str | None = None
     status_code: int | None = None
+    # False only when a ``repin`` callback was supplied and lost the CAS, so the
+    # bind was aborted before any launch frame. Default True (the bind landed).
+    repinned: bool = True
 
 
 class HostWorkerRunnerFabric:
@@ -63,7 +72,17 @@ class HostWorkerRunnerFabric:
         binding_token = secrets.token_urlsafe(32)
         runner_id = token_bound_runner_id(binding_token)
 
-        if acquisition.bind_mode == "set":
+        if acquisition.repin is not None:
+            # Self-heal CAS path (BDP-2579 F3): the caller owns the swap and
+            # aborts the whole acquisition (no launch frame, no owner record)
+            # if it loses the compare-and-swap.
+            if not await asyncio.to_thread(acquisition.repin, runner_id):
+                return RunnerAcquisitionResult(
+                    runner_id=runner_id,
+                    acked=False,
+                    repinned=False,
+                )
+        elif acquisition.bind_mode == "set":
             bound = await asyncio.to_thread(
                 acquisition.conversation_store.set_runner_id,
                 acquisition.session_id,

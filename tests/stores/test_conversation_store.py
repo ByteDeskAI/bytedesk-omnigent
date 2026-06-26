@@ -2323,6 +2323,67 @@ def test_set_host_id_with_workspace_satisfies_constraint(
     assert updated.workspace == "/Users/corey/projects/myapp"
 
 
+def test_cas_runner_id_swaps_only_when_expected_matches(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """cas_runner_id repins iff the row still holds the expected (dead) id —
+    the rung-1 self-heal swap (BDP-2579 F3)."""
+    conv = conversation_store.create_conversation()
+    conversation_store.replace_runner_id(conv.id, "runner_dead")
+
+    # Expected matches → swap wins.
+    assert conversation_store.cas_runner_id(conv.id, "runner_dead", "runner_new") is True
+    assert conversation_store.get_conversation(conv.id).runner_id == "runner_new"
+
+    # Row already moved → swap loses, no write.
+    assert conversation_store.cas_runner_id(conv.id, "runner_dead", "runner_other") is False
+    assert conversation_store.get_conversation(conv.id).runner_id == "runner_new"
+
+
+def test_cas_host_and_runner_swaps_both_atomically(
+    conversation_store: SqlAlchemyConversationStore,
+    db_uri: str,
+) -> None:
+    """cas_host_and_runner repins (host_id, runner_id) together iff BOTH still
+    match — the rung-2 failover swap; fails if either column moved (BDP-2579 F3)."""
+    _register_host(db_uri, "host_old")
+    _register_host(db_uri, "host_new")
+    conv = conversation_store.create_conversation(workspace="/ws")
+    conversation_store.set_host_id(conv.id, "host_old")
+    conversation_store.replace_runner_id(conv.id, "runner_dead")
+
+    # Wrong host → no swap.
+    assert (
+        conversation_store.cas_host_and_runner(
+            conv.id, "host_wrong", "runner_dead", "host_new", "runner_new"
+        )
+        is False
+    )
+    # Wrong runner → no swap.
+    assert (
+        conversation_store.cas_host_and_runner(
+            conv.id, "host_old", "runner_wrong", "host_new", "runner_new"
+        )
+        is False
+    )
+    fetched = conversation_store.get_conversation(conv.id)
+    assert fetched.host_id == "host_old"
+    assert fetched.runner_id == "runner_dead"
+    assert fetched.workspace == "/ws"  # untouched (constraint stays satisfied)
+
+    # Both match → both move in one statement.
+    assert (
+        conversation_store.cas_host_and_runner(
+            conv.id, "host_old", "runner_dead", "host_new", "runner_new"
+        )
+        is True
+    )
+    fetched = conversation_store.get_conversation(conv.id)
+    assert fetched.host_id == "host_new"
+    assert fetched.runner_id == "runner_new"
+    assert fetched.workspace == "/ws"
+
+
 def test_clear_host_binding_nulls_all_binding_fields(
     conversation_store: SqlAlchemyConversationStore,
     db_uri: str,
