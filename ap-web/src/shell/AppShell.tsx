@@ -4,6 +4,7 @@ import { useParams, useSearchParams } from "@/lib/routing";
 import { PageTransitionOutlet } from "./PageTransitionOutlet";
 import { useConversations } from "@/hooks/useConversations";
 import { useSessionAgent } from "@/hooks/useAgents";
+import { useAgentBlueprint } from "@/hooks/useBlueprints";
 import { AgentInfoContent, agentHasInfo } from "@/components/AgentInfo";
 import { OfflineBanner } from "@/components/OfflineBanner";
 import { useIdleNotifications } from "@/hooks/useIdleNotifications";
@@ -66,6 +67,7 @@ import { PermissionsModal } from "@/components/PermissionsModal";
 import { ForkSessionDialog } from "./ForkSessionDialog";
 import { ForkDialogContextProvider, type ForkDialogContextValue } from "./ForkDialogContext";
 import { WorkspacePanel } from "./WorkspacePanel";
+import { BlueprintPanel } from "./BlueprintPanel";
 import type { RightRailTab } from "./railTabs";
 
 /**
@@ -173,6 +175,7 @@ export function AppShell() {
   // on a phone they open as full-screen overlays from the session-menu FAB.
   const [subagentsPanelOpen, setSubagentsPanelOpen] = useState(false);
   const [todosPanelOpen, setTodosPanelOpen] = useState(false);
+  const [blueprintPanelOpen, setBlueprintPanelOpen] = useState(false);
   // The right "Workspace" rail (WorkspacePanel) is open by default and
   // remembers its open/closed state per session — a brand-new session starts
   // open; reopening a session restores how the user last left it. Toggled
@@ -248,6 +251,10 @@ export function AppShell() {
   // Full agent object (mcp_servers + policies) for the header info icon.
   // react-query-cached, so this shares the fetch ChatPage's picker makes.
   const { data: boundAgent } = useSessionAgent(conversationId ?? null);
+  const { data: blueprintGraph } = useAgentBlueprint(boundAgent?.id ?? null);
+  const blueprintAvailable =
+    blueprintGraph !== null && (blueprintGraph !== undefined || boundAgent?.harness === "blueprint");
+  const blueprintNodeCount = blueprintGraph?.nodes.length ?? 0;
   const permissionLevel = derivePermissionLevel(
     activeSession,
     sessionLoading,
@@ -399,6 +406,7 @@ export function AppShell() {
         // Agents tab is unconditional: the panel always lists at least
         // the main agent (its "main" row), so there's never a dead end.
         subagents: true,
+        blueprint: blueprintAvailable,
         // Shells tab: shown by default when the agent's spec declares
         // shell access (the empty state offers "+ New shell"), or once a
         // shell exists for agents that don't. Inventory view: the
@@ -413,6 +421,7 @@ export function AppShell() {
       }) as const,
     [
       showFilesPanel,
+      blueprintAvailable,
       hideTerminalsTab,
       railTerminals.length,
       agentSupportsShells,
@@ -428,12 +437,12 @@ export function AppShell() {
   // Keep the selected tab valid. When the current tab disappears — files
   // panel turns off, or the Shells tab hides (native wrapper / no shell
   // and no shell access) — fall back to the first still-visible tab in
-  // display order (Files · Agents · Shells · Tasks). Picking the first
+  // display order (Files · Agents · Blueprint · Shells · Tasks). Picking the first
   // available (rather than ping-ponging between two effects) keeps this
   // convergent even when several tabs vanish at once.
   useEffect(() => {
     if (railTabsAvailable[rightRailTab]) return;
-    const next = (["files", "subagents", "terminals", "todos"] as const).find(
+    const next = (["files", "subagents", "blueprint", "terminals", "todos"] as const).find(
       (t) => railTabsAvailable[t],
     );
     if (next) setRightRailTab(next);
@@ -483,6 +492,7 @@ export function AppShell() {
     setFilesPanelOpen(false);
     setSubagentsPanelOpen(false);
     setTodosPanelOpen(false);
+    setBlueprintPanelOpen(false);
     setFilesPanelShowHidden(false);
     if (!conversationId) {
       // No session → no rail; false (not the open default) so rail-gated
@@ -625,11 +635,14 @@ export function AppShell() {
       setFilesPanelOpen(false); // close files drawer so the viewer is unobscured
       setSubagentsPanelOpen(false); // close mobile agents drawer
       setTodosPanelOpen(false); // close mobile tasks drawer
+      setBlueprintPanelOpen(false); // close mobile blueprint drawer
       // Pull the rail to the Files tab when parked on a tab where the viewer
       // won't render (Terminals, Subagents, Todos). The Files tab surfaces the
       // FileViewer inline, so leave it undisturbed.
       setRightRailTab((prev) =>
-        prev === "terminals" || prev === "subagents" || prev === "todos" ? "files" : prev,
+        prev === "terminals" || prev === "subagents" || prev === "blueprint" || prev === "todos"
+          ? "files"
+          : prev,
       );
       // Reveal the rail so the viewer is actually visible — the rail defaults
       // open but a session the user collapsed restores collapsed, so opening a
@@ -763,6 +776,7 @@ export function AppShell() {
     setFilesPanelOpen(false); // close files drawer
     setSubagentsPanelOpen(false); // close mobile agents drawer
     setTodosPanelOpen(false); // close mobile tasks drawer
+    setBlueprintPanelOpen(false); // close mobile blueprint drawer
     setPanelInitialKey(key);
   }
 
@@ -774,6 +788,7 @@ export function AppShell() {
     setSubagentsPanelOpen(false); // close mobile agents drawer
     setTodosPanelOpen(false); // close mobile tasks drawer
     setExecutionLogsKey(key);
+    setBlueprintPanelOpen(false); // close mobile blueprint drawer
   }
 
   // Mobile FAB → "Files" opens the files drawer (mirrors the desktop rail's
@@ -786,6 +801,7 @@ export function AppShell() {
     setExecutionLogsKey(null); // close execution-logs panel
     setSubagentsPanelOpen(false); // close mobile agents drawer
     setTodosPanelOpen(false); // close mobile tasks drawer
+    setBlueprintPanelOpen(false); // close mobile blueprint drawer
     setFilesPanelOpen(true);
   }
 
@@ -798,7 +814,21 @@ export function AppShell() {
     setExecutionLogsKey(null); // close execution-logs panel
     setFilesPanelOpen(false); // close files drawer
     setTodosPanelOpen(false); // close mobile tasks drawer
+    setBlueprintPanelOpen(false); // close mobile blueprint drawer
     setSubagentsPanelOpen(true);
+  }
+
+  // Mobile FAB → "Blueprint" opens the deterministic graph/run panel
+  // as a full-screen drawer.
+  function openBlueprintPanel() {
+    setSelectedFilePath(null); // close file viewer
+    clearFileViewerUrl();
+    setPanelInitialKey(null); // close terminals panel
+    setExecutionLogsKey(null); // close execution-logs panel
+    setFilesPanelOpen(false); // close files drawer
+    setSubagentsPanelOpen(false); // close mobile agents drawer
+    setTodosPanelOpen(false); // close mobile tasks drawer
+    setBlueprintPanelOpen(true);
   }
 
   // Mobile FAB → "Tasks" opens the todo list (the desktop rail's Tasks tab)
@@ -810,6 +840,7 @@ export function AppShell() {
     setExecutionLogsKey(null); // close execution-logs panel
     setFilesPanelOpen(false); // close files drawer
     setSubagentsPanelOpen(false); // close mobile agents drawer
+    setBlueprintPanelOpen(false); // close mobile blueprint drawer
     setTodosPanelOpen(true);
   }
 
@@ -1031,6 +1062,7 @@ export function AppShell() {
                     executionLogsOpen,
                     filesPanelOpen,
                     subagentsPanelOpen,
+                    blueprintPanelOpen,
                     todosPanelOpen,
                     hideTerminalsTab,
                     terminalsLength: railTerminals.length,
@@ -1040,10 +1072,13 @@ export function AppShell() {
                     debugMode,
                     changedCount,
                     subagentsWorking,
+                    showBlueprintTab: blueprintAvailable,
+                    blueprintNodeCount,
                     agentCount,
                     onOpenFiles: openFilesPanel,
                     onOpenFirstTerminal: openFirstTerminal,
                     onOpenSubagents: openSubagentsPanel,
+                    onOpenBlueprint: openBlueprintPanel,
                     onOpenTodos: openTodosPanel,
                     onOpenMainExecutionLog: openMainExecutionLog,
                   }}
@@ -1078,6 +1113,9 @@ export function AppShell() {
                       showFilesPanel={showFilesPanel}
                       changedCount={changedCount}
                       showShellsTab={railTabsAvailable.terminals}
+                      showBlueprintTab={railTabsAvailable.blueprint}
+                      blueprintNodeCount={blueprintNodeCount}
+                      boundAgentId={boundAgent?.id ?? null}
                       terminalsLength={railTerminals.length}
                       subagentsWorking={subagentsWorking}
                       agentCount={agentCount}
@@ -1153,6 +1191,16 @@ export function AppShell() {
                   testId="subagents-panel-drawer"
                 >
                   <SubagentsPanel conversationId={conversationId} rootSessionId={rootSessionId} />
+                </MobilePanelDrawer>
+              )}
+              {conversationId && (
+                <MobilePanelDrawer
+                  open={blueprintPanelOpen}
+                  title="Blueprint"
+                  onClose={() => setBlueprintPanelOpen(false)}
+                  testId="blueprint-panel-drawer"
+                >
+                  <BlueprintPanel conversationId={conversationId} agentId={boundAgent?.id ?? null} />
                 </MobilePanelDrawer>
               )}
               {conversationId && (

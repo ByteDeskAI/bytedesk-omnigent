@@ -1,0 +1,78 @@
+# Blueprint Playground: Team Motto Draft — internal deterministic blueprint proving flow.
+spec_version: 1
+name: blueprint-playground-team-motto
+description: >-
+  Internal blueprint playground that exercises nested blueprint sessions,
+  fan-out, bounded review loops, parent return, and graph visualization.
+
+executor:
+  type: blueprint
+
+params:
+  workflow: true
+  department: "Internal Demo"
+  internalOnly: true
+
+blueprint:
+  name: "Blueprint Playground: Team Motto Draft"
+  description: "Harmless internal proof flow for deterministic blueprint execution."
+  version: 1
+  nodes:
+    - id: collect_product_ideas
+      kind: blueprint
+      target: demo-team-idea-collection
+      input:
+        text: "Collect product-team motto ideas from: {{ $.input.text }}"
+    - id: collect_support_ideas
+      kind: blueprint
+      target: demo-team-idea-collection
+      input:
+        text: "Collect support-team motto ideas from: {{ $.input.text }}"
+    - id: draft_motto
+      kind: blueprint
+      target: demo-motto-drafting
+      depends_on: [collect_product_ideas, collect_support_ideas]
+      input:
+        text: "Product ideas: {{ $.nodes.collect_product_ideas.output }}. Support ideas: {{ $.nodes.collect_support_ideas.output }}."
+    - id: review_rework_loop
+      kind: loop
+      depends_on: [draft_motto]
+      loop:
+        max_iterations: 2
+        until:
+          path: "$.nodes.playground_approval.output.approved"
+          equals: true
+        on_exhausted: fail
+        reuse_session: true
+        body:
+          - id: playground_approval
+            kind: approval
+            metadata:
+              auto_approve: true
+            input:
+              approved: true
+              note: "Internal playground approval accepted."
+          - id: rework_instruction
+            kind: task
+            depends_on: [playground_approval]
+            output:
+              text: "No rework requested in the playground run."
+    - id: share_summary
+      kind: portal_message
+      depends_on: [review_rework_loop]
+      input:
+        text: "Motto draft ready for internal review."
+    - id: final_output
+      kind: output
+      depends_on: [share_summary]
+      output:
+        title: "Team motto draft"
+        motto: "{{ $.nodes.draft_motto.output }}"
+        review: "{{ $.nodes.review_rework_loop.output }}"
+  outputs:
+    title: "{{ $.nodes.final_output.output.title }}"
+    motto: "{{ $.nodes.final_output.output.motto }}"
+    review: "{{ $.nodes.final_output.output.review }}"
+
+async: true
+cancellable: true

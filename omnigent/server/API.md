@@ -145,6 +145,33 @@ GET /api/agents/{id}
 404 Not Found
 ```
 
+### Get Agent Blueprint
+
+```
+GET /v1/agents/{agent_id}/blueprint
+
+200 OK
+{
+  "object": "blueprint",
+  "agent_id": "ag_abc123",
+  "agent_name": "blueprint-playground-team-motto",
+  "name": "Blueprint Playground: Team Motto Draft",
+  "version": 1,
+  "nodes": [
+    {"id": "draft", "kind": "blueprint", "depends_on": ["collect"], "target": "demo-motto-drafting"}
+  ],
+  "edges": [
+    {"id": "collect->draft", "source": "collect", "target": "draft"}
+  ],
+  "outputs": {}
+}
+
+404 Not Found — agent is missing or does not declare a blueprint
+```
+
+Returns the normalized static graph for built-in blueprint agents. Clients use
+this for graph visualization without parsing YAML.
+
 ### Delete Agent
 
 ```
@@ -779,6 +806,38 @@ When runner liveness is wired (and not skipped via
     Whether the session's bound runner/host is reachable. This is
     session-scoped (authorized by access to the session), and matches
     `GET /health?session_id=...` for the same id.
+
+### Get Blueprint Run
+
+```
+GET /v1/sessions/{session_id}/blueprint-run
+
+200 OK
+{
+  "object": "blueprint_run",
+  "blueprint_run_id": "bpr_abc123",
+  "status": "running",
+  "nodes": [
+    {
+      "id": "draft",
+      "kind": "blueprint",
+      "status": "running",
+      "loop_iteration": null,
+      "child_session_id": "conv_child",
+      "payload": {},
+      "updated_at": 1774118400
+    }
+  ],
+  "loop_iterations": [],
+  "events": []
+}
+
+404 Not Found — no session with that id
+```
+
+Reconstructs live blueprint node state from durable `blueprint_event`
+conversation items. It is intentionally a projection: chat text is not parsed to
+recover run state.
 
 ### Delete Session
 

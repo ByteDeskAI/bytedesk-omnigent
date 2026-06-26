@@ -36,6 +36,7 @@ resolved from the YAML file's directory.
 | `prompt` | Usually | Inline system prompt. |
 | `instructions` | Optional | Inline instructions or a path to an instructions file. If set, it takes precedence over `prompt`. |
 | `executor` | Recommended | Harness, model, and auth settings. |
+| `blueprint` | Required for `executor.type: blueprint` | Deterministic node graph for blueprint workflow agents. |
 | `tools` | Optional | MCP tools, Python function tools, sub-agents, handoffs, or inherited tools. |
 | `policies` | Optional | Guardrails that inspect requests, responses, tool calls, or tool results. |
 | `params` | Optional | Typed user parameters available to tools/skills. |
@@ -93,6 +94,70 @@ CLI flags such as `--harness` and `--model` can override or supply missing
 executor values for a run. Databricks credentials come from the spec's
 `executor.auth` block or your `omnigent setup` provider config — there is
 no profile flag.
+
+### Blueprint
+
+Use `executor.type: blueprint` for deterministic workflow agents. A blueprint
+agent keeps the normal agent identity and session model, but executes the
+top-level `blueprint.nodes` graph instead of a prompt-driven harness turn.
+
+```yaml
+spec_version: 1
+name: blueprint-playground-team-motto
+
+executor:
+  type: blueprint
+
+params:
+  workflow: true
+
+blueprint:
+  name: "Blueprint Playground: Team Motto Draft"
+  version: 1
+  nodes:
+    - id: collect_ideas
+      kind: blueprint
+      target: demo-team-idea-collection
+      input:
+        text: "{{ $.input.text }}"
+    - id: draft
+      kind: blueprint
+      target: demo-motto-drafting
+      depends_on: [collect_ideas]
+      input:
+        text: "{{ $.nodes.collect_ideas.output }}"
+    - id: review
+      kind: loop
+      depends_on: [draft]
+      loop:
+        max_iterations: 2
+        until:
+          path: "$.nodes.approve.output.approved"
+          equals: true
+        on_exhausted: fail
+        reuse_session: true
+        body:
+          - id: approve
+            kind: approval
+            metadata:
+              auto_approve: true
+            input:
+              approved: true
+    - id: final
+      kind: output
+      depends_on: [review]
+      output:
+        text: "{{ $.nodes.draft.output }}"
+  outputs:
+    text: "{{ $.nodes.final.output.text }}"
+```
+
+Supported v1 node kinds are `task`, `tool`, `agent`, `blueprint`, `approval`,
+`wait_for_event`, `portal_message`, `loop`, and `output`. `kind: agent` and
+`kind: blueprint` launch child sessions and return through the parent session's
+inbox-style result path. `kind: blueprint` targets must be workflow-category
+blueprint agents. Loops must declare `max_iterations`, `until`, and
+`on_exhausted`; unbounded loops are invalid.
 
 ## Local OS access
 

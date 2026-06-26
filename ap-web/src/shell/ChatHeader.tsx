@@ -11,6 +11,7 @@ import {
   PanelRightIcon,
   ShareIcon,
   TerminalIcon,
+  WorkflowIcon,
 } from "lucide-react";
 import { Link } from "@/lib/routing";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,8 @@ interface MobileSessionMenuProps {
   subagentsPanelOpen: boolean;
   /** True while the mobile tasks drawer is open. */
   todosPanelOpen: boolean;
+  /** True while the mobile blueprint drawer is open. */
+  blueprintPanelOpen: boolean;
   /** Hide the Shells entry (claude-native sub-agents only). */
   hideTerminalsTab: boolean;
   /** Number of open terminals (entry badge + visibility). */
@@ -64,6 +67,10 @@ interface MobileSessionMenuProps {
   changedCount: number;
   /** Working child-agent count (Agents entry badge). */
   subagentsWorking: number;
+  /** Whether the active agent exposes a blueprint graph. */
+  showBlueprintTab: boolean;
+  /** Number of top-level blueprint nodes. */
+  blueprintNodeCount: number;
   /**
    * Total agents in the session tree, main agent included (Agents
    * entry badge) — starts at 1 for a lone agent.
@@ -75,6 +82,8 @@ interface MobileSessionMenuProps {
   onOpenFirstTerminal: () => void;
   /** Open the mobile agents drawer. */
   onOpenSubagents: () => void;
+  /** Open the mobile blueprint drawer. */
+  onOpenBlueprint: () => void;
   /** Open the mobile tasks drawer. */
   onOpenTodos: () => void;
   /** Open the main execution-log push panel. */
@@ -354,6 +363,7 @@ export function ChatHeader({
           !mobileMenu.executionLogsOpen &&
           !mobileMenu.filesPanelOpen &&
           !mobileMenu.subagentsPanelOpen &&
+          !mobileMenu.blueprintPanelOpen &&
           !mobileMenu.todosPanelOpen &&
           (hasRailContent || mobileMenu.debugMode) && (
             <DropdownMenu>
@@ -408,6 +418,18 @@ export function ChatHeader({
                       : mobileMenu.agentCount}
                   </span>
                 </DropdownMenuItem>
+                {mobileMenu.showBlueprintTab && (
+                  <DropdownMenuItem
+                    onSelect={mobileMenu.onOpenBlueprint}
+                    className="gap-2.5 px-2.5 py-2 text-base"
+                  >
+                    <WorkflowIcon className="size-4" />
+                    Blueprint
+                    <span className={cn(TAB_BADGE_BASE, "ml-auto bg-muted text-muted-foreground")}>
+                      {mobileMenu.blueprintNodeCount}
+                    </span>
+                  </DropdownMenuItem>
+                )}
                 {/* Shells — hidden only for claude-native sub-agents,
                     matching the desktop rail's Shells tab. The agent's
                     own terminal (SDK REPL / native vendor pane) is

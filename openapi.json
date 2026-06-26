@@ -196,6 +196,11 @@
       "AgentObject": {
         "description": "API representation of a registered agent.\n\n:param id: Unique agent identifier, e.g. ``\"ag_abc123\"``.\n:param object: Fixed resource type, always ``\"agent\"``.\n:param name: Human-readable agent name,\n    e.g. ``\"research-agent\"``.\n:param display_name: Optional human display name sourced from the\n    bundle's ``params.displayName`` (e.g. ``\"Maya Chen\"``). The Web\n    UI new-session picker prefers it over the slug ``name``. ``None``\n    when the bundle sets no ``params.displayName`` or can't be loaded.\n:param version: Monotonic version counter. Starts at 1,\n    incremented on each update.\n:param description: Optional free-text description of the\n    agent's purpose.\n:param created_at: Unix epoch timestamp of creation.\n:param updated_at: Unix epoch timestamp of the last update,\n    or ``None`` if never updated.\n:param harness: The agent's harness/kind, e.g. ``\"codex\"``,\n    ``\"codex-native\"``, or ``\"claude-native\"`` for\n    ``executor.type: omnigent`` agents, otherwise the executor\n    type (``\"claude_sdk\"``, ``\"agents_sdk\"``). ``None`` when the\n    bundle cannot be loaded. Lets the Web UI Add Agent picker\n    recognise an agent's kind (Codex vs Claude) without\n    hardcoding by name slug.\n:param mcp_servers: MCP servers the agent is connected to\n    (secret fields omitted). Empty list when the spec\n    declares no MCP servers or when the bundle cannot be\n    loaded.\n:param policies: Guardrails policies declared on the agent.\n    Each entry summarises the policy name, type, and\n    phases. Empty list when the spec declares no policies\n    or when the bundle cannot be loaded.\n:param skills: Skills bundled in the agent spec\n    (``skills/<name>/SKILL.md``). Lets the Web UI's\n    new-session composer offer a slash-command menu before a\n    session (and its runner) exists. Host-discovered skills\n    are runner-owned, so they are NOT listed here \u2014 the\n    session snapshot's ``skills`` field carries the merged\n    set once a runner is bound. Empty list when the spec\n    bundles no skills or when the bundle cannot be loaded.\n:param terminals: Terminal names declared in the spec's\n    ``terminals:`` block, in declaration order, e.g.\n    ``[\"shell\"]``. The Web UI gates its \"new terminal\"\n    affordance on this list (creation is only offered for\n    agents with terminal access) and offers these names as\n    the launchable choices. Empty list when the spec\n    declares no terminals or when the bundle cannot be\n    loaded.",
         "properties": {
+          "category": {
+            "default": "employee",
+            "title": "Category",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "integer"
@@ -332,6 +337,373 @@
           "created_at"
         ],
         "title": "AgentObject",
+        "type": "object"
+      },
+      "BlueprintGraphEdge": {
+        "description": "Static dependency edge in a blueprint graph.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target"
+        ],
+        "title": "BlueprintGraphEdge",
+        "type": "object"
+      },
+      "BlueprintGraphLoop": {
+        "description": "Static loop metadata nested under a blueprint loop node.",
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintGraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "max_iterations": {
+            "title": "Max Iterations",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "on_exhausted": {
+            "title": "On Exhausted",
+            "type": "string"
+          },
+          "reuse_session": {
+            "default": false,
+            "title": "Reuse Session",
+            "type": "boolean"
+          },
+          "until": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "required": [
+          "max_iterations",
+          "on_exhausted"
+        ],
+        "title": "BlueprintGraphLoop",
+        "type": "object"
+      },
+      "BlueprintGraphNode": {
+        "description": "Static node projection for a blueprint graph.",
+        "properties": {
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "loop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlueprintGraphLoop"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output"
+          },
+          "return": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "when": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "When"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "BlueprintGraphNode",
+        "type": "object"
+      },
+      "BlueprintGraphResponse": {
+        "description": "Static normalized blueprint graph response.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintGraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintGraphNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "object": {
+            "const": "blueprint",
+            "default": "blueprint",
+            "title": "Object",
+            "type": "string"
+          },
+          "outputs": {
+            "additionalProperties": true,
+            "title": "Outputs",
+            "type": "object"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "title": "BlueprintGraphResponse",
+        "type": "object"
+      },
+      "BlueprintRunNode": {
+        "description": "Live node-state projection for a blueprint run.",
+        "properties": {
+          "child_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Child Session Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "loop_iteration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loop Iteration"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "BlueprintRunNode",
+        "type": "object"
+      },
+      "BlueprintRunResponse": {
+        "description": "Live blueprint run snapshot reconstructed from persisted events.",
+        "properties": {
+          "blueprint_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blueprint Run Id"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "loop_iterations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Loop Iterations",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintRunNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "object": {
+            "const": "blueprint_run",
+            "default": "blueprint_run",
+            "title": "Object",
+            "type": "string"
+          },
+          "status": {
+            "default": "pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "BlueprintRunResponse",
         "type": "object"
       },
       "Body_update_session_agent_v1_sessions__session_id__agent_put": {
@@ -6073,6 +6445,27 @@
         "summary": "Health"
       }
     },
+    "/readyz": {
+      "get": {
+        "description": "Readiness check backed by mandatory fabric preflight.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Readyz Readyz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz"
+      }
+    },
     "/v1/_capabilities": {
       "get": {
         "description": "Pluggable-seam capability manifest (BDP-2374).\n\nReturns one entry per live pluggable seam \u2014 its registered\nprovider names, the active impl, the registered default, and the\n``OMNIGENT_USE_<SEAM>`` override env var \u2014 projected from\n:data:`omnigent.kernel.pluggable.manifest.SEAMS`. Read-only and cheap\n(no factories are invoked, only registry introspection).\n\nAuthentication: intentionally UNAUTHED, matching ``/v1/info`` \u2014\nit exposes only which backends are wired, no secret state \u2014 so a\nclient / operator can probe seam configuration before holding a\nsession.\n\n:returns: ``{\"seams\": [<describe() + override_env>, ...]}``.",
@@ -6149,7 +6542,7 @@
     },
     "/v1/agents": {
       "get": {
-        "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:returns: A :class:`PaginatedList` of built-in agents.",
+        "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:param category: Optional tier filter (``\"system\"`` | ``\"employee\"`` |\n    ``\"workflow\"``); ``None`` returns all tiers.\n:returns: A :class:`PaginatedList` of built-in agents.",
         "operationId": "list_builtin_agents_v1_agents_get",
         "parameters": [
           {
@@ -6206,6 +6599,23 @@
               "title": "Order",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(system|employee|workflow)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
           }
         ],
         "responses": {
@@ -6231,6 +6641,49 @@
           }
         },
         "summary": "List Builtin Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/blueprint": {
+      "get": {
+        "description": "Return the normalized static blueprint graph for a built-in agent.\n\n:param request: The incoming FastAPI request (for auth).\n:param agent_id: Registered built-in agent id.\n:returns: Static blueprint graph.\n:raises OmnigentError: 404 when the agent or blueprint is absent.",
+        "operationId": "get_agent_blueprint_v1_agents__agent_id__blueprint_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintGraphResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Blueprint",
         "tags": [
           "agents"
         ]
@@ -6695,6 +7148,222 @@
         "tags": [
           "sessions"
         ]
+      }
+    },
+    "/v1/fabric/audit": {
+      "get": {
+        "operationId": "audit_v1_fabric_audit_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Audit"
+      }
+    },
+    "/v1/fabric/capacity": {
+      "get": {
+        "operationId": "capacity_v1_fabric_capacity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capacity"
+      }
+    },
+    "/v1/fabric/dlq": {
+      "get": {
+        "operationId": "dlq_v1_fabric_dlq_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dlq"
+      }
+    },
+    "/v1/fabric/lanes": {
+      "get": {
+        "operationId": "lanes_v1_fabric_lanes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Lanes"
+      }
+    },
+    "/v1/fabric/outbox": {
+      "get": {
+        "operationId": "outbox_v1_fabric_outbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Outbox"
+      }
+    },
+    "/v1/fabric/pools": {
+      "get": {
+        "operationId": "pools_v1_fabric_pools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pools"
+      }
+    },
+    "/v1/fabric/preflight": {
+      "get": {
+        "operationId": "preflight_v1_fabric_preflight_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Preflight"
+      }
+    },
+    "/v1/fabric/quarantine": {
+      "get": {
+        "operationId": "quarantine_v1_fabric_quarantine_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Quarantine"
+      }
+    },
+    "/v1/fabric/runners": {
+      "get": {
+        "operationId": "runners_v1_fabric_runners_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Runners"
+      }
+    },
+    "/v1/fabric/timeline": {
+      "get": {
+        "operationId": "timeline_v1_fabric_timeline_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Timeline"
+      }
+    },
+    "/v1/fabric/topology": {
+      "get": {
+        "operationId": "topology_v1_fabric_topology_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Topology"
       }
     },
     "/v1/flags": {
@@ -7826,7 +8495,7 @@
     },
     "/v1/hosts/{host_id}/runners": {
       "post": {
-        "description": "Launch a runner on a host for a session.\n\nGenerates a binding token, writes the expected runner_id\nto the session row, sends the launch command to the host,\nand waits for the host's acknowledgement.\n\n:param request: The incoming request (for auth).\n:param host_id: Target host, e.g. ``\"host_a1b2c3d4...\"``.\n:param body: Launch request with ``session_id`` and\n    ``workspace``.\n:returns: ``{\"runner_id\": ..., \"status\": \"launching\"}``.\n:raises HTTPException: 404 if host not found, 409 if host\n    offline, 403 if caller doesn't own the host, 400 if\n    session already has a runner.",
+        "description": "Launch a runner on a host for a session.\n\nDelegates runner acquisition to the fabric facade, which\natomically binds a runner id, sends the launch command to the\nhost worker, and waits for the host's acknowledgement.\n\n:param request: The incoming request (for auth).\n:param host_id: Target host, e.g. ``\"host_a1b2c3d4...\"``.\n:param body: Launch request with ``session_id`` and\n    ``workspace``.\n:returns: ``{\"runner_id\": ..., \"status\": \"launching\"}``.\n:raises HTTPException: 404 if host not found, 409 if host\n    offline, 403 if caller doesn't own the host, 400 if\n    session already has a runner.",
         "operationId": "launch_runner_v1_hosts__host_id__runners_post",
         "parameters": [
           {
@@ -7877,6 +8546,62 @@
         "tags": [
           "hosts"
         ]
+      }
+    },
+    "/v1/inbound/events": {
+      "get": {
+        "description": "Subscribe to the live inbound-event feed (SSE).",
+        "operationId": "subscribe_inbound_events_v1_inbound_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Subscribe Inbound Events"
+      }
+    },
+    "/v1/inbound/recent": {
+      "get": {
+        "description": "Most-recent inbound events (newest first) for feed hydration.",
+        "operationId": "recent_v1_inbound_recent_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recent"
       }
     },
     "/v1/info": {
@@ -9333,6 +10058,49 @@
           }
         },
         "summary": "Await Session Message",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/blueprint-run": {
+      "get": {
+        "description": "Return live blueprint run state reconstructed from durable events.",
+        "operationId": "get_blueprint_run_v1_sessions__session_id__blueprint_run_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Blueprint Run",
         "tags": [
           "sessions"
         ]

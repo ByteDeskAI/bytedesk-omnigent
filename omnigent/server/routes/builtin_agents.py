@@ -24,11 +24,19 @@ import logging
 
 from fastapi import APIRouter, Query, Request
 
+from omnigent.blueprints import blueprint_to_graph
 from omnigent.entities import Automation
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user as _require_user
-from omnigent.server.schemas import AgentObject, MCPServerSummary, PaginatedList, SkillSummary
+from omnigent.server.schemas import (
+    AgentObject,
+    BlueprintGraphResponse,
+    MCPServerSummary,
+    PaginatedList,
+    SkillSummary,
+)
 from omnigent.stores import AgentStore
 
 _logger = logging.getLogger(__name__)
@@ -193,6 +201,44 @@ def create_builtin_agents_router(
             first_id=page.first_id,
             last_id=page.last_id,
             has_more=page.has_more,
+        )
+
+    @router.get("/agents/{agent_id}/blueprint", response_model=BlueprintGraphResponse)
+    async def get_agent_blueprint(
+        request: Request,
+        agent_id: str,
+    ) -> BlueprintGraphResponse:
+        """
+        Return the normalized static blueprint graph for a built-in agent.
+
+        :param request: The incoming FastAPI request (for auth).
+        :param agent_id: Registered built-in agent id.
+        :returns: Static blueprint graph.
+        :raises OmnigentError: 404 when the agent or blueprint is absent.
+        """
+        _require_user(request, auth_provider)
+        agent = agent_store.get(agent_id)
+        if agent is None:
+            raise OmnigentError(
+                f"Agent not found: {agent_id!r}",
+                code=ErrorCode.NOT_FOUND,
+            )
+        loaded = agent_cache.load(
+            agent.id,
+            agent.bundle_location,
+            expand_env=agent.session_id is None,
+        )
+        if loaded.spec.blueprint is None:
+            raise OmnigentError(
+                f"Agent {agent_id!r} does not declare a blueprint",
+                code=ErrorCode.NOT_FOUND,
+            )
+        return BlueprintGraphResponse.model_validate(
+            blueprint_to_graph(
+                loaded.spec.blueprint,
+                agent_id=agent.id,
+                agent_name=agent.name,
+            )
         )
 
     return router

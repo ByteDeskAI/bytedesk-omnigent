@@ -15,6 +15,11 @@ vi.mock("./FileViewer", () => ({
 vi.mock("./FilesPanel", () => ({
   FilesPanel: () => <div data-testid="files-panel-stub" />,
 }));
+vi.mock("./BlueprintPanel", () => ({
+  BlueprintPanel: ({ agentId }: { agentId: string | null }) => (
+    <div data-testid="blueprint-panel-stub" data-agent-id={agentId ?? ""} />
+  ),
+}));
 vi.mock("./InlineTerminalsSection", () => ({
   InlineTerminalsSection: () => <div data-testid="terminals-stub" />,
 }));
@@ -55,6 +60,9 @@ function renderWorkspace(
       showFilesPanel
       changedCount={0}
       showShellsTab={false}
+      showBlueprintTab
+      blueprintNodeCount={3}
+      boundAgentId="agent_blueprint"
       terminalsLength={0}
       subagentsWorking={0}
       agentCount={1}
@@ -177,5 +185,18 @@ describe("WorkspacePanel content area", () => {
     // slot and the viewer is unmounted.
     expect(screen.getByTestId("files-panel-stub")).toBeInTheDocument();
     expect(screen.queryByTestId("file-viewer-stub")).toBeNull();
+  });
+
+  it("renders the Blueprint tab and panel when selected", () => {
+    renderWorkspace({ rightRailTab: "blueprint", selectedFilePath: null });
+
+    expect(screen.getByRole("tab", { name: /Blueprint\s*3/i })).toHaveAttribute(
+      "data-state",
+      "active",
+    );
+    expect(screen.getByTestId("blueprint-panel-stub")).toHaveAttribute(
+      "data-agent-id",
+      "agent_blueprint",
+    );
   });
 });

@@ -196,6 +196,11 @@
       "AgentObject": {
         "description": "API representation of a registered agent.\n\n:param id: Unique agent identifier, e.g. ``\"ag_abc123\"``.\n:param object: Fixed resource type, always ``\"agent\"``.\n:param name: Human-readable agent name,\n    e.g. ``\"research-agent\"``.\n:param display_name: Optional human display name sourced from the\n    bundle's ``params.displayName`` (e.g. ``\"Maya Chen\"``). The Web\n    UI new-session picker prefers it over the slug ``name``. ``None``\n    when the bundle sets no ``params.displayName`` or can't be loaded.\n:param version: Monotonic version counter. Starts at 1,\n    incremented on each update.\n:param description: Optional free-text description of the\n    agent's purpose.\n:param created_at: Unix epoch timestamp of creation.\n:param updated_at: Unix epoch timestamp of the last update,\n    or ``None`` if never updated.\n:param harness: The agent's harness/kind, e.g. ``\"codex\"``,\n    ``\"codex-native\"``, or ``\"claude-native\"`` for\n    ``executor.type: omnigent`` agents, otherwise the executor\n    type (``\"claude_sdk\"``, ``\"agents_sdk\"``). ``None`` when the\n    bundle cannot be loaded. Lets the Web UI Add Agent picker\n    recognise an agent's kind (Codex vs Claude) without\n    hardcoding by name slug.\n:param mcp_servers: MCP servers the agent is connected to\n    (secret fields omitted). Empty list when the spec\n    declares no MCP servers or when the bundle cannot be\n    loaded.\n:param policies: Guardrails policies declared on the agent.\n    Each entry summarises the policy name, type, and\n    phases. Empty list when the spec declares no policies\n    or when the bundle cannot be loaded.\n:param skills: Skills bundled in the agent spec\n    (``skills/<name>/SKILL.md``). Lets the Web UI's\n    new-session composer offer a slash-command menu before a\n    session (and its runner) exists. Host-discovered skills\n    are runner-owned, so they are NOT listed here \u2014 the\n    session snapshot's ``skills`` field carries the merged\n    set once a runner is bound. Empty list when the spec\n    bundles no skills or when the bundle cannot be loaded.\n:param terminals: Terminal names declared in the spec's\n    ``terminals:`` block, in declaration order, e.g.\n    ``[\"shell\"]``. The Web UI gates its \"new terminal\"\n    affordance on this list (creation is only offered for\n    agents with terminal access) and offers these names as\n    the launchable choices. Empty list when the spec\n    declares no terminals or when the bundle cannot be\n    loaded.",
         "properties": {
+          "category": {
+            "default": "employee",
+            "title": "Category",
+            "type": "string"
+          },
           "created_at": {
             "title": "Created At",
             "type": "integer"
@@ -334,6 +339,373 @@
         "title": "AgentObject",
         "type": "object"
       },
+      "BlueprintGraphEdge": {
+        "description": "Static dependency edge in a blueprint graph.",
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "target": {
+            "title": "Target",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "source",
+          "target"
+        ],
+        "title": "BlueprintGraphEdge",
+        "type": "object"
+      },
+      "BlueprintGraphLoop": {
+        "description": "Static loop metadata nested under a blueprint loop node.",
+        "properties": {
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintGraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "max_iterations": {
+            "title": "Max Iterations",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "on_exhausted": {
+            "title": "On Exhausted",
+            "type": "string"
+          },
+          "reuse_session": {
+            "default": false,
+            "title": "Reuse Session",
+            "type": "boolean"
+          },
+          "until": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Until"
+          }
+        },
+        "required": [
+          "max_iterations",
+          "on_exhausted"
+        ],
+        "title": "BlueprintGraphLoop",
+        "type": "object"
+      },
+      "BlueprintGraphNode": {
+        "description": "Static node projection for a blueprint graph.",
+        "properties": {
+          "depends_on": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Depends On",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "input": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "loop": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/BlueprintGraphLoop"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "output": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Output"
+          },
+          "return": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Return"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "when": {
+            "anyOf": [
+              {},
+              {
+                "type": "null"
+              }
+            ],
+            "title": "When"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "title": "BlueprintGraphNode",
+        "type": "object"
+      },
+      "BlueprintGraphResponse": {
+        "description": "Static normalized blueprint graph response.",
+        "properties": {
+          "agent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Id"
+          },
+          "agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Name"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintGraphEdge"
+            },
+            "title": "Edges",
+            "type": "array"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintGraphNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "object": {
+            "const": "blueprint",
+            "default": "blueprint",
+            "title": "Object",
+            "type": "string"
+          },
+          "outputs": {
+            "additionalProperties": true,
+            "title": "Outputs",
+            "type": "object"
+          },
+          "version": {
+            "default": 1,
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "title": "BlueprintGraphResponse",
+        "type": "object"
+      },
+      "BlueprintRunNode": {
+        "description": "Live node-state projection for a blueprint run.",
+        "properties": {
+          "child_session_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Child Session Id"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "loop_iteration": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loop Iteration"
+          },
+          "payload": {
+            "additionalProperties": true,
+            "title": "Payload",
+            "type": "object"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "title": "BlueprintRunNode",
+        "type": "object"
+      },
+      "BlueprintRunResponse": {
+        "description": "Live blueprint run snapshot reconstructed from persisted events.",
+        "properties": {
+          "blueprint_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blueprint Run Id"
+          },
+          "events": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Events",
+            "type": "array"
+          },
+          "loop_iterations": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "Loop Iterations",
+            "type": "array"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/BlueprintRunNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "object": {
+            "const": "blueprint_run",
+            "default": "blueprint_run",
+            "title": "Object",
+            "type": "string"
+          },
+          "status": {
+            "default": "pending",
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "title": "BlueprintRunResponse",
+        "type": "object"
+      },
       "Body_update_session_agent_v1_sessions__session_id__agent_put": {
         "properties": {
           "bundle": {
@@ -360,6 +732,22 @@
           "file"
         ],
         "title": "Body_upload_session_file_v1_sessions__session_id__resources_files_post",
+        "type": "object"
+      },
+      "CadenceDraftBody": {
+        "description": "Natural-language cadence text to convert into a schedule expression.",
+        "properties": {
+          "natural_language": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Natural Language",
+            "type": "string"
+          }
+        },
+        "required": [
+          "natural_language"
+        ],
+        "title": "CadenceDraftBody",
         "type": "object"
       },
       "CancelledEvent": {
@@ -435,6 +823,27 @@
           "task_id"
         ],
         "title": "ClientTaskCancelEvent",
+        "type": "object"
+      },
+      "CommitGoalPlanningSessionBody": {
+        "description": "Commit a planner-produced draft into the durable goal backlog.",
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/GoalDraftBody"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "title": "CommitGoalPlanningSessionBody",
         "type": "object"
       },
       "CompactionCompletedEvent": {
@@ -561,6 +970,98 @@
         "title": "CompletedEvent",
         "type": "object"
       },
+      "ConciergeSessionRequest": {
+        "description": "Open a Skills Concierge chat scoped to an install target.",
+        "properties": {
+          "target_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Agent Ids"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "organization",
+              "department",
+              "employee"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
+        "title": "ConciergeSessionRequest",
+        "type": "object"
+      },
+      "ConciergeSessionResponse": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "object": {
+            "default": "skills_concierge_session",
+            "title": "Object",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "web_path": {
+            "title": "Web Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "agent_id",
+          "agent_name",
+          "title",
+          "prompt",
+          "web_path"
+        ],
+        "title": "ConciergeSessionResponse",
+        "type": "object"
+      },
       "ConversationRef": {
         "description": "Lightweight reference to a conversation, used in request and\nresponse bodies where only the conversation ID is needed.\n\n:param id: Conversation identifier, e.g. ``\"conv_abc123\"``.",
         "properties": {
@@ -611,6 +1112,202 @@
         "title": "CreateDefaultPolicyRequest",
         "type": "object"
       },
+      "CreateGoalBody": {
+        "description": "Admin create body for a scoped goal.",
+        "properties": {
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/GoalDependencyBody"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "priority": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "readiness_kind": {
+            "default": "immediate",
+            "maxLength": 16,
+            "title": "Readiness Kind",
+            "type": "string"
+          },
+          "source": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": "admin",
+            "title": "Source"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_kind": {
+            "default": "organization",
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          },
+          "title": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "CreateGoalBody",
+        "type": "object"
+      },
+      "CreateScheduleBody": {
+        "description": "Create a durable wake-up trigger for an agent/task.",
+        "properties": {
+          "agent_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "natural_language": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Natural Language"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 12000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "schedule_expr": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Expr"
+          },
+          "schedule_kind": {
+            "anyOf": [
+              {
+                "enum": [
+                  "interval",
+                  "cron",
+                  "once"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schedule Kind"
+          },
+          "start_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start At"
+          },
+          "task_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Id"
+          },
+          "timezone": {
+            "default": "UTC",
+            "maxLength": 80,
+            "title": "Timezone",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "title"
+        ],
+        "title": "CreateScheduleBody",
+        "type": "object"
+      },
       "CreateSessionPolicyRequest": {
         "description": "Request body for ``POST /v1/sessions/{session_id}/policies``.\n\n:param name: Human-readable policy name. Must be unique\n    within the session, e.g.\n    ``\"block_non_feature_branch_push\"``.\n:param type: Handler discriminator: ``\"python\"`` or\n    ``\"url\"``.\n:param handler: Dotted import path (python) or HTTPS URL\n    (url), e.g.\n    ``\"github_mcp_policy.block_non_misc_push\"``\n    or ``\"https://example.com/policies/eval\"``.\n:param factory_params: Optional dict of kwargs passed to the\n    handler when it is a factory function. Only valid for\n    ``type=\"python\"``, e.g. ``{\"limit\": 10}``.",
         "properties": {
@@ -647,6 +1344,78 @@
         "title": "CreateSessionPolicyRequest",
         "type": "object"
       },
+      "CreateTaskBody": {
+        "description": "Create a reusable task/workflow template from the schedules UI.",
+        "properties": {
+          "owner_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Agent Id"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "priority": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "prompt": {
+            "maxLength": 12000,
+            "minLength": 1,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "required_capability": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Required Capability"
+          },
+          "source": {
+            "default": "schedule-workflow-plan",
+            "maxLength": 80,
+            "title": "Source",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 240,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "prompt"
+        ],
+        "title": "CreateTaskBody",
+        "type": "object"
+      },
       "CreatedEvent": {
         "description": "Initial event emitted at the start of every streaming response.\n\nCarries the freshly-allocated\n:class:`omnigent.server.schemas.ResponseObject` (status will\nbe ``\"queued\"`` or ``\"in_progress\"`` depending on whether the\ntask started immediately).\n\n:param type: Always ``\"response.created\"``.\n:param response: The newly-allocated response object.",
         "properties": {
@@ -676,6 +1445,30 @@
           "response"
         ],
         "title": "CreatedEvent",
+        "type": "object"
+      },
+      "DailyCostSummary": {
+        "description": "A user's accumulated LLM spend for one UTC day.\n\nReturned by ``GET /v1/users/{user_id}/cost/daily``. Projection of the\n:class:`omnigent.db.db_models.SqlUserDailyCost` rollup row.\n\n:param date_utc: The UTC calendar day, ``\"YYYY-MM-DD\"``, e.g.\n    ``\"2026-06-24\"``.\n:param cost_usd: Accumulated USD spend for the user on this day; ``0.0``\n    when no row exists.\n:param ask_approved_usd: Highest soft cost-checkpoint (USD) the user has\n    already approved continuing past this day; ``0.0`` when none. (The\n    underlying column is ``ask_approved_usd`` \u2014 a USD checkpoint, not a\n    count.)",
+        "properties": {
+          "ask_approved_usd": {
+            "default": 0.0,
+            "title": "Ask Approved Usd",
+            "type": "number"
+          },
+          "cost_usd": {
+            "default": 0.0,
+            "title": "Cost Usd",
+            "type": "number"
+          },
+          "date_utc": {
+            "title": "Date Utc",
+            "type": "string"
+          }
+        },
+        "required": [
+          "date_utc"
+        ],
+        "title": "DailyCostSummary",
         "type": "object"
       },
       "ElicitationRequestEvent": {
@@ -1007,6 +1800,213 @@
         "title": "FailedEvent",
         "type": "object"
       },
+      "FleetHealth": {
+        "description": "Aggregate health of the hosts the caller can see.\n\nReturned by ``GET /v1/hosts/health``. Scoped to the same host set the\ncaller would get from ``GET /v1/hosts`` (owner / visibility-scope filtered).\n\n:param total_hosts: Number of hosts in the caller's scope.\n:param online_hosts: Hosts online and seen within the liveness window.\n:param offline_hosts: ``total_hosts - online_hosts``.\n:param hosts_by_sandbox_provider: Count of hosts per sandbox provider; the\n    ``\"external\"`` key counts user-connected (non-managed) hosts.\n:param avg_last_seen_seconds_ago: Mean age (seconds) of the hosts'\n    last-seen timestamps. ``None`` when there are no hosts.",
+        "properties": {
+          "avg_last_seen_seconds_ago": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Last Seen Seconds Ago"
+          },
+          "hosts_by_sandbox_provider": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Hosts By Sandbox Provider",
+            "type": "object"
+          },
+          "offline_hosts": {
+            "default": 0,
+            "title": "Offline Hosts",
+            "type": "integer"
+          },
+          "online_hosts": {
+            "default": 0,
+            "title": "Online Hosts",
+            "type": "integer"
+          },
+          "total_hosts": {
+            "default": 0,
+            "title": "Total Hosts",
+            "type": "integer"
+          }
+        },
+        "title": "FleetHealth",
+        "type": "object"
+      },
+      "GoalDependencyBody": {
+        "description": "Create/update body for one goal dependency.",
+        "properties": {
+          "kind": {
+            "default": "manual",
+            "maxLength": 32,
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "status": {
+            "default": "pending",
+            "maxLength": 16,
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label"
+        ],
+        "title": "GoalDependencyBody",
+        "type": "object"
+      },
+      "GoalDraftBody": {
+        "description": "Structured goal draft committed by the planner interview.",
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Acceptance Criteria",
+            "type": "array"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/GoalDependencyBody"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "priority": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "readiness_kind": {
+            "default": "immediate",
+            "maxLength": 16,
+            "title": "Readiness Kind",
+            "type": "string"
+          },
+          "source_refs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 20,
+            "title": "Source Refs",
+            "type": "array"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_kind": {
+            "default": "organization",
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          },
+          "title": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "GoalDraftBody",
+        "type": "object"
+      },
       "GrantPermissionRequest": {
         "description": "Request body for ``PUT /v1/sessions/{id}/permissions``.\n\n:param user_id: The user to grant access to, e.g.\n    ``\"alice@example.com\"`` or ``\"__public__\"`` for public\n    read access.\n:param level: Numeric permission level: ``1`` = read,\n    ``2`` = edit, ``3`` = manage.",
         "properties": {
@@ -1168,6 +2168,76 @@
         "title": "IncompleteEvent",
         "type": "object"
       },
+      "InstalledSkillAgentObject": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version"
+        ],
+        "title": "InstalledSkillAgentObject",
+        "type": "object"
+      },
+      "InstalledSkillObject": {
+        "properties": {
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/InstalledSkillAgentObject"
+            },
+            "title": "Agents",
+            "type": "array"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "agents"
+        ],
+        "title": "InstalledSkillObject",
+        "type": "object"
+      },
+      "InstalledSkillsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/InstalledSkillObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "installed_skill.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "InstalledSkillsResponse",
+        "type": "object"
+      },
       "LaunchRunnerRequest": {
         "description": "Request body for ``POST /v1/hosts/{host_id}/runners``.\n\n:param session_id: Session to bind the new runner to, e.g.\n    ``\"conv_abc123\"``.\n:param workspace: Absolute path on the host machine to use\n    as the runner's working directory, e.g.\n    ``\"/Users/corey/projects/frontend\"``. When ``git`` is set,\n    this is interpreted as the source repository directory and\n    the runner starts in the created worktree instead.\n:param git: Optional git worktree options. When set, the server\n    creates a worktree for a new branch off ``workspace`` on the\n    host and binds the runner to it (the fork-resume path; mirrors\n    ``POST /v1/sessions``). ``None`` binds ``workspace`` directly.\n    ``host_id`` is always present (it is in the path), so no\n    host requirement check is needed here.",
         "properties": {
@@ -1256,6 +2326,112 @@
         "title": "MCPServerSummary",
         "type": "object"
       },
+      "MemoryListResponse": {
+        "description": "Page of session-scoped memories.\n\nReturned by ``GET /v1/sessions/{id}/memories``.\n\n:param object: Fixed resource type, always ``\"list\"``.\n:param data: The memories captured from this session, newest first.\n:param has_more: Whether more memories exist beyond ``limit``.",
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/MemoryObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "has_more": {
+            "default": false,
+            "title": "Has More",
+            "type": "boolean"
+          },
+          "object": {
+            "default": "list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "title": "MemoryListResponse",
+        "type": "object"
+      },
+      "MemoryObject": {
+        "description": "One durable, weighted, decaying memory (FU1, ADR-0132).\n\nProjection of a :class:`omnigent.db.db_models.SqlMemory` row scoped to a\nsession via ``source_conversation_id``. Pure read \u2014 no decay is applied\nhere; ``weight`` is the stored salience.\n\n:param id: Memory identifier, e.g. ``\"mem_abc123\"``.\n:param object: Fixed resource type, always ``\"memory\"``.\n:param content: The remembered text.\n:param weight: Stored salience (pre-decay), e.g. ``1.0``.\n:param salience: Optional capture-time salience score, e.g. ``0.8``.\n    ``None`` when not recorded.\n:param confidence: Optional capture-time confidence score. ``None`` when\n    not recorded.\n:param created_at: Unix epoch seconds the memory was first written.\n:param last_accessed_at: Unix epoch seconds of the last reinforcement\n    (drives the decay clock).\n:param access_count: Number of times the memory has been recalled.\n:param archived: Whether the memory has been evicted below the archive\n    floor (excluded from recall).\n:param source_conversation_id: Session the memory was captured from, e.g.\n    ``\"conv_abc123\"``. ``None`` for memories with no recorded source.",
+        "properties": {
+          "access_count": {
+            "title": "Access Count",
+            "type": "integer"
+          },
+          "archived": {
+            "title": "Archived",
+            "type": "boolean"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "last_accessed_at": {
+            "title": "Last Accessed At",
+            "type": "integer"
+          },
+          "object": {
+            "default": "memory",
+            "title": "Object",
+            "type": "string"
+          },
+          "salience": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Salience"
+          },
+          "source_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Conversation Id"
+          },
+          "weight": {
+            "title": "Weight",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "content",
+          "weight",
+          "created_at",
+          "last_accessed_at",
+          "access_count",
+          "archived"
+        ],
+        "title": "MemoryObject",
+        "type": "object"
+      },
       "ModelUsage": {
         "description": "Cumulative token/cost usage attributed to a single LLM model.\n\nOne value in the ``usage_by_model`` map on :class:`SessionResponse` /\n:class:`SessionUsageEvent`, keyed by the raw harness-reported model id\n(e.g. ``\"claude-sonnet-4-6\"``, ``\"databricks-gpt-5-5\"``). Counts are\nsummed over the session's subtree (itself + sub-agent descendants), so a\nparent folds in sub-agents that ran a different model. Token buckets\nmirror the flat per-session breakdown.\n\n:param input_tokens: Cumulative non-cached input (prompt) tokens for this\n    model over the subtree, e.g. ``12000``. ``None`` when not recorded.\n:param output_tokens: Cumulative output (completion) tokens, e.g.\n    ``3400``. ``None`` when not recorded.\n:param total_tokens: Cumulative total tokens (counts cache buckets too,\n    as the harness reports), e.g. ``15400``. ``None`` when not recorded.\n:param cache_read_input_tokens: Cumulative tokens read from the prompt\n    cache, e.g. ``8000``. ``None`` when not recorded.\n:param cache_creation_input_tokens: Cumulative tokens written to the\n    prompt cache, e.g. ``2000``. ``None`` when not recorded.\n:param total_cost_usd: Cumulative USD spend attributed to this model,\n    e.g. ``0.42``. Present **only when this model's turns were priced**\n    (same \"priced \u27fa key present\" contract as the session total); ``None``\n    when the model is unpriced, so the sum of priced per-model costs\n    equals the session ``total_cost_usd``.",
         "properties": {
@@ -1268,7 +2444,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Cache Creation Input Tokens"
           },
           "cache_read_input_tokens": {
@@ -1280,7 +2455,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Cache Read Input Tokens"
           },
           "input_tokens": {
@@ -1292,7 +2466,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Input Tokens"
           },
           "output_tokens": {
@@ -1304,7 +2477,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Output Tokens"
           },
           "total_cost_usd": {
@@ -1316,7 +2488,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Total Cost Usd"
           },
           "total_tokens": {
@@ -1328,7 +2499,6 @@
                 "type": "null"
               }
             ],
-            "default": null,
             "title": "Total Tokens"
           }
         },
@@ -1536,6 +2706,68 @@
         "title": "PaginatedList",
         "type": "object"
       },
+      "PendingElicitationItem": {
+        "description": "A compact projection of one outstanding elicitation prompt.\n\n:param elicitation_id: Correlates the prompt to its reply, e.g.\n    ``\"elicit_abc123\"``.\n:param prompt: The human-facing message, e.g. ``\"Approve running 'rm'?\"``.\n    ``None`` when the payload carried no message.\n:param fields: For form-mode elicitations, the requested field names.\n    ``None`` for non-form prompts.",
+        "properties": {
+          "elicitation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Elicitation Id"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          }
+        },
+        "title": "PendingElicitationItem",
+        "type": "object"
+      },
+      "PendingElicitationsSummary": {
+        "description": "Pending elicitations across the caller's accessible sessions.\n\nReturned by ``GET /v1/elicitations/pending``.\n\n:param total_count: Total outstanding prompts across the listed sessions.\n:param by_session: One entry per session with at least one outstanding\n    prompt (scoped to sessions the caller can read).",
+        "properties": {
+          "by_session": {
+            "items": {
+              "$ref": "#/components/schemas/SessionPendingElicitations"
+            },
+            "title": "By Session",
+            "type": "array"
+          },
+          "total_count": {
+            "default": 0,
+            "title": "Total Count",
+            "type": "integer"
+          }
+        },
+        "title": "PendingElicitationsSummary",
+        "type": "object"
+      },
       "PolicySummary": {
         "description": "Safe subset of a policy's spec for API exposure.\n\nExposes the policy name, type, and phases so the UI can\ndisplay which guardrails are active on an agent. The full\npolicy body (prompt text, callable path, label conditions)\nis intentionally excluded \u2014 this is a summary for display,\nnot a full spec.\n\n:param name: Policy name as declared in the agent spec,\n    e.g. ``\"block_long_sleep\"``.\n:param type: Policy type discriminator \u2014 ``\"function\"``\n    or ``\"prompt\"``.\n:param on: List of phase selectors the policy fires on,\n    e.g. ``[\"tool_call\"]`` or ``[\"request\", \"response\"]``.\n:param description: Short detail string about the policy\n    implementation. For function policies: the callable\n    dotted path. For prompt policies: the first line of\n    the prompt. ``None`` when not available.",
         "properties": {
@@ -1596,6 +2828,54 @@
           "joined_at"
         ],
         "title": "PresenceViewer",
+        "type": "object"
+      },
+      "PushSubscriptionCreate": {
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/PushSubscriptionKeys"
+          }
+        },
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "title": "PushSubscriptionCreate",
+        "type": "object"
+      },
+      "PushSubscriptionDelete": {
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint"
+        ],
+        "title": "PushSubscriptionDelete",
+        "type": "object"
+      },
+      "PushSubscriptionKeys": {
+        "properties": {
+          "auth": {
+            "title": "Auth",
+            "type": "string"
+          },
+          "p256dh": {
+            "title": "P256Dh",
+            "type": "string"
+          }
+        },
+        "required": [
+          "p256dh",
+          "auth"
+        ],
+        "title": "PushSubscriptionKeys",
         "type": "object"
       },
       "QueuedEvent": {
@@ -1964,6 +3244,63 @@
           "error"
         ],
         "title": "RetryEvent",
+        "type": "object"
+      },
+      "RunTaskBody": {
+        "description": "Optional dispatch override when a caller runs a task directly.",
+        "properties": {
+          "external_key": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "External Key"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "maxLength": 12000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "run_as_agent_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run As Agent Id"
+          }
+        },
+        "title": "RunTaskBody",
+        "type": "object"
+      },
+      "ScheduleEnabledBody": {
+        "description": "Enable/disable a schedule.",
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ScheduleEnabledBody",
         "type": "object"
       },
       "SendCommentsRequest": {
@@ -2707,6 +4044,43 @@
         "title": "SessionModelEvent",
         "type": "object"
       },
+      "SessionPendingElicitations": {
+        "description": "Outstanding elicitations for one session.\n\n:param conversation_id: The session, e.g. ``\"conv_abc123\"``.\n:param pending_count: Number of outstanding prompts on this session.\n:param oldest_created_at: Unix epoch seconds of the oldest outstanding\n    prompt. Always ``None`` \u2014 the in-memory pending index does not record\n    per-prompt timestamps.\n:param elicitations: The compact prompt projections.",
+        "properties": {
+          "conversation_id": {
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "elicitations": {
+            "items": {
+              "$ref": "#/components/schemas/PendingElicitationItem"
+            },
+            "title": "Elicitations",
+            "type": "array"
+          },
+          "oldest_created_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Oldest Created At"
+          },
+          "pending_count": {
+            "title": "Pending Count",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "pending_count"
+        ],
+        "title": "SessionPendingElicitations",
+        "type": "object"
+      },
       "SessionPresenceEvent": {
         "description": "The session's viewer list changed \u2014 full state, not a delta.\n\nEmitted on ``GET /v1/sessions/{id}/stream`` whenever a user\njoins, leaves (after the server-side grace window absorbs\nreconnect churn), or flips their idle aggregate, and once to\neach newly-connected stream as a snapshot-on-connect. Every\nevent carries the COMPLETE viewer list so clients replace their\nstate wholesale \u2014 missed events self-heal on the next event or\nreconnect. Viewers are scoped to the session *tree* (the root\nconversation and every sub-agent conversation under it), so a\nuser on a sub-agent page and a user on the root page appear in\neach other's lists. See ``omnigent/server/presence.py`` and\n``designs/UI/PRESENCE.md``.\n\n:param type: Always ``\"session.presence\"``.\n:param conversation_id: The conversation whose stream delivered\n    this event \u2014 the root or a sub-agent conversation, e.g.\n    ``\"conv_abc123\"``. Matches the streamed conversation (not\n    necessarily the tree's root) so clients can guard events by\n    the conversation they are viewing.\n:param viewers: All users currently viewing any conversation in\n    the session tree (including the receiving user \u2014 the web\n    filters self out for display), ordered by join time.",
         "properties": {
@@ -3295,6 +4669,701 @@
         "title": "SessionUsageEvent",
         "type": "object"
       },
+      "SkillApplyRequest": {
+        "properties": {
+          "target_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Agent Ids"
+          }
+        },
+        "title": "SkillApplyRequest",
+        "type": "object"
+      },
+      "SkillApplyResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillApplyResultObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_apply.result",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillApplyResponse",
+        "type": "object"
+      },
+      "SkillApplyResultObject": {
+        "properties": {
+          "action_count": {
+            "default": 0,
+            "title": "Action Count",
+            "type": "integer"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "agent_id",
+          "status"
+        ],
+        "title": "SkillApplyResultObject",
+        "type": "object"
+      },
+      "SkillCommandBody": {
+        "description": "Command source for free-form/configured source adapters.",
+        "properties": {
+          "argv": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Argv"
+          },
+          "shell": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Shell"
+          },
+          "timeout_seconds": {
+            "default": 60,
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Timeout Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "SkillCommandBody",
+        "type": "object"
+      },
+      "SkillCommandEvidenceObject": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Command"
+          },
+          "duration_ms": {
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "exit_code": {
+            "title": "Exit Code",
+            "type": "integer"
+          },
+          "shell": {
+            "title": "Shell",
+            "type": "boolean"
+          },
+          "stderr": {
+            "title": "Stderr",
+            "type": "string"
+          },
+          "stdout": {
+            "title": "Stdout",
+            "type": "string"
+          }
+        },
+        "required": [
+          "command",
+          "shell",
+          "exit_code",
+          "duration_ms",
+          "stdout",
+          "stderr"
+        ],
+        "title": "SkillCommandEvidenceObject",
+        "type": "object"
+      },
+      "SkillFileManifestObject": {
+        "properties": {
+          "binary": {
+            "title": "Binary",
+            "type": "boolean"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "sha256": {
+            "title": "Sha256",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "path",
+          "size",
+          "sha256",
+          "binary"
+        ],
+        "title": "SkillFileManifestObject",
+        "type": "object"
+      },
+      "SkillMarketplaceObject": {
+        "properties": {
+          "default": {
+            "default": false,
+            "title": "Default",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "source_id",
+          "kind"
+        ],
+        "title": "SkillMarketplaceObject",
+        "type": "object"
+      },
+      "SkillMarketplacesResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillMarketplaceObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_marketplace.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillMarketplacesResponse",
+        "type": "object"
+      },
+      "SkillPreviewRequest": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCommandBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "install_mode": {
+            "default": "replace",
+            "enum": [
+              "replace",
+              "skip_existing",
+              "fail_on_existing"
+            ],
+            "title": "Install Mode",
+            "type": "string"
+          },
+          "operation": {
+            "default": "install",
+            "enum": [
+              "install",
+              "remove"
+            ],
+            "title": "Operation",
+            "type": "string"
+          },
+          "selected_skill_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Selected Skill Names"
+          },
+          "skill_names": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Skill Names"
+          },
+          "source": {
+            "default": "freeform",
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "target_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Target Agent Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "target_agent_ids"
+        ],
+        "title": "SkillPreviewRequest",
+        "type": "object"
+      },
+      "SkillPreviewResponse": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCommandEvidenceObject"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "expires_at": {
+            "title": "Expires At",
+            "type": "integer"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "install_mode": {
+            "title": "Install Mode",
+            "type": "string"
+          },
+          "object": {
+            "default": "skill_preview",
+            "title": "Object",
+            "type": "string"
+          },
+          "operation": {
+            "title": "Operation",
+            "type": "string"
+          },
+          "skill_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Skill Names",
+            "type": "array"
+          },
+          "skills": {
+            "items": {
+              "$ref": "#/components/schemas/StagedSkillObject"
+            },
+            "title": "Skills",
+            "type": "array"
+          },
+          "target_actions": {
+            "items": {
+              "$ref": "#/components/schemas/SkillTargetActionObject"
+            },
+            "title": "Target Actions",
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "operation",
+          "install_mode",
+          "created_at",
+          "expires_at",
+          "skills",
+          "target_actions"
+        ],
+        "title": "SkillPreviewResponse",
+        "type": "object"
+      },
+      "SkillRecommendationObject": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "source_ref",
+          "reason"
+        ],
+        "title": "SkillRecommendationObject",
+        "type": "object"
+      },
+      "SkillRecommendationsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillRecommendationObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_recommendation.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillRecommendationsResponse",
+        "type": "object"
+      },
+      "SkillSearchRequest": {
+        "properties": {
+          "command": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SkillCommandBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limit": {
+            "default": 20,
+            "maximum": 100.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "title": "Query",
+            "type": "string"
+          },
+          "sources": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sources"
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "title": "SkillSearchRequest",
+        "type": "object"
+      },
+      "SkillSearchResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSearchResultObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Errors",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_search.result",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillSearchResponse",
+        "type": "object"
+      },
+      "SkillSearchResultObject": {
+        "properties": {
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Ref"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          }
+        },
+        "required": [
+          "source",
+          "name"
+        ],
+        "title": "SkillSearchResultObject",
+        "type": "object"
+      },
+      "SkillSourceObject": {
+        "properties": {
+          "available": {
+            "default": true,
+            "title": "Available",
+            "type": "boolean"
+          },
+          "high_risk": {
+            "title": "High Risk",
+            "type": "boolean"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "supports_preview": {
+            "title": "Supports Preview",
+            "type": "boolean"
+          },
+          "supports_search": {
+            "title": "Supports Search",
+            "type": "boolean"
+          },
+          "unavailable_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unavailable Reason"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "kind",
+          "supports_search",
+          "supports_preview",
+          "high_risk"
+        ],
+        "title": "SkillSourceObject",
+        "type": "object"
+      },
+      "SkillSourcesResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillSourceObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_source.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillSourcesResponse",
+        "type": "object"
+      },
       "SkillSummary": {
         "description": "Safe subset of a discovered skill for API exposure.\n\nSurfaces the skill name and one-line description so clients\n(e.g. the web composer's slash-command menu) can list which\nskills the session has access to. The full skill ``content``\nis intentionally omitted \u2014 it's only loaded server-side when\nthe harness invokes the skill, and it can be large.\n\n:param name: Skill identifier as parsed from the SKILL.md\n    frontmatter, e.g. ``\"triage-issues\"``. Lowercase\n    kebab-case.\n:param description: One-line summary from the SKILL.md\n    frontmatter, e.g. ``\"Triage open GitHub issues in the\n    repo.\"``.",
         "properties": {
@@ -3312,6 +5381,244 @@
           "description"
         ],
         "title": "SkillSummary",
+        "type": "object"
+      },
+      "SkillTargetActionObject": {
+        "properties": {
+          "action": {
+            "title": "Action",
+            "type": "string"
+          },
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "agent_version": {
+            "title": "Agent Version",
+            "type": "integer"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "skill_name": {
+            "title": "Skill Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agent_id",
+          "agent_name",
+          "agent_version",
+          "skill_name",
+          "action"
+        ],
+        "title": "SkillTargetActionObject",
+        "type": "object"
+      },
+      "SpawnTree": {
+        "description": "A session and its sub-agent descendants as a recursive tree.\n\nReturned by ``GET /v1/sessions/{id}/spawn-tree``. Walks\n``parent_conversation_id`` within the shared ``root_conversation_id``.\n\n:param session_id: This node's session/conversation id.\n:param object: Fixed resource type, always ``\"spawn_tree\"``.\n:param agent_type: The node's sub-agent type, e.g. ``\"researcher\"``;\n    ``\"root\"`` for the top-level session.\n:param status: Coarse lifecycle status \u2014 the live in-memory status when\n    known (``\"running\"`` / ``\"waiting\"`` / ``\"idle\"`` / ``\"failed\"``),\n    else ``\"archived\"`` / ``\"closed\"`` from durable markers, else\n    ``\"active\"``.\n:param metadata: Descriptive metadata for this node.\n:param children: Sub-agent children, newest-first by ``created_at``.\n    Empty for a leaf, or when ``depth`` cut off further descent.",
+        "properties": {
+          "agent_type": {
+            "title": "Agent Type",
+            "type": "string"
+          },
+          "children": {
+            "items": {
+              "$ref": "#/components/schemas/SpawnTree"
+            },
+            "title": "Children",
+            "type": "array"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/SpawnTreeMetadata"
+          },
+          "object": {
+            "default": "spawn_tree",
+            "title": "Object",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "agent_type",
+          "status",
+          "metadata"
+        ],
+        "title": "SpawnTree",
+        "type": "object"
+      },
+      "SpawnTreeMetadata": {
+        "description": "Descriptive metadata for a node in a session spawn tree.\n\n:param sub_agent_name: For sub-agent nodes, the sub-agent type name within\n    the parent's spec tree, e.g. ``\"researcher\"``. ``None`` for the root.\n:param title: The node's stored title, e.g. ``\"researcher:auth\"``. ``None``\n    when untitled.\n:param created_at: Unix epoch seconds the node was created.\n:param last_activity_at: Unix epoch seconds the node was last updated.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "integer"
+          },
+          "last_activity_at": {
+            "title": "Last Activity At",
+            "type": "integer"
+          },
+          "sub_agent_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sub Agent Name"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "created_at",
+          "last_activity_at"
+        ],
+        "title": "SpawnTreeMetadata",
+        "type": "object"
+      },
+      "StagedSkillObject": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "files": {
+            "items": {
+              "$ref": "#/components/schemas/SkillFileManifestObject"
+            },
+            "title": "Files",
+            "type": "array"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "total_bytes": {
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "description",
+          "total_bytes",
+          "files"
+        ],
+        "title": "StagedSkillObject",
+        "type": "object"
+      },
+      "StartGoalPlanningSessionBody": {
+        "description": "Start a goal-planning interview for one scope.",
+        "properties": {
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "target_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
+        "title": "StartGoalPlanningSessionBody",
+        "type": "object"
+      },
+      "StartSkillsConciergeSessionBody": {
+        "properties": {
+          "target_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Target Agent Ids",
+            "type": "array"
+          },
+          "target_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "default": "organization",
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          }
+        },
+        "required": [
+          "target_id"
+        ],
+        "title": "StartSkillsConciergeSessionBody",
         "type": "object"
       },
       "TurnCancelledEvent": {
@@ -3515,6 +5822,191 @@
           }
         },
         "title": "UpdateDefaultPolicyRequest",
+        "type": "object"
+      },
+      "UpdateDependencyBody": {
+        "description": "Admin patch body for a dependency.",
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "metadata": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metadata"
+          },
+          "ref": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "title": "UpdateDependencyBody",
+        "type": "object"
+      },
+      "UpdateGoalBody": {
+        "description": "Admin patch body for goal metadata and lifecycle state.",
+        "properties": {
+          "activation_state": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Activation State"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "priority": {
+            "anyOf": [
+              {
+                "maximum": 10.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Priority"
+          },
+          "readiness_kind": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Readiness Kind"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_kind": {
+            "anyOf": [
+              {
+                "maxLength": 16,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Kind"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "title": "UpdateGoalBody",
         "type": "object"
       },
       "UpdateSessionPolicyRequest": {
@@ -3747,6 +6239,63 @@
         "title": "UsageDetails",
         "type": "object"
       },
+      "UsageSummary": {
+        "description": "Cumulative token + cost usage for a session subtree.\n\nReturned by ``GET /v1/sessions/{id}/usage/summary``. Counts are summed\nover the session and its sub-agent descendants (same subtree total the\nsnapshot's ``usage`` field uses), so a parent folds in its sub-agents.\n\n:param input_tokens: Cumulative non-cached input (prompt) tokens.\n:param output_tokens: Cumulative output (completion) tokens.\n:param cache_read_input_tokens: Cumulative tokens served from the prompt\n    cache (cache hits).\n:param cache_creation_input_tokens: Cumulative tokens written to the\n    prompt cache (cache creation).\n:param total_tokens: Cumulative total tokens (billing total).\n:param total_cost_usd: Cumulative USD spend. ``None`` when no turn in the\n    subtree was priced (same \"priced \u27fa key present\" contract as the\n    snapshot).\n:param usage_by_model: Per-model breakdown keyed by the raw harness model\n    id. ``None`` when no per-model usage was recorded.",
+        "properties": {
+          "cache_creation_input_tokens": {
+            "default": 0,
+            "title": "Cache Creation Input Tokens",
+            "type": "integer"
+          },
+          "cache_read_input_tokens": {
+            "default": 0,
+            "title": "Cache Read Input Tokens",
+            "type": "integer"
+          },
+          "input_tokens": {
+            "default": 0,
+            "title": "Input Tokens",
+            "type": "integer"
+          },
+          "output_tokens": {
+            "default": 0,
+            "title": "Output Tokens",
+            "type": "integer"
+          },
+          "total_cost_usd": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Cost Usd"
+          },
+          "total_tokens": {
+            "default": 0,
+            "title": "Total Tokens",
+            "type": "integer"
+          },
+          "usage_by_model": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "$ref": "#/components/schemas/ModelUsage"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Usage By Model"
+          }
+        },
+        "title": "UsageSummary",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "ctx": {
@@ -3785,6 +6334,19 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VapidPublicKeyResponse": {
+        "properties": {
+          "public_key": {
+            "title": "Public Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "public_key"
+        ],
+        "title": "VapidPublicKeyResponse",
         "type": "object"
       }
     }
@@ -3883,9 +6445,30 @@
         "summary": "Health"
       }
     },
+    "/readyz": {
+      "get": {
+        "description": "Readiness check backed by mandatory fabric preflight.",
+        "operationId": "readyz_readyz_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Readyz Readyz Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Readyz"
+      }
+    },
     "/v1/_capabilities": {
       "get": {
-        "description": "Pluggable-seam capability manifest (BDP-2374).\n\nReturns one entry per live pluggable seam \u2014 its registered\nprovider names, the active impl, the registered default, and the\n``OMNIGENT_USE_<SEAM>`` override env var \u2014 projected from\n:data:`omnigent.pluggable.manifest.SEAMS`. Read-only and cheap\n(no factories are invoked, only registry introspection).\n\nAuthentication: intentionally UNAUTHED, matching ``/v1/info`` \u2014\nit exposes only which backends are wired, no secret state \u2014 so a\nclient / operator can probe seam configuration before holding a\nsession.\n\n:returns: ``{\"seams\": [<describe() + override_env>, ...]}``.",
+        "description": "Pluggable-seam capability manifest (BDP-2374).\n\nReturns one entry per live pluggable seam \u2014 its registered\nprovider names, the active impl, the registered default, and the\n``OMNIGENT_USE_<SEAM>`` override env var \u2014 projected from\n:data:`omnigent.kernel.pluggable.manifest.SEAMS`. Read-only and cheap\n(no factories are invoked, only registry introspection).\n\nAuthentication: intentionally UNAUTHED, matching ``/v1/info`` \u2014\nit exposes only which backends are wired, no secret state \u2014 so a\nclient / operator can probe seam configuration before holding a\nsession.\n\n:returns: ``{\"seams\": [<describe() + override_env>, ...]}``.",
         "operationId": "capabilities_v1__capabilities_get",
         "responses": {
           "200": {
@@ -3920,9 +6503,46 @@
         "summary": "Ext Health"
       }
     },
+    "/v1/admin/omni-cli/terminal": {
+      "get": {
+        "operationId": "get_omni_cli_terminal_v1_admin_omni_cli_terminal_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Get Omni Cli Terminal V1 Admin Omni Cli Terminal Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Omni Cli Terminal"
+      }
+    },
+    "/v1/agentic-inbox/events": {
+      "post": {
+        "description": "Receive a signed Agentic Inbox ``email.received`` event.",
+        "operationId": "receive_email_event_v1_agentic_inbox_events_post",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Receive Email Event"
+      }
+    },
     "/v1/agents": {
       "get": {
-        "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:returns: A :class:`PaginatedList` of built-in agents.",
+        "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:param category: Optional tier filter (``\"system\"`` | ``\"employee\"`` |\n    ``\"workflow\"``); ``None`` returns all tiers.\n:returns: A :class:`PaginatedList` of built-in agents.",
         "operationId": "list_builtin_agents_v1_agents_get",
         "parameters": [
           {
@@ -3979,6 +6599,23 @@
               "title": "Order",
               "type": "string"
             }
+          },
+          {
+            "in": "query",
+            "name": "category",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^(system|employee|workflow)$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Category"
+            }
           }
         ],
         "responses": {
@@ -4004,6 +6641,49 @@
           }
         },
         "summary": "List Builtin Agents",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/blueprint": {
+      "get": {
+        "description": "Return the normalized static blueprint graph for a built-in agent.\n\n:param request: The incoming FastAPI request (for auth).\n:param agent_id: Registered built-in agent id.\n:returns: Static blueprint graph.\n:raises OmnigentError: 404 when the agent or blueprint is absent.",
+        "operationId": "get_agent_blueprint_v1_agents__agent_id__blueprint_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintGraphResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Blueprint",
         "tags": [
           "agents"
         ]
@@ -4372,6 +7052,56 @@
         "summary": "Put Value"
       }
     },
+    "/v1/elicitations/pending": {
+      "get": {
+        "description": "Summarize outstanding elicitation prompts across accessible sessions.\n\nReads the in-memory pending-elicitations index, scoped to sessions the\ncaller can READ \u2014 a caller never sees another owner's pending prompts.\n\n:param session_ids: Optional comma-separated allow-list to restrict the\n    summary to specific sessions (each still access-checked).",
+        "operationId": "pending_elicitations_summary_v1_elicitations_pending_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "session_ids",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Session Ids"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PendingElicitationsSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Pending Elicitations Summary",
+        "tags": [
+          "data-surfaces"
+        ]
+      }
+    },
     "/v1/events": {
       "get": {
         "description": "Subscribe to typed lifecycle events for the caller (BDP-2394, ADR-0149).\n\nA cross-cutting Publish-Subscribe channel (GoF Observer): the consumer\nreceives typed Event Messages \u2014 e.g. ``session.created`` \u2014 for sessions\naccessible to it, instead of hand-wiring a callback per event type. Pass\n``?types=a,b`` to narrow to specific types (EIP Message Filter). SSE with\na 20s heartbeat; live-tail only (reconcile via the REST snapshots on\nconnect, like the per-session stream).\n\n:param request: The FastAPI request, used to detect disconnect.\n:param types: Optional comma-separated event-type allowlist, e.g.\n    ``\"session.created\"``. Empty/absent yields every type.\n:returns: An SSE :class:`StreamingResponse` of typed events.",
@@ -4420,6 +7150,472 @@
         ]
       }
     },
+    "/v1/fabric/audit": {
+      "get": {
+        "operationId": "audit_v1_fabric_audit_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Audit"
+      }
+    },
+    "/v1/fabric/capacity": {
+      "get": {
+        "operationId": "capacity_v1_fabric_capacity_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Capacity"
+      }
+    },
+    "/v1/fabric/dlq": {
+      "get": {
+        "operationId": "dlq_v1_fabric_dlq_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Dlq"
+      }
+    },
+    "/v1/fabric/lanes": {
+      "get": {
+        "operationId": "lanes_v1_fabric_lanes_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Lanes"
+      }
+    },
+    "/v1/fabric/outbox": {
+      "get": {
+        "operationId": "outbox_v1_fabric_outbox_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Outbox"
+      }
+    },
+    "/v1/fabric/pools": {
+      "get": {
+        "operationId": "pools_v1_fabric_pools_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Pools"
+      }
+    },
+    "/v1/fabric/preflight": {
+      "get": {
+        "operationId": "preflight_v1_fabric_preflight_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Preflight"
+      }
+    },
+    "/v1/fabric/quarantine": {
+      "get": {
+        "operationId": "quarantine_v1_fabric_quarantine_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Quarantine"
+      }
+    },
+    "/v1/fabric/runners": {
+      "get": {
+        "operationId": "runners_v1_fabric_runners_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Runners"
+      }
+    },
+    "/v1/fabric/timeline": {
+      "get": {
+        "operationId": "timeline_v1_fabric_timeline_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Timeline"
+      }
+    },
+    "/v1/fabric/topology": {
+      "get": {
+        "operationId": "topology_v1_fabric_topology_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Topology"
+      }
+    },
+    "/v1/flags": {
+      "get": {
+        "operationId": "list_flags_v1_flags_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Flags"
+      },
+      "post": {
+        "operationId": "create_flag_v1_flags_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Create Flag"
+      }
+    },
+    "/v1/flags/{key}": {
+      "get": {
+        "operationId": "get_flag_v1_flags__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Flag"
+      },
+      "patch": {
+        "operationId": "patch_flag_v1_flags__key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Flag"
+      }
+    },
+    "/v1/flags/{key}/evaluate": {
+      "post": {
+        "operationId": "evaluate_flag_v1_flags__key__evaluate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluate Flag"
+      }
+    },
+    "/v1/flags/{key}/history": {
+      "get": {
+        "operationId": "flag_history_v1_flags__key__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flag History"
+      }
+    },
+    "/v1/flags/{key}/rollback": {
+      "post": {
+        "operationId": "rollback_flag_v1_flags__key__rollback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rollback Flag"
+      }
+    },
+    "/v1/goal-delivery/{source}": {
+      "post": {
+        "operationId": "receive_v1_goal_delivery__source__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive"
+      }
+    },
     "/v1/goals": {
       "get": {
         "description": "List the ops backlog (by priority then age), optionally filtered.",
@@ -4456,6 +7652,90 @@
               ],
               "title": "Owner"
             }
+          },
+          {
+            "in": "query",
+            "name": "target_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "readiness_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Readiness Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "activation_state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Activation State"
+            }
+          },
+          {
+            "in": "query",
+            "name": "ready_only",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Ready Only",
+              "type": "boolean"
+            }
+          },
+          {
+            "in": "query",
+            "name": "include_dependencies",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Dependencies",
+              "type": "boolean"
+            }
           }
         ],
         "responses": {
@@ -4479,6 +7759,387 @@
           }
         },
         "summary": "List Goals"
+      },
+      "post": {
+        "description": "Create a scoped goal from the admin overlay.",
+        "operationId": "create_goal_v1_goals_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGoalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Goal"
+      }
+    },
+    "/v1/goals/events": {
+      "get": {
+        "description": "Subscribe to goal events for live Omnigent admin refresh.",
+        "operationId": "subscribe_goal_events_v1_goals_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Subscribe Goal Events"
+      }
+    },
+    "/v1/goals/planner/sessions": {
+      "post": {
+        "description": "Create an assistant-driven goal-planning session for one scope.",
+        "operationId": "start_planning_session_v1_goals_planner_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGoalPlanningSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Planning Session"
+      }
+    },
+    "/v1/goals/planner/sessions/{session_id}/commit": {
+      "post": {
+        "description": "Commit an approved planner draft into the durable goal backlog.",
+        "operationId": "commit_planning_session_v1_goals_planner_sessions__session_id__commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitGoalPlanningSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Commit Planning Session"
+      }
+    },
+    "/v1/goals/planner/sources": {
+      "get": {
+        "description": "List available knowledge sources for the goal-planning assistant.",
+        "operationId": "list_planner_sources_v1_goals_planner_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Planner Sources"
+      }
+    },
+    "/v1/goals/{goal_id}": {
+      "get": {
+        "description": "Return one scoped goal with dependencies.",
+        "operationId": "get_goal_v1_goals__goal_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Goal"
+      },
+      "patch": {
+        "description": "Update a scoped goal from the admin overlay.",
+        "operationId": "update_goal_v1_goals__goal_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGoalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Goal"
+      }
+    },
+    "/v1/goals/{goal_id}/activate": {
+      "post": {
+        "description": "Manual override: make a deferred/dependent goal claimable now.",
+        "operationId": "activate_goal_v1_goals__goal_id__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Goal"
+      }
+    },
+    "/v1/goals/{goal_id}/dependencies": {
+      "post": {
+        "description": "Attach a dependency to a goal.",
+        "operationId": "add_dependency_v1_goals__goal_id__dependencies_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalDependencyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Dependency"
+      }
+    },
+    "/v1/goals/{goal_id}/dependencies/{dependency_id}": {
+      "patch": {
+        "description": "Update or resolve a dependency.",
+        "operationId": "update_dependency_v1_goals__goal_id__dependencies__dependency_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dependency_id",
+            "required": true,
+            "schema": {
+              "title": "Dependency Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDependencyBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Dependency"
       }
     },
     "/v1/governance/leaderboard": {
@@ -4575,6 +8236,28 @@
         "summary": "List Hosts",
         "tags": [
           "hosts"
+        ]
+      }
+    },
+    "/v1/hosts/health": {
+      "get": {
+        "description": "Aggregate health of the hosts the caller can see.\n\nScoped exactly like ``GET /v1/hosts`` (owner / visibility-scope\nfiltered) so the summary never counts another owner's managed hosts.",
+        "operationId": "hosts_health_v1_hosts_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetHealth"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Hosts Health",
+        "tags": [
+          "data-surfaces"
         ]
       }
     },
@@ -4812,7 +8495,7 @@
     },
     "/v1/hosts/{host_id}/runners": {
       "post": {
-        "description": "Launch a runner on a host for a session.\n\nGenerates a binding token, writes the expected runner_id\nto the session row, sends the launch command to the host,\nand waits for the host's acknowledgement.\n\n:param request: The incoming request (for auth).\n:param host_id: Target host, e.g. ``\"host_a1b2c3d4...\"``.\n:param body: Launch request with ``session_id`` and\n    ``workspace``.\n:returns: ``{\"runner_id\": ..., \"status\": \"launching\"}``.\n:raises HTTPException: 404 if host not found, 409 if host\n    offline, 403 if caller doesn't own the host, 400 if\n    session already has a runner.",
+        "description": "Launch a runner on a host for a session.\n\nDelegates runner acquisition to the fabric facade, which\natomically binds a runner id, sends the launch command to the\nhost worker, and waits for the host's acknowledgement.\n\n:param request: The incoming request (for auth).\n:param host_id: Target host, e.g. ``\"host_a1b2c3d4...\"``.\n:param body: Launch request with ``session_id`` and\n    ``workspace``.\n:returns: ``{\"runner_id\": ..., \"status\": \"launching\"}``.\n:raises HTTPException: 404 if host not found, 409 if host\n    offline, 403 if caller doesn't own the host, 400 if\n    session already has a runner.",
         "operationId": "launch_runner_v1_hosts__host_id__runners_post",
         "parameters": [
           {
@@ -4863,6 +8546,62 @@
         "tags": [
           "hosts"
         ]
+      }
+    },
+    "/v1/inbound/events": {
+      "get": {
+        "description": "Subscribe to the live inbound-event feed (SSE).",
+        "operationId": "subscribe_inbound_events_v1_inbound_events_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Subscribe Inbound Events"
+      }
+    },
+    "/v1/inbound/recent": {
+      "get": {
+        "description": "Most-recent inbound events (newest first) for feed hydration.",
+        "operationId": "recent_v1_inbound_recent_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Recent"
       }
     },
     "/v1/info": {
@@ -5326,9 +9065,95 @@
         ]
       }
     },
+    "/v1/push/subscriptions": {
+      "delete": {
+        "operationId": "delete_subscription_v1_push_subscriptions_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscriptionDelete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Subscription",
+        "tags": [
+          "push"
+        ]
+      },
+      "post": {
+        "operationId": "create_subscription_v1_push_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscriptionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Subscription",
+        "tags": [
+          "push"
+        ]
+      }
+    },
+    "/v1/push/vapid-public-key": {
+      "get": {
+        "operationId": "vapid_public_key_v1_push_vapid_public_key_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VapidPublicKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Vapid Public Key",
+        "tags": [
+          "push"
+        ]
+      }
+    },
     "/v1/runners": {
       "get": {
-        "description": "Return currently online runners owned by the requesting user.\n\nWhen auth is active, only runners whose tunnel was\nestablished by the same user are returned. Without auth,\nall online runners are listed (single-user / dev mode).\n\n:param request: The incoming FastAPI request (for auth).\n:returns: A ``{\"data\": [...]}`` list with runner ids and\n    advertised harnesses.",
         "operationId": "list_runners_v1_runners_get",
         "responses": {
           "200": {
@@ -5358,7 +9183,6 @@
     },
     "/v1/runners/{runner_id}/status": {
       "get": {
-        "description": "Return whether a runner currently has an open tunnel.\n\nWhen auth is active, a runner owned by a different user\nappears as offline to prevent enumeration.\n\n:param request: The incoming FastAPI request (for auth).\n:param runner_id: Stable runner id, e.g.\n    ``\"runner_0123456789abcdef\"``.\n:returns: A JSON object with ``runner_id`` and ``online``.",
         "operationId": "runner_status_v1_runners__runner_id__status_get",
         "parameters": [
           {
@@ -5408,6 +9232,271 @@
         "tags": [
           "runners"
         ]
+      }
+    },
+    "/v1/schedules": {
+      "get": {
+        "operationId": "list_schedules_v1_schedules_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "enabled",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Enabled"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Schedules"
+      },
+      "post": {
+        "operationId": "create_schedule_v1_schedules_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateScheduleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Schedule"
+      }
+    },
+    "/v1/schedules/assistant/draft": {
+      "post": {
+        "operationId": "draft_cadence_v1_schedules_assistant_draft_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CadenceDraftBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Draft Cadence"
+      }
+    },
+    "/v1/schedules/occurrences": {
+      "get": {
+        "operationId": "list_occurrences_v1_schedules_occurrences_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "start",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "in": "query",
+            "name": "end",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 500,
+              "maximum": 1000,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Occurrences"
+      }
+    },
+    "/v1/schedules/{schedule_id}": {
+      "patch": {
+        "operationId": "set_schedule_enabled_v1_schedules__schedule_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "schedule_id",
+            "required": true,
+            "schema": {
+              "title": "Schedule Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScheduleEnabledBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Set Schedule Enabled"
       }
     },
     "/v1/schema/events": {
@@ -5969,6 +10058,49 @@
           }
         },
         "summary": "Await Session Message",
+        "tags": [
+          "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/blueprint-run": {
+      "get": {
+        "description": "Return live blueprint run state reconstructed from durable events.",
+        "operationId": "get_blueprint_run_v1_sessions__session_id__blueprint_run_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlueprintRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Blueprint Run",
         "tags": [
           "sessions"
         ]
@@ -6778,6 +10910,88 @@
         "summary": "Mcp Proxy",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/sessions/{session_id}/memories": {
+      "get": {
+        "description": "List long-term memories captured from a session.\n\nReads :class:`omnigent.db.db_models.SqlMemory` rows by\n``source_conversation_id``. ``scopes`` is accepted for forward\ncompatibility (memory compartments are scope/owner/topic-keyed, not\nsession-keyed) but does not filter session-sourced rows today.\n\n:param scopes: Reserved compartment-scope filter (currently unused).\n:param limit: Max memories to return (1-200).\n:param sort_by: ``\"created_at\"`` (default) or ``\"weight\"``.",
+        "operationId": "list_session_memories_v1_sessions__session_id__memories_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "scopes",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Scopes"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sort_by",
+            "required": false,
+            "schema": {
+              "default": "created_at",
+              "pattern": "^(created_at|weight)$",
+              "title": "Sort By",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Session Memories",
+        "tags": [
+          "data-surfaces"
         ]
       }
     },
@@ -8639,6 +12853,61 @@
         ]
       }
     },
+    "/v1/sessions/{session_id}/spawn-tree": {
+      "get": {
+        "description": "Return a session and its sub-agent descendants as a tree.\n\nAuthorizes READ on the requested session (the same check the\nchild-sessions read uses), then walks ``parent_conversation_id``\nwithin the shared ``root_conversation_id`` \u2014 one tree read, built\nin-memory.\n\n:param depth: Max levels of descendants to include (children of the\n    requested node are depth 1).",
+        "operationId": "session_spawn_tree_v1_sessions__session_id__spawn_tree_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "depth",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Depth",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpawnTree"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Spawn Tree",
+        "tags": [
+          "data-surfaces"
+        ]
+      }
+    },
     "/v1/sessions/{session_id}/stream": {
       "get": {
         "description": "Subscribe to the session's live SSE event stream.\n\nDoes NOT replay history; clients reconcile via the snapshot\nendpoint. The generator handles disconnects via a\n``try/finally`` that emits the ``[DONE]`` sentinel in all\nexit paths \u2014 see :func:`_stream_live_events`.\n\nHolding this stream open registers the caller as a session\n*viewer* (presence): co-viewers' streams receive\n``session.presence`` events on join/leave/idle edges, and\nthis stream's snapshot-on-connect includes the current\nviewer list. Presence is scoped to the session tree's root\nconversation, so viewers of different agents/sub-agents in\none session see each other. See\n``omnigent/server/presence.py``.\n\n:param request: The FastAPI request, used to detect\n    disconnect.\n:param session_id: Session/conversation identifier,\n    e.g. ``\"conv_abc123\"``.\n:param idle: Presence idle flag computed by the web client\n    at connect time (tab backgrounded \u2265 its debounce). An\n    idle *flip* mid-view arrives as a reconnect carrying the\n    new value \u2014 there is no separate update endpoint.\n:returns: An SSE :class:`StreamingResponse`.\n:raises OmnigentError: 404 if no session exists.",
@@ -8746,6 +13015,49 @@
         ]
       }
     },
+    "/v1/sessions/{session_id}/usage/summary": {
+      "get": {
+        "description": "Return cumulative token + cost usage for a session subtree.\n\nReuses :func:`omnigent.runtime.policies.builder.load_session_usage`\n(the subtree-summed dict the snapshot displays) so a parent folds in\nits sub-agents.",
+        "operationId": "session_usage_summary_v1_sessions__session_id__usage_summary_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UsageSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Session Usage Summary",
+        "tags": [
+          "data-surfaces"
+        ]
+      }
+    },
     "/v1/sessions/{source_id}/fork": {
       "post": {
         "description": "Fork an existing session into a new session.\n\nDeep-copies the source session's conversation items and\nclones the agent into a new session. When ``body.agent_id``\nis set, the fork binds that built-in agent instead of the\nsource's \u2014 switching harness (e.g. Claude-SDK \u2192 Claude Code,\nor Claude \u2192 Codex). The source's model settings carry over\nonly within the same provider family; a same-family native\ntarget also carries conversation history (the runner rebuilds\nits transcript). The REPL/CLI binds the fork to its runner via\n``PATCH /v1/sessions/{id}`` after creation.\n\nWhen ``body.up_to_response_id`` is set, only history up to and\nincluding that response is copied into the fork (a \"fork from\nthis response\"); a native target then rebuilds its transcript\nfrom the truncated items instead of resuming the source's full\nnative transcript.\n\n:param request: The incoming FastAPI request (for auth).\n:param source_id: Session/conversation identifier of the\n    source session to fork, e.g. ``\"conv_abc123\"``.\n:param body: The validated :class:`SessionForkRequest`.\n:returns: A :class:`SessionResponse` describing the newly\n    created fork (status ``\"idle\"``).\n:raises OmnigentError: 404 if *source_id* does not exist\n    or ``body.agent_id`` is not a bindable built-in agent;\n    403 if the caller lacks read access; 400 if the source\n    is a sub-agent session, has no agent binding, or\n    ``body.up_to_response_id`` names no response in the\n    source session.",
@@ -8794,6 +13106,349 @@
         "summary": "Fork Session",
         "tags": [
           "sessions"
+        ]
+      }
+    },
+    "/v1/skills/concierge/sessions": {
+      "post": {
+        "operationId": "start_skills_concierge_session_v1_skills_concierge_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSkillsConciergeSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Skills Concierge Session"
+      }
+    },
+    "/v1/skills/installed": {
+      "get": {
+        "operationId": "list_installed_skills_v1_skills_installed_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "agent_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agent Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstalledSkillsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Installed Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/marketplaces": {
+      "get": {
+        "operationId": "list_skill_marketplaces_v1_skills_marketplaces_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillMarketplacesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Skill Marketplaces",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/previews": {
+      "post": {
+        "operationId": "create_skill_preview_v1_skills_previews_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Skill Preview",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/previews/{preview_id}/apply": {
+      "post": {
+        "operationId": "apply_skill_preview_v1_skills_previews__preview_id__apply_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "preview_id",
+            "required": true,
+            "schema": {
+              "title": "Preview Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/SkillApplyRequest"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillApplyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Apply Skill Preview",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/recommendations": {
+      "get": {
+        "operationId": "list_skill_recommendations_v1_skills_recommendations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "department",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Department"
+            }
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillRecommendationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Skill Recommendations",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/search": {
+      "post": {
+        "operationId": "search_skills_v1_skills_search_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SkillSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillSearchResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/sources": {
+      "get": {
+        "operationId": "list_skill_sources_v1_skills_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillSourcesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Skill Sources",
+        "tags": [
+          "skills"
         ]
       }
     },
@@ -8872,6 +13527,194 @@
           }
         },
         "summary": "List Tasks"
+      },
+      "post": {
+        "description": "Create a reusable workflow/task template.",
+        "operationId": "create_task_v1_tasks_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTaskBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Task"
+      }
+    },
+    "/v1/tasks/{task_id}": {
+      "get": {
+        "description": "Return one task template/backlog item.",
+        "operationId": "get_task_v1_tasks__task_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Task"
+      }
+    },
+    "/v1/tasks/{task_id}/run": {
+      "post": {
+        "description": "Run one task through the existing resolve -> session-dispatch seam.",
+        "operationId": "run_task_endpoint_v1_tasks__task_id__run_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "task_id",
+            "required": true,
+            "schema": {
+              "title": "Task Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/RunTaskBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Task Endpoint"
+      }
+    },
+    "/v1/users/{user_id}/cost/daily": {
+      "get": {
+        "description": "Return a user's accumulated LLM spend for one UTC day.\n\nA caller may only read their own daily cost (an admin may read any\nuser's). ``date`` defaults to today (UTC).\n\n:param date: UTC day ``\"YYYY-MM-DD\"``; defaults to today.\n:raises HTTPException: 403 reading another user's cost without admin.",
+        "operationId": "user_daily_cost_v1_users__user_id__cost_daily_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DailyCostSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "User Daily Cost",
+        "tags": [
+          "data-surfaces"
+        ]
       }
     }
   }

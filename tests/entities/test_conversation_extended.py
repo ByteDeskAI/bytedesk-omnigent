@@ -13,6 +13,7 @@ from pydantic import ValidationError
 from omnigent.entities.conversation import (
     ITEM_TYPE_TO_DATA_CLS,
     NON_CONTENT_ITEM_TYPES,
+    BlueprintEventData,
     CompactionData,
     Conversation,
     ConversationItem,
@@ -137,6 +138,24 @@ def test_resource_event_deleted() -> None:
     assert red.resource is None
 
 
+# ── BlueprintEventData ─────────────────────────────────
+
+
+def test_blueprint_event_data_valid() -> None:
+    event = BlueprintEventData(
+        blueprint_run_id="bpr_123",
+        event_type="node_status",
+        node_id="draft",
+        node_kind="task",
+        status="completed",
+        loop_iteration=2,
+        child_session_id="conv_child",
+        payload={"output": "done"},
+    )
+    assert event.blueprint_run_id == "bpr_123"
+    assert event.payload["output"] == "done"
+
+
 # ── TerminalCommandData ───────────────────────────────
 
 
@@ -169,7 +188,14 @@ def test_terminal_command_invalid_kind() -> None:
 
 def test_non_content_item_types_complete() -> None:
     """All expected non-content types are present."""
-    expected = {"compaction", "error", "resource_event", "slash_command", "terminal_command"}
+    expected = {
+        "blueprint_event",
+        "compaction",
+        "error",
+        "resource_event",
+        "slash_command",
+        "terminal_command",
+    }
     assert expected == NON_CONTENT_ITEM_TYPES
 
 
@@ -192,6 +218,7 @@ def test_item_type_map_covers_all_types() -> None:
         "resource_event",
         "slash_command",
         "terminal_command",
+        "blueprint_event",
     }
     assert set(ITEM_TYPE_TO_DATA_CLS.keys()) == expected_types
 

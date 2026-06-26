@@ -23,7 +23,7 @@ export interface ContractLock {
 
 /** The SDK's pinned contract identity. Kept in lockstep with `src/contract/contract.lock` by the drift-gate test. */
 export const CONTRACT_LOCK: ContractLock = {
-  openapi_sha256: "fb73affe8073c8ff12103b4bcceadad385cbc55d8d63ca2247e6966507cd6612",
+  openapi_sha256: "c659b6b3ee4f094fc8f0e109d9459c12eadbd2e341dda7ffb075b8acb7ae4e2c",
   events_sha256: "fa0233f67b304bfa2795cf33b8cab9dcb6c8baac25e45c8a8a16960f5cb92a4e",
   omnigent_version: "962a88fb",
 };

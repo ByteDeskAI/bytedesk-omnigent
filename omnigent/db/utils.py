@@ -411,6 +411,7 @@ _ITEM_TYPE_PREFIX: dict[str, str] = {
     "resource_event": "rse_",
     "slash_command": "sc_",
     "terminal_command": "tc_",
+    "blueprint_event": "bpe_",
 }
 
 
@@ -676,7 +677,8 @@ def extract_search_text(item: NewConversationItem) -> str:
         ``type`` is one of ``"message"``, ``"function_call"``,
         ``"function_call_output"``, ``"reasoning"``,
         ``"compaction"``, ``"native_tool"``, ``"resource_event"``,
-        ``"slash_command"``, or ``"terminal_command"``.
+        ``"slash_command"``, ``"terminal_command"``, or
+        ``"blueprint_event"``.
     :returns: A single plain-text string suitable for FTS indexing.
     :raises ValueError: If *item.type* is not a recognised type.
     """
@@ -730,6 +732,18 @@ def extract_search_text(item: NewConversationItem) -> str:
         # !cmd executions by what was typed or what was printed.
         return " ".join(
             part for part in (data.get("input") or "", data.get("stdout") or "") if part
+        )
+    if item.type == "blueprint_event":
+        return " ".join(
+            part
+            for part in (
+                data["blueprint_run_id"],
+                data["event_type"],
+                data.get("node_id") or "",
+                data.get("node_kind") or "",
+                data.get("status") or "",
+            )
+            if part
         )
     raise ValueError(f"unknown item type: {item.type!r}")
 
