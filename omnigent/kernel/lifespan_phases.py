@@ -549,6 +549,44 @@ class MemoryMaintenancePhase(LifespanPhase):
                 await task
 
 
+class CoordinationPhase(LifespanPhase):
+    """Start the cross-replica coordination backplane; stop it on shutdown.
+
+    BDP-2571: the monolithic ``_lifespan`` calls
+    :func:`omnigent.coordination.lifecycle.start_coordination` (and stops it in
+    its ``finally``), but the **deployed** phase lifespan
+    (``OMNIGENT_USE_LIFESPAN_PHASES=1``) was missing it. Without the active
+    backplane ``claim_resource`` / ``resolve_resource`` are no-ops, so BDP-2556
+    cross-replica host control fails with "host is offline" on any server replica
+    that does not own the host tunnel (the "runner didn't come online" symptom at
+    2+ replicas). Self-contained: ``start_coordination`` resolves the backplane
+    from ``OMNIGENT_NATS_URL`` + the inline coordination registry, so this phase
+    has no ``depends_on``. It is ordered before
+    :class:`ExtensionBackgroundTasksPhase` / :class:`DefaultAgentsPhase` so the
+    backplane is live before any phase creates tasks/agents that use it.
+    """
+
+    name = "coordination"
+
+    async def startup(self, ctx: LifespanContext) -> None:
+        """Connect the active coordination backplane.
+
+        :param ctx: The shared lifespan context (unused).
+        """
+        from omnigent.coordination.lifecycle import start_coordination
+
+        await start_coordination()
+
+    async def shutdown(self, ctx: LifespanContext) -> None:
+        """Disconnect the coordination backplane.
+
+        :param ctx: The shared lifespan context (unused).
+        """
+        from omnigent.coordination.lifecycle import stop_coordination
+
+        await stop_coordination()
+
+
 class ExtensionBackgroundTasksPhase(LifespanPhase):
     """Run (and cancel) the first-party extension background loops."""
 
@@ -706,6 +744,12 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
         # longer in the default DAG (they remain as classes for back-compat /
         # direct use but are unwired). Mirrors the monolithic _lifespan which now
         # folds those two loops into the single _ext_bg_tasks list.
+        # BDP-2571: start the coordination backplane before the task/agent
+        # phases that use it (mirrors start_coordination in the monolithic
+        # _lifespan). Its reverse-order teardown lands right after
+        # extension_background_tasks rather than first-in-finally as _lifespan
+        # does — a best-effort shutdown ordering, not a correctness requirement.
+        CoordinationPhase(),
         ExtensionBackgroundTasksPhase(),
         DefaultAgentsPhase(),
         PolicyRegistryPhase(),
@@ -716,6 +760,7 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
 __all__ = [
     "AccountsAutoOpenPhase",
     "AnyioThreadLimiterPhase",
+    "CoordinationPhase",
     "DefaultAgentsPhase",
     "ExtensionBackgroundTasksPhase",
     "HarnessProcessManagerPhase",
