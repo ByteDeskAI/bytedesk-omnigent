@@ -80,6 +80,12 @@ spec:
             - secretRef:
                 name: agentic-inbox-config-secrets
                 optional: true
+            # Runtime config such as OMNIGENT_NATS_URL is hydrated from
+            # Infisical bytedesk-agent-configuration /runtime. The NATS URL is
+            # deployment config, not an agent-spec field.
+            - secretRef:
+                name: omnigent-runtime-config-secrets
+                optional: true
             # InfisicalBackend (BDP-2303) bootstrap creds. The Skills GitHub
             # adapter resolves GITHUB_TOKEN through Omnigent's secret backend
             # and passes it only to gh's isolated command environment.
@@ -122,9 +128,9 @@ spec:
             # for a shared instance.
             - name: OMNIGENT_AUTH_ENABLED
               value: "0"
-            # Coordination backplane — JetStream KV + fan-out across replicas.
-            - name: OMNIGENT_NATS_URL
-              value: nats://omnigent-nats:4222
+            # Coordination backplane URL comes from omnigent-runtime-config-secrets
+            # (Infisical /runtime) so server, host, and spawned runners share one
+            # runtime-config source of truth.
             # Admin-only Omni CLI terminal. The UI attaches to the server, and
             # the server execs into the dedicated StatefulSet pod
             # `omnigent-cli-0` using the narrowly-scoped ServiceAccount below.

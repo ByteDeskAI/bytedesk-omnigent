@@ -171,11 +171,12 @@ spec:
             # (BDP-2303), then resolve keychain:<name> agent creds from Infisical.
             # The two universal-auth secrets come from the operator-hydrated
             # omnigent-infisical-secrets Secret (envFrom below, see
-            # omnigent-infisical-secret.yaml); the rest are non-secret config set
-            # inline here. All MUST be in this list or the runner can't authenticate
-            # to Infisical and falls back to its local keyring.
+            # omnigent-infisical-secret.yaml); OMNIGENT_NATS_URL comes from the
+            # operator-hydrated omnigent-runtime-config-secrets Secret. All MUST
+            # be in this list or the runner can't authenticate to Infisical / NATS
+            # and falls back to its local keyring or fails NATS startup.
             - name: OMNIGENT_RUNNER_ENV_PASSTHROUGH
-              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,OMNIGENT_EXTENSIONS,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV,AGENTIC_INBOX_MCP_URL,AGENTIC_INBOX_EMAIL_DOMAIN,AGENTIC_INBOX_CF_ACCESS_CLIENT_ID,AGENTIC_INBOX_CF_ACCESS_CLIENT_SECRET,GITHUB_MCP_URL"
+              value: "HARNESS_OPENAI_AGENTS_GATEWAY_BASE_URL,HARNESS_OPENAI_AGENTS_API_KEY,HARNESS_OPENAI_AGENTS_USE_RESPONSES,HARNESS_OPENAI_AGENTS_MODEL,BYTEDESK_IDENTITY_TOKEN_URL,OMNIGENT_MCP_CLIENT_SECRET,OMNIGENT_EXTENSIONS,OMNIGENT_NATS_URL,INFISICAL_UNIVERSAL_AUTH_CLIENT_ID,INFISICAL_UNIVERSAL_AUTH_CLIENT_SECRET,INFISICAL_HOST_URL,OMNIGENT_INFISICAL_PROJECT_SLUG,OMNIGENT_INFISICAL_ENV,AGENTIC_INBOX_MCP_URL,AGENTIC_INBOX_EMAIL_DOMAIN,AGENTIC_INBOX_CF_ACCESS_CLIENT_ID,AGENTIC_INBOX_CF_ACCESS_CLIENT_SECRET,GITHUB_MCP_URL"
             # ByteDesk platform MCP (BDP-2169/2182/2199): every agent's inline
             # bytedesk-platform MCP server references these ${VAR}s, expanded by
             # the runner at turn setup. Both names MUST be in the passthrough list
@@ -231,6 +232,12 @@ spec:
             # OMNIGENT_RUNNER_ENV_PASSTHROUGH above.
             - secretRef:
                 name: agentic-inbox-config-secrets
+                optional: true
+            # Runtime config such as OMNIGENT_NATS_URL, hydrated from Infisical
+            # bytedesk-agent-configuration /runtime and forwarded to spawned
+            # runners by OMNIGENT_RUNNER_ENV_PASSTHROUGH above.
+            - secretRef:
+                name: omnigent-runtime-config-secrets
                 optional: true
           resources:
             requests:
