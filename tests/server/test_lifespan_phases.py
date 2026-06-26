@@ -206,6 +206,11 @@ def test_default_phases_topo_sort_and_reverse_matches_finally_order() -> None:
     # list. They are therefore absent from the default DAG's teardown order.
     expected_finally = [
         "extension_background_tasks",
+        # BDP-2571: coordination starts before extension_background_tasks (so the
+        # backplane is live before task/agent phases use it), so reverse-order
+        # teardown places it right after. _lifespan stops coordination first in
+        # its finally; that ordering is best-effort, not a correctness contract.
+        "coordination",
         "managed_launch_cancel",
         "subagent_block_notifier",
         "resource_registry",
@@ -224,3 +229,47 @@ def test_default_phases_topo_sort_and_reverse_matches_finally_order() -> None:
         "accounts_auto_open",
     }
     assert [n for n in teardown_order if n not in no_teardown] == expected_finally
+
+
+def test_default_phases_include_coordination() -> None:
+    """BDP-2571: the deployed phase lifespan must start the coordination
+    backplane. Without a coordination phase, ``start_coordination`` is never
+    called (it only runs in the monolithic ``_lifespan``), the NATS backplane
+    stays inactive, and BDP-2556 cross-replica host control fails ("host is
+    offline" / "runner didn't come online" at 2+ server replicas).
+    """
+    assert "coordination" in {p.name for p in build_default_lifespan_phases()}
+    # Must start before the phases that create backplane-using tasks/agents.
+    ordered = [p.name for p in topological_order(build_default_lifespan_phases())]
+    assert ordered.index("coordination") < ordered.index("extension_background_tasks")
+    assert ordered.index("coordination") < ordered.index("default_agents")
+
+
+@pytest.mark.asyncio
+async def test_coordination_phase_starts_and_stops_backplane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The coordination phase delegates to start/stop_coordination."""
+    from omnigent.kernel.lifespan_phases import CoordinationPhase
+
+    calls: list[str] = []
+
+    async def _fake_start() -> object:
+        calls.append("start")
+        return object()
+
+    async def _fake_stop() -> None:
+        calls.append("stop")
+
+    monkeypatch.setattr(
+        "omnigent.coordination.lifecycle.start_coordination", _fake_start
+    )
+    monkeypatch.setattr(
+        "omnigent.coordination.lifecycle.stop_coordination", _fake_stop
+    )
+
+    phase = CoordinationPhase()
+    await phase.startup(_ctx())
+    await phase.shutdown(_ctx())
+
+    assert calls == ["start", "stop"]
