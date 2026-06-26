@@ -2991,6 +2991,12 @@ def server(
 
     telemetry.init()
 
+    # Sentry error + performance telemetry (BDP-2550). Opt-in: no-op unless
+    # OMNIGENT_SENTRY_DSN is set. Tagged component=server.
+    from omnigent.runtime.sentry import init_sentry
+
+    init_sentry("server")
+
     # Read a pre-shared tunnel token from the environment if the
     # caller (e.g. _start_local_server) spawns the runner externally
     # and needs the server to accept exactly that runner's tunnel.

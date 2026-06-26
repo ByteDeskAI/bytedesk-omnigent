@@ -978,6 +978,12 @@ def main() -> None:
         datefmt="%Y-%m-%dT%H:%M:%S%z",
         stream=sys.stderr,
     )
+    # Sentry error + performance telemetry (BDP-2550). Opt-in: no-op unless
+    # OMNIGENT_SENTRY_DSN is set (inherited from the host via the runner env
+    # allowlist). Tagged component=runner.
+    from omnigent.runtime.sentry import init_sentry
+
+    init_sentry("runner")
     try:
         asyncio.run(_run_tunnel_from_env())
     except RuntimeError as exc:

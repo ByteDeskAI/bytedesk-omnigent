@@ -121,6 +121,13 @@ ENV VIRTUAL_ENV=/opt/venv \
 # [tool.uv.sources]. The runtime stages preserve /build/ so the venv's
 # .pth references stay valid.
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} -e .
+# Sentry error + performance telemetry to the self-hosted ByteDesk Observability
+# project (BDP-2550). Installed in the SHARED builder stage so the server, host,
+# and host-spawned runner subprocesses all carry it. Not an upstream core dep —
+# the omnigent.runtime.sentry hook is opt-in (no-op unless OMNIGENT_SENTRY_DSN is
+# set) and import-guarded, so this install is a bytedesk-deploy concern like
+# psycopg/nats-py/fastembed below.
+RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'sentry-sdk>=2,<3'
 
 # ── Server builder ──────────────────────────────────────
 # Server-only additions on top of the shared builder: the SPA bundle
