@@ -204,6 +204,76 @@ class SqlAgenticInboxEvent(Base):
     )
 
 
+class SqlInboundEvent(Base):
+    """The observable Wire-Tap log of every inbound event (ADR-0155, BDP-2559).
+
+    One row per inbound event across all sources (webhooks, email, signal deliveries).
+    ``idempotency_key`` is the primary key — the Idempotent-Receiver guard that
+    replaces the three divergent per-consumer dedupe schemes. ``raw_payload`` keeps
+    the verbatim body; ``normalized`` the translator-extracted fields. This table is
+    additive and observable — it is the source of truth for the live "Inbound Events"
+    feed.
+    """
+
+    __tablename__ = "inbound_events"
+
+    idempotency_key: Mapped[str] = mapped_column(String(256), primary_key=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    type: Mapped[str] = mapped_column(String(128), nullable=False)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    occurred_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    received_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="received")
+    raw_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    normalized: Mapped[str | None] = mapped_column(Text, nullable=True)
+    headers: Mapped[str | None] = mapped_column(Text, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("ix_inbound_events_source_type", "source", "type"),
+        Index("ix_inbound_events_status_updated", "status", "updated_at"),
+        Index("ix_inbound_events_received", "received_at"),
+        CheckConstraint(
+            "status in ('received', 'fanned_out', 'duplicate', 'dead_lettered')",
+            name="ck_inbound_events_status",
+        ),
+    )
+
+
+class SqlInboundEventResult(Base):
+    """Per-processor outcome of an inbound event's fan-out (ADR-0155, BDP-2559).
+
+    One row per ``(idempotency_key, processor)`` — which processor saw the event and
+    what it did. A failed handle records ``next_retry_at`` for the Dead-Letter reaper;
+    at the attempt cap the row (and parent event) become ``dead_lettered``.
+    """
+
+    __tablename__ = "inbound_event_results"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    processor: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ok")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    next_retry_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("idempotency_key", "processor", name="uq_inbound_result"),
+        Index("ix_inbound_result_retry", "status", "next_retry_at"),
+        CheckConstraint(
+            "status in ('ok', 'skipped', 'failed', 'dead_lettered')",
+            name="ck_inbound_event_results_status",
+        ),
+    )
+
+
 class SqlToolStep(Base):
     """A durable deterministic tool-step with retry/timeout-over-session +
     resume-on-restart (BDP-2252, ADR-0142).
