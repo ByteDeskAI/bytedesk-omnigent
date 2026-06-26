@@ -160,6 +160,73 @@ def test_disk_cache_read_errors_are_tolerated(env, caplog):
     assert any("infisical cache unreadable" in r.message for r in caplog.records)
 
 
+@pytest.fixture
+def no_sleep(monkeypatch):
+    """Patch backoff sleep to a no-op so retry tests stay fast/deterministic."""
+    monkeypatch.setattr(inf.time, "sleep", lambda _s: None)
+
+
+def _retry_client(counts, *, list_responses):
+    """MockTransport whose /secrets/raw serves a queued list of responses in order."""
+    queue = list(list_responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        counts[path] = counts.get(path, 0) + 1
+        if path == "/api/v1/auth/universal-auth/login":
+            return httpx.Response(200, json={"accessToken": "tok", "expiresIn": 3600})
+        if path == "/api/v3/secrets/raw":
+            return queue.pop(0)()
+        return httpx.Response(200, json={})
+
+    return httpx.Client(base_url="https://infisical.test", transport=httpx.MockTransport(handler))
+
+
+_OK = lambda: httpx.Response(  # noqa: E731
+    200, json={"secrets": [{"secretKey": "deepseek", "secretValue": "sk", "updatedAt": None}]}
+)
+_500 = lambda: httpx.Response(503, json={"error": "down"})  # noqa: E731
+_404 = lambda: httpx.Response(404, json={"error": "missing"})  # noqa: E731
+
+
+def test_transient_then_success_retries_and_returns_value(env, clock, no_sleep):
+    counts: dict[str, int] = {}
+    b = InfisicalBackend(client=_retry_client(counts, list_responses=[_500, _OK]))
+    assert b.load("deepseek") == "sk"  # first 503 retried, second OK
+    assert counts["/api/v3/secrets/raw"] == 2
+
+
+def test_permanent_4xx_is_not_retried(env, clock, no_sleep):
+    counts: dict[str, int] = {}
+    # would be _OK on a 2nd attempt if it retried — proving it does NOT
+    b = InfisicalBackend(client=_retry_client(counts, list_responses=[_404, _OK]))
+    assert b.load("deepseek") is None  # 4xx → fetch raises → load swallows to None
+    assert counts["/api/v3/secrets/raw"] == 1  # exactly one attempt, no retry
+
+
+def test_retries_are_bounded_then_fall_back_to_stale(env, clock, no_sleep):
+    counts: dict[str, int] = {}
+    # warm the cache once
+    b = InfisicalBackend(client=_retry_client(counts, list_responses=[_OK]))
+    assert b.load("deepseek") == "sk"
+    assert counts["/api/v3/secrets/raw"] == 1
+    # now all-failing transient; expire TTL → refresh exhausts cap, serves stale
+    b._client = _retry_client(counts, list_responses=[_500, _500, _500])
+    clock["t"] += 301
+    assert b.load("deepseek") == "sk"  # stale-on-error after bounded retry
+    # 1 warming fetch + exactly _RETRY_ATTEMPTS on the failing refresh (no unbounded loop)
+    assert counts["/api/v3/secrets/raw"] == 1 + inf._RETRY_ATTEMPTS
+
+
+def test_retries_exhaust_then_raise_without_stale(env, clock, no_sleep):
+    counts: dict[str, int] = {}
+    b = InfisicalBackend(client=_retry_client(counts, list_responses=[_500, _500, _500]))
+    # cold cache, no stale → after bounded retry the error propagates
+    with pytest.raises(httpx.HTTPStatusError):
+        b._scope_secrets()
+    assert counts["/api/v3/secrets/raw"] == inf._RETRY_ATTEMPTS
+
+
 def test_disk_cache_write_failures_are_tolerated(env, clock, monkeypatch, caplog):
     counts: dict[str, int] = {}
 

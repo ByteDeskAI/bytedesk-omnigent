@@ -325,6 +325,71 @@ def test_reconnect_under_new_owner_reowns_host_id(
     assert host_store.list_hosts(owner="alice@example.com") == []
 
 
+def test_concurrent_first_connect_same_host_id_converges_without_integrity_error(
+    host_store: HostStore,
+    db_uri: str,
+) -> None:
+    """A first-connect that loses the host_id INSERT race must converge, not crash.
+
+    The host upsert race (ADR-0009 single-writer): on an empty table, two
+    concurrent ``host.hello`` frames for the same ``host_id`` both miss the
+    ``(owner, name)`` get AND the host_id re-own lookup, so both reach the
+    INSERT. The loser hits ``uq_hosts_host_id`` — which, before the guard,
+    raised an uncaught IntegrityError that crashed the tunnel handler and
+    sent the host into an endless reconnect loop with nothing in the UI.
+
+    Determinism without a flaky thread interleave: the winner's row is
+    committed (via a separate connection) at the exact race instant — right
+    after the loser's pre-INSERT re-own lookup misses — by intercepting
+    ``_reown_host_id``. The loser's flush then collides for real, and the
+    guard must catch it, re-own the now-present winner row, and return
+    cleanly. A regression that drops the guard re-raises IntegrityError here.
+    """
+    # The winner: a different (owner, name) holding the SAME host_id, planted
+    # mid-race so the loser collides on uq_hosts_host_id (not the PK).
+    real_reown = host_store._reown_host_id
+    planted: list[bool] = []
+
+    def reown_then_plant_winner(session: Session, **kwargs: object) -> Host | None:
+        result = real_reown(session, **kwargs)  # type: ignore[arg-type]
+        if result is None and not planted:
+            # Loser's lookup missed; the winner commits NOW (separate conn) —
+            # the race window the guard exists to survive.
+            planted.append(True)
+            engine = get_or_create_engine(db_uri)
+            with Session(engine) as winner:
+                winner.add(
+                    SqlHost(
+                        owner="winner@example.com",
+                        name="winner-laptop",
+                        host_id="host_race",
+                        status="online",
+                        created_at=now_epoch(),
+                        updated_at=now_epoch(),
+                    )
+                )
+                winner.commit()
+        return result
+
+    host_store._reown_host_id = reown_then_plant_winner  # type: ignore[method-assign]
+
+    # Must NOT raise: the loser hits uq_hosts_host_id, the guard catches it,
+    # rolls back, and re-owns the winner's row in place.
+    loser = host_store.upsert_on_connect(
+        host_id="host_race",
+        name="loser-laptop",
+        owner="loser@example.com",
+    )
+
+    assert planted == [True], "winner row was not planted in the race window"
+    assert loser.host_id == "host_race"
+    # The loser converged onto the existing row and re-owned it — one row.
+    all_rows = host_store.list_all_hosts()
+    assert [h.host_id for h in all_rows] == ["host_race"]
+    assert all_rows[0].owner == "loser@example.com"
+    assert all_rows[0].status == "online"
+
+
 def test_list_all_hosts_returns_every_owner(host_store: HostStore) -> None:
     """list_all_hosts spans owners — the org-shared pool source (ADR-0151)."""
     host_store.upsert_on_connect(host_id="h_a", name="a", owner="alice@example.com")
