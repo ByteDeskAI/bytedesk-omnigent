@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
+from bytedesk_omnigent.runtime_flags.defaults import (
+    NATS_UPGRADE_FLAG_DEFINITIONS,
+    NATS_UPGRADE_FLAG_KEYS,
+    build_runtime_flag_context,
+    seed_runtime_flag_defaults,
+)
 from bytedesk_omnigent.runtime_flags.extension import BytedeskRuntimeFlagsExtension
 from bytedesk_omnigent.runtime_flags.models import (
     EvaluationContext,
@@ -18,6 +26,7 @@ from bytedesk_omnigent.runtime_flags.models import (
 from bytedesk_omnigent.runtime_flags.router import create_runtime_flags_router
 from bytedesk_omnigent.runtime_flags.store import (
     FlagConflictError,
+    FlagUnavailableError,
     InMemoryRuntimeFlagStore,
     set_runtime_flag_store_for_tests,
 )
@@ -36,6 +45,7 @@ def test_runtime_flags_extension_uses_omnigent_sdk() -> None:
         assert ext.name == "bytedesk.runtime_flags"
         assert ext.runtime_flag_store() is store
         assert len(ext.routers()) == 1
+        assert len(ext.background_tasks()) == 1
         assert getattr(BytedeskRuntimeFlagsExtension.runtime_flags_router, CONTRIB_ATTR)[
             "seam"
         ] == "router"
@@ -230,3 +240,112 @@ def test_runtime_flags_router_crud_and_evaluate() -> None:
         json={"default_variation": "on"},
     )
     assert conflict.status_code == 412
+
+
+def test_nats_upgrade_flag_catalog_is_runtime_flag_based() -> None:
+    definitions = {definition.key: definition for definition in NATS_UPGRADE_FLAG_DEFINITIONS}
+
+    assert set(definitions) == set(NATS_UPGRADE_FLAG_KEYS)
+    assert "runtime.message_bus.mode" in definitions
+    assert "runtime.session_events.mode" in definitions
+    assert "runtime.presence.store" in definitions
+    assert "runtime.realtime.publisher" in definitions
+    assert "runtime.session_initiator" in definitions
+
+    for definition in definitions.values():
+        assert definition.descriptor.owner == "runtime"
+        assert "nats-upgrade" in definition.descriptor.tags
+        assert not definition.key.startswith("OMNIGENT_")
+
+    assert definitions["runtime.message_bus.mode"].descriptor.default_value == "inprocess"
+    assert definitions["runtime.session_events.mode"].descriptor.default_value == "local"
+    assert definitions["runtime.presence.store"].descriptor.default_value == "local"
+    assert definitions["runtime.realtime.publisher"].descriptor.default_value == "redis"
+    assert definitions["runtime.session_initiator"].descriptor.default_value == "http"
+
+
+def test_seed_runtime_flag_defaults_create_only() -> None:
+    async def _run() -> None:
+        store = InMemoryRuntimeFlagStore()
+
+        created = await seed_runtime_flag_defaults(store)
+        created_again = await seed_runtime_flag_defaults(store)
+
+        assert [entry.definition.key for entry in created] == list(NATS_UPGRADE_FLAG_KEYS)
+        assert created_again == []
+
+        current = await store.get_revision("runtime.realtime.publisher")
+        changed = current.definition.with_default_variation("dual")
+        await store.upsert(changed, if_match=current.revision)
+
+        after_admin_edit = await seed_runtime_flag_defaults(store)
+
+        assert after_admin_edit == []
+        assert (await store.get("runtime.realtime.publisher")).default_variation == "dual"
+
+    asyncio.run(_run())
+
+
+def test_runtime_flag_context_uses_stable_rollout_attributes() -> None:
+    context = build_runtime_flag_context(
+        environment="prod",
+        tenant="tenant_a",
+        user="user_a",
+        session="session_a",
+        agent_id="agent_a",
+        runner_id="runner_a",
+        replica_id="replica_a",
+        target_key="tenant_a",
+        extra={"region": "iad"},
+    )
+
+    assert context.attributes == {
+        "environment": "prod",
+        "tenant": "tenant_a",
+        "user": "user_a",
+        "session": "session_a",
+        "agent_id": "agent_a",
+        "runner_id": "runner_a",
+        "replica_id": "replica_a",
+        "key": "tenant_a",
+        "region": "iad",
+    }
+
+
+def test_runtime_flags_extension_seeds_defaults_in_background() -> None:
+    async def _run() -> list[str]:
+        store = InMemoryRuntimeFlagStore()
+        set_runtime_flag_store_for_tests(store)
+        ext = BytedeskRuntimeFlagsExtension()
+
+        try:
+            await ext._seed_runtime_flag_defaults()
+            return [entry.definition.key for entry in await store.list()]
+        finally:
+            set_runtime_flag_store_for_tests(None)
+
+    keys = asyncio.run(_run())
+    assert keys == sorted(NATS_UPGRADE_FLAG_KEYS)
+
+
+def test_runtime_flags_extension_seed_swallow_unavailable(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class _UnavailableStore:
+        async def upsert(self, *_args: object, **_kwargs: object) -> object:
+            raise FlagUnavailableError("nats unavailable")
+
+    async def _run() -> None:
+        set_runtime_flag_store_for_tests(_UnavailableStore())  # type: ignore[arg-type]
+        ext = BytedeskRuntimeFlagsExtension()
+
+        try:
+            with caplog.at_level(
+                "WARNING", logger="bytedesk_omnigent.runtime_flags.extension"
+            ):
+                await ext._seed_runtime_flag_defaults()
+        finally:
+            set_runtime_flag_store_for_tests(None)
+
+    asyncio.run(_run())
+    assert any("runtime flag default seed skipped" in r.message for r in caplog.records)

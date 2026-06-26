@@ -280,6 +280,8 @@ class NatsRuntimeFlagStore(_EvaluationMixin):
         try:
             if if_match is None:
                 revision = await self._kv.put(definition.key, payload)
+            elif if_match == 0:
+                revision = await self._kv.create(definition.key, payload)
             else:
                 revision = await self._kv.update(definition.key, payload, last=if_match)
         except Exception as exc:
