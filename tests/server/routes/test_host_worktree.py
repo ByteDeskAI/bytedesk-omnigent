@@ -251,7 +251,7 @@ async def test_create_worktree_connection_lost_raises_unavailable(
     assert conn is not None
     # Deregister so the registry no longer recognizes this conn ->
     # send_text raises ConnectionError on the next send.
-    registry.deregister(_HOST_ID)
+    registry.deregister(conn)
 
     with pytest.raises(WorktreeHostUnavailableError) as exc:
         await create_worktree_on_host(

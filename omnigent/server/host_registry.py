@@ -266,18 +266,32 @@ class HostRegistry:
         claim_resource("host", host_id)
         return conn
 
-    def deregister(self, host_id: str) -> None:
-        """Remove a host connection.
+    def deregister(self, conn: HostConnection) -> bool:
+        """Remove a host connection — conn-guarded (newest-wins safe).
 
-        No-op if ``host_id`` is not registered.
+        Only removes the registration when *conn* is STILL the current one for
+        its ``host_id``, and returns whether it did. A no-op (returns
+        ``False``) when a newer connection has already replaced *conn* — so a
+        stale/old tunnel's teardown can never deregister the live host that
+        re-registered in the meantime. That race — the OLD host pod's
+        disconnect popping the NEW pod's registration on a co-roll, orphaning a
+        still-connected host out of the registry until it happened to reconnect
+        — was the recurring "runner didn't come online" wedge (BDP-2540).
+        Mirrors :meth:`evict` / :meth:`send_text`, the registry's other
+        conn-guarded mutations.
 
-        :param host_id: Host identifier to remove.
+        :param conn: The host connection whose tunnel is tearing down.
+        :returns: ``True`` if *conn* was the current registration and was
+            removed; ``False`` if a newer connection had already replaced it.
         """
         with self._lock:
-            self._hosts.pop(host_id, None)
+            if self._hosts.get(conn.host_id) is not conn:
+                return False
+            self._hosts.pop(conn.host_id, None)
         from omnigent.coordination.sync import release_resource
 
-        release_resource("host", host_id)
+        release_resource("host", conn.host_id)
+        return True
 
     def evict(self, conn: HostConnection) -> bool:
         """Force-retire a wedged host connection (BDP-2491).
