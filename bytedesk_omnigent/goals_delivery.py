@@ -292,6 +292,38 @@ class GoalDeliveryProjector:
         return count
 
 
+def normalize_delivery_contract(payload: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Make a Goals-Concierge draft projector-ready (ADR-0154 P4, BDP-2545).
+
+    At plan approval each milestone in ``payload.hierarchy.milestones`` MUST carry
+    both delivery fingerprints (Jira + GitHub) and an initial two-key gate state,
+    so the GoalDeliveryProjector can later match webhooks against it. This fills
+    the skeleton in place (idempotent): ``delivery.jira.taskKey`` defaults from
+    ``taskKey``; ``delivery.github`` gets ``baseBranch``/``prNumber`` placeholders
+    (``ship`` backfills ``branch``/``prNumber``); ``status``/``jiraDone``/
+    ``prMerged``/``steps`` are initialized. A draft with no milestones is returned
+    unchanged.
+    """
+    if not _milestones(payload):
+        return payload
+    out = copy.deepcopy(payload)
+    for milestone in _milestones(out):
+        task_key = milestone.get("taskKey") or _jira_task_key(milestone)
+        delivery = milestone.setdefault("delivery", {})
+        jira = delivery.setdefault("jira", {})
+        if task_key and not jira.get("taskKey"):
+            jira["taskKey"] = task_key
+        github = delivery.setdefault("github", {})
+        github.setdefault("baseBranch", DEFAULT_BASE_BRANCH)
+        github.setdefault("branch", None)
+        github.setdefault("prNumber", None)
+        milestone.setdefault("status", "pending")
+        milestone.setdefault("jiraDone", False)
+        milestone.setdefault("prMerged", False)
+        milestone.setdefault("steps", [])
+    return out
+
+
 def parse_github_pr_event(payload: dict[str, Any]) -> GithubPrEvent | None:
     """Normalize a GitHub ``pull_request`` webhook body to a merged-PR event.
 
