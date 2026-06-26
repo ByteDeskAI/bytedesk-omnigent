@@ -71,11 +71,14 @@ spec:
               cpu: "1"
               memory: 1Gi
           volumeMounts:
-            - name: coordination-jetstream-data
+            - name: jetstream-data
               mountPath: /data
   volumeClaimTemplates:
     - metadata:
-        name: coordination-jetstream-data
+        # Existing local/prod StatefulSets already use this claim-template name.
+        # Kubernetes treats volumeClaimTemplates as immutable, so keep the name
+        # stable while isolating artifact storage in omnigent-nats-artifacts.
+        name: jetstream-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
