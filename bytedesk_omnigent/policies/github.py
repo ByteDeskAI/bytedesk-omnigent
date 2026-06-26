@@ -73,6 +73,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from bytedesk_omnigent.policies._prefix import strip_server_prefix
 from omnigent.policies.builtins._shell import (
     MAX_SHELL_NESTING,
     real_invocation_tokens,
@@ -171,22 +172,6 @@ def _ask(reason: str) -> PolicyResponse:
     :returns: A :class:`PolicyResponse` with an ASK decision.
     """
     return {"result": "ASK", "reason": reason}
-
-
-def _canonical_tool_name(tool_name: str, prefixes: tuple[str, ...]) -> str:
-    """
-    Strip the first matching server prefix to get the canonical name.
-
-    :param tool_name: Raw tool name, e.g. ``"mcp__github__create_pull_request"``
-        or ``"github__github_read_api_call"``.
-    :param prefixes: Prefixes to try, longest-first.
-    :returns: The canonical name (``"create_pull_request"``), or *tool_name*
-        unchanged when no prefix matches.
-    """
-    for prefix in prefixes:
-        if tool_name.startswith(prefix):
-            return tool_name[len(prefix) :]
-    return tool_name
 
 
 def _normalize_repo(value: str) -> str:
@@ -952,7 +937,7 @@ def github_policy(
         :returns: A :class:`PolicyResponse`, or ``None`` to abstain (not a
             GitHub tool, or an allowed operation).
         """
-        canonical = _canonical_tool_name(raw_tool, prefixes)
+        canonical = strip_server_prefix(raw_tool, prefixes)
         had_github_prefix = canonical != raw_tool
         cls = _classify_mcp_tool(canonical, use_verb_heuristic=had_github_prefix)
 

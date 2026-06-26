@@ -41,3 +41,34 @@ def test_override_wins_over_nats_url(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OMNIGENT_USE_COORDINATION_BACKPLANE", "inprocess")
     backplane = resolve_coordination_backplane()
     assert isinstance(backplane, InProcessBackplane)
+
+
+def test_override_selects_nats_without_nats_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """OMNIGENT_USE_<seam>=nats is honored via the registry even with no NATS_URL
+    auto-select in play — proving the override, not the URL branch, drove it.
+
+    (The nats factory still needs a URL to construct, so one is provided; the URL
+    being present is what nats *needs*, not what *selected* it — selection here is
+    the override resolved through ``resolve_default``.)
+    """
+    pytest.importorskip("nats")
+    monkeypatch.setenv("OMNIGENT_USE_COORDINATION_BACKPLANE", "nats")
+    monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://127.0.0.1:4222")
+    from omnigent.coordination.nats_backplane import NatsBackplane
+
+    assert isinstance(resolve_coordination_backplane(), NatsBackplane)
+
+
+def test_unknown_override_raises_registry_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unknown OMNIGENT_USE_<seam> resolves through the registry and surfaces
+    its ProviderNotRegistered, not a silent fallback."""
+    from omnigent.kernel.pluggable.errors import ProviderNotRegistered
+
+    monkeypatch.delenv("OMNIGENT_NATS_URL", raising=False)
+    monkeypatch.setenv("OMNIGENT_USE_COORDINATION_BACKPLANE", "nope")
+    with pytest.raises(ProviderNotRegistered):
+        resolve_coordination_backplane()
