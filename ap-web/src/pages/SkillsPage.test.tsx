@@ -158,6 +158,10 @@ describe("SkillsPage", () => {
     expect(screen.getByRole("button", { name: /Operations/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Engineering/ })).toBeInTheDocument();
     expect(screen.getByTestId("agent-conversation")).toBeInTheDocument();
+    // The Catalog section header is a generic title; "ByteDesk Catalog" is the
+    // marketplace chip below it — guards against the header re-duplicating the
+    // marketplace name (which made getByText("ByteDesk Catalog") ambiguous).
+    expect(screen.getByRole("heading", { name: "Catalog" })).toBeInTheDocument();
     expect(screen.getByText("ByteDesk Catalog")).toBeInTheDocument();
     expect(screen.getByLabelText("Search ByteDesk catalog")).toBeInTheDocument();
     expect(screen.getByText("platform-dev")).toBeInTheDocument();
