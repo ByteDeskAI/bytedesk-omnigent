@@ -208,10 +208,19 @@ _webhook_adapter_registry = None
 def register_webhook_adapter(
     source: str, factory: Callable[[], WebhookSourceAdapter]
 ) -> None:
-    """Register a per-source webhook adapter *factory* (BDP-2354)."""
+    """Register a per-source webhook adapter *factory* (BDP-2354).
+
+    Idempotent: ``routers()`` runs once per ``create_app()`` build, and the
+    registry is a module-global that persists across builds (tests build the app
+    many times per process). Re-registering the same source is a no-op rather
+    than a ``RegistryConflict`` — mirroring the ``if source in names()`` guard in
+    :func:`resolve_webhook_adapter`.
+    """
     global _webhook_adapter_registry
     if _webhook_adapter_registry is None:
         _webhook_adapter_registry = _build_webhook_adapter_registry()
+    if source in _webhook_adapter_registry.names():
+        return
     _webhook_adapter_registry.register(source, factory)
 
 
