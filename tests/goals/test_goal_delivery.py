@@ -328,3 +328,15 @@ def test_normalize_delivery_contract_fills_fingerprints() -> None:
 def test_normalize_delivery_contract_noop_without_milestones() -> None:
     assert normalize_delivery_contract({"jiraEpicKey": "BDP-1"}) == {"jiraEpicKey": "BDP-1"}
     assert normalize_delivery_contract(None) is None
+
+
+# -- Jira webhook adapter (P3): shared-secret, not HMAC ----------------------
+def test_jira_webhook_adapter_shared_secret() -> None:
+    from bytedesk_omnigent.ingress import JiraWebhookAdapter
+
+    adapter = JiraWebhookAdapter()
+    assert adapter.verify(b"{}", {"x-omnigent-secret": "s3cret"}, "s3cret") is True
+    assert adapter.verify(b"{}", {"X-Omnigent-Secret": "s3cret"}, "s3cret") is True  # CI
+    assert adapter.verify(b"{}", {"x-omnigent-secret": "wrong"}, "s3cret") is False
+    assert adapter.verify(b"{}", {}, "s3cret") is False
+    assert adapter.match_key({}) == "*"
