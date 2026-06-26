@@ -55,6 +55,10 @@ ENV VIRTUAL_ENV=/opt/venv \
     PATH="/opt/venv/bin:${PATH}"
 
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} -e .
+# NATS runner/control transport (OMNIGENT_NATS_URL) is used by BOTH server and
+# host-spawned runners. Keep this in the shared builder so host images can serve
+# runner control traffic over NATS.
+RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'nats-py>=2.9,<3'
 
 # ── Server builder ──────────────────────────────────────
 FROM builder AS server-builder

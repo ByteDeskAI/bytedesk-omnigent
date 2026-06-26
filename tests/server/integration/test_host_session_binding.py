@@ -6,12 +6,13 @@ import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
 from asgiref.testing import ApplicationCommunicator
 from fastapi import FastAPI
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from omnigent.entities import Conversation
 from omnigent.host.frames import (
@@ -21,6 +22,7 @@ from omnigent.host.frames import (
     decode_host_frame,
     encode_host_frame,
 )
+from omnigent.runner.control_registry import RunnerControlRegistry
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import create_app
 from omnigent.server.auth import RESERVED_USER_LOCAL
@@ -48,12 +50,19 @@ pytestmark = pytest.mark.asyncio
 _HOST_ID = "host_binding_test"
 
 
-def _websocket_scope(path: str) -> dict[str, object]:
+def _websocket_scope(
+    path: str,
+    *,
+    user_id: str | None = None,
+) -> dict[str, object]:
     """Build an ASGI WebSocket scope.
 
     :param path: WebSocket path.
     :returns: Minimal ASGI WebSocket scope.
     """
+    headers: list[tuple[bytes, bytes]] = []
+    if user_id is not None:
+        headers.append((b"x-test-user", user_id.encode("utf-8")))
     return {
         "type": "websocket",
         "asgi": {"version": "3.0"},
@@ -61,7 +70,7 @@ def _websocket_scope(path: str) -> dict[str, object]:
         "path": path,
         "raw_path": path.encode("ascii"),
         "query_string": b"",
-        "headers": [],
+        "headers": headers,
         "client": ("127.0.0.1", 50000),
         "server": ("testserver", 80),
         "subprotocols": [],
@@ -112,12 +121,83 @@ def binding_app(
     return app, registry, host_store, conv_store
 
 
+class _StubAuthProvider:
+    """Auth provider that returns a user ID from ``X-Test-User``."""
+
+    def get_user_id(self, request: object) -> str | None:
+        headers = getattr(request, "headers", {})
+        return headers.get("x-test-user")
+
+
+class _ReadyRunnerClient:
+    """Runner client fake whose health probe succeeds."""
+
+    def __init__(self) -> None:
+        self.health_calls = 0
+
+    async def get(self, path: str, **_kwargs: object) -> Response:
+        if path == "/health":
+            self.health_calls += 1
+            return Response(200)
+        return Response(404)
+
+
+class _ReadyRunnerRouter:
+    """Runner router fake for direct host launch readiness waits."""
+
+    def __init__(self) -> None:
+        self.client = _ReadyRunnerClient()
+        self.session_ids: list[str] = []
+
+    async def aclient_for_session_resources(self, session_id: str) -> object:
+        self.session_ids.append(session_id)
+        return SimpleNamespace(client=self.client)
+
+
+@pytest.fixture()
+def auth_binding_app(
+    db_uri: str,
+) -> tuple[
+    FastAPI,
+    HostRegistry,
+    HostStore,
+    SqlAlchemyConversationStore,
+    RunnerControlRegistry,
+    _ReadyRunnerRouter,
+]:
+    """Authenticated app wiring for launch-token registry assertions."""
+    registry = HostRegistry()
+    host_store = HostStore(db_uri)
+    conv_store = SqlAlchemyConversationStore(db_uri)
+    runner_registry = RunnerControlRegistry()
+    runner_router = _ReadyRunnerRouter()
+    auth = _StubAuthProvider()
+    app = FastAPI()
+    app.include_router(
+        create_host_tunnel_router(registry, host_store, auth_provider=auth),
+        prefix="/v1",
+    )
+    app.include_router(
+        create_hosts_router(
+            registry,
+            host_store,
+            conv_store,
+            auth_provider=auth,
+            runner_control_registry=runner_registry,
+            runner_router=runner_router,
+        ),
+        prefix="/v1",
+    )
+    return app, registry, host_store, conv_store, runner_registry, runner_router
+
+
 async def _connect_host(
     app: FastAPI,
     registry: HostRegistry,
     host_id: str = _HOST_ID,
     name: str = "test-laptop",
     runners: list[str] | None = None,
+    user_id: str | None = None,
 ) -> ApplicationCommunicator:
     """Connect a mock host and wait for registration.
 
@@ -126,10 +206,11 @@ async def _connect_host(
     :param host_id: Host identifier.
     :param name: Host name.
     :param runners: Live runner IDs for hello frame.
+    :param user_id: Optional authenticated owner header for the tunnel.
     :returns: Connected ASGI communicator.
     """
     path = f"/v1/hosts/{host_id}/tunnel"
-    comm = ApplicationCommunicator(app, _websocket_scope(path))
+    comm = ApplicationCommunicator(app, _websocket_scope(path, user_id=user_id))
     await comm.send_input({"type": "websocket.connect"})
     accepted = await comm.receive_output(timeout=1.0)
     assert accepted["type"] == "websocket.accept"
@@ -196,6 +277,72 @@ async def test_launch_runner_writes_host_id_and_runner_id(
     assert updated.runner_id is not None, "runner_id should be written to session row"
     assert updated.runner_id.startswith("runner_token_"), "runner_id should be a token-bound id"
     assert updated.host_id == _HOST_ID, "host_id should be written to session row"
+
+
+async def test_launch_runner_records_nats_control_token(
+    auth_binding_app: tuple[
+        FastAPI,
+        HostRegistry,
+        HostStore,
+        SqlAlchemyConversationStore,
+        RunnerControlRegistry,
+        _ReadyRunnerRouter,
+    ],
+) -> None:
+    """
+    Authenticated host launches must record the server-minted token.
+
+    Skills Manager launches runners through ``POST /hosts/{id}/runners``.
+    Without the registry record, NATS dispatch can probe ``/health`` but
+    cannot authorize real session traffic to the runner.
+    """
+    owner = "admin@example.com"
+    app, registry, _hs, conv_store, runner_registry, runner_router = auth_binding_app
+    comm = await _connect_host(app, registry, user_id=owner)
+    conv = conv_store.create_conversation(agent_id=None)
+    launched_token: str | None = None
+
+    async def _respond_launched() -> None:
+        nonlocal launched_token
+        for _ in range(20):
+            output = await comm.receive_output(timeout=2.0)
+            if output["type"] != "websocket.send":
+                continue
+            frame = decode_host_frame(output["text"])
+            if isinstance(frame, HostLaunchRunnerFrame):
+                launched_token = frame.binding_token
+                await comm.send_input(
+                    {
+                        "type": "websocket.receive",
+                        "text": encode_host_frame(
+                            HostLaunchRunnerResultFrame(
+                                request_id=frame.request_id,
+                                status="launched",
+                                runner_id="runner_token_test",
+                            )
+                        ),
+                    }
+                )
+                return
+
+    responder = asyncio.create_task(_respond_launched())
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        resp = await client.post(
+            f"/v1/hosts/{_HOST_ID}/runners",
+            headers={"X-Test-User": owner},
+            json={"session_id": conv.id, "workspace": "/tmp"},
+        )
+
+    await responder
+    assert resp.status_code == 200
+    updated = conv_store.get_conversation(conv.id)
+    assert updated is not None
+    assert updated.runner_id is not None
+    assert runner_registry.launch_owner(updated.runner_id) == owner
+    assert runner_registry.launch_token(updated.runner_id) == launched_token
+    assert runner_router.session_ids == [conv.id]
+    assert runner_router.client.health_calls == 1
 
 
 async def test_host_id_in_session_response(

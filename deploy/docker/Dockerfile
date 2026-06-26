@@ -125,9 +125,13 @@ RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} -e .
 # project (BDP-2550). Installed in the SHARED builder stage so the server, host,
 # and host-spawned runner subprocesses all carry it. Not an upstream core dep —
 # the omnigent.runtime.sentry hook is opt-in (no-op unless OMNIGENT_SENTRY_DSN is
-# set) and import-guarded, so this install is a bytedesk-deploy concern like
-# psycopg/nats-py/fastembed below.
+# set) and import-guarded, so this install is a bytedesk-deploy concern like the
+# server-only psycopg/fastembed installs below.
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'sentry-sdk>=2,<3'
+# NATS runner/control transport (OMNIGENT_NATS_URL) is used by BOTH server and
+# host-spawned runners. Keep this in the shared builder so the host target does
+# not ACK a launch and then crash the runner with "install omnigent[coordination]".
+RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'nats-py>=2.9,<3'
 
 # ── Server builder ──────────────────────────────────────
 # Server-only additions on top of the shared builder: the SPA bundle
@@ -146,10 +150,8 @@ RUN test -f ./omnigent/server/static/web-ui/index.html \
 # psycopg[binary] is not a baseline dep — pulled in by the
 # [databricks] extra in pyproject — so add it explicitly here.
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'psycopg[binary]>=3.1,<4'
-# NATS coordination backplane (OMNIGENT_NATS_URL) — lazy-imported at runtime.
-RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'nats-py>=2.9,<3'
 # Semantic-recall embedder (fastembed BAAI/bge-small-en-v1.5, ONNX on CPU; the
-# `memory` pyproject extra). Installed explicitly like psycopg/nats-py so the
+# `memory` pyproject extra). Installed explicitly like psycopg so the
 # server embeds memories LOCALLY — no external inference/LLM call. Lazy-imported
 # on first recall; the bge-small ONNX model downloads on first use (BDP-2457).
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'fastembed>=0.4,<1'
