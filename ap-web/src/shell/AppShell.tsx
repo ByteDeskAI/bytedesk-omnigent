@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { Outlet, useParams, useSearchParams } from "@/lib/routing";
+import { useParams, useSearchParams } from "@/lib/routing";
+import { PageTransitionOutlet } from "./PageTransitionOutlet";
 import { useConversations } from "@/hooks/useConversations";
 import { useSessionAgent } from "@/hooks/useAgents";
 import { AgentInfoContent, agentHasInfo } from "@/components/AgentInfo";
@@ -1048,7 +1049,7 @@ export function AppShell() {
                   }}
                 />
                 <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
-                  <Outlet />
+                  <PageTransitionOutlet />
                 </main>
 
                 {/* Right workspace card — gated on conversationId (panels have

@@ -624,6 +624,82 @@
   }
 }
 
+/* ── Refined enterprise polish (BDP-2570) ──────────────────────────────────
+ * Reusable, token-driven motion for the appshell, modals, and admin pages.
+ * Pure CSS so it adds zero bundle weight, and the global reduced-motion gate
+ * above already collapses every animation/transition declared here. */
+
+/* Page/route entrance — incoming route content rises + fades in. `backwards`
+ * fill leaves NO lingering transform after the run (a persisted transform
+ * would create a containing block for any fixed descendant). PageTransitionOutlet
+ * remounts a section-keyed wrapper to replay this on navigation. */
+@keyframes mc-page-enter {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.mc-page-enter {
+  animation: mc-page-enter var(--duration-enter) var(--ease-out) backwards;
+}
+
+/* Interactive card — subtle lift + border emphasis on hover, settle on press.
+ * Opt-in via the Card `interactive` prop so static cards never move. */
+.mc-card-interactive {
+  transition:
+    transform var(--duration-fast) var(--ease-out),
+    box-shadow var(--duration-fast) var(--ease-out),
+    border-color var(--duration-fast) var(--ease-out);
+}
+.mc-card-interactive:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+  border-color: var(--color-border-stronger);
+}
+.mc-card-interactive:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
+}
+
+/* Auto-stagger — add to a list/grid container and its direct children fade-up
+ * in sequence with no per-item wiring. Delay is capped so long lists don't
+ * accrue a visible tail. The global reduced-motion gate zeroes the animation
+ * DURATION but not the delay, so the override below also drops the delay —
+ * otherwise reduced-motion users would see content appear late. */
+.mc-stagger-children > * {
+  animation: mc-page-enter var(--duration-enter) var(--ease-out) backwards;
+}
+.mc-stagger-children > *:nth-child(2) {
+  animation-delay: calc(var(--duration-stagger) * 1);
+}
+.mc-stagger-children > *:nth-child(3) {
+  animation-delay: calc(var(--duration-stagger) * 2);
+}
+.mc-stagger-children > *:nth-child(4) {
+  animation-delay: calc(var(--duration-stagger) * 3);
+}
+.mc-stagger-children > *:nth-child(5) {
+  animation-delay: calc(var(--duration-stagger) * 4);
+}
+.mc-stagger-children > *:nth-child(6) {
+  animation-delay: calc(var(--duration-stagger) * 5);
+}
+.mc-stagger-children > *:nth-child(7) {
+  animation-delay: calc(var(--duration-stagger) * 6);
+}
+.mc-stagger-children > *:nth-child(n + 8) {
+  animation-delay: calc(var(--duration-stagger) * 7);
+}
+@media (prefers-reduced-motion: reduce) {
+  .mc-stagger-children > * {
+    animation-delay: 0ms !important;
+  }
+}
+
 /* ── TipTap comment decorations ────────────────────────────────────────────
  * ProseMirror Decorations render as <span> elements; these classes are
  * applied by TipTapCommentExtension and must live here so Tailwind's

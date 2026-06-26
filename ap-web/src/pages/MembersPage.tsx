@@ -191,7 +191,7 @@ export function MembersPage() {
                 <th className="px-3 py-2 text-right font-medium">Actions</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="mc-stagger-children">
               {users.map((u) => (
                 <tr key={u.id} className="border-t border-border">
                   <td className="px-3 py-2 align-middle">

@@ -220,7 +220,7 @@ export function InboxPage() {
           </div>
         )}
 
-      <div className="flex flex-col gap-4">
+      <div className="mc-stagger-children flex flex-col gap-4">
         {items.map((item, index) => {
           const elicitationId = item.elicitation.elicitationId;
           const verdict = responded[elicitationId];
