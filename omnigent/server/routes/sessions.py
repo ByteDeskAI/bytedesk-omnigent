@@ -15203,7 +15203,8 @@ def create_sessions_router(
         access = await _require_access_and_level(
             user_id, session_id, LEVEL_READ, permission_store, conversation_store
         )
-        if access.conversation is None:
+        conv = access.conversation
+        if conv is None:
             conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
             if conv is None:
                 raise OmnigentError(
@@ -15213,6 +15214,13 @@ def create_sessions_router(
         page: SessionResourcePaginatedList | None = None
         try:
             runner_client = await _get_runner_client_for_resource_access(session_id)
+            if (
+                runner_client is None
+                and conv.runner_id is not None
+                and conv.host_id is not None
+                and await _heal_session_runner(session_id, request)
+            ):
+                runner_client = await _get_runner_client_for_resource_access(session_id)
             if runner_client is not None:
                 page = await _proxy_get_session_resources_to_runner(
                     runner_client, session_id, resource_type=type
@@ -18067,6 +18075,17 @@ def create_sessions_router(
             session_id,
             runner_router,
         )
+        if (
+            runner_client is None
+            and conv.runner_id is not None
+            and conv.host_id is not None
+            and await _heal_session_runner(session_id, request)
+        ):
+            conv = (
+                await asyncio.to_thread(conversation_store.get_conversation, session_id)
+                or conv
+            )
+            runner_client = await _get_runner_client(session_id, runner_router)
         try:
             await _ensure_runner_relay_ready(
                 session_id,
