@@ -28,8 +28,10 @@ from bytedesk_omnigent.realtime import config
 from bytedesk_omnigent.realtime.channel import (
     goal_changed,
     goal_planning_event,
+    inbound_event_changed,
     office_agents_channel,
     office_goals_channel,
+    office_inbound_channel,
     presence_changed,
     roster_changed,
 )
@@ -38,6 +40,36 @@ from bytedesk_omnigent.realtime.publisher import publish
 logger = logging.getLogger(__name__)
 
 _INSTALLED = False
+
+#: event-hub key for the in-process inbound SSE stream (/v1/inbound/events).
+INBOUND_EVENT_USER_KEY = "__all__"
+
+
+def emit_inbound_event(record: Any, inserted: bool = True) -> None:
+    """Wire-Tap tee: fan an inbound event onto the live feed (Redis + in-process SSE).
+
+    Mirrors :func:`emit_goal_change`. Dormant until ``BYTEDESK_REALTIME_TENANT_ID``
+    is set. The ``emit`` hook the pipeline calls after the wire-tap write — even
+    duplicates are emitted so they're observable.
+    """
+    payload = inbound_event_changed(
+        idempotency_key=record.idempotency_key,
+        source=record.source,
+        event_type=record.type,
+        status="duplicate" if not inserted else record.status,
+        occurred_at=record.occurred_at,
+        received_at=record.received_at,
+        duplicate=not inserted,
+    )
+    tenant = config.tenant_id()
+    if tenant:
+        publish(office_inbound_channel(tenant), payload)
+    try:
+        from omnigent.runtime.event_hub import publish as hub_publish
+
+        hub_publish(INBOUND_EVENT_USER_KEY, payload)
+    except Exception:  # pragma: no cover - best-effort in-process SSE
+        logger.exception("failed to publish inbound event-hub delta")
 
 
 def emit_roster(action: str, agent_id: str) -> None:
