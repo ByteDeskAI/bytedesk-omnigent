@@ -57,6 +57,12 @@ from pydantic import TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
+from omnigent.blueprints import (
+    BlueprintRunner,
+    ChildDispatchResult,
+    blueprint_events_to_run,
+    render_blueprint_value,
+)
 from omnigent.codex_native_elicitation import codex_elicitation_id
 from omnigent.cost_plan import (
     COST_CONTROL_LABEL_NAMESPACE,
@@ -65,6 +71,7 @@ from omnigent.cost_plan import (
 from omnigent.db.utils import generate_agent_id, generate_task_id
 from omnigent.entities import (
     Agent,
+    BlueprintEventData,
     CommentsFingerprint,
     Conversation,
     ConversationItem,
@@ -198,6 +205,7 @@ from omnigent.server.routes._host_worktree import CreatedWorktree
 from omnigent.server.runner_heal_config import RunnerHealConfig, load_runner_heal_config
 from omnigent.server.schemas import (
     AgentObject,
+    BlueprintRunResponse,
     ChildSessionSummary,
     ConversationDeleted,
     CreatedSessionResponse,
@@ -255,6 +263,7 @@ from omnigent.session_lifecycle import (
 )
 from omnigent.spec.types import (
     AgentSpec,
+    BlueprintNode,
     FunctionPolicySpec,
     Phase,
     PolicySpec,
@@ -17140,6 +17149,15 @@ def create_sessions_router(
                 conversation_store,
             )
             return {"queued": False, "child_session_id": child_id}
+        blueprint_response = await _try_handle_blueprint_session_event(
+            request=request,
+            session_id=session_id,
+            conv=conv,
+            body=body,
+            user_id=user_id,
+        )
+        if blueprint_response is not None:
+            return blueprint_response
         if body.type == "function_call_output":
             # A client-side tool's result tunneling back to a parked turn.
             # The harness scaffold resolves the parked tool Future on a
@@ -17534,6 +17552,336 @@ def create_sessions_router(
         if dispatch.pending_id is not None:
             response["pending_id"] = dispatch.pending_id
         return response
+
+    async def _try_handle_blueprint_session_event(
+        *,
+        request: Request,
+        session_id: str,
+        conv: Conversation,
+        body: SessionEventInput,
+        user_id: str | None,
+    ) -> dict[str, bool | str] | None:
+        """
+        Handle a user message for an ``executor.type: blueprint`` session.
+
+        Returns ``None`` for ordinary agents so the normal runner dispatch path
+        continues unchanged.
+        """
+        if body.type != "message" or body.data.get("role") != "user" or conv.agent_id is None:
+            return None
+        loaded = await _load_agent_spec_for_conversation(conv)
+        if loaded is None or loaded.spec.executor.type != "blueprint":
+            return None
+        if loaded.spec.blueprint is None:
+            raise OmnigentError(
+                "Blueprint executor requires a blueprint block",
+                code=ErrorCode.INVALID_INPUT,
+            )
+
+        response_id = f"bpr_input_{secrets.token_hex(8)}"
+        user_item = NewConversationItem(
+            type="message",
+            response_id=response_id,
+            data=parse_item_data("message", {"type": "message", **body.data}),
+            created_by=_attribution_user(user_id),
+        )
+        persisted_items = await asyncio.to_thread(
+            conversation_store.append,
+            session_id,
+            [user_item],
+        )
+        accepted = persisted_items[0]
+        _publish_input_consumed(session_id, accepted)
+
+        agent = await asyncio.to_thread(agent_store.get, conv.agent_id)
+        agent_name = agent.name if agent is not None else loaded.spec.name or "blueprint"
+        _publish_status(session_id, "running")
+
+        async def emit(event: dict[str, Any]) -> None:
+            event_item = NewConversationItem(
+                type="blueprint_event",
+                response_id=str(event["blueprint_run_id"]),
+                data=BlueprintEventData(**event),
+            )
+            await asyncio.to_thread(conversation_store.append, session_id, [event_item])
+
+        async def dispatch_child(
+            node: BlueprintNode,
+            context: dict[str, Any],
+            loop_iteration: int | None,
+        ) -> ChildDispatchResult:
+            return await _dispatch_blueprint_child_node(
+                request=request,
+                parent_session_id=session_id,
+                parent_user_id=user_id,
+                node=node,
+                context=context,
+                loop_iteration=loop_iteration,
+            )
+
+        runner = BlueprintRunner(
+            loaded.spec.blueprint,
+            emit=emit,
+            dispatch_child=dispatch_child,
+        )
+        result = await runner.run(_message_body_to_blueprint_input(body.data))
+        if result.status == "failed":
+            _publish_status(
+                session_id,
+                "failed",
+                ErrorDetail(
+                    code="blueprint_failed",
+                    message=result.error or "Blueprint execution failed",
+                ),
+            )
+            return {"queued": True, "item_id": accepted.id}
+        if result.status == "waiting":
+            _publish_status(session_id, "waiting")
+            return {"queued": True, "item_id": accepted.id}
+
+        assistant_item = NewConversationItem(
+            type="message",
+            response_id=result.blueprint_run_id,
+            data=MessageData(
+                role="assistant",
+                agent=agent_name,
+                content=[
+                    {
+                        "type": "output_text",
+                        "text": _blueprint_output_to_text(result.output),
+                    }
+                ],
+            ),
+        )
+        assistant_items = await asyncio.to_thread(
+            conversation_store.append,
+            session_id,
+            [assistant_item],
+        )
+        _publish_external_conversation_item(session_id, assistant_items[0])
+        _publish_status(session_id, "idle")
+        return {"queued": True, "item_id": accepted.id}
+
+    async def _load_agent_spec_for_conversation(conv: Conversation) -> Any | None:
+        """Load the parsed spec for a conversation's bound agent."""
+        if conv.agent_id is None or agent_cache is None:
+            return None
+        agent = await asyncio.to_thread(agent_store.get, conv.agent_id)
+        if agent is None:
+            return None
+        return await asyncio.to_thread(
+            agent_cache.load,
+            agent.id,
+            agent.bundle_location,
+            expand_env=agent.session_id is None,
+        )
+
+    async def _dispatch_blueprint_child_node(
+        *,
+        request: Request,
+        parent_session_id: str,
+        parent_user_id: str | None,
+        node: BlueprintNode,
+        context: dict[str, Any],
+        loop_iteration: int | None,
+    ) -> ChildDispatchResult:
+        """Create and optionally drive a child session for a blueprint node."""
+        target_agent = await _resolve_blueprint_target_agent(node)
+        target_loaded = await asyncio.to_thread(
+            agent_cache.load,
+            target_agent.id,
+            target_agent.bundle_location,
+            expand_env=target_agent.session_id is None,
+        ) if agent_cache is not None else None
+        if node.kind == "blueprint":
+            if target_agent.category != "workflow" and not (
+                target_loaded is not None and target_loaded.spec.executor.type == "blueprint"
+            ):
+                return ChildDispatchResult(
+                    status="failed",
+                    error="kind 'blueprint' may target only workflow-category agents",
+                )
+
+        rendered_input = render_blueprint_value(node.input, context)
+        child = await _create_session_from_existing_agent(
+            conversation_store,
+            agent_store,
+            runner_router,
+            SessionCreateRequest(
+                agent_id=target_agent.id,
+                parent_session_id=parent_session_id,
+                title=f"{node.kind}:{node.id}",
+                labels={
+                    "omnigent.blueprint.node_id": node.id,
+                    "omnigent.blueprint.node_kind": node.kind,
+                    "omnigent.blueprint.target": target_agent.name,
+                    "omnigent.blueprint.loop_iteration": (
+                        str(loop_iteration) if loop_iteration is not None else ""
+                    ),
+                },
+            ),
+            request,
+            agent_cache=agent_cache,
+            user_id=parent_user_id,
+            permission_store=permission_store,
+            liveness_lookup=liveness_lookup,
+        )
+        prompt = _child_prompt_text(rendered_input)
+        post_body = SessionEventInput(
+            type="message",
+            data={
+                "role": "user",
+                "content": [{"type": "input_text", "text": prompt}],
+            },
+        )
+        try:
+            await post_event(request, child.id, post_body)
+        except OmnigentError as exc:
+            if exc.code == ErrorCode.RUNNER_UNAVAILABLE:
+                return ChildDispatchResult(
+                    status="waiting",
+                    child_session_id=child.id,
+                    output={"prompt": prompt},
+                )
+            raise
+        output = await _latest_assistant_text(child.id)
+        await _append_blueprint_child_return(
+            parent_session_id,
+            node=node,
+            child_session_id=child.id,
+            target=target_agent.name,
+            output=output,
+        )
+        return ChildDispatchResult(
+            status="completed",
+            child_session_id=child.id,
+            output=output,
+        )
+
+    async def _append_blueprint_child_return(
+        parent_session_id: str,
+        *,
+        node: BlueprintNode,
+        child_session_id: str,
+        target: str,
+        output: str,
+    ) -> None:
+        """Persist one hidden parent-inbox style result for a child node."""
+        text = (
+            f"[System: blueprint node {node.id} completed — "
+            f"{target} returned from child session {child_session_id}: {output}]"
+        )
+        item = NewConversationItem(
+            type="message",
+            response_id=f"bpr_child_{secrets.token_hex(8)}",
+            data=MessageData(
+                role="assistant",
+                agent="blueprint",
+                content=[{"type": "output_text", "text": text}],
+                is_meta=True,
+            ),
+        )
+        await asyncio.to_thread(conversation_store.append, parent_session_id, [item])
+
+    async def _resolve_blueprint_target_agent(node: BlueprintNode) -> Agent:
+        """Resolve a blueprint node target by id first, then template name."""
+        if not node.target:
+            raise OmnigentError(
+                f"Blueprint node {node.id!r} is missing a target",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        agent = await asyncio.to_thread(agent_store.get, node.target)
+        if agent is None:
+            agent = await asyncio.to_thread(agent_store.get_by_name, node.target)
+        if agent is None:
+            raise OmnigentError(
+                f"Blueprint target not found: {node.target!r}",
+                code=ErrorCode.NOT_FOUND,
+            )
+        return agent
+
+    async def _latest_assistant_text(session_id: str) -> str:
+        """Return the newest assistant message text for a child session."""
+        page = await asyncio.to_thread(
+            conversation_store.list_items,
+            session_id,
+            50,
+            None,
+            None,
+            "desc",
+            "message",
+        )
+        for item in page.data:
+            if isinstance(item.data, MessageData) and item.data.role == "assistant":
+                return _message_blocks_to_text(item.data.content)
+        return ""
+
+    def _message_body_to_blueprint_input(data: dict[str, Any]) -> dict[str, Any]:
+        """Project a user message payload into blueprint input context."""
+        content = data.get("content")
+        blocks = content if isinstance(content, list) else []
+        text = _message_blocks_to_text(blocks)
+        return {"message": data, "content": blocks, "text": text}
+
+    def _message_blocks_to_text(blocks: list[dict[str, Any]]) -> str:
+        """Extract plain text from message content blocks."""
+        parts: list[str] = []
+        for block in blocks:
+            if not isinstance(block, dict):
+                continue
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        return "\n".join(parts)
+
+    def _child_prompt_text(value: Any) -> str:
+        """Serialize rendered child input into a message prompt."""
+        if isinstance(value, str):
+            return value
+        return json.dumps(value if value is not None else {}, indent=2, sort_keys=True)
+
+    def _blueprint_output_to_text(value: Any) -> str:
+        """Serialize a blueprint output into assistant message text."""
+        if isinstance(value, str):
+            return value
+        if value is None:
+            return ""
+        return json.dumps(value, indent=2, sort_keys=True)
+
+    @router.get(
+        "/sessions/{session_id}/blueprint-run",
+        response_model=BlueprintRunResponse,
+    )
+    async def get_blueprint_run(
+        request: Request,
+        session_id: str,
+    ) -> BlueprintRunResponse:
+        """Return live blueprint run state reconstructed from durable events."""
+        user_id = _get_user_id(request, auth_provider)
+        access = await _require_access_and_level(
+            user_id,
+            session_id,
+            LEVEL_READ,
+            permission_store,
+            conversation_store,
+        )
+        if access.conversation is None:
+            conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+            if conv is None:
+                raise OmnigentError(
+                    "Session not found",
+                    code=ErrorCode.NOT_FOUND,
+                )
+        page = await asyncio.to_thread(
+            conversation_store.list_items,
+            session_id,
+            1000,
+            None,
+            None,
+            "asc",
+            "blueprint_event",
+        )
+        return BlueprintRunResponse.model_validate(blueprint_events_to_run(page.data))
 
     # ── POST /sessions/{session_id}/await ────────────────────────
     @router.post(

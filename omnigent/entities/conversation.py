@@ -515,6 +515,35 @@ class SlashCommandData(BaseModel):
     output: str | None = None
 
 
+class BlueprintEventData(BaseModel):
+    """
+    Data payload for a persisted blueprint run event.
+
+    Blueprint events are metadata, not LLM content. They let clients replay a
+    deterministic workflow graph from structured state instead of parsing chat
+    text.
+
+    :param blueprint_run_id: Correlation id for one blueprint execution.
+    :param event_type: Event discriminator, e.g. ``"run_started"``,
+        ``"node_status"``, or ``"loop_iteration"``.
+    :param node_id: Node id related to the event, if any.
+    :param node_kind: Node kind related to the event, if any.
+    :param status: Node/run status related to the event, if any.
+    :param loop_iteration: 1-based loop iteration number, if any.
+    :param child_session_id: Child session linked to this event, if any.
+    :param payload: Additional structured event data.
+    """
+
+    blueprint_run_id: str
+    event_type: str
+    node_id: str | None = None
+    node_kind: str | None = None
+    status: str | None = None
+    loop_iteration: int | None = None
+    child_session_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 ItemData = (
     MessageData
     | FunctionCallData
@@ -526,6 +555,7 @@ ItemData = (
     | ResourceEventData
     | SlashCommandData
     | TerminalCommandData
+    | BlueprintEventData
 )
 
 ITEM_TYPE_TO_DATA_CLS: dict[str, type[BaseModel]] = {
@@ -539,6 +569,7 @@ ITEM_TYPE_TO_DATA_CLS: dict[str, type[BaseModel]] = {
     "resource_event": ResourceEventData,
     "slash_command": SlashCommandData,
     "terminal_command": TerminalCommandData,
+    "blueprint_event": BlueprintEventData,
 }
 
 # Item types that are metadata / lifecycle events — not content
@@ -551,6 +582,7 @@ NON_CONTENT_ITEM_TYPES: frozenset[str] = frozenset(
         "resource_event",
         "slash_command",
         "terminal_command",
+        "blueprint_event",
     }
 )
 

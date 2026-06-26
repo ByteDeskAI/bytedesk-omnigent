@@ -50,6 +50,10 @@ vi.mock("@/hooks/useAgents", () => ({
   useSessionAgent: vi.fn(() => ({ data: undefined })),
 }));
 
+vi.mock("@/hooks/useBlueprints", () => ({
+  useAgentBlueprint: vi.fn(() => ({ data: null })),
+}));
+
 vi.mock("./Sidebar", () => ({
   Sidebar: () => <div data-testid="sidebar" />,
 }));
@@ -197,6 +201,9 @@ const useSessionMock = vi.mocked(useSession);
 import { useSessionAgent } from "@/hooks/useAgents";
 import type { Agent } from "@/hooks/useAgents";
 const useSessionAgentMock = vi.mocked(useSessionAgent);
+
+import { useAgentBlueprint } from "@/hooks/useBlueprints";
+const useAgentBlueprintMock = vi.mocked(useAgentBlueprint);
 
 import { AppShell } from "./AppShell";
 import { useTerminalFirst } from "./TerminalFirstContext";
@@ -390,6 +397,8 @@ beforeEach(() => {
   // Default: no agent tools/policies → agent-info affordances hidden.
   useSessionAgentMock.mockReset();
   useSessionAgentMock.mockReturnValue({ data: undefined } as ReturnType<typeof useSessionAgent>);
+  useAgentBlueprintMock.mockReset();
+  useAgentBlueprintMock.mockReturnValue({ data: null } as ReturnType<typeof useAgentBlueprint>);
   // Default: loading state (data undefined) → showFilesPanel stays true,
   // no flash for agents that do have os_env.
   useEnvironmentMock.mockReset();

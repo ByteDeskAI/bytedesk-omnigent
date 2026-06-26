@@ -68,6 +68,17 @@ tools:
 params:                       # arbitrary key-value; readable by skills and tools
   max_results: 10             # not interpreted by the runtime
   prefer_recent: true
+
+executor:
+  type: blueprint             # deterministic workflow runner
+
+blueprint:                    # required when executor.type == blueprint
+  nodes:
+    - id: collect
+      kind: task
+    - id: done
+      kind: output
+      depends_on: [collect]
 ```
 
 ### `interaction` axes
@@ -116,6 +127,20 @@ Declares which sub-agents this agent is allowed to call. Any name listed here
 must have a corresponding directory under `agents/`. Listing an agent in
 `tools.agents` is sufficient to call it — no additional builtin declaration is
 needed.
+
+### `blueprint`
+
+Declares a deterministic workflow graph for `executor.type: blueprint` agents.
+The spec parser projects this block into `BlueprintSpec` / `BlueprintNode`
+dataclasses, and the server runs it as the session turn instead of invoking a
+prompt harness. Existing prompt-driven workflow agents keep using
+`params.workflow: true` with their normal executor.
+
+Supported v1 node kinds are `task`, `tool`, `agent`, `blueprint`, `approval`,
+`wait_for_event`, `portal_message`, `loop`, and `output`. `kind: agent` and
+`kind: blueprint` dispatch child sessions and return through the parent
+session's inbox-style result path. Loops must be bounded with
+`max_iterations`, an `until` condition, and an `on_exhausted` policy.
 
 ### `tools.builtins`
 
@@ -321,6 +346,8 @@ The validator (`validator.py`) enforces:
   `tools/typescript/`
 - Sub-agent names in `tools.agents` must have a corresponding directory under
   `agents/`
+- `blueprint` requires `executor.type: blueprint`, valid dependencies, and
+  bounded `loop` nodes with explicit exhaustion behavior
 
 ---
 

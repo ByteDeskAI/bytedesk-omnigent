@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from omnigent.spec.types import AgentSpec, ToolRuntime
+from omnigent.spec.types import AgentSpec, BlueprintNode, ToolRuntime
 
 _SKILL_NAME_PATTERN = re.compile(r"^[a-z0-9-]+$")
 # Agent names appear as components of the ``model`` field in API responses
@@ -91,6 +91,7 @@ def validate(spec: AgentSpec) -> ValidationResult:
     _validate_mcp_servers(spec, result)
     _validate_local_tools(spec, result)
     _validate_sub_agents(spec, result)
+    _validate_blueprint(spec, result)
     _validate_compaction(spec, result)
     _validate_os_env(spec, result)
     _validate_capabilities(spec, result)
@@ -121,8 +122,23 @@ from omnigent.spec._omnigent_compat import (  # noqa: E402
 _VALID_EXECUTOR_TYPES = {
     "claude_sdk",
     "agents_sdk",
+    "blueprint",
     OMNIGENT_EXECUTOR_TYPE,
 }
+_VALID_BLUEPRINT_NODE_KINDS = frozenset(
+    {
+        "task",
+        "tool",
+        "agent",
+        "blueprint",
+        "approval",
+        "wait_for_event",
+        "portal_message",
+        "loop",
+        "output",
+    }
+)
+_VALID_LOOP_ON_EXHAUSTED = frozenset({"fail", "complete", "skip"})
 
 
 def _validate_executor_type(
@@ -153,6 +169,165 @@ def _validate_executor_type(
         _validate_agents_sdk_executor(spec, result)
     elif etype == OMNIGENT_EXECUTOR_TYPE:
         validate_omnigent_executor(spec, result)
+
+
+def _validate_blueprint(spec: AgentSpec, result: ValidationResult) -> None:
+    """
+    Validate the optional deterministic blueprint graph.
+
+    Blueprints are intentionally additive: existing prompt-driven
+    workflow agents remain valid. When a blueprint is present, it must
+    opt into the deterministic runner via ``executor.type: blueprint``.
+    """
+    has_blueprint = spec.blueprint is not None
+    if spec.executor.type == "blueprint" and not has_blueprint:
+        result.add("blueprint", "is required when executor.type is 'blueprint'")
+        return
+    if has_blueprint and spec.executor.type != "blueprint":
+        result.add("executor.type", "must be 'blueprint' when blueprint is declared")
+    if spec.blueprint is None:
+        return
+    if spec.blueprint.version < 1:
+        result.add("blueprint.version", "must be >= 1")
+    _validate_blueprint_nodes(
+        spec.blueprint.nodes,
+        result,
+        "blueprint.nodes",
+        root_spec=spec,
+    )
+
+
+def _validate_blueprint_nodes(
+    nodes: list[BlueprintNode],
+    result: ValidationResult,
+    path: str,
+    *,
+    root_spec: AgentSpec,
+) -> None:
+    """Validate one blueprint node list and its local dependency scope."""
+    ids: set[str] = set()
+    for idx, node in enumerate(nodes):
+        node_path = f"{path}[{idx}]"
+        if not node.id.strip():
+            result.add(f"{node_path}.id", "must be a non-empty string")
+        elif node.id in ids:
+            result.add(f"{node_path}.id", f"duplicate node id: {node.id!r}")
+        ids.add(node.id)
+        if node.kind not in _VALID_BLUEPRINT_NODE_KINDS:
+            result.add(
+                f"{node_path}.kind",
+                f"must be one of {sorted(_VALID_BLUEPRINT_NODE_KINDS)}, got {node.kind!r}",
+            )
+        if node.kind in {"tool", "agent", "blueprint"} and not node.target:
+            result.add(f"{node_path}.target", f"is required for kind {node.kind!r}")
+        if node.kind == "blueprint":
+            _validate_blueprint_target(node, root_spec, result, node_path)
+        if node.kind == "loop":
+            _validate_loop_node(node, result, node_path, root_spec)
+        elif node.loop is not None:
+            result.add(f"{node_path}.loop", "is only valid when kind is 'loop'")
+
+    for idx, node in enumerate(nodes):
+        node_path = f"{path}[{idx}]"
+        for dep in node.depends_on:
+            if dep not in ids:
+                result.add(
+                    f"{node_path}.depends_on",
+                    f"unknown dependency {dep!r}",
+                )
+            if dep == node.id:
+                result.add(
+                    f"{node_path}.depends_on",
+                    "node cannot depend on itself",
+                )
+    _validate_blueprint_cycles(nodes, ids, result, path)
+
+
+def _validate_blueprint_target(
+    node: BlueprintNode,
+    root_spec: AgentSpec,
+    result: ValidationResult,
+    path: str,
+) -> None:
+    """
+    Validate static ``kind: blueprint`` targets that are visible in the image.
+
+    External target ids/names are validated at runtime against the agent store;
+    only bundled sub-agents can be checked statically here.
+    """
+    target = node.target
+    if not target:
+        return
+    for sub_spec in root_spec.sub_agents:
+        if sub_spec.name == target:
+            if sub_spec.executor.type == "blueprint":
+                return
+            if isinstance(sub_spec.params, dict) and sub_spec.params.get("workflow") is True:
+                return
+            result.add(
+                f"{path}.target",
+                "kind 'blueprint' may target only workflow-category agents",
+            )
+            return
+
+
+def _validate_loop_node(
+    node: BlueprintNode,
+    result: ValidationResult,
+    path: str,
+    root_spec: AgentSpec,
+) -> None:
+    """Validate bounded loop configuration and nested body nodes."""
+    if node.loop is None:
+        result.add(f"{path}.loop", "is required when kind is 'loop'")
+        return
+    if node.loop.max_iterations <= 0:
+        result.add(f"{path}.loop.max_iterations", "must be > 0")
+    if node.loop.until is None:
+        result.add(f"{path}.loop.until", "is required")
+    if node.loop.on_exhausted not in _VALID_LOOP_ON_EXHAUSTED:
+        result.add(
+            f"{path}.loop.on_exhausted",
+            f"must be one of {sorted(_VALID_LOOP_ON_EXHAUSTED)}",
+        )
+    if not node.loop.body:
+        result.add(f"{path}.loop.body", "must contain at least one node")
+    _validate_blueprint_nodes(
+        node.loop.body,
+        result,
+        f"{path}.loop.body",
+        root_spec=root_spec,
+    )
+
+
+def _validate_blueprint_cycles(
+    nodes: list[BlueprintNode],
+    ids: set[str],
+    result: ValidationResult,
+    path: str,
+) -> None:
+    """Reject dependency cycles within one node list."""
+    node_by_id = {node.id: node for node in nodes if node.id in ids}
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(node_id: str, chain: list[str]) -> None:
+        if node_id in visited:
+            return
+        if node_id in visiting:
+            result.add(path, f"dependency cycle detected: {' -> '.join([*chain, node_id])}")
+            return
+        visiting.add(node_id)
+        node = node_by_id.get(node_id)
+        if node is not None:
+            for dep in node.depends_on:
+                if dep in node_by_id:
+                    visit(dep, [*chain, node_id])
+        visiting.discard(node_id)
+        visited.add(node_id)
+
+    for node in nodes:
+        visit(node.id, [])
 
 
 def _validate_claude_sdk_executor(

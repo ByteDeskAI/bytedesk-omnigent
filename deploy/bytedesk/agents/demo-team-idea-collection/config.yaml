@@ -1,0 +1,47 @@
+# Internal deterministic blueprint demo: harmless idea collection child flow.
+spec_version: 1
+name: demo-team-idea-collection
+description: >-
+  Internal blueprint child flow that turns a short team brief into motto themes.
+
+executor:
+  type: blueprint
+
+params:
+  workflow: true
+  department: "Internal Demo"
+  internalOnly: true
+
+blueprint:
+  name: "Demo Team Idea Collection"
+  description: "Collect deterministic motto themes for the playground workflow."
+  version: 1
+  nodes:
+    - id: collect_context
+      kind: task
+      input:
+        brief: "{{ $.input.text }}"
+      output:
+        themes:
+          - "clear ownership"
+          - "fast feedback"
+          - "calm execution"
+        brief: "{{ $.input.text }}"
+    - id: rank_themes
+      kind: task
+      depends_on: [collect_context]
+      output:
+        top_theme: "{{ $.nodes.collect_context.output.themes }}"
+        recommendation: "calm execution with fast feedback"
+    - id: return_ideas
+      kind: output
+      depends_on: [rank_themes]
+      output:
+        text: "Themes: {{ $.nodes.collect_context.output.themes }}. Recommendation: {{ $.nodes.rank_themes.output.recommendation }}."
+        recommendation: "{{ $.nodes.rank_themes.output.recommendation }}"
+  outputs:
+    text: "{{ $.nodes.return_ideas.output.text }}"
+    recommendation: "{{ $.nodes.return_ideas.output.recommendation }}"
+
+async: true
+cancellable: true

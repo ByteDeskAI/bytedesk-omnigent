@@ -26,6 +26,9 @@ from omnigent.spec.types import (
     DEFAULT_ASK_TIMEOUT,
     AgentSpec,
     ApiKeyAuth,
+    BlueprintLoopSpec,
+    BlueprintNode,
+    BlueprintSpec,
     BuiltinToolConfig,
     CompactionConfig,
     DatabricksAuth,
@@ -268,6 +271,7 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
     # A JSON Schema mapping; ignored unless it is a dict (free-text default).
     raw_output_schema = raw.get("output_schema")
     output_schema = raw_output_schema if isinstance(raw_output_schema, dict) else None
+    blueprint = _parse_blueprint(raw.get("blueprint"))
 
     # Honor ``prompt:`` as the legacy alias for ``instructions:`` (per
     # ``_OMNIGENT_SYSTEM_PROMPT_KEYS``); ``instructions:`` wins if both set.
@@ -300,6 +304,7 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
         local_tools=local_tools,
         sub_agents=sub_agents,
         async_enabled=async_enabled,
+        blueprint=blueprint,
         os_env=os_env,
         terminals=terminals,
         timers=timers,
@@ -616,6 +621,163 @@ def _parse_executor(
         context_window=context_window,
         supervisor_tools=supervisor_tools,
         auth=auth,
+    )
+
+
+_BLUEPRINT_NODE_RESERVED_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "kind",
+        "depends_on",
+        "depends",
+        "when",
+        "target",
+        "input",
+        "return",
+        "output",
+        "loop",
+        "metadata",
+    }
+)
+
+
+def _parse_blueprint(raw: object) -> BlueprintSpec | None:
+    """
+    Parse the top-level ``blueprint:`` block.
+
+    :param raw: Raw YAML value from ``config.yaml``.
+    :returns: Parsed :class:`BlueprintSpec`, or ``None`` when absent.
+    :raises OmnigentError: If the block is structurally invalid.
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise OmnigentError(
+            "blueprint must be a mapping",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    raw_nodes = raw.get("nodes", [])
+    if raw_nodes is None:
+        raw_nodes = []
+    if not isinstance(raw_nodes, list):
+        raise OmnigentError(
+            "blueprint.nodes must be a list",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    outputs = raw.get("outputs", {})
+    if outputs is None:
+        outputs = {}
+    if not isinstance(outputs, dict):
+        raise OmnigentError(
+            "blueprint.outputs must be a mapping",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    version = raw.get("version", 1)
+    return BlueprintSpec(
+        name=str(raw["name"]) if raw.get("name") is not None else None,
+        description=str(raw["description"]) if raw.get("description") is not None else None,
+        nodes=[
+            _parse_blueprint_node(node_raw, f"blueprint.nodes[{idx}]")
+            for idx, node_raw in enumerate(raw_nodes)
+        ],
+        outputs=dict(outputs),
+        version=int(version),
+    )
+
+
+def _parse_blueprint_node(raw: object, path: str) -> BlueprintNode:
+    """
+    Parse one blueprint node mapping.
+
+    :param raw: Raw YAML node.
+    :param path: Human-readable path for error messages.
+    :returns: Parsed :class:`BlueprintNode`.
+    :raises OmnigentError: If the node is structurally invalid.
+    """
+    if not isinstance(raw, dict):
+        raise OmnigentError(
+            f"{path} must be a mapping",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    raw_id = raw.get("id")
+    raw_kind = raw.get("kind")
+    if raw_id is None:
+        raise OmnigentError(
+            f"{path}.id is required",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    if raw_kind is None:
+        raise OmnigentError(
+            f"{path}.kind is required",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    metadata: dict[str, Any] = {}
+    raw_metadata = raw.get("metadata")
+    if isinstance(raw_metadata, dict):
+        metadata.update(raw_metadata)
+    metadata.update(
+        {
+            str(key): value
+            for key, value in raw.items()
+            if key not in _BLUEPRINT_NODE_RESERVED_KEYS
+        }
+    )
+    return BlueprintNode(
+        id=str(raw_id),
+        kind=str(raw_kind),  # type: ignore[arg-type]
+        depends_on=_parse_blueprint_depends(raw),
+        when=raw.get("when"),
+        target=str(raw["target"]) if raw.get("target") is not None else None,
+        input=raw.get("input"),
+        return_mapping=raw.get("return"),
+        output=raw.get("output"),
+        loop=_parse_blueprint_loop(raw, path),
+        metadata=metadata,
+    )
+
+
+def _parse_blueprint_depends(raw: dict[str, Any]) -> list[str]:
+    """Parse ``depends_on`` / ``depends`` into a list of node ids."""
+    raw_depends = raw.get("depends_on", raw.get("depends", []))
+    if raw_depends is None:
+        return []
+    if isinstance(raw_depends, str):
+        return [raw_depends]
+    if isinstance(raw_depends, list):
+        return [str(item) for item in raw_depends]
+    raise OmnigentError(
+        "blueprint node depends_on must be a string or list",
+        code=ErrorCode.INVALID_INPUT,
+    )
+
+
+def _parse_blueprint_loop(raw: dict[str, Any], path: str) -> BlueprintLoopSpec | None:
+    """Parse ``loop:`` config for a blueprint node, if present."""
+    raw_loop = raw.get("loop")
+    if raw_loop is None:
+        return None
+    if not isinstance(raw_loop, dict):
+        raise OmnigentError(
+            f"{path}.loop must be a mapping",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    body = raw_loop.get("body", [])
+    if body is None:
+        body = []
+    if not isinstance(body, list):
+        raise OmnigentError(
+            f"{path}.loop.body must be a list",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return BlueprintLoopSpec(
+        max_iterations=int(raw_loop.get("max_iterations", 0)),
+        until=raw_loop.get("until"),
+        on_exhausted=str(raw_loop.get("on_exhausted", "fail")),  # type: ignore[arg-type]
+        body=[
+            _parse_blueprint_node(node_raw, f"{path}.loop.body[{idx}]")
+            for idx, node_raw in enumerate(body)
+        ],
+        reuse_session=bool(raw_loop.get("reuse_session", False)),
     )
 
 

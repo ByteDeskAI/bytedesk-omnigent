@@ -1,0 +1,61 @@
+# Internal deterministic blueprint demo: harmless motto drafting child flow.
+spec_version: 1
+name: demo-motto-drafting
+description: >-
+  Internal blueprint child flow that drafts and reviews a short team motto.
+
+executor:
+  type: blueprint
+
+params:
+  workflow: true
+  department: "Internal Demo"
+  internalOnly: true
+
+blueprint:
+  name: "Demo Motto Drafting"
+  description: "Draft a team motto and exercise an auto-approved bounded loop."
+  version: 1
+  nodes:
+    - id: draft_motto
+      kind: task
+      input:
+        ideas: "{{ $.input.text }}"
+      output:
+        motto: "Move clearly. Ship calmly. Learn fast."
+        rationale: "Uses ownership, execution, and feedback themes."
+    - id: review_loop
+      kind: loop
+      depends_on: [draft_motto]
+      loop:
+        max_iterations: 2
+        until:
+          path: "$.nodes.approve_motto.output.approved"
+          equals: true
+        on_exhausted: fail
+        reuse_session: true
+        body:
+          - id: approve_motto
+            kind: approval
+            metadata:
+              auto_approve: true
+            input:
+              approved: true
+              note: "Demo approval accepted."
+          - id: rework_note
+            kind: task
+            depends_on: [approve_motto]
+            output:
+              text: "No rework needed after demo approval."
+    - id: final_draft
+      kind: output
+      depends_on: [review_loop]
+      output:
+        motto: "{{ $.nodes.draft_motto.output.motto }}"
+        rationale: "{{ $.nodes.draft_motto.output.rationale }}"
+  outputs:
+    motto: "{{ $.nodes.final_draft.output.motto }}"
+    rationale: "{{ $.nodes.final_draft.output.rationale }}"
+
+async: true
+cancellable: true

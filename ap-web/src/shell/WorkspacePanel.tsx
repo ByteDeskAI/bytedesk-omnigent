@@ -1,7 +1,15 @@
-import { BotIcon, FileIcon, ListTodoIcon, TerminalIcon, XIcon } from "lucide-react";
+import {
+  BotIcon,
+  FileIcon,
+  ListTodoIcon,
+  TerminalIcon,
+  WorkflowIcon,
+  XIcon,
+} from "lucide-react";
 import { useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { BlueprintPanel } from "./BlueprintPanel";
 import { FilesPanel } from "./FilesPanel";
 import { FileViewer } from "./FileViewer";
 import type { ChangedSort } from "./FlatFileList";
@@ -149,8 +157,14 @@ interface WorkspacePanelProps {
    * (not a native wrapper, AND either a shell exists or the agent's
    * spec declares shell access, which makes the tab show by default
    * with its "+ New shell" empty state).
-   */
+  */
   showShellsTab: boolean;
+  /** Whether the active agent exposes a deterministic blueprint graph. */
+  showBlueprintTab: boolean;
+  /** Number of top-level blueprint nodes, shown as the Blueprint tab badge. */
+  blueprintNodeCount: number;
+  /** Active agent id for the Blueprint graph API. */
+  boundAgentId: string | null;
   /** Number of open shells, shown as the Shells tab badge when > 0. */
   terminalsLength: number;
   /** How many child agents are actively working (Agents tab badge). */
@@ -228,6 +242,9 @@ export function WorkspacePanel({
   showFilesPanel,
   changedCount,
   showShellsTab,
+  showBlueprintTab,
+  blueprintNodeCount,
+  boundAgentId,
   terminalsLength,
   subagentsWorking,
   agentCount,
@@ -274,7 +291,7 @@ export function WorkspacePanel({
         {...handleProps}
         className="absolute inset-y-0 left-0 z-10 w-1 cursor-col-resize hover:bg-primary/30 active:bg-primary/50 transition-colors"
       />
-      {/* Tab strip, in display order Files · Agents · Shells · Tasks.
+      {/* Tab strip, in display order Files · Agents · Blueprint · Shells · Tasks.
           Files and Agents are always present (the Agents panel lists at
           least the main agent). Shells shows whenever AppShell's gate
           allows it (the agent declares shell access, or a shell already
@@ -336,6 +353,18 @@ export function WorkspacePanel({
                 {subagentsWorking > 0 ? `${subagentsWorking}/${agentCount}` : agentCount}
               </span>
             </TabsTrigger>
+            {showBlueprintTab && (
+              <TabsTrigger
+                value="blueprint"
+                className="h-[32px] gap-[6px] rounded-[8px] px-[12px] text-[13px] leading-5"
+              >
+                <WorkflowIcon className="size-4" />
+                Blueprint
+                <span className={cn(TAB_BADGE_BASE, "ml-0.5 bg-muted text-muted-foreground")}>
+                  {blueprintNodeCount}
+                </span>
+              </TabsTrigger>
+            )}
             {showShellsTab && (
               <TabsTrigger
                 value="terminals"
@@ -418,6 +447,8 @@ export function WorkspacePanel({
           />
         ) : rightRailTab === "subagents" && rootSessionId ? (
           <SubagentsPanel conversationId={conversationId} rootSessionId={rootSessionId} />
+        ) : rightRailTab === "blueprint" && showBlueprintTab ? (
+          <BlueprintPanel conversationId={conversationId} agentId={boundAgentId} />
         ) : rightRailTab === "todos" && isClaudeNative ? (
           <TodoPanel frameless />
         ) : rightRailTab === "terminals" && showShellsTab ? (

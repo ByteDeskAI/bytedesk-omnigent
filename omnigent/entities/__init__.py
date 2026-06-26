@@ -16,6 +16,7 @@ from omnigent.entities.automation import (
 from omnigent.entities.comment import Comment, CommentsFingerprint
 from omnigent.entities.conversation import (
     NON_CONTENT_ITEM_TYPES,
+    BlueprintEventData,
     CompactionData,
     Conversation,
     ConversationItem,
@@ -55,6 +56,7 @@ __all__ = [
     "AgentCategory",
     "AgentRole",
     "Automation",
+    "BlueprintEventData",
     "Comment",
     "CommentsFingerprint",
     "CompactionData",

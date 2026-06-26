@@ -646,6 +646,101 @@ class ExecutorSpec:  # type: ignore[explicit-any]  # config: dict[str, Any] fiel
         return self.config.get("harness") or self.type
 
 
+BlueprintNodeKind = Literal[
+    "task",
+    "tool",
+    "agent",
+    "blueprint",
+    "approval",
+    "wait_for_event",
+    "portal_message",
+    "loop",
+    "output",
+]
+
+
+@dataclass
+class BlueprintLoopSpec:  # type: ignore[explicit-any]  # expressions are YAML-shaped
+    """
+    Bounded loop configuration for a blueprint ``kind: loop`` node.
+
+    :param max_iterations: Required upper bound. Prevents non-terminating
+        deterministic workflow execution.
+    :param until: Explicit completion condition. The first implementation
+        supports literal booleans and simple YAML-shaped predicates; unknown
+        predicates are treated as false at runtime rather than guessed.
+    :param on_exhausted: Behavior when the bound is reached before ``until``
+        passes. Supported values are ``"fail"``, ``"complete"``, and
+        ``"skip"``.
+    :param body: Nodes executed once per iteration.
+    :param reuse_session: Whether child dispatch nodes in the loop should
+        prefer reusing the same review/rework child session. The runtime
+        records the flag now; reuse is enforced by dispatchers that support
+        it.
+    """
+
+    max_iterations: int
+    until: Any
+    on_exhausted: Literal["fail", "complete", "skip"] = "fail"
+    body: list[BlueprintNode] = field(default_factory=list)
+    reuse_session: bool = False
+
+
+@dataclass
+class BlueprintNode:  # type: ignore[explicit-any]  # node inputs are YAML-shaped
+    """
+    A node in a deterministic blueprint graph.
+
+    :param id: Stable node identifier unique within its containing graph.
+    :param kind: Node kind, e.g. ``"task"``, ``"blueprint"``, ``"loop"``.
+    :param depends_on: Node IDs that must complete before this node runs.
+    :param when: Optional YAML-shaped condition. The runtime supports literal
+        booleans and simple references; unsupported predicates evaluate false.
+    :param target: Agent/tool/blueprint target, depending on ``kind``.
+    :param input: YAML-shaped input mapping or template for the node.
+    :param return_mapping: YAML ``return:`` mapping, renamed to avoid the
+        Python keyword.
+    :param output: YAML-shaped output mapping for ``kind: output`` nodes.
+    :param loop: Required loop config for ``kind: loop`` nodes.
+    :param metadata: Any extra YAML keys preserved for visualization and
+        forward-compatible runtime dispatch.
+    """
+
+    id: str
+    kind: BlueprintNodeKind
+    depends_on: list[str] = field(default_factory=list)
+    when: Any | None = None
+    target: str | None = None
+    input: Any | None = None
+    return_mapping: Any | None = None
+    output: Any | None = None
+    loop: BlueprintLoopSpec | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class BlueprintSpec:  # type: ignore[explicit-any]  # outputs are YAML-shaped
+    """
+    Top-level deterministic blueprint graph attached to an agent image.
+
+    Blueprints are additive to spec_version 1. Existing prompt-orchestrated
+    workflow agents keep using their current executor. A blueprint is
+    executable only when paired with ``executor.type: blueprint``.
+
+    :param name: Optional display name. Falls back to the agent name.
+    :param description: Optional summary for static graph surfaces.
+    :param nodes: Root graph nodes.
+    :param outputs: Optional final output projection.
+    :param version: Blueprint-local version, independent of ``spec_version``.
+    """
+
+    name: str | None = None
+    description: str | None = None
+    nodes: list[BlueprintNode] = field(default_factory=list)
+    outputs: dict[str, Any] = field(default_factory=dict)
+    version: int = 1
+
+
 @dataclass
 class CompactionConfig:
     """
@@ -1538,6 +1633,7 @@ class AgentSpec:  # type: ignore[explicit-any]  # params: dict[str, Any] field (
     local_tools: list[LocalToolInfo] = field(default_factory=list)
     sub_agents: list[AgentSpec] = field(default_factory=list)
     executor: ExecutorSpec = field(default_factory=ExecutorSpec)
+    blueprint: BlueprintSpec | None = None
     compaction: CompactionConfig | None = None
     guardrails: GuardrailsSpec | None = None
     async_enabled: bool = True

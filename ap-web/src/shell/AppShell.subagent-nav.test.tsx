@@ -66,6 +66,9 @@ vi.mock("@/hooks/useSession", async (importOriginal) => ({
 vi.mock("@/hooks/useAgents", () => ({
   useSessionAgent: vi.fn(() => ({ data: undefined })),
 }));
+vi.mock("@/hooks/useBlueprints", () => ({
+  useAgentBlueprint: vi.fn(() => ({ data: null })),
+}));
 vi.mock("./Sidebar", () => ({ Sidebar: () => <div data-testid="sidebar" /> }));
 vi.mock("./FilesPanel", () => ({
   FilesPanel: () => <div data-testid="files-panel" />,

@@ -217,6 +217,79 @@ class AgentObject(BaseModel):
     category: str = "employee"
 
 
+class BlueprintGraphEdge(BaseModel):
+    """Static dependency edge in a blueprint graph."""
+
+    id: str
+    source: str
+    target: str
+
+
+class BlueprintGraphLoop(BaseModel):
+    """Static loop metadata nested under a blueprint loop node."""
+
+    max_iterations: int
+    until: Any | None = None
+    on_exhausted: str
+    reuse_session: bool = False
+    nodes: list[dict[str, Any]] = Field(default_factory=list)
+    edges: list[BlueprintGraphEdge] = Field(default_factory=list)
+
+
+class BlueprintGraphNode(BaseModel):
+    """Static node projection for a blueprint graph."""
+
+    id: str
+    kind: str
+    depends_on: list[str] = Field(default_factory=list)
+    target: str | None = None
+    when: Any | None = None
+    input: Any | None = None
+    return_: Any | None = Field(default=None, alias="return")
+    output: Any | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    loop: BlueprintGraphLoop | None = None
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class BlueprintGraphResponse(BaseModel):
+    """Static normalized blueprint graph response."""
+
+    object: Literal["blueprint"] = "blueprint"
+    agent_id: str | None = None
+    agent_name: str | None = None
+    name: str | None = None
+    description: str | None = None
+    version: int = 1
+    nodes: list[BlueprintGraphNode] = Field(default_factory=list)
+    edges: list[BlueprintGraphEdge] = Field(default_factory=list)
+    outputs: dict[str, Any] = Field(default_factory=dict)
+
+
+class BlueprintRunNode(BaseModel):
+    """Live node-state projection for a blueprint run."""
+
+    id: str
+    kind: str | None = None
+    status: str | None = None
+    loop_iteration: int | None = None
+    child_session_id: str | None = None
+    payload: dict[str, Any] = Field(default_factory=dict)
+    updated_at: int | None = None
+
+
+class BlueprintRunResponse(BaseModel):
+    """Live blueprint run snapshot reconstructed from persisted events."""
+
+    object: Literal["blueprint_run"] = "blueprint_run"
+    blueprint_run_id: str | None = None
+    status: str = "pending"
+    nodes: list[BlueprintRunNode] = Field(default_factory=list)
+    loop_iterations: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+
+
 # ── Session Policies ───────────────────────────────────────────
 
 
