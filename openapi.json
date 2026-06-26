@@ -453,6 +453,27 @@
         "title": "ClientTaskCancelEvent",
         "type": "object"
       },
+      "CommitGoalPlanningSessionBody": {
+        "description": "Commit a planner-produced draft into the durable goal backlog.",
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/GoalDraftBody"
+          },
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Source Ids",
+            "type": "array"
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "title": "CommitGoalPlanningSessionBody",
+        "type": "object"
+      },
       "CompactionCompletedEvent": {
         "description": "Conversation history compaction has finished.\n\nEmitted by ``omnigent/server/routes/sessions.py`` after\n``compact_conversation_now()`` returns successfully. Clients\nthat rendered a \"Compacting\u2026\" spinner on\n:class:`CompactionInProgressEvent` should upgrade it to the\npermanent \"Conversation compacted\" marker on this event.\n\n:param type: Always ``\"response.compaction.completed\"``.\n:param total_tokens: Tiktoken estimate of the post-compaction\n    message context size, e.g. ``8421``. Used by clients to\n    update the context-ring immediately without waiting for the\n    next ``response.completed`` usage report. ``None`` when\n    token counting is unavailable.",
         "properties": {
@@ -575,6 +596,98 @@
           "response"
         ],
         "title": "CompletedEvent",
+        "type": "object"
+      },
+      "ConciergeSessionRequest": {
+        "description": "Open a Skills Concierge chat scoped to an install target.",
+        "properties": {
+          "target_agent_ids": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Agent Ids"
+          },
+          "target_id": {
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "enum": [
+              "organization",
+              "department",
+              "employee"
+            ],
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
+        "title": "ConciergeSessionRequest",
+        "type": "object"
+      },
+      "ConciergeSessionResponse": {
+        "properties": {
+          "agent_id": {
+            "title": "Agent Id",
+            "type": "string"
+          },
+          "agent_name": {
+            "title": "Agent Name",
+            "type": "string"
+          },
+          "object": {
+            "default": "skills_concierge_session",
+            "title": "Object",
+            "type": "string"
+          },
+          "prompt": {
+            "title": "Prompt",
+            "type": "string"
+          },
+          "session_id": {
+            "title": "Session Id",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "web_path": {
+            "title": "Web Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "agent_id",
+          "agent_name",
+          "title",
+          "prompt",
+          "web_path"
+        ],
+        "title": "ConciergeSessionResponse",
         "type": "object"
       },
       "ConversationRef": {
@@ -1407,6 +1520,121 @@
         "title": "GoalDependencyBody",
         "type": "object"
       },
+      "GoalDraftBody": {
+        "description": "Structured goal draft committed by the planner interview.",
+        "properties": {
+          "acceptance_criteria": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Acceptance Criteria",
+            "type": "array"
+          },
+          "assumptions": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "Assumptions",
+            "type": "array"
+          },
+          "dependencies": {
+            "items": {
+              "$ref": "#/components/schemas/GoalDependencyBody"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "outcome": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome"
+          },
+          "payload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Payload"
+          },
+          "priority": {
+            "default": 3,
+            "maximum": 10.0,
+            "minimum": 1.0,
+            "title": "Priority",
+            "type": "integer"
+          },
+          "readiness_kind": {
+            "default": "immediate",
+            "maxLength": 16,
+            "title": "Readiness Kind",
+            "type": "string"
+          },
+          "source_refs": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "maxItems": 20,
+            "title": "Source Refs",
+            "type": "array"
+          },
+          "target_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Id"
+          },
+          "target_kind": {
+            "default": "organization",
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          },
+          "title": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "title": "GoalDraftBody",
+        "type": "object"
+      },
       "GrantPermissionRequest": {
         "description": "Request body for ``PUT /v1/sessions/{id}/permissions``.\n\n:param user_id: The user to grant access to, e.g.\n    ``\"alice@example.com\"`` or ``\"__public__\"`` for public\n    read access.\n:param level: Numeric permission level: ``1`` = read,\n    ``2`` = edit, ``3`` = manage.",
         "properties": {
@@ -2228,6 +2456,54 @@
           "joined_at"
         ],
         "title": "PresenceViewer",
+        "type": "object"
+      },
+      "PushSubscriptionCreate": {
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/PushSubscriptionKeys"
+          }
+        },
+        "required": [
+          "endpoint",
+          "keys"
+        ],
+        "title": "PushSubscriptionCreate",
+        "type": "object"
+      },
+      "PushSubscriptionDelete": {
+        "properties": {
+          "endpoint": {
+            "title": "Endpoint",
+            "type": "string"
+          }
+        },
+        "required": [
+          "endpoint"
+        ],
+        "title": "PushSubscriptionDelete",
+        "type": "object"
+      },
+      "PushSubscriptionKeys": {
+        "properties": {
+          "auth": {
+            "title": "Auth",
+            "type": "string"
+          },
+          "p256dh": {
+            "title": "P256Dh",
+            "type": "string"
+          }
+        },
+        "required": [
+          "p256dh",
+          "auth"
+        ],
+        "title": "PushSubscriptionKeys",
         "type": "object"
       },
       "QueuedEvent": {
@@ -4222,6 +4498,82 @@
         "title": "SkillFileManifestObject",
         "type": "object"
       },
+      "SkillMarketplaceObject": {
+        "properties": {
+          "default": {
+            "default": false,
+            "title": "Default",
+            "type": "boolean"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "repo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Repo"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label",
+          "source_id",
+          "kind"
+        ],
+        "title": "SkillMarketplaceObject",
+        "type": "object"
+      },
+      "SkillMarketplacesResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillMarketplaceObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_marketplace.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillMarketplacesResponse",
+        "type": "object"
+      },
       "SkillPreviewRequest": {
         "properties": {
           "command": {
@@ -4380,6 +4732,55 @@
           "target_actions"
         ],
         "title": "SkillPreviewResponse",
+        "type": "object"
+      },
+      "SkillRecommendationObject": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "source_ref": {
+            "title": "Source Ref",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "source",
+          "source_ref",
+          "reason"
+        ],
+        "title": "SkillRecommendationObject",
+        "type": "object"
+      },
+      "SkillRecommendationsResponse": {
+        "properties": {
+          "data": {
+            "items": {
+              "$ref": "#/components/schemas/SkillRecommendationObject"
+            },
+            "title": "Data",
+            "type": "array"
+          },
+          "object": {
+            "default": "skill_recommendation.list",
+            "title": "Object",
+            "type": "string"
+          }
+        },
+        "required": [
+          "data"
+        ],
+        "title": "SkillRecommendationsResponse",
         "type": "object"
       },
       "SkillSearchRequest": {
@@ -4764,6 +5165,88 @@
           "files"
         ],
         "title": "StagedSkillObject",
+        "type": "object"
+      },
+      "StartGoalPlanningSessionBody": {
+        "description": "Start a goal-planning interview for one scope.",
+        "properties": {
+          "source_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 8,
+            "title": "Source Ids",
+            "type": "array"
+          },
+          "target_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          }
+        },
+        "required": [
+          "target_kind",
+          "target_id"
+        ],
+        "title": "StartGoalPlanningSessionBody",
+        "type": "object"
+      },
+      "StartSkillsConciergeSessionBody": {
+        "properties": {
+          "target_agent_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Target Agent Ids",
+            "type": "array"
+          },
+          "target_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Target Id",
+            "type": "string"
+          },
+          "target_kind": {
+            "default": "organization",
+            "maxLength": 16,
+            "title": "Target Kind",
+            "type": "string"
+          },
+          "target_label": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Label"
+          }
+        },
+        "required": [
+          "target_id"
+        ],
+        "title": "StartSkillsConciergeSessionBody",
         "type": "object"
       },
       "TurnCancelledEvent": {
@@ -5481,152 +5964,17 @@
         "title": "ValidationError",
         "type": "object"
       },
-      "_AppendBody": {
+      "VapidPublicKeyResponse": {
         "properties": {
-          "content": {
-            "title": "Content",
-            "type": "string"
-          },
-          "name": {
-            "default": "org-context",
-            "title": "Name",
-            "type": "string"
-          },
-          "scope": {
-            "default": "team",
-            "title": "Scope",
-            "type": "string"
-          },
-          "weight": {
-            "default": 1.0,
-            "title": "Weight",
-            "type": "number"
-          }
-        },
-        "required": [
-          "content"
-        ],
-        "title": "_AppendBody",
-        "type": "object"
-      },
-      "_CompartmentsBody": {
-        "properties": {},
-        "title": "_CompartmentsBody",
-        "type": "object"
-      },
-      "_GetBody": {
-        "properties": {
-          "address": {
-            "title": "Address",
+          "public_key": {
+            "title": "Public Key",
             "type": "string"
           }
         },
         "required": [
-          "address"
+          "public_key"
         ],
-        "title": "_GetBody",
-        "type": "object"
-      },
-      "_ListBody": {
-        "properties": {
-          "prefix": {
-            "default": "org",
-            "title": "Prefix",
-            "type": "string"
-          }
-        },
-        "title": "_ListBody",
-        "type": "object"
-      },
-      "_PutBody": {
-        "properties": {
-          "address": {
-            "title": "Address",
-            "type": "string"
-          },
-          "confidence": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Confidence"
-          },
-          "content": {
-            "title": "Content",
-            "type": "string"
-          },
-          "source_conversation_id": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Source Conversation Id"
-          },
-          "weight": {
-            "default": 1.0,
-            "title": "Weight",
-            "type": "number"
-          }
-        },
-        "required": [
-          "address",
-          "content"
-        ],
-        "title": "_PutBody",
-        "type": "object"
-      },
-      "_RecallBody": {
-        "properties": {
-          "kind": {
-            "default": "all",
-            "title": "Kind",
-            "type": "string"
-          },
-          "limit": {
-            "default": 10,
-            "title": "Limit",
-            "type": "integer"
-          },
-          "name": {
-            "default": "org-context",
-            "title": "Name",
-            "type": "string"
-          },
-          "query": {
-            "title": "Query",
-            "type": "string"
-          },
-          "scope": {
-            "default": "team",
-            "title": "Scope",
-            "type": "string"
-          }
-        },
-        "required": [
-          "query"
-        ],
-        "title": "_RecallBody",
-        "type": "object"
-      },
-      "_UnsetBody": {
-        "properties": {
-          "address": {
-            "title": "Address",
-            "type": "string"
-          }
-        },
-        "required": [
-          "address"
-        ],
-        "title": "_UnsetBody",
+        "title": "VapidPublicKeyResponse",
         "type": "object"
       }
     }
@@ -5727,7 +6075,7 @@
     },
     "/v1/_capabilities": {
       "get": {
-        "description": "Pluggable-seam capability manifest (BDP-2374).\n\nReturns one entry per live pluggable seam \u2014 its registered\nprovider names, the active impl, the registered default, and the\n``OMNIGENT_USE_<SEAM>`` override env var \u2014 projected from\n:data:`omnigent.pluggable.manifest.SEAMS`. Read-only and cheap\n(no factories are invoked, only registry introspection).\n\nAuthentication: intentionally UNAUTHED, matching ``/v1/info`` \u2014\nit exposes only which backends are wired, no secret state \u2014 so a\nclient / operator can probe seam configuration before holding a\nsession.\n\n:returns: ``{\"seams\": [<describe() + override_env>, ...]}``.",
+        "description": "Pluggable-seam capability manifest (BDP-2374).\n\nReturns one entry per live pluggable seam \u2014 its registered\nprovider names, the active impl, the registered default, and the\n``OMNIGENT_USE_<SEAM>`` override env var \u2014 projected from\n:data:`omnigent.kernel.pluggable.manifest.SEAMS`. Read-only and cheap\n(no factories are invoked, only registry introspection).\n\nAuthentication: intentionally UNAUTHED, matching ``/v1/info`` \u2014\nit exposes only which backends are wired, no secret state \u2014 so a\nclient / operator can probe seam configuration before holding a\nsession.\n\n:returns: ``{\"seams\": [<describe() + override_env>, ...]}``.",
         "operationId": "capabilities_v1__capabilities_get",
         "responses": {
           "200": {
@@ -6349,6 +6697,256 @@
         ]
       }
     },
+    "/v1/flags": {
+      "get": {
+        "operationId": "list_flags_v1_flags_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Flags"
+      },
+      "post": {
+        "operationId": "create_flag_v1_flags_post",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Create Flag"
+      }
+    },
+    "/v1/flags/{key}": {
+      "get": {
+        "operationId": "get_flag_v1_flags__key__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Flag"
+      },
+      "patch": {
+        "operationId": "patch_flag_v1_flags__key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Flag"
+      }
+    },
+    "/v1/flags/{key}/evaluate": {
+      "post": {
+        "operationId": "evaluate_flag_v1_flags__key__evaluate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Evaluate Flag"
+      }
+    },
+    "/v1/flags/{key}/history": {
+      "get": {
+        "operationId": "flag_history_v1_flags__key__history_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Flag History"
+      }
+    },
+    "/v1/flags/{key}/rollback": {
+      "post": {
+        "operationId": "rollback_flag_v1_flags__key__rollback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "key",
+            "required": true,
+            "schema": {
+              "title": "Key",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rollback Flag"
+      }
+    },
+    "/v1/goal-delivery/{source}": {
+      "post": {
+        "operationId": "receive_v1_goal_delivery__source__post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "source",
+            "required": true,
+            "schema": {
+              "title": "Source",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Receive"
+      }
+    },
     "/v1/goals": {
       "get": {
         "description": "List the ops backlog (by priority then age), optionally filtered.",
@@ -6531,7 +7129,7 @@
     },
     "/v1/goals/events": {
       "get": {
-        "description": "Subscribe to goal.changed events for live Omnigent admin refresh.",
+        "description": "Subscribe to goal events for live Omnigent admin refresh.",
         "operationId": "subscribe_goal_events_v1_goals_events_get",
         "responses": {
           "200": {
@@ -6544,6 +7142,108 @@
           }
         },
         "summary": "Subscribe Goal Events"
+      }
+    },
+    "/v1/goals/planner/sessions": {
+      "post": {
+        "description": "Create an assistant-driven goal-planning session for one scope.",
+        "operationId": "start_planning_session_v1_goals_planner_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartGoalPlanningSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Planning Session"
+      }
+    },
+    "/v1/goals/planner/sessions/{session_id}/commit": {
+      "post": {
+        "description": "Commit an approved planner draft into the durable goal backlog.",
+        "operationId": "commit_planning_session_v1_goals_planner_sessions__session_id__commit_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommitGoalPlanningSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Commit Planning Session"
+      }
+    },
+    "/v1/goals/planner/sources": {
+      "get": {
+        "description": "List available knowledge sources for the goal-planning assistant.",
+        "operationId": "list_planner_sources_v1_goals_planner_sources_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Planner Sources"
       }
     },
     "/v1/goals/{goal_id}": {
@@ -7409,265 +8109,6 @@
         "summary": "Me"
       }
     },
-    "/v1/memory/append": {
-      "post": {
-        "description": "Save a durable shared memory into a compartment.",
-        "operationId": "append_v1_memory_append_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_AppendBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Append"
-      }
-    },
-    "/v1/memory/compartments": {
-      "post": {
-        "description": "List the reachable shared (team + topic) memory compartments.",
-        "operationId": "compartments_v1_memory_compartments_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_CompartmentsBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Compartments"
-      }
-    },
-    "/v1/memory/get": {
-      "post": {
-        "description": "Exact-key read of an addressable slot (e.g. ``org:charter``).\n\nDeterministic lookup on the indexed ``key`` column \u2014 no similarity search,\nno decay. Returns the slot's current value or ``{\"found\": false}``.",
-        "operationId": "get_v1_memory_get_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_GetBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Get"
-      }
-    },
-    "/v1/memory/list": {
-      "post": {
-        "description": "Browse addressable slots under a prefix (``org`` or ``dept:<dept>``).\n\nQuery-less discovery of the keyed slots in a compartment \u2014 deterministic,\nnewest first. The fuzzy counterpart is ``/memory/recall`` (kind=all).",
-        "operationId": "list_slots_v1_memory_list_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_ListBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "List Slots"
-      }
-    },
-    "/v1/memory/put": {
-      "post": {
-        "description": "Write an addressable slot, OVERWRITING any current value at this key.\n\nOverwrite-in-place: any live row(s) at the key are archived (history\nretained via the archive flag), then the new content is written as the\nsingle live slot on the first-class ``key`` column. Owner is\nserver-stamped from the address class (anti-spoof).",
-        "operationId": "put_v1_memory_put_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_PutBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Put"
-      }
-    },
-    "/v1/memory/recall": {
-      "post": {
-        "description": "Recall shared memories from a compartment, ranked by decayed salience.",
-        "operationId": "recall_v1_memory_recall_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_RecallBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Recall"
-      }
-    },
-    "/v1/memory/unset": {
-      "post": {
-        "description": "Clear an addressable slot \u2014 archive whatever lives at this key.",
-        "operationId": "unset_v1_memory_unset_post",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/_UnsetBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {}
-              }
-            },
-            "description": "Successful Response"
-          },
-          "422": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/HTTPValidationError"
-                }
-              }
-            },
-            "description": "Validation Error"
-          }
-        },
-        "summary": "Unset"
-      }
-    },
     "/v1/policies": {
       "get": {
         "description": "List all default policies.\n\nRequires authentication in multi-user mode.\n\n:param request: The incoming request, used to extract the\n    user identity.\n:returns: ``{\"object\": \"list\", \"data\": [...]}``.\n:raises OmnigentError: 401 if unauthenticated in\n    multi-user mode.",
@@ -7899,9 +8340,95 @@
         ]
       }
     },
+    "/v1/push/subscriptions": {
+      "delete": {
+        "operationId": "delete_subscription_v1_push_subscriptions_delete",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscriptionDelete"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Subscription",
+        "tags": [
+          "push"
+        ]
+      },
+      "post": {
+        "operationId": "create_subscription_v1_push_subscriptions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PushSubscriptionCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Subscription",
+        "tags": [
+          "push"
+        ]
+      }
+    },
+    "/v1/push/vapid-public-key": {
+      "get": {
+        "operationId": "vapid_public_key_v1_push_vapid_public_key_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VapidPublicKeyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Vapid Public Key",
+        "tags": [
+          "push"
+        ]
+      }
+    },
     "/v1/runners": {
       "get": {
-        "description": "Return currently online runners owned by the requesting user.\n\nWhen auth is active, only runners whose tunnel was\nestablished by the same user are returned. Without auth,\nall online runners are listed (single-user / dev mode).\n\n:param request: The incoming FastAPI request (for auth).\n:returns: A ``{\"data\": [...]}`` list with runner ids and\n    advertised harnesses.",
         "operationId": "list_runners_v1_runners_get",
         "responses": {
           "200": {
@@ -7931,7 +8458,6 @@
     },
     "/v1/runners/{runner_id}/status": {
       "get": {
-        "description": "Return whether a runner currently has an open tunnel.\n\nWhen auth is active, a runner owned by a different user\nappears as offline to prevent enumeration.\n\n:param request: The incoming FastAPI request (for auth).\n:param runner_id: Stable runner id, e.g.\n    ``\"runner_0123456789abcdef\"``.\n:returns: A JSON object with ``runner_id`` and ``online``.",
         "operationId": "runner_status_v1_runners__runner_id__status_get",
         "parameters": [
           {
@@ -11815,6 +12341,42 @@
         ]
       }
     },
+    "/v1/skills/concierge/sessions": {
+      "post": {
+        "operationId": "start_skills_concierge_session_v1_skills_concierge_sessions_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartSkillsConciergeSessionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Start Skills Concierge Session"
+      }
+    },
     "/v1/skills/installed": {
       "get": {
         "operationId": "list_installed_skills_v1_skills_installed_get",
@@ -11859,6 +12421,27 @@
           }
         },
         "summary": "List Installed Skills",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/marketplaces": {
+      "get": {
+        "operationId": "list_skill_marketplaces_v1_skills_marketplaces_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillMarketplacesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Skill Marketplaces",
         "tags": [
           "skills"
         ]
@@ -11959,6 +12542,81 @@
           }
         },
         "summary": "Apply Skill Preview",
+        "tags": [
+          "skills"
+        ]
+      }
+    },
+    "/v1/skills/recommendations": {
+      "get": {
+        "operationId": "list_skill_recommendations_v1_skills_recommendations_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "department",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Department"
+            }
+          },
+          {
+            "in": "query",
+            "name": "title",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Title"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SkillRecommendationsResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Skill Recommendations",
         "tags": [
           "skills"
         ]
