@@ -413,3 +413,56 @@ def test_runner_token_provider_owner_read_live_not_cached() -> None:
     # Re-record with a new owner → reflected live.
     registry.record_launch_owner(runner_id, "dave@example.com")
     assert provider.get_user_id(_runner_token_conn(token)) == "dave@example.com"
+
+
+def test_runner_token_provider_falls_back_to_store_on_registry_miss() -> None:
+    """BDP-2572: a runner whose callback lands on a server replica that did not
+    launch it has no per-replica record; resolve the owner from the shared-store
+    fallback (session→runner→owner binding) so 2+ replicas stop 401ing."""
+    from omnigent.runner.control_registry import RunnerControlRegistry
+    from omnigent.runner.identity import token_bound_runner_id
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = RunnerControlRegistry()  # empty: a different replica launched it
+    token = "runner-binding-token-xrep"
+    runner_id = token_bound_runner_id(token)
+    seen: list[str] = []
+
+    def _store_fallback(rid: str) -> str | None:
+        seen.append(rid)
+        return "erin@example.com" if rid == runner_id else None
+
+    provider = RunnerTokenAuthProvider(registry, owner_fallback=_store_fallback)
+    assert provider.get_user_id(_runner_token_conn(token)) == "erin@example.com"
+    assert seen == [runner_id]  # fallback consulted with the token's runner id
+
+
+def test_runner_token_provider_local_hit_skips_fallback() -> None:
+    """A local launch record short-circuits — the shared-store fallback is not
+    consulted (no extra DB read on the same-replica hot path)."""
+    from omnigent.runner.control_registry import RunnerControlRegistry
+    from omnigent.runner.identity import token_bound_runner_id
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = RunnerControlRegistry()
+    token = "runner-binding-token-local"
+    runner_id = token_bound_runner_id(token)
+    registry.record_launch_owner(runner_id, "frank@example.com")
+    fallback_calls: list[str] = []
+
+    provider = RunnerTokenAuthProvider(
+        registry, owner_fallback=lambda rid: fallback_calls.append(rid) or "ignored"
+    )
+    assert provider.get_user_id(_runner_token_conn(token)) == "frank@example.com"
+    assert fallback_calls == []
+
+
+def test_runner_token_provider_forged_rejected_even_with_fallback() -> None:
+    """A forged / never-launched runner id has no session binding, so the
+    fallback also yields None → still rejected (the auth invariant holds)."""
+    from omnigent.runner.control_registry import RunnerControlRegistry
+    from omnigent.server.auth import RunnerTokenAuthProvider
+
+    registry = RunnerControlRegistry()
+    provider = RunnerTokenAuthProvider(registry, owner_fallback=lambda rid: None)
+    assert provider.get_user_id(_runner_token_conn("attacker-token")) is None

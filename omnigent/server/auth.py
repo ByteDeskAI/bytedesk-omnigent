@@ -28,6 +28,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from typing import Protocol
 
 from starlette.requests import HTTPConnection
@@ -495,8 +496,20 @@ class RunnerTokenAuthProvider(AuthProvider):
         never cached here.
     """
 
-    def __init__(self, registry: _LaunchOwnerRegistry) -> None:
+    def __init__(
+        self,
+        registry: _LaunchOwnerRegistry,
+        *,
+        owner_fallback: Callable[[str], str | None] | None = None,
+    ) -> None:
         self._registry = registry
+        # Cross-replica owner resolver (BDP-2572): the registry's launch record
+        # is per-replica in-memory, so a runner whose HTTP callback lands on a
+        # replica that did not launch it misses locally. This fallback (the
+        # shared conversation store's runner→owner lookup) resolves it from the
+        # DB. Optional so single-replica / test wiring keeps the registry-only
+        # behavior.
+        self._owner_fallback = owner_fallback
         # token → runner_id memo. Only the deterministic derivation is cached;
         # the owner is always re-read from the registry below.
         self._runner_id_cache: dict[str, str] = {}
@@ -524,7 +537,14 @@ class RunnerTokenAuthProvider(AuthProvider):
             runner_id = token_bound_runner_id(stripped)
             self._runner_id_cache[stripped] = runner_id
         # Always live: a forged token has no launch record → None → 401.
-        return self._registry.launch_owner(runner_id)
+        owner = self._registry.launch_owner(runner_id)
+        if owner is None and self._owner_fallback is not None:
+            # Cross-replica (BDP-2572): per-replica launch record missing →
+            # resolve from the shared store (session→runner→owner binding). A
+            # forged/never-launched runner id has no session binding → None →
+            # still rejected, so the auth invariant holds.
+            owner = self._owner_fallback(runner_id)
+        return owner
 
 
 def unwrap_auth_base(provider: AuthProvider | None) -> AuthProvider | None:

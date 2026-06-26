@@ -755,6 +755,31 @@ class SqlAlchemyConversationStore(ConversationStore):
             ).all()
         return {row.id: row.runner_id for row in rows}
 
+    def owner_for_runner(self, runner_id: str) -> str | None:
+        """
+        Resolve a runner's launch owner from the shared DB (BDP-2572).
+
+        Finds the session bound to ``runner_id`` (``SELECT id WHERE runner_id =
+        ? LIMIT 1``) and returns its owner via :meth:`get_session_owner` (the
+        authoritative owning ``user_id`` from ``session_permissions`` — the same
+        value the launch path passes to ``record_launch_owner``). This is the
+        cross-replica fallback for ``RunnerTokenAuthProvider`` when the
+        per-replica in-memory launch record is absent (the runner's HTTP
+        callback landed on a server replica that did not launch it). ``None``
+        when no session is bound to ``runner_id``.
+        """
+        if not runner_id:
+            return None
+        with self._session() as session:
+            row = session.execute(
+                select(SqlConversation.id)
+                .where(SqlConversation.runner_id == runner_id)
+                .limit(1)
+            ).first()
+        if row is None:
+            return None
+        return self.get_session_owner(row[0])
+
     def get_session_connectivity(
         self, conversation_ids: list[str]
     ) -> dict[str, SessionConnectivity]:
