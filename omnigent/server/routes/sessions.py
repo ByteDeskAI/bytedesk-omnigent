@@ -153,6 +153,7 @@ from omnigent.server.auth import (
     local_single_user_enabled,
 )
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
+from omnigent.server.host_control import HostControlError, request_host_launch_runner
 from omnigent.server.host_registry import HostConnection, HostRegistry, RunnerExitReports
 from omnigent.server.managed_hosts import (
     ManagedHostLaunch,
@@ -5401,6 +5402,76 @@ async def _launch_runner_on_host(
     return _HostLaunchAttempt(runner_id=new_runner_id)
 
 
+async def _launch_runner_on_host_id(
+    conv: Conversation,
+    conversation_store: ConversationStore,
+    host_registry: HostRegistry,
+    host_id: str,
+    *,
+    owner: str | None = None,
+    runner_control_registry: Any | None = None,
+) -> _HostLaunchAttempt:
+    """
+    Ask a host to spawn a runner when its tunnel may live on another replica.
+
+    Mirrors :func:`_launch_runner_on_host` but routes through
+    ``host_control`` so a REST request served by replica A can launch through a
+    host tunnel owned by replica B.
+    """
+    from omnigent.runner.identity import token_bound_runner_id
+
+    binding_token = secrets.token_urlsafe(32)
+    new_runner_id = token_bound_runner_id(binding_token)
+
+    if owner is not None and runner_control_registry is not None:
+        runner_control_registry.record_launch_owner(new_runner_id, owner, token=binding_token)
+
+    await asyncio.to_thread(
+        conversation_store.replace_runner_id,
+        conv.id,
+        new_runner_id,
+    )
+
+    if conv.workspace is None:  # pragma: no cover — constraint guards
+        _logger.error(
+            "session %s has host_id=%s but workspace is NULL — schema "
+            "constraint should have prevented this",
+            conv.id,
+            conv.host_id,
+        )
+        return _HostLaunchAttempt(runner_id=new_runner_id)
+
+    try:
+        launch = await request_host_launch_runner(
+            host_registry=host_registry,
+            host_id=host_id,
+            binding_token=binding_token,
+            workspace=conv.workspace,
+            harness=_resolve_harness(conv),
+            timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
+        )
+    except HostControlError as exc:
+        _logger.warning(
+            "Host %s could not launch runner for %s: %s",
+            host_id,
+            conv.id,
+            exc.message,
+        )
+        return _HostLaunchAttempt(runner_id=new_runner_id, acked=False)
+
+    if not launch.acked:
+        return _HostLaunchAttempt(runner_id=new_runner_id, acked=False)
+
+    result = launch.result
+    if result.get("status") == "failed":
+        return _HostLaunchAttempt(
+            runner_id=new_runner_id,
+            error_code=result.get("error_code"),
+            error=result.get("error"),
+        )
+    return _HostLaunchAttempt(runner_id=new_runner_id)
+
+
 # Strong references to in-flight background managed-launch tasks.
 # asyncio.create_task results are weakly held by the loop; without a
 # reference here a long provision could be garbage-collected mid-flight.
@@ -5685,16 +5756,25 @@ async def _bind_and_launch_managed_runner(
                 owner=owner,
                 runner_control_registry=runner_control_registry,
             )
-            if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
-                # The sandbox image should bake in the harness, but if the
-                # host refuses, fail the launch loudly (mirroring the
-                # delete-during-provisioning path) rather than waiting out
-                # the connect timeout for a runner that will never appear.
-                reason = launch_attempt.error or "harness not configured on the sandbox host"
-                tracker.fail(session_id, reason)
-                _publish_sandbox_status(session_id, "failed", reason)
-                return
-            runner_id = launch_attempt.runner_id
+        else:
+            launch_attempt = await _launch_runner_on_host_id(
+                conv,
+                conversation_store,
+                host_registry,
+                managed.host_id,
+                owner=owner,
+                runner_control_registry=runner_control_registry,
+            )
+        if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
+            # The sandbox image should bake in the harness, but if the
+            # host refuses, fail the launch loudly (mirroring the
+            # delete-during-provisioning path) rather than waiting out
+            # the connect timeout for a runner that will never appear.
+            reason = launch_attempt.error or "harness not configured on the sandbox host"
+            tracker.fail(session_id, reason)
+            _publish_sandbox_status(session_id, "failed", reason)
+            return
+        runner_id = launch_attempt.runner_id
     if runner_id is not None and runner_router is not None:
         # Wait for the runner control plane before settling so a rendezvoused
         # message POST resolves its runner client on the first try. A timeout
@@ -12451,24 +12531,20 @@ def create_sessions_router(
             host_registry = getattr(request.app.state, "host_registry", None)
             host_store_inst = getattr(request.app.state, "host_store", None)
             if host_registry is not None and host_store_inst is not None:
-                from omnigent.host.frames import (
-                    HostLaunchRunnerFrame,
-                    encode_host_frame,
-                )
                 from omnigent.runner.identity import token_bound_runner_id
-                from omnigent.server.routes._host_launch import resolve_host_launch
+                from omnigent.server.routes._host_launch import resolve_host_launch_access
 
-                target = await asyncio.to_thread(
-                    resolve_host_launch,
+                await asyncio.to_thread(
+                    resolve_host_launch_access,
                     user_id=user_id,
                     host_id=launch_host_id,
                     session_id=resp.id,
                     host_store=host_store_inst,
-                    host_registry=host_registry,
                     conversation_store=conversation_store,
                     permission_store=permission_store,
                 )
-                conn = target.conn
+                if not await asyncio.to_thread(host_store_inst.is_online, launch_host_id):
+                    raise HTTPException(status_code=409, detail="host is offline")
                 binding_token = secrets.token_urlsafe(32)
                 runner_id = token_bound_runner_id(binding_token)
                 # Atomic bind (WHERE runner_id IS NULL) closes the TOCTOU.
@@ -12482,33 +12558,12 @@ def create_sessions_router(
                         f"Session {resp.id!r} already has a runner bound",
                         code=ErrorCode.CONFLICT,
                     )
-                # host_id and workspace were already written by
-                # _create_session_from_existing_agent; we only need
-                # to set runner_id atomically (above) and send the
-                # launch frame.
-                request_id = secrets.token_hex(8)
-                future: asyncio.Future[dict[str, str | None]] = (
-                    asyncio.get_running_loop().create_future()
-                )
-                conn.pending_launches[request_id] = future
                 if resp.workspace is None:  # pragma: no cover — schema guards
                     raise OmnigentError(
                         "session has host_id but no workspace; "
                         "schema constraint should have prevented this",
                         code=ErrorCode.INTERNAL_ERROR,
                     )
-                launch_frame = encode_host_frame(
-                    HostLaunchRunnerFrame(
-                        request_id=request_id,
-                        binding_token=binding_token,
-                        workspace=resp.workspace,
-                        # Already canonical (see _resolve_harness); lets
-                        # the host refuse an unconfigured harness before
-                        # spawning. None (agent not resolvable) skips the
-                        # host-side check.
-                        harness=resp.harness,
-                    )
-                )
                 # Record the trusted launch owner BEFORE the host spawns the
                 # runner, so the runner's tunnel can authenticate the instant it
                 # connects (BDP-2436/BDP-2493) — mirrors the relaunch path
@@ -12525,12 +12580,25 @@ def create_sessions_router(
                         user_id,
                         token=binding_token,
                     )
-                host_registry.send_text(conn, launch_frame)
                 try:
-                    result = await asyncio.wait_for(future, timeout=30.0)
-                except asyncio.TimeoutError:
-                    conn.pending_launches.pop(request_id, None)
-                    result = {"status": "failed", "error": "host launch timed out"}
+                    launch = await request_host_launch_runner(
+                        host_registry=host_registry,
+                        host_id=launch_host_id,
+                        binding_token=binding_token,
+                        workspace=resp.workspace,
+                        # Already canonical (see _resolve_harness); lets
+                        # the host refuse an unconfigured harness before
+                        # spawning. None (agent not resolvable) skips the
+                        # host-side check.
+                        harness=resp.harness,
+                        timeout_s=30.0,
+                    )
+                    result = launch.result if launch.acked else {
+                        "status": "failed",
+                        "error": "host launch timed out",
+                    }
+                except HostControlError as exc:
+                    result = {"status": "failed", "error": exc.message}
                 if result.get("status") == "failed":
                     # Lenient on every create-time launch failure, including
                     # an unconfigured harness: the picker's readiness data
@@ -16824,28 +16892,51 @@ def create_sessions_router(
                     else:
                         relaunched_runner_id = launch_attempt.runner_id
                 else:
-                    relaunched_runner_id = None
-                    # The host tunnel is gone entirely. A managed
-                    # host's sandbox is relaunchable — provision a new
-                    # generation under the same host identity and ride
-                    # it; an external (laptop) host falls through to
-                    # the unavailable raise below.
-                    if await _maybe_relaunch_managed_sandbox(
-                        session_id=session_id,
-                        conv=conv,
-                        app_state=request.app.state,
-                        conversation_store=conversation_store,
-                    ):
-                        conv_after_relaunch = await asyncio.to_thread(
-                            conversation_store.get_conversation, session_id
+                    launch_attempt = await _launch_runner_on_host_id(
+                        conv,
+                        conversation_store,
+                        _host_reg,
+                        conv.host_id,
+                        owner=user_id,
+                        runner_control_registry=_runner_control_registry,
+                    )
+                    if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
+                        item_id = await _persist_host_launch_failure_turn(
+                            session_id,
+                            conv,
+                            body,
+                            conversation_store,
+                            launch_attempt.error,
+                            runner_router,
+                            created_by=_attribution_user(user_id),
                         )
-                        if conv_after_relaunch is None:
-                            raise OmnigentError(
-                                "Session not found",
-                                code=ErrorCode.NOT_FOUND,
+                        return {"queued": True, "item_id": item_id}
+                    if launch_attempt.acked:
+                        relaunched_runner_id = launch_attempt.runner_id
+                    else:
+                        relaunched_runner_id = None
+                        _host_evicted = True
+                        # The host tunnel is gone entirely. A managed
+                        # host's sandbox is relaunchable — provision a new
+                        # generation under the same host identity and ride
+                        # it; an external (laptop) host falls through to
+                        # the unavailable raise below.
+                        if await _maybe_relaunch_managed_sandbox(
+                            session_id=session_id,
+                            conv=conv,
+                            app_state=request.app.state,
+                            conversation_store=conversation_store,
+                        ):
+                            conv_after_relaunch = await asyncio.to_thread(
+                                conversation_store.get_conversation, session_id
                             )
-                        conv = conv_after_relaunch
-                        runner_client = await _get_runner_client(session_id, runner_router)
+                            if conv_after_relaunch is None:
+                                raise OmnigentError(
+                                    "Session not found",
+                                    code=ErrorCode.NOT_FOUND,
+                                )
+                            conv = conv_after_relaunch
+                            runner_client = await _get_runner_client(session_id, runner_router)
             else:
                 relaunched_runner_id = None
             if runner_client is None and not _host_evicted:

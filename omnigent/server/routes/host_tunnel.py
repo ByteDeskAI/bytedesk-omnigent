@@ -36,14 +36,15 @@ from omnigent.host.frames import (
     HostStopRunnerResultFrame,
     decode_host_frame,
 )
+from omnigent.host.identity import MANAGED_HOST_TOKEN_HEADER
 from omnigent.host.keepalive import (
     PingFrame,
     PongFrame,
     decode_keepalive_frame,
     encode_keepalive_frame,
 )
-from omnigent.host.identity import MANAGED_HOST_TOKEN_HEADER
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.host_control import start_host_control_server
 from omnigent.server.host_registry import (
     HostConnection,
     HostRegistry,
@@ -137,14 +138,15 @@ def create_host_tunnel_router(
                 return
             tunnel_owner = managed.owner
         elif auth_provider is not None:
-            tunnel_owner = auth_provider.get_user_id(ws)
-            if tunnel_owner is None:
+            authenticated_owner = auth_provider.get_user_id(ws)
+            if authenticated_owner is None:
                 # Auth is enabled but this peer didn't authenticate. Fail
                 # closed — never fall back to RESERVED_USER_LOCAL, which is
                 # admin-equivalent under the multi-user header scheme
                 # Closing before accept() refuses the handshake.
                 await ws.close(code=4004, reason="unauthenticated")
                 return
+            tunnel_owner = authenticated_owner
         else:
             # No auth provider configured = explicit single-user / local
             # deployment; RESERVED_USER_LOCAL is the accepted local owner
@@ -206,6 +208,7 @@ def create_host_tunnel_router(
                 _receive_loop(ws, conn, host_id, runner_exit_reports, on_runner_exited),
                 name=f"host-receive:{host_id}",
             )
+            host_control_task = start_host_control_server(host_registry, conn)
 
             if on_host_connect is not None:
                 try:
@@ -234,12 +237,13 @@ def create_host_tunnel_router(
                     if exc is not None:
                         raise exc
             finally:
-                for task in (sender_task, ping_task, receive_task):
+                tasks_to_cancel = [sender_task, ping_task, receive_task]
+                if host_control_task is not None:
+                    tasks_to_cancel.append(host_control_task)
+                for task in tasks_to_cancel:
                     task.cancel()
                 await asyncio.gather(
-                    sender_task,
-                    ping_task,
-                    receive_task,
+                    *tasks_to_cancel,
                     return_exceptions=True,
                 )
                 # Conn-guarded teardown (BDP-2540): when a newer connection has
