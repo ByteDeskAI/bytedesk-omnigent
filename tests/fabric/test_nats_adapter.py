@@ -63,6 +63,7 @@ class _FakeNatsPyJetStream:
     updated_streams: list[_Config] = field(default_factory=list)
     created_kv: list[_Config] = field(default_factory=list)
     created_object_stores: list[_Config] = field(default_factory=list)
+    created_object_store_buckets: list[str] = field(default_factory=list)
 
     async def stream_info(self, name: str) -> None:
         if name not in self.streams:
@@ -87,9 +88,26 @@ class _FakeNatsPyJetStream:
         if bucket not in self.object_stores:
             raise KeyError(bucket)
 
-    async def create_object_store(self, *, config: _Config) -> None:
+    async def create_object_store(self, *, bucket: str, config: _Config) -> None:
+        self.created_object_store_buckets.append(bucket)
         self.created_object_stores.append(config)
         self.object_stores.add(config.kwargs["bucket"])
+
+
+class KeyNotFoundError(Exception):
+    pass
+
+
+class _MissingKeyValueBucket:
+    async def get(self, key: str) -> object:
+        del key
+        raise KeyNotFoundError
+
+
+class _KvLookupJetStream:
+    async def key_value(self, bucket: str) -> _MissingKeyValueBucket:
+        del bucket
+        return _MissingKeyValueBucket()
 
 
 @dataclass
@@ -200,6 +218,20 @@ async def test_nats_py_client_asset_reconcile_is_idempotent() -> None:
     assert [config.kwargs["bucket"] for config in fake.created_object_stores] == [
         "omnigent-fabric-replay-packs"
     ]
+    assert fake.created_object_store_buckets == ["omnigent-fabric-replay-packs"]
+
+
+@pytest.mark.asyncio
+async def test_nats_py_client_kv_get_treats_missing_key_as_none() -> None:
+    client = _NatsPyJetStreamClient(
+        nc=object(),
+        js=_KvLookupJetStream(),
+        key_value_config_cls=_Config,
+        stream_config_cls=_Config,
+        object_store_config_cls=_Config,
+    )
+
+    assert await client.kv_get("bucket", "missing") is None
 
 
 @pytest.mark.asyncio
