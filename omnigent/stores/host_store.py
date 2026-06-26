@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from sqlalchemy import Engine, select, update
 from sqlalchemy import delete as sql_delete
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from omnigent.db.db_models import SqlConversation, SqlHost
@@ -278,6 +279,36 @@ class HostStore:
                     configured_harnesses=harnesses_json,
                 )
                 session.add(row)
+                try:
+                    # Flush now so a concurrent first-connect's INSERT (same
+                    # host_id, or same (owner, name)) surfaces here as an
+                    # IntegrityError instead of an uncaught crash in the
+                    # tunnel handler. ADR-0009 single-writer: the race loser
+                    # rolls back and converges on the winner's row via the
+                    # idempotent-on-host_id re-own path.
+                    session.flush()
+                except IntegrityError:
+                    session.rollback()
+                    reowned = self._reown_host_id(
+                        session,
+                        host_id=host_id,
+                        name=name,
+                        owner=owner,
+                        configured_harnesses_json=harnesses_json,
+                    )
+                    if reowned is not None:
+                        return reowned
+                    # The winner collided on (owner, name), not host_id (e.g.
+                    # a host_id rotation racing a first connect); re-read that
+                    # row and apply the normal update branch.
+                    row = session.get(SqlHost, (owner, name))
+                    if row is None:
+                        raise
+                    if row.host_id != host_id:
+                        self._rotate_host_id(session, row, host_id)
+                    row.status = "online"
+                    row.updated_at = now
+                    row.configured_harnesses = harnesses_json
             return _row_to_host(row)
 
     @staticmethod

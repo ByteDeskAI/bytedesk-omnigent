@@ -49,6 +49,33 @@ _DEFAULT_PATH = "/"
 _DEFAULT_TTL_S = 300.0
 _TIMEOUT_S = 10.0
 _TOKEN_SKEW_S = 60.0  # refresh the token a minute before it actually expires
+_RETRY_ATTEMPTS = 3
+_RETRY_BASE_S = 0.25  # exponential backoff base; small so tests stay fast
+
+
+def _is_transient(exc: Exception) -> bool:
+    """Transient = retry; permanent (4xx) = give up. (ADR-0009 retry-with-backoff.)"""
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, httpx.TransportError)  # connect/timeout/read/write errors
+
+
+def _with_retry(call):
+    """Run ``call()`` with bounded exponential backoff, retrying only transients.
+
+    Sits INSIDE the read path, before the stale-on-error fallback: a cold cache +
+    one transient blip now recovers instead of failing the whole resolution.
+    """
+    for attempt in range(_RETRY_ATTEMPTS):
+        try:
+            return call()
+        except Exception as exc:  # noqa: BLE001 — re-raised below if not retryable/last
+            if attempt == _RETRY_ATTEMPTS - 1 or not _is_transient(exc):
+                raise
+            delay = _RETRY_BASE_S * (2 ** attempt)
+            logger.warning("infisical transient error (attempt %d/%d), retrying in %.2fs: %s",
+                           attempt + 1, _RETRY_ATTEMPTS, delay, exc)
+            time.sleep(delay)
 
 
 def _first_env(*names: str) -> str | None:
@@ -176,10 +203,15 @@ class InfisicalBackend:
             return fetched
 
     def _fetch_scope(self) -> dict[str, dict]:
-        """One bulk ``GET /secrets/raw`` for the whole scope."""
+        """One bulk ``GET /secrets/raw`` for the whole scope (bounded retry on transients)."""
         params = {"environment": self._env, "secretPath": self._path, **self._workspace_param()}
-        resp = self._http().get("/api/v3/secrets/raw", params=params, headers=self._auth_headers())
-        resp.raise_for_status()
+
+        def _get() -> httpx.Response:
+            resp = self._http().get("/api/v3/secrets/raw", params=params, headers=self._auth_headers())
+            resp.raise_for_status()
+            return resp
+
+        resp = _with_retry(_get)
         out: dict[str, dict] = {}
         for s in resp.json().get("secrets", []):
             out[s["secretKey"]] = {"value": s.get("secretValue"), "updatedAt": s.get("updatedAt")}
@@ -194,11 +226,16 @@ class InfisicalBackend:
         now = time.time()
         if self._token and now < self._token_exp:
             return self._token
-        resp = self._http().post(
-            "/api/v1/auth/universal-auth/login",
-            json={"clientId": self._client_id, "clientSecret": self._client_secret},
-        )
-        resp.raise_for_status()
+
+        def _login() -> httpx.Response:
+            resp = self._http().post(
+                "/api/v1/auth/universal-auth/login",
+                json={"clientId": self._client_id, "clientSecret": self._client_secret},
+            )
+            resp.raise_for_status()
+            return resp
+
+        resp = _with_retry(_login)
         data = resp.json()
         self._token = data["accessToken"]
         self._token_exp = now + float(data.get("expiresIn", 600)) - _TOKEN_SKEW_S
