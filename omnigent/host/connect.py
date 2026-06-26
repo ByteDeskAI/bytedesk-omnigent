@@ -294,6 +294,18 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # spine flags are enabled. Unset/0 keeps the legacy dispatch path.
         "OMNIGENT_USE_TOOL_EXECUTION_CONTEXT",
         "OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY",
+        # Sentry error/performance telemetry config (BDP-2550). The runner
+        # subprocess calls omnigent.runtime.sentry.init_sentry("runner"), so it
+        # needs the DSN + reporting config + the content-capture flag the same
+        # way the server/host processes get them from their pod env. The DSN's
+        # public key is an embeddable ingest identifier, not a bearer secret;
+        # the rest are plain config flags. Unset → the runner's Sentry init is a
+        # no-op, matching the opt-in posture.
+        "OMNIGENT_SENTRY_DSN",
+        "OMNIGENT_SENTRY_ENVIRONMENT",
+        "OMNIGENT_SENTRY_RELEASE",
+        "OMNIGENT_SENTRY_TRACES_SAMPLE_RATE",
+        "OMNIGENT_OTEL_CAPTURE_CONTENT",
     }
 )
 # Locale family (``LC_ALL``, ``LC_CTYPE``, …) — allowed by prefix.
@@ -1552,6 +1564,13 @@ def run_host_process(
         (auth / authorization / outdated server). The
         actionable cause is printed to stderr first.
     """
+    # Sentry error + performance telemetry (BDP-2550). Opt-in: no-op unless
+    # OMNIGENT_SENTRY_DSN is set. Initialized first so even identity-load /
+    # connect failures in this process are captured. Tagged component=host.
+    from omnigent.runtime.sentry import init_sentry
+
+    init_sentry("host")
+
     from omnigent.host.identity import CONFIG_PATH
 
     path = config_path or CONFIG_PATH

@@ -1055,6 +1055,39 @@ def test_build_runner_env_allowlists_host_env_and_strips_secrets() -> None:
     assert env[RUNNER_PARENT_PID_ENV_VAR] == "42"
 
 
+def test_build_runner_env_forwards_sentry_telemetry_config() -> None:
+    """
+    The runner subprocess calls ``init_sentry("runner")`` (BDP-2550), so the
+    Sentry DSN + reporting config + content-capture flag must cross the
+    allowlist host→runner. The DSN's public key is an embeddable ingest
+    identifier, not a bearer secret like DATABRICKS_TOKEN, so it is allowlisted
+    rather than stripped.
+    """
+    base = {
+        "PATH": "/usr/bin:/bin",
+        "OMNIGENT_SENTRY_DSN": "http://k@observability.bytedesk.svc.cluster.local/proj",
+        "OMNIGENT_SENTRY_ENVIRONMENT": "development",
+        "OMNIGENT_SENTRY_RELEASE": "0.13.0",
+        "OMNIGENT_SENTRY_TRACES_SAMPLE_RATE": "1.0",
+        "OMNIGENT_OTEL_CAPTURE_CONTENT": "false",
+    }
+
+    env = _build_runner_env(
+        base,
+        server_url="http://server",
+        runner_id="runner_abc",
+        binding_token="tok",
+        workspace="/ws",
+        parent_pid=42,
+    )
+
+    assert env["OMNIGENT_SENTRY_DSN"] == base["OMNIGENT_SENTRY_DSN"]
+    assert env["OMNIGENT_SENTRY_ENVIRONMENT"] == "development"
+    assert env["OMNIGENT_SENTRY_RELEASE"] == "0.13.0"
+    assert env["OMNIGENT_SENTRY_TRACES_SAMPLE_RATE"] == "1.0"
+    assert env["OMNIGENT_OTEL_CAPTURE_CONTENT"] == "false"
+
+
 def test_build_runner_env_forwards_harness_credentials_and_endpoints() -> None:
     """
     Every var in HARNESS_CREDENTIAL_ENV_VARS forwards when present —

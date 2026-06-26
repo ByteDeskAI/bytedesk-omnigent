@@ -106,6 +106,20 @@ patches:
                     value: /build
                   - name: OMNIGENT_EXTENSIONS
                     value: bytedesk_omnigent.extension:BytedeskExtension
+                  # Sentry error/performance telemetry → self-hosted ByteDesk
+                  # Observability (BDP-2550). Local-dev-only literal: the
+                  # deterministic dev-seeded `omnigent` project DSN
+                  # (DevProjectSeeder, a100000d). Prod instead populates
+                  # OMNIGENT_SENTRY_DSN via the omnigent Infisical project (it
+                  # flows in through the omnigent-infisical-secrets envFrom), so
+                  # it is NOT set in the base manifests. traces=1.0 here so every
+                  # request yields a transaction the smoke can see.
+                  - name: OMNIGENT_SENTRY_DSN
+                    value: "http://a100000d00000000000000000000000d@observability.bytedesk.svc.cluster.local/a100000d-0000-0000-0000-00000000000d"
+                  - name: OMNIGENT_SENTRY_ENVIRONMENT
+                    value: development
+                  - name: OMNIGENT_SENTRY_TRACES_SAMPLE_RATE
+                    value: "1.0"
                   # Accounts mode (multi-user login) for local dev. env merges by
                   # name, so this OVERRIDES the base server.yaml OMNIGENT_AUTH_ENABLED=0
                   # — but only in THIS local-dev overlay, which is never reconciled
@@ -178,6 +192,18 @@ patches:
                   # from the source mount — make the new top-level package importable.
                   - name: PYTHONPATH
                     value: /build
+                  # Sentry telemetry (BDP-2550). The host's own errors are minor,
+                  # but the runner subprocess inherits this DSN via the host env
+                  # allowlist (_RUNNER_ENV_ALLOWLIST) and reports as
+                  # component=runner — so it MUST be present on the host pod.
+                  # Local-dev-only literal (deterministic dev-seeded `omnigent`
+                  # project); prod populates it via the omnigent Infisical project.
+                  - name: OMNIGENT_SENTRY_DSN
+                    value: "http://a100000d00000000000000000000000d@observability.bytedesk.svc.cluster.local/a100000d-0000-0000-0000-00000000000d"
+                  - name: OMNIGENT_SENTRY_ENVIRONMENT
+                    value: development
+                  - name: OMNIGENT_SENTRY_TRACES_SAMPLE_RATE
+                    value: "1.0"
                 volumeMounts:
                   - name: omnigent-src
                     mountPath: /build
