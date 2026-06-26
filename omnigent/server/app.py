@@ -949,10 +949,14 @@ def create_app(
     # byte-identical to today. ``managed_launches`` is also produced by the
     # container so the same object reaches ``app.state.managed_launches`` below.
     _di_container = None
+    from omnigent.fabric.credentials import create_runner_credential_store_from_env
+
+    runner_credential_store = create_runner_credential_store_from_env()
+
     if _env_truthy_di("OMNIGENT_USE_DI_CONTAINER"):
         from omnigent.server.container import build_core_container
 
-        _di_container = build_core_container(conversation_store)
+        _di_container = build_core_container(conversation_store, runner_credential_store)
         runner_control_registry = _di_container.runner_control_registry()
         runner_router = _di_container.runner_router()
         host_registry = _di_container.host_registry()
@@ -966,6 +970,7 @@ def create_app(
         runner_router = RunnerRouter(
             registry=runner_control_registry,
             conversation_store=conversation_store,
+            credential_store=runner_credential_store,
         )
         host_registry = HostRegistry()
         # Shared between the host tunnel (which records ``host.runner_exited``
@@ -1313,6 +1318,7 @@ def create_app(
 
     telemetry.instrument_fastapi_app(app)
     app.state.runner_control_registry = runner_control_registry
+    app.state.runner_credential_store = runner_credential_store
     app.state.runner_router = runner_router
     app.state.runner_exit_reports = runner_exit_reports
     # The fully-assembled principal composite (BDP-2437) — the runner-token tail
@@ -2106,6 +2112,7 @@ def create_app(
                 agent_store=agent_store,
                 agent_cache=agent_cache,
                 runner_control_registry=runner_control_registry,
+                runner_credential_store=runner_credential_store,
                 runner_router=runner_router,
                 runner_exit_reports=runner_exit_reports,
             ),

@@ -109,6 +109,7 @@ def _base_state(conv_store: _ConvStore, host_store: _HostStore) -> dict[str, Any
         "host_registry": _HostRegistry(),
         "host_store": host_store,
         "runner_control_registry": None,
+        "runner_credential_store": object(),
         "runner_exit_reports": None,
         "sandbox_config": None,
         "managed_launches": None,
@@ -139,9 +140,18 @@ async def test_rung1_relaunch_on_live_host_single_flight(
     launches: list[str] = []
 
     async def _fake_launch_on_id(
-        conv, cs, hr, host_id, *, owner=None, runner_control_registry=None, repin=None
+        conv,
+        cs,
+        hr,
+        host_id,
+        *,
+        owner=None,
+        runner_control_registry=None,
+        runner_credential_store=None,
+        repin=None,
     ):
         launches.append(host_id)
+        assert runner_credential_store is state["runner_credential_store"]
         assert repin is not None and repin("runner_new") is True  # CAS exercised
         return S._HostLaunchAttempt(runner_id="runner_new", acked=True, repinned=True)
 
@@ -205,8 +215,17 @@ async def test_plain_host_wedge_fails_over_to_capable_owner_host(
     monkeypatch.setattr(S, "_get_runner_client", _async_return(None))
 
     async def _fake_launch_on_id(
-        conv, cs, hr, host_id, *, owner=None, runner_control_registry=None, repin=None
+        conv,
+        cs,
+        hr,
+        host_id,
+        *,
+        owner=None,
+        runner_control_registry=None,
+        runner_credential_store=None,
+        repin=None,
     ):
+        assert runner_credential_store is state["runner_credential_store"]
         if host_id == "host_a":
             # rung-1: bound host is wedged (registered tunnel never ACKs).
             assert repin is not None and repin("runner_r1") is True
@@ -234,9 +253,18 @@ async def test_failover_disabled_falls_through_to_rung3(
     monkeypatch.setattr(S, "_get_runner_client", _async_return(None))
 
     async def _wedged(
-        conv, cs, hr, host_id, *, owner=None, runner_control_registry=None, repin=None
+        conv,
+        cs,
+        hr,
+        host_id,
+        *,
+        owner=None,
+        runner_control_registry=None,
+        runner_credential_store=None,
+        repin=None,
     ):
         assert host_id == "host_a", "must never try a second host when failover off"
+        assert runner_credential_store is state["runner_credential_store"]
         assert repin is not None and repin("runner_r1") is True
         return S._HostLaunchAttempt(runner_id="runner_r1", acked=False, repinned=True)
 

@@ -39,6 +39,14 @@ class _FakeRegistry:
         self.recorded = (runner_id, owner, token)
 
 
+class _FakeCredentialStore:
+    def __init__(self) -> None:
+        self.recorded: tuple[str, str, str] | None = None
+
+    async def record_launch_token(self, runner_id: str, owner: str, token: str) -> None:
+        self.recorded = (runner_id, owner, token)
+
+
 class _FakeHostWorker:
     def __init__(self, *, acked: bool = True) -> None:
         self.acked = acked
@@ -56,6 +64,7 @@ class _FakeHostWorker:
 async def test_runner_fabric_atomically_binds_and_launches_host_runner() -> None:
     store = _FakeStore()
     owner_registry = _FakeRegistry()
+    credential_store = _FakeCredentialStore()
     host_worker = _FakeHostWorker()
     fabric = HostWorkerRunnerFabric(host_worker=host_worker)
 
@@ -71,6 +80,7 @@ async def test_runner_fabric_atomically_binds_and_launches_host_runner() -> None
             host_registry=host_registry,
             owner="alice@example.com",
             runner_control_registry=owner_registry,
+            runner_credential_store=credential_store,
             bind_mode="set",
             timeout_s=15.0,
         )
@@ -86,6 +96,11 @@ async def test_runner_fabric_atomically_binds_and_launches_host_runner() -> None
     assert recorded_runner == result.runner_id
     assert recorded_owner == "alice@example.com"
     assert recorded_token
+    assert credential_store.recorded == (
+        result.runner_id,
+        "alice@example.com",
+        recorded_token,
+    )
     assert len(host_worker.calls) == 1
     call = host_worker.calls[0]
     assert call["host_registry"] is host_registry

@@ -97,9 +97,11 @@ class RunnerRouter:
         registry: RunnerRegistry,
         conversation_store: ConversationStore,
         transport_factory: RunnerTransportFactory | None = None,
+        credential_store: Any | None = None,
     ) -> None:
         self._registry = registry
         self._conversation_store = conversation_store
+        self._credential_store = credential_store
         self._transport_factory = transport_factory or resolve_runner_transport_factory(
             auth_token_resolver=self._launch_token,
         )
@@ -278,6 +280,11 @@ class RunnerRouter:
                 runner_id=runner_id,
                 client=self._client_for_runner(runner_id),
             )
+        if await self._hydrate_launch_credential(runner_id):
+            return RoutedRunner(
+                runner_id=runner_id,
+                client=self._client_for_runner(runner_id),
+            )
 
         owner = await self._resolve_owner("runner", runner_id)
         if owner is None:
@@ -289,6 +296,18 @@ class RunnerRouter:
             f"runner {runner_id!r} is owned by replica {owner!r} but has no NATS launch token",
             code=ErrorCode.RUNNER_UNAVAILABLE,
         )
+
+    async def _hydrate_launch_credential(self, runner_id: str) -> bool:
+        lookup = getattr(self._credential_store, "lookup_launch_token", None)
+        if not callable(lookup):
+            return False
+        credential = await lookup(runner_id)
+        if credential is None:
+            return False
+        record = getattr(self._registry, "record_launch_owner", None)
+        if callable(record):
+            record(credential.runner_id, credential.owner, token=credential.token)
+        return True
 
     def _routed_runner_local(self, runner_id: str, conversation_id: str) -> RoutedRunner:
         session = self._registry.get(runner_id)

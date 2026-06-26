@@ -653,7 +653,7 @@ _SNAPSHOT_RUNNER_TIMEOUT_S = 2.0
 # runner stream's ready heartbeat before forwarding a no-replay input
 # event. A timeout fails loud instead of accepting a prompt whose fast
 # output could be dropped before the relay is subscribed.
-_RUNNER_RELAY_READY_TIMEOUT_S = 5.0
+_RUNNER_RELAY_READY_TIMEOUT_S = 15.0
 
 # Set of event ``type`` values the route accepts on POST /events.
 # Two are special-cased and bypass the normal item-persist path:
@@ -5312,6 +5312,7 @@ async def _launch_runner_on_host(
     *,
     owner: str | None = None,
     runner_control_registry: Any | None = None,
+    runner_credential_store: Any | None = None,
     repin: Callable[[str], bool] | None = None,
 ) -> _HostLaunchAttempt:
     """
@@ -5340,6 +5341,10 @@ async def _launch_runner_on_host(
         identity at connect as before.
     :param runner_control_registry: Runner-tunnel registry to record the launch
         owner in. ``None`` (minimal test wirings) skips recording.
+    :param runner_credential_store: Shared fabric credential store used
+        to make launch tokens visible to every server replica.
+    :param repin: Optional self-heal compare-and-swap callback. When supplied,
+        it owns the runner_id swap and aborts launch on a lost CAS.
     :returns: The :class:`_HostLaunchAttempt` — the new runner id plus any
         structured refusal from the host.
     """
@@ -5369,6 +5374,7 @@ async def _launch_runner_on_host(
             host_registry=host_registry,
             owner=owner,
             runner_control_registry=runner_control_registry,
+            runner_credential_store=runner_credential_store,
             bind_mode="replace",
             timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
             host_connection=host_conn,
@@ -5398,6 +5404,7 @@ async def _launch_runner_on_host_id(
     *,
     owner: str | None = None,
     runner_control_registry: Any | None = None,
+    runner_credential_store: Any | None = None,
     repin: Callable[[str], bool] | None = None,
 ) -> _HostLaunchAttempt:
     """
@@ -5426,6 +5433,7 @@ async def _launch_runner_on_host_id(
             host_registry=host_registry,
             owner=owner,
             runner_control_registry=runner_control_registry,
+            runner_credential_store=runner_credential_store,
             bind_mode="replace",
             timeout_s=_HOST_LAUNCH_RESULT_TIMEOUT_S,
             # Self-heal CAS swap (BDP-2579 F3) — see _launch_runner_on_host.
@@ -5494,6 +5502,7 @@ async def _run_managed_launch(
     host_store: HostStore,
     host_registry: HostRegistry | None,
     runner_control_registry: Any | None,
+    runner_credential_store: Any | None = None,
     runner_router: RunnerRouter | None = None,
     relaunch_host: Host | None = None,
 ) -> None:
@@ -5541,6 +5550,8 @@ async def _run_managed_launch(
     :param runner_control_registry: Deprecated runner-tunnel registry slot.
         Retained for callsite compatibility while runner readiness is
         probed through ``runner_router``.
+    :param runner_credential_store: Shared fabric credential store used
+        to make launch tokens visible to every server replica.
     :param runner_router: Router used to probe the launched runner over
         the NATS control plane before settling readiness.
     :param relaunch_host: Existing managed host row to relaunch a new
@@ -5568,6 +5579,7 @@ async def _run_managed_launch(
         host_store=host_store,
         host_registry=host_registry,
         runner_control_registry=runner_control_registry,
+        runner_credential_store=runner_credential_store,
         runner_router=runner_router,
     )
 
@@ -5667,6 +5679,7 @@ async def _bind_and_launch_managed_runner(
     host_store: HostStore,
     host_registry: HostRegistry | None,
     runner_control_registry: Any | None,
+    runner_credential_store: Any | None = None,
     runner_router: RunnerRouter | None = None,
 ) -> None:
     """
@@ -5691,6 +5704,8 @@ async def _bind_and_launch_managed_runner(
         launch-runner frame. ``None`` in minimal test wirings.
     :param runner_control_registry: Deprecated runner-tunnel registry slot.
         Retained for compatibility while readiness is probed over NATS.
+    :param runner_credential_store: Shared fabric credential store used
+        to make launch tokens visible to every server replica.
     :param runner_router: Router used to probe the launched runner's
         control-plane readiness. ``None`` in minimal test wirings.
     """
@@ -5736,6 +5751,7 @@ async def _bind_and_launch_managed_runner(
                 host_conn,
                 owner=owner,
                 runner_control_registry=runner_control_registry,
+                runner_credential_store=runner_credential_store,
             )
         else:
             launch_attempt = await _launch_runner_on_host_id(
@@ -5745,6 +5761,7 @@ async def _bind_and_launch_managed_runner(
                 managed.host_id,
                 owner=owner,
                 runner_control_registry=runner_control_registry,
+                runner_credential_store=runner_credential_store,
             )
         if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
             # The sandbox image should bake in the harness, but if the
@@ -5947,6 +5964,7 @@ def _kick_managed_relaunch(
             host_store=host_store,
             host_registry=getattr(app_state, "host_registry", None),
             runner_control_registry=getattr(app_state, "runner_control_registry", None),
+            runner_credential_store=getattr(app_state, "runner_credential_store", None),
             runner_router=getattr(app_state, "runner_router", None),
             relaunch_host=host,
         )
@@ -6127,6 +6145,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
     host_registry = getattr(app_state, "host_registry", None)
     host_store = getattr(app_state, "host_store", None)
     runner_control_registry = getattr(app_state, "runner_control_registry", None)
+    runner_credential_store = getattr(app_state, "runner_credential_store", None)
     runner_exit_reports = getattr(app_state, "runner_exit_reports", None)
 
     try:
@@ -6213,6 +6232,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                     host_conn,
                     owner=owner,
                     runner_control_registry=runner_control_registry,
+                    runner_credential_store=runner_credential_store,
                     repin=_repin,
                 )
             elif host_registry is not None:
@@ -6223,6 +6243,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                     conv.host_id,
                     owner=owner,
                     runner_control_registry=runner_control_registry,
+                    runner_credential_store=runner_credential_store,
                     repin=_repin,
                 )
             else:
@@ -6279,6 +6300,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                 host_registry=host_registry,
                 runner_router=runner_router,
                 runner_control_registry=runner_control_registry,
+                runner_credential_store=runner_credential_store,
                 runner_exit_reports=runner_exit_reports,
             )
             if healed:
@@ -6308,6 +6330,7 @@ async def _failover_to_new_host(
     host_registry: HostRegistry | None,
     runner_router: RunnerRouter | None,
     runner_control_registry: Any | None,
+    runner_credential_store: Any | None,
     runner_exit_reports: RunnerExitReports | None,
 ) -> bool:
     """Rung 2: select a live capability-matching host and atomically repin.
@@ -6363,6 +6386,7 @@ async def _failover_to_new_host(
             target.host_id,
             owner=owner,
             runner_control_registry=runner_control_registry,
+            runner_credential_store=runner_credential_store,
             repin=_repin,
         )
         if not attempt.repinned:
@@ -12885,6 +12909,11 @@ def create_sessions_router(
                         "runner_control_registry",
                         None,
                     ),
+                    runner_credential_store=getattr(
+                        request.app.state,
+                        "runner_credential_store",
+                        None,
+                    ),
                     runner_router=getattr(request.app.state, "runner_router", None),
                 )
             )
@@ -12936,6 +12965,11 @@ def create_sessions_router(
                             host_registry=host_registry,
                             owner=user_id,
                             runner_control_registry=_create_runner_control_registry,
+                            runner_credential_store=getattr(
+                                request.app.state,
+                                "runner_credential_store",
+                                None,
+                            ),
                             bind_mode="set",
                             timeout_s=30.0,
                         )
@@ -17246,6 +17280,11 @@ def create_sessions_router(
                         _host_conn,
                         owner=user_id,
                         runner_control_registry=_runner_control_registry,
+                        runner_credential_store=getattr(
+                            request.app.state,
+                            "runner_credential_store",
+                            None,
+                        ),
                     )
                     if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                         # The host refused: the agent's harness isn't
@@ -17295,6 +17334,11 @@ def create_sessions_router(
                         conv.host_id,
                         owner=user_id,
                         runner_control_registry=_runner_control_registry,
+                        runner_credential_store=getattr(
+                            request.app.state,
+                            "runner_credential_store",
+                            None,
+                        ),
                     )
                     if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                         item_id = await _persist_host_launch_failure_turn(
