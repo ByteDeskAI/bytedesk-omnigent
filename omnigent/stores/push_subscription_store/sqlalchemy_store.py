@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, select
+from collections.abc import Callable
+
+from sqlalchemy import delete, insert, select
+from sqlalchemy.dialects.postgresql import insert as postgres_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.engine import Engine
 
 from omnigent.db.db_models import SqlPushSubscription
 from omnigent.db.utils import get_or_create_engine, make_managed_session_maker
 from omnigent.stores.push_subscription_store import PushSubscription, PushSubscriptionStore
+
+
+def _upsert_insert_for_engine(engine: Engine) -> Callable[..., object]:
+    if engine.dialect.name == "postgresql":
+        return postgres_insert
+    if engine.dialect.name == "sqlite":
+        return sqlite_insert
+    return insert
 
 
 class SqlAlchemyPushSubscriptionStore(PushSubscriptionStore):
@@ -19,7 +31,7 @@ class SqlAlchemyPushSubscriptionStore(PushSubscriptionStore):
 
     def upsert(self, user_id: str, endpoint: str, p256dh: str, auth: str) -> PushSubscription:
         with self._session() as session:
-            stmt = sqlite_insert(SqlPushSubscription).values(
+            stmt = _upsert_insert_for_engine(self._engine)(SqlPushSubscription).values(
                 user_id=user_id,
                 endpoint=endpoint,
                 p256dh=p256dh,
@@ -49,7 +61,9 @@ class SqlAlchemyPushSubscriptionStore(PushSubscriptionStore):
 
     def delete_all_for_user(self, user_id: str) -> None:
         with self._session() as session:
-            session.execute(delete(SqlPushSubscription).where(SqlPushSubscription.user_id == user_id))
+            session.execute(
+                delete(SqlPushSubscription).where(SqlPushSubscription.user_id == user_id)
+            )
             session.commit()
 
     def list_for_user(self, user_id: str) -> list[PushSubscription]:
