@@ -185,12 +185,13 @@ def _request_timeout_s(request: httpx.Request, default: float) -> float:
     timeout = request.extensions.get("timeout")
     if not isinstance(timeout, dict):
         return default
-    candidates: list[float] = []
-    for key in ("read", "connect"):
-        value = timeout.get(key)
-        if isinstance(value, int | float) and value > 0:
-            candidates.append(float(value))
-    return min(candidates) if candidates else default
+    read_timeout = timeout.get("read")
+    if isinstance(read_timeout, int | float) and read_timeout > 0:
+        return float(read_timeout)
+    connect_timeout = timeout.get("connect")
+    if isinstance(connect_timeout, int | float) and connect_timeout > 0:
+        return float(connect_timeout)
+    return default
 
 
 def encode_http_response(

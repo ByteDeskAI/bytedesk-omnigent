@@ -183,6 +183,79 @@ async def test_nats_runner_transport_streams_response_frames() -> None:
 
 
 @pytest.mark.asyncio
+async def test_nats_runner_transport_uses_read_timeout_for_stream_frames() -> None:
+    class _Msg:
+        def __init__(self, data: bytes) -> None:
+            self.data = data
+
+    class _Subscription:
+        def __init__(self) -> None:
+            self.queue: asyncio.Queue[_Msg] = asyncio.Queue()
+            self.next_timeouts: list[float] = []
+
+        async def next_msg(self, timeout: float = 1.0) -> _Msg:
+            self.next_timeouts.append(timeout)
+            return await asyncio.wait_for(self.queue.get(), timeout=timeout)
+
+        async def unsubscribe(self) -> None:
+            return None
+
+    class _Nats:
+        def __init__(self) -> None:
+            self.subscriptions: dict[str, _Subscription] = {}
+            self.request_timeout: float | None = None
+            self._inbox_counter = 0
+
+        def new_inbox(self) -> str:
+            self._inbox_counter += 1
+            return f"inbox.{self._inbox_counter}"
+
+        async def subscribe(self, subject: str) -> _Subscription:
+            subscription = _Subscription()
+            self.subscriptions[subject] = subscription
+            return subscription
+
+        async def request(self, subject: str, payload: bytes, timeout: float) -> _Msg:
+            del subject
+            self.request_timeout = timeout
+            request = decode_http_request(payload)
+            stream_reply = str(request["stream_reply"])
+            await self.subscriptions[stream_reply].queue.put(
+                _Msg(encode_http_stream_body(body=b"data: ready\n\n", more_body=True))
+            )
+            await self.subscriptions[stream_reply].queue.put(
+                _Msg(encode_http_stream_body(body=b"", more_body=False))
+            )
+            return _Msg(encode_http_response(status_code=200, stream=True))
+
+        async def publish(self, subject: str, payload: bytes) -> None:
+            del subject, payload
+
+        async def drain(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    fake_nats = _Nats()
+    transport = NatsRunnerTransport("runner_1", nats_url="nats://fake")
+    transport._nc = fake_nats  # type: ignore[attr-defined]
+
+    timeout = httpx.Timeout(connect=5.0, read=45.0, write=None, pool=None)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        async with client.stream(
+            "GET",
+            "/v1/sessions/conv_1/stream",
+            timeout=timeout,
+        ) as response:
+            await response.aread()
+
+    subscription = fake_nats.subscriptions["inbox.1"]
+    assert fake_nats.request_timeout == 45.0
+    assert subscription.next_timeouts == [45.0, 45.0]
+
+
+@pytest.mark.asyncio
 async def test_dispatch_nats_http_request_runs_runner_asgi_app() -> None:
     app = FastAPI()
 
