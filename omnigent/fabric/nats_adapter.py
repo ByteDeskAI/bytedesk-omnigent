@@ -117,7 +117,12 @@ def _is_not_found_error(exc: Exception) -> bool:
     if isinstance(exc, KeyError):
         return True
     class_name = exc.__class__.__name__
-    if class_name in {"NotFoundError", "BucketNotFoundError", "ObjectNotFoundError"}:
+    if class_name in {
+        "NotFoundError",
+        "BucketNotFoundError",
+        "KeyNotFoundError",
+        "ObjectNotFoundError",
+    }:
         return True
     for attr in ("code", "status_code", "err_code"):
         value = getattr(exc, attr, None)
@@ -172,6 +177,7 @@ class _NatsPyJetStreamClient:
             if not _is_not_found_error(exc):
                 raise
             await self._js.create_object_store(
+                bucket=bucket,
                 config=self._object_store_config_cls(**config)
             )
 
