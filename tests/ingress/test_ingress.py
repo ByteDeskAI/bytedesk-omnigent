@@ -105,6 +105,10 @@ def test_process_inbound_delivers_to_signal_bus_then_replay_409(tmp_path) -> Non
     )
     assert nob.status is IngressStatus.NO_BINDING
     assert nob.http_status == 404
+    assert nob.escalation is not None
+    assert nob.escalation["kind"] == "integration.dead_letter_escalation"
+    assert nob.escalation["source"] == "teamcity"
+    assert nob.escalation["match_key"] == "unknown.event"
 
     # Valid + bound -> delivers to the bus, resolves the parked wait -> 202.
     ok = process_inbound(
@@ -177,6 +181,9 @@ def test_process_inbound_expired_wait_returns_410_not_409(tmp_path) -> None:
     )
     assert res.status is IngressStatus.EXPIRED
     assert res.http_status == 410
+    assert res.escalation is not None
+    assert res.escalation["status"] == "expired"
+    assert res.escalation["byte_desk_task"]["owner"] == "integration-ops"
 
 
 # ── per-source webhook signature adapter (BDP-2354) ──────────────────────────

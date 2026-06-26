@@ -53,13 +53,13 @@ def create_ingress_router() -> APIRouter:
             adapter=adapter,
             payload=payload if isinstance(payload, dict) else None,
         )
-        return JSONResponse(
-            {
-                "status": result.status.value,
-                "signal_id": result.signal_id,
-                "detail": result.detail,
-            },
-            status_code=result.http_status,
-        )
+        response = {
+            "status": result.status.value,
+            "signal_id": result.signal_id,
+            "detail": result.detail,
+        }
+        if result.escalation is not None:
+            response["escalation"] = result.escalation
+        return JSONResponse(response, status_code=result.http_status)
 
     return router
