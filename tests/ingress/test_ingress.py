@@ -13,6 +13,7 @@ import bytedesk_omnigent.ingress as _ingress_mod
 from bytedesk_omnigent.bus import SqlAlchemySignalBus
 from bytedesk_omnigent.ingress import (
     GitHubWebhookAdapter,
+    HubSpotWebhookAdapter,
     IngressBindingStore,
     IngressStatus,
     WebhookSourceAdapter,
@@ -233,3 +234,23 @@ def test_second_registered_source_uses_its_own_adapter(_restore_adapter_registry
     assert adapter.match_key({"stripe-event": "invoice.paid"}) == "invoice.paid"
     # The default source is untouched.
     assert isinstance(resolve_webhook_adapter("github"), GitHubWebhookAdapter)
+
+
+def test_hubspot_adapter_verifies_legacy_signature_and_extracts_subscription_type() -> None:
+    """HubSpot signs ``clientSecret + rawBody`` and carries the routing event in
+    the JSON body, so the built-in adapter must not require a deployment shim."""
+    adapter = HubSpotWebhookAdapter()
+    body = json.dumps(
+        [{"subscriptionType": "contact.propertyChange", "objectId": 123}],
+        separators=(",", ":"),
+    ).encode()
+    secret = "hubspot-client-secret"
+    signature = hashlib.sha256(secret.encode() + body).hexdigest()
+
+    assert adapter.verify(body, {"X-HubSpot-Signature": signature}, secret) is True
+    assert adapter.verify(body, {"X-HubSpot-Signature": "bad"}, secret) is False
+    assert adapter.match_key(body, {}) == "contact.propertyChange"
+
+
+def test_hubspot_source_is_registered_by_default() -> None:
+    assert isinstance(resolve_webhook_adapter("hubspot"), HubSpotWebhookAdapter)
