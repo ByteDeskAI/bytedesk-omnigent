@@ -351,12 +351,28 @@ class BytedeskExtension:
         return [
             self._configure_logging,
             self._signal_bus_reaper,
+            self._inbound_retry_reaper,
+            self._seed_inbound_flags,
             self._cron_scheduler,
             self._accountability,
             self._tool_step_resume,
             self._seed_workflow_tasks,
             self._realtime_bridge,
         ]
+
+    async def _inbound_retry_reaper(self) -> None:
+        from bytedesk_omnigent.inbound.reaper import inbound_retry_reaper_loop
+
+        await inbound_retry_reaper_loop()
+
+    async def _seed_inbound_flags(self) -> None:
+        """One-shot: seed the inbound-pipeline feature flags (ADR-0155), default off."""
+        from bytedesk_omnigent.inbound.flags import seed_inbound_flags
+
+        try:
+            await seed_inbound_flags()
+        except Exception:  # noqa: BLE001 - seed must not block boot
+            logger.warning("inbound flag seed skipped", exc_info=True)
 
     async def _configure_logging(self) -> None:
         """Surface the ``bytedesk_omnigent`` namespace's INFO logs. Core sets the
