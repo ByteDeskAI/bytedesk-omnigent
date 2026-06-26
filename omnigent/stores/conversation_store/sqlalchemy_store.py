@@ -780,6 +780,28 @@ class SqlAlchemyConversationStore(ConversationStore):
             return None
         return self.get_session_owner(row[0])
 
+    def agent_id_for_runner(self, runner_id: str) -> str | None:
+        """
+        Resolve the agent bound to a runner's live session (BDP-2577).
+
+        ``SELECT agent_id WHERE runner_id = ? LIMIT 1`` — the calling-agent half
+        of the runner-tunnel auth used by the route-level skill-manage gate to
+        identify which agent is requesting a cross-agent skill apply. ``None``
+        when no session is bound to ``runner_id`` (forged / never-launched
+        runner) or that session has no bound agent.
+        """
+        if not runner_id:
+            return None
+        with self._session() as session:
+            row = session.execute(
+                select(SqlConversation.agent_id)
+                .where(SqlConversation.runner_id == runner_id)
+                .limit(1)
+            ).first()
+        if row is None:
+            return None
+        return row[0]
+
     def get_session_connectivity(
         self, conversation_ids: list[str]
     ) -> dict[str, SessionConnectivity]:

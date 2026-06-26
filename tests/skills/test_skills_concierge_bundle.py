@@ -67,6 +67,13 @@ def test_skill_builtins_attached_and_stdio_front_gone(spec) -> None:
     assert "skills" not in servers, "the legacy skills stdio MCP front must be removed"
 
 
+def test_concierge_declares_skill_manage_capability(spec) -> None:
+    # Step 2 (BDP-2577): the Concierge is the privileged Skill Manager. Its
+    # `system.skills.manage` capability is the slug the route-level skill-apply
+    # authz gate checks; the startup backfill materializes it onto the row.
+    assert spec.capabilities == ("system.skills.manage",)
+
+
 def test_probe_surface_is_granted(spec) -> None:
     # async → inbox builtins to await each probe; spawn → sys_session_create
     # against any registered target agent. Both are required by the saga.

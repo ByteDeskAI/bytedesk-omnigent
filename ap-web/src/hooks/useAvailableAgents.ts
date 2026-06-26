@@ -6,6 +6,7 @@ import {
   nativeCodingAgentForAgentName,
   nativeCodingAgentForHarness,
 } from "@/lib/nativeCodingAgents";
+import type { AgentTier } from "@/lib/agentTiers";
 
 export interface AvailableAgent {
   id: string;
@@ -27,6 +28,9 @@ export interface AvailableAgent {
   department?: string | null;
   title?: string | null;
   workflow?: boolean;
+  // Three-tier grouping from GET /v1/agents (system / employee / workflow).
+  // Absent on older servers; tierForAgent falls back to the workflow flag.
+  category?: AgentTier;
 }
 
 const DISPLAY_NAMES: Record<string, string> = {
@@ -56,6 +60,7 @@ interface BuiltinAgentWire {
   department?: string | null;
   title?: string | null;
   workflow?: boolean;
+  category?: string;
 }
 
 /** Wire row of the sessions scan, GET /v1/sessions?kind=any. */
@@ -90,6 +95,9 @@ async function fetchBuiltinAgents(): Promise<AvailableAgent[]> {
     department: a.department ?? null,
     title: a.title ?? null,
     workflow: a.workflow ?? false,
+    // Passed through raw; tierForAgent validates the enum and falls back to
+    // the workflow flag when it's absent or unrecognized.
+    category: a.category as AgentTier | undefined,
   }));
 }
 
@@ -144,6 +152,7 @@ interface AgentObjectWire {
   department?: string | null;
   title?: string | null;
   workflow?: boolean;
+  category?: string;
 }
 
 /**
@@ -183,6 +192,7 @@ async function enrichSessionAgent(scanned: ScannedSessionAgent): Promise<Availab
       department: json.department ?? null,
       title: json.title ?? null,
       workflow: json.workflow ?? false,
+      category: json.category as AgentTier | undefined,
     };
   } catch {
     // Network-level failure — same best-effort degradation as the

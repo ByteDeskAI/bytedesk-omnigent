@@ -31,8 +31,9 @@ AgentCategory = Literal["system", "employee", "workflow"]
 # Bootstrap "system" allowlist — privilege classification, NOT SoT ownership
 # (do not infer from ``sot_tier``: that means omnigent-is-source-of-truth, a
 # different axis). Names mirror the seeded built-ins in omnigent/server/app.py
-# (the four NativeCodingAgent.agent_name values + debby + polly). The Skill
-# Manager (skills-concierge) joins this set in step 2.
+# (the four NativeCodingAgent.agent_name values + debby + polly) plus the Skill
+# Manager (skills-concierge), promoted to a system agent in step 2 (BDP-2577) so
+# its ``system.skills.manage`` privilege gates cross-agent skill installs.
 SYSTEM_AGENT_NAMES: frozenset[str] = frozenset(
     {
         "claude-native-ui",
@@ -41,6 +42,7 @@ SYSTEM_AGENT_NAMES: frozenset[str] = frozenset(
         "grok-native-ui",
         "debby",
         "polly",
+        "skills-concierge",
     }
 )
 
@@ -89,6 +91,22 @@ class WorkflowRole(Protocol):
 
     @property
     def category(self) -> AgentCategory: ...
+
+
+def is_system(agent: AgentRole) -> bool:
+    """Return whether *agent* is a system-tier automation (step 2, BDP-2577).
+
+    The first real consumer of the role Protocols: reads the structural
+    :attr:`AgentRole.category` rather than re-checking the name allowlist, so
+    callers classify via the entity seam. Used by the startup classification
+    backfill to keep system classification independent of a (possibly
+    failed-to-load) bundle spec — the converter already derives ``"system"``
+    from the allowlisted name.
+
+    :param agent: Any object satisfying :class:`AgentRole`.
+    :returns: ``True`` if its category is ``"system"``.
+    """
+    return agent.category == "system"
 
 
 @dataclass

@@ -3917,6 +3917,30 @@ def test_owner_for_runner_none_when_runner_unbound(
     assert conversation_store.owner_for_runner("") is None
 
 
+def test_agent_id_for_runner_resolves_bound_agent(
+    conversation_store: SqlAlchemyConversationStore,
+    agent_store: SqlAlchemyAgentStore,
+) -> None:
+    """BDP-2577: agent_id_for_runner returns the agent bound to the runner's
+    session — the calling-agent half of the runner-tunnel skill-manage gate."""
+    caller = agent_store.create(
+        agent_id="ag_caller", name="caller", bundle_location="ag_caller/h"
+    )
+    conv = conversation_store.create_conversation(
+        agent_id=caller.id, runner_id="runner_skill_1"
+    )
+    assert conv.agent_id == "ag_caller"
+    assert conversation_store.agent_id_for_runner("runner_skill_1") == "ag_caller"
+
+
+def test_agent_id_for_runner_none_when_runner_unbound(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """No session bound to the runner id (forged / never-launched) → None."""
+    assert conversation_store.agent_id_for_runner("runner_never_launched") is None
+    assert conversation_store.agent_id_for_runner("") is None
+
+
 def test_get_session_owner_excludes_public_sentinel(
     conversation_store: SqlAlchemyConversationStore,
     db_uri: str,

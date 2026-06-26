@@ -28,6 +28,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
+import { tierForAgent } from "@/lib/agentTiers";
 import {
   useActivateGoal,
   useAddGoalDependency,
@@ -179,7 +180,10 @@ export function GoalsPage() {
   useGoalEvents(true);
 
   const agentRows = useMemo(() => agents.data ?? [], [agents.data]);
-  const employeeRows = useMemo(() => agentRows.filter((agent) => !agent.workflow), [agentRows]);
+  const employeeRows = useMemo(
+    () => agentRows.filter((agent) => tierForAgent(agent) !== "workflow"),
+    [agentRows],
+  );
   const goalRows = useMemo(() => goals.data ?? [], [goals.data]);
   const scopeOptions = useMemo(
     () => scopeOptionsForGoals(employeeRows, goalRows),

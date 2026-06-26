@@ -21,6 +21,14 @@ executor:
   config:
     harness: claude-sdk
 
+# Privilege surface (agent-tiering step 2, BDP-2577). `system.skills.manage` is
+# the slug the route-level skill-apply authz gate checks: only an agent holding
+# it may apply a skill into an agent OTHER than itself (a cross-agent install).
+# The startup classification backfill materializes this onto the agent row so
+# the gate can read it back via the agent store.
+capabilities:
+  - system.skills.manage
+
 params:
   department: "Operations"
   internalOnly: true
