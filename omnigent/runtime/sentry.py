@@ -36,6 +36,16 @@ _CONTENT_REQUEST_KEYS = ("data", "query_string", "cookies")
 
 _DEFAULT_TRACES_SAMPLE_RATE = 0.1
 
+# Set True once init_sentry has successfully initialized the SDK in this process.
+# capture_and_flush / install_asyncio_exception_handler self-gate on it so callers
+# (e.g. the server lifespan) can invoke them unconditionally.
+_enabled: bool = False
+
+
+def is_enabled() -> bool:
+    """Return whether Sentry was initialized in this process."""
+    return _enabled
+
 
 def _env_bool(name: str) -> bool:
     """Return ``True`` when *name* is set to a truthy value (``true``/``1``/``yes``)."""
@@ -146,6 +156,69 @@ def resolve_options(dsn: str) -> dict[str, Any]:
     }
 
 
+def capture_and_flush(exc: BaseException | None = None, *, timeout: float = 2.0) -> None:
+    """
+    Capture an exception to Sentry and flush before the process may exit.
+
+    The top-level global error handler for the non-ASGI processes (host, runner):
+    they have no web-framework integration to capture unhandled errors, and a
+    crashing process would otherwise die before the background transport sends.
+    No-op when ``sentry-sdk`` is absent or Sentry was never initialized (capture
+    on a disabled client does nothing).
+
+    :param exc: The exception to capture; ``None`` captures the one currently
+        being handled (``sys.exc_info``).
+    :param timeout: Seconds to wait for the flush.
+    """
+    if not _enabled:
+        return
+    try:
+        import sentry_sdk
+    except ImportError:
+        return
+    sentry_sdk.capture_exception(exc)
+    sentry_sdk.flush(timeout=timeout)
+
+
+def install_asyncio_exception_handler() -> None:
+    """
+    Route unhandled asyncio task exceptions to Sentry — the loop-level global
+    error handler.
+
+    asyncio does **not** use ``sys.excepthook``, so Sentry's default
+    ``ExcepthookIntegration`` never sees exceptions raised inside the event loop
+    (fire-and-forget tasks, callbacks). This installs a loop exception handler
+    that reports them, chaining to any previously-installed handler (or the
+    loop's default) so existing logging is preserved. Call from inside the
+    running loop. No-op when Sentry is not initialized or no loop is running.
+    """
+    if not _enabled:
+        return
+    try:
+        import sentry_sdk
+    except ImportError:
+        return
+    import asyncio
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+
+    previous = loop.get_exception_handler()
+
+    def _handler(running_loop: Any, context: dict[str, Any]) -> None:
+        exc = context.get("exception")
+        if exc is not None:
+            sentry_sdk.capture_exception(exc)
+        if previous is not None:
+            previous(running_loop, context)
+        else:
+            running_loop.default_exception_handler(context)
+
+    loop.set_exception_handler(_handler)
+
+
 def init_sentry(component: str) -> bool:
     """
     Initialize Sentry telemetry for one omnigent process. Safe + idempotent.
@@ -175,6 +248,8 @@ def init_sentry(component: str) -> bool:
     options = resolve_options(dsn)
     sentry_sdk.init(**options)
     sentry_sdk.set_tag("omnigent.component", component)
+    global _enabled
+    _enabled = True
     _logger.info(
         "omnigent Sentry telemetry initialized "
         "(component=%s, environment=%s, traces=%.2f, scrub_content=%s)",
