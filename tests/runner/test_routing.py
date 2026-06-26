@@ -2,35 +2,68 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 import pytest
 
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runner.routing import RunnerRouter, runner_dispatch_harness
-from omnigent.runner.transports.ws_tunnel.frames import HelloFrame
-from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+from omnigent.runner.transports.nats_transport import NatsRunnerTransport
 from omnigent.spec import AgentSpec, ExecutorSpec, LLMConfig
 
 
-class _FakeWebSocket:
-    """Minimal WebSocket used only to register runner sessions."""
+@dataclass(frozen=True)
+class _Hello:
+    harnesses: list[str]
 
-    async def send_text(self, data: str) -> None:
-        """
-        Accept a send call from the registry.
 
-        :param data: Encoded tunnel frame.
-        :returns: None.
-        """
-        del data
+@dataclass(frozen=True)
+class _RunnerSession:
+    hello: _Hello
 
-    async def receive_text(self) -> str:
-        """
-        Return no frames.
 
-        :returns: Empty frame string.
-        """
-        return ""
+class _RunnerRegistry:
+    """Small registry implementing the RunnerRouter protocol."""
+
+    def __init__(self) -> None:
+        self._sessions: dict[str, _RunnerSession] = {}
+        self._owners: dict[str, str] = {}
+        self._tokens: dict[str, str] = {}
+
+    def register(
+        self,
+        runner_id: str,
+        hello: _Hello,
+        *,
+        owner: str | None = None,
+    ) -> None:
+        self._sessions[runner_id] = _RunnerSession(hello=hello)
+        if owner is not None:
+            self._owners[runner_id] = owner
+
+    def get(self, runner_id: str) -> _RunnerSession | None:
+        return self._sessions.get(runner_id)
+
+    def runner_owner(self, runner_id: str) -> str | None:
+        return self._owners.get(runner_id)
+
+    def record_launch_owner(
+        self,
+        runner_id: str,
+        owner: str,
+        *,
+        token: str | None = None,
+    ) -> None:
+        self._owners[runner_id] = owner
+        if token is not None:
+            self._tokens[runner_id] = token
+
+    def launch_owner(self, runner_id: str) -> str | None:
+        return self._owners.get(runner_id)
+
+    def launch_token(self, runner_id: str) -> str | None:
+        return self._tokens.get(runner_id)
 
 
 class _ConversationStore:
@@ -76,19 +109,14 @@ def _conversation(
     )
 
 
-def _hello(*, harnesses: list[str]) -> HelloFrame:
+def _hello(*, harnesses: list[str]) -> _Hello:
     """
     Build a runner hello frame.
 
     :param harnesses: Harness kinds advertised by the runner.
-    :returns: A :class:`HelloFrame`.
+    :returns: A runner hello test double.
     """
-    return HelloFrame(
-        runner_version="0.1.0-test",
-        frame_protocol_version=1,
-        harnesses=harnesses,
-        envs=["os_sandbox"],
-    )
+    return _Hello(harnesses=harnesses)
 
 
 def _assert_omnigent_error(
@@ -158,11 +186,11 @@ def test_runner_dispatch_harness_ignores_unmapped_harness() -> None:
 @pytest.mark.asyncio
 async def test_runner_router_requires_existing_runner_binding() -> None:
     """Dispatch fails when a conversation has not been PATCH-bound."""
-    registry = TunnelRegistry()
-    registry.register("runner_one", _FakeWebSocket(), _hello(harnesses=["codex"]))
+    registry = _RunnerRegistry()
+    registry.register("runner_one", _hello(harnesses=["codex"]))
     conversation = _conversation()
     store = _ConversationStore({"conv_test": conversation})
-    router = RunnerRouter(registry=registry, conversation_store=store)  # type: ignore[arg-type]
+    router = RunnerRouter(registry=registry, conversation_store=store)
     try:
         with pytest.raises(OmnigentError) as excinfo:
             router.client_for_conversation(conversation_id="conv_test", harness="codex")
@@ -176,10 +204,10 @@ async def test_runner_router_requires_existing_runner_binding() -> None:
 @pytest.mark.asyncio
 async def test_runner_router_requires_pinned_runner_to_be_online() -> None:
     """A pinned offline runner fails instead of silently rerouting."""
-    registry = TunnelRegistry()
-    registry.register("runner_other", _FakeWebSocket(), _hello(harnesses=["codex"]))
+    registry = _RunnerRegistry()
+    registry.register("runner_other", _hello(harnesses=["codex"]))
     store = _ConversationStore({"conv_test": _conversation(runner_id="runner_missing")})
-    router = RunnerRouter(registry=registry, conversation_store=store)  # type: ignore[arg-type]
+    router = RunnerRouter(registry=registry, conversation_store=store)
     try:
         with pytest.raises(OmnigentError) as excinfo:
             router.client_for_conversation(conversation_id="conv_test", harness="codex")
@@ -192,11 +220,11 @@ async def test_runner_router_requires_pinned_runner_to_be_online() -> None:
 @pytest.mark.asyncio
 async def test_runner_router_uses_pinned_runner_when_multiple_online() -> None:
     """A pinned conversation keeps hard affinity with multiple runners online."""
-    registry = TunnelRegistry()
-    registry.register("runner_one", _FakeWebSocket(), _hello(harnesses=["codex"]))
-    registry.register("runner_two", _FakeWebSocket(), _hello(harnesses=["codex"]))
+    registry = _RunnerRegistry()
+    registry.register("runner_one", _hello(harnesses=["codex"]))
+    registry.register("runner_two", _hello(harnesses=["codex"]))
     store = _ConversationStore({"conv_test": _conversation(runner_id="runner_two")})
-    router = RunnerRouter(registry=registry, conversation_store=store)  # type: ignore[arg-type]
+    router = RunnerRouter(registry=registry, conversation_store=store)
     try:
         routed = router.client_for_conversation(conversation_id="conv_test", harness="codex")
 
@@ -206,12 +234,35 @@ async def test_runner_router_uses_pinned_runner_when_multiple_online() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runner_router_uses_launch_record_for_nats_only_runner() -> None:
+    """A trusted launch record is enough to route over NATS."""
+    registry = _RunnerRegistry()
+    registry.record_launch_owner(
+        "runner_nats",
+        "alice@example.com",
+        token="launch-token",
+    )
+    store = _ConversationStore({"conv_test": _conversation(runner_id="runner_nats")})
+    router = RunnerRouter(registry=registry, conversation_store=store)
+    try:
+        routed = router.client_for_session_resources("conv_test")
+
+        assert routed.runner_id == "runner_nats"
+        assert router.runner_is_online("runner_nats") is True
+        assert router.runner_owner("runner_nats") == "alice@example.com"
+        assert isinstance(routed.client._transport, NatsRunnerTransport)  # type: ignore[attr-defined]
+        assert routed.client._transport._auth_token == "launch-token"  # type: ignore[attr-defined]
+    finally:
+        await router.aclose()
+
+
+@pytest.mark.asyncio
 async def test_runner_router_fails_when_no_runner_supports_harness() -> None:
     """A harness capability mismatch fails before dispatching."""
-    registry = TunnelRegistry()
-    registry.register("runner_one", _FakeWebSocket(), _hello(harnesses=["claude-sdk"]))
+    registry = _RunnerRegistry()
+    registry.register("runner_one", _hello(harnesses=["claude-sdk"]))
     store = _ConversationStore({"conv_test": _conversation(runner_id="runner_one")})
-    router = RunnerRouter(registry=registry, conversation_store=store)  # type: ignore[arg-type]
+    router = RunnerRouter(registry=registry, conversation_store=store)
     try:
         with pytest.raises(OmnigentError) as excinfo:
             router.client_for_conversation(conversation_id="conv_test", harness="codex")
@@ -224,11 +275,11 @@ async def test_runner_router_fails_when_no_runner_supports_harness() -> None:
 @pytest.mark.asyncio
 async def test_runner_router_resources_require_existing_runner_binding() -> None:
     """Resource access fails instead of lazily pinning an unbound session."""
-    registry = TunnelRegistry()
-    registry.register("runner_one", _FakeWebSocket(), _hello(harnesses=["codex"]))
+    registry = _RunnerRegistry()
+    registry.register("runner_one", _hello(harnesses=["codex"]))
     conversation = _conversation()
     store = _ConversationStore({"conv_test": conversation})
-    router = RunnerRouter(registry=registry, conversation_store=store)  # type: ignore[arg-type]
+    router = RunnerRouter(registry=registry, conversation_store=store)
     try:
         with pytest.raises(OmnigentError) as excinfo:
             router.client_for_session_resources("conv_test")
@@ -242,9 +293,9 @@ async def test_runner_router_resources_require_existing_runner_binding() -> None
 @pytest.mark.asyncio
 async def test_runner_router_existing_conversation_returns_none_when_unpinned() -> None:
     """Non-dispatch routes can distinguish unpinned conversations."""
-    registry = TunnelRegistry()
+    registry = _RunnerRegistry()
     store = _ConversationStore({"conv_test": _conversation()})
-    router = RunnerRouter(registry=registry, conversation_store=store)  # type: ignore[arg-type]
+    router = RunnerRouter(registry=registry, conversation_store=store)
     try:
         assert router.client_for_existing_conversation("conv_test") is None
     finally:

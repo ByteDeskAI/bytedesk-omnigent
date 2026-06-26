@@ -57,7 +57,7 @@ def _ctx() -> LifespanContext:
         agent_cache=None,
         conversation_store=None,
         runner_router=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
         mcp_pool=None,
         server_metrics=None,
         server_metrics_otel=None,

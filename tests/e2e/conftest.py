@@ -1237,7 +1237,7 @@ def resume_test_server(
 
     * **No tunnel-token allow-list.** ``OMNIGENT_RUNNER_TUNNEL_TOKEN``
       installs a binding-token allow-list (see
-      ``runner_tunnel.create_runner_tunnel_router``) that rejects the runner
+      ``create_runners_router``) that rejects the runner
       the CLI spawns with its own per-run token. Omitting it selects the
       deployed-server posture: accept any token-bound runner.
     * **Accounts auth.** The server defaults to accounts mode, which

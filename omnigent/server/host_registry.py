@@ -6,9 +6,8 @@ hosts with active WebSocket tunnels on this replica. The persistent
 source of truth for which hosts exist; this registry only tracks
 which hosts are live *here*.
 
-Simpler than :class:`TunnelRegistry` because the host tunnel
-carries only control frames (launch/stop runner), not HTTP
-request/response traffic. No per-request reassembly queues needed.
+The host tunnel carries only control frames (launch/stop runner), not
+HTTP request/response traffic. No per-request reassembly queues needed.
 """
 
 from __future__ import annotations

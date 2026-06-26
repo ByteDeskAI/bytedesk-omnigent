@@ -3,7 +3,7 @@
 Launched by the CLI when spawning the runner as a separate process.
 Reads process wiring from environment variables set by the parent:
 - ``RUNNER_SERVER_URL``: Omnigent server base URL for outbound calls
-  (spec fetch, response resolution, and WS tunnel registration).
+  (spec fetch and response resolution).
 """
 
 from __future__ import annotations
@@ -23,11 +23,11 @@ from typing import TYPE_CHECKING, cast
 import httpx
 from fastapi import FastAPI
 
-from omnigent.runner.transports.ws_tunnel.serve import RUNNER_TUNNEL_REJECTION_PREFIX
+from omnigent.runner.transports.nats_transport.serve import RUNNER_NATS_REJECTION_PREFIX
 
 if TYPE_CHECKING:
     from omnigent.runner.app import ResolvedSpec
-    from omnigent.runner.transports.ws_tunnel.serve import _ASGIApp
+    from omnigent.runner.transports.nats_transport.serve import _ASGIApp
 
 _RUNNER_SERVER_URL_ENV_VAR = "RUNNER_SERVER_URL"
 _RUNNER_PREWARM_SPEC_PATH_ENV_VAR = "RUNNER_PREWARM_SPEC_PATH"
@@ -47,9 +47,7 @@ def _server_url_from_env() -> str:
     """
     server_url = os.environ.get(_RUNNER_SERVER_URL_ENV_VAR)
     if server_url is None or not server_url.strip():
-        raise RuntimeError(
-            f"{_RUNNER_SERVER_URL_ENV_VAR} is required for the runner WebSocket tunnel"
-        )
+        raise RuntimeError(f"{_RUNNER_SERVER_URL_ENV_VAR} is required for runner callbacks")
     return server_url.strip()
 
 
@@ -273,8 +271,6 @@ def _make_auth_token_factory(
         factory will silently fall through to the Databricks path.
 
     Used by:
-    - :func:`serve_tunnel` for the WebSocket ``Authorization`` header
-      (refreshed on each reconnect).
     - :class:`_RunnerDatabricksAuth` for the httpx client
       (refreshed on each HTTP callback to the Omnigent server).
     - ``omnigent/host/connect.py`` for the host tunnel's WS upgrade
@@ -837,20 +833,18 @@ def create_app(
 
 
 async def _run_tunnel_from_env() -> None:
-    """Run the runner as a WebSocket tunnel client.
+    """Run the runner as a NATS control-plane subscriber.
 
     :returns: None.
     """
     from omnigent.runner.identity import get_stable_runner_id
-    from omnigent.runner.transports.ws_tunnel.serve import serve_tunnel
+    from omnigent.runner.transports.nats_transport.serve import serve_runner_nats
 
-    server_url = _server_url_from_env()
     auth_token_factory = _make_auth_token_factory()
-    auth_token = auth_token_factory() if auth_token_factory is not None else None
-    binding_token = _runner_tunnel_binding_token_from_env()
     parent_pid = _runner_parent_pid_from_env()
     runner_id = get_stable_runner_id()
-    # Reuse the tunnel's token factory for the app's httpx client so the
+    nats_url = os.environ.get("OMNIGENT_NATS_URL", "")
+    # Reuse the token factory for the app's httpx client so the
     # runner resolves Databricks auth once at boot, not twice.
     app = create_app(auth_token_factory=auth_token_factory)
     idle_timeout_s = _load_runner_idle_timeout_s_from_config()
@@ -862,8 +856,7 @@ async def _run_tunnel_from_env() -> None:
     def _mark_activity() -> None:
         """Record real runner work for the inactivity watchdog.
 
-        Called by the WebSocket tunnel frame dispatcher for non-keepalive
-        request frames.
+        Called by the NATS control-plane dispatcher for each request.
 
         :returns: None.
         """
@@ -891,19 +884,15 @@ async def _run_tunnel_from_env() -> None:
     # parent-death killer stand down so the runner outlives the CLI.
     adopted_event = threading.Event()
     _install_signal_handlers(stop_event, adopted_event=adopted_event)
-    tunnel_task = asyncio.create_task(
-        serve_tunnel(
+    control_plane_task = asyncio.create_task(
+        serve_runner_nats(
             cast("_ASGIApp", app),  # FastAPI is ASGI-compatible; cast narrows for mypy
-            server_url=server_url,
             runner_id=runner_id,
-            runner_version=_RUNNER_VERSION,
-            auth_token=auth_token,
-            tunnel_token=binding_token,
-            auth_token_factory=auth_token_factory,
+            nats_url=nats_url,
             on_reconnect=getattr(app.state, "catch_up_scan", None),
             on_activity=_mark_activity,
         ),
-        name=f"runner-ws-tunnel:{runner_id}",
+        name=f"runner-nats-control:{runner_id}",
     )
     stop_task = asyncio.create_task(stop_event.wait(), name="runner-signal-wait")
     idle_task: asyncio.Task[None] | None = None
@@ -930,7 +919,7 @@ async def _run_tunnel_from_env() -> None:
             name=f"runner-parent-killer:{parent_pid}",
             daemon=True,
         ).start()
-    wait_tasks = {tunnel_task, stop_task}
+    wait_tasks = {control_plane_task, stop_task}
     if idle_task is not None:
         wait_tasks.add(idle_task)
     try:
@@ -938,15 +927,15 @@ async def _run_tunnel_from_env() -> None:
             wait_tasks,
             return_when=asyncio.FIRST_COMPLETED,
         )
-        if tunnel_task in done:
-            await tunnel_task
+        if control_plane_task in done:
+            await control_plane_task
     finally:
         for task in wait_tasks:
             task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await stop_task
         with contextlib.suppress(asyncio.CancelledError):
-            await tunnel_task
+            await control_plane_task
         if idle_task is not None:
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_task
@@ -992,7 +981,7 @@ def main() -> None:
     try:
         asyncio.run(_run_tunnel_from_env())
     except RuntimeError as exc:
-        if not str(exc).startswith(RUNNER_TUNNEL_REJECTION_PREFIX):
+        if not str(exc).startswith(RUNNER_NATS_REJECTION_PREFIX):
             raise
         print(f"error: {exc}", file=sys.stderr)
         raise SystemExit(1) from None

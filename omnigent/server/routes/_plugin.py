@@ -17,8 +17,8 @@ extension lifecycle the third-party route seam already uses.
 Scope of this slice: the plugin must import cleanly with the kernel only (no
 store construction at import) and mount the documented store-backed route group
 after the app host has built its stores. Route factories outside this subpackage
-(peer tunnel, runner tunnel, hosts, accounts/auth, SPA/static, caller-provided
-``extra_routers``) remain in ``create_app()`` because they are separate
+(hosts, accounts/auth, SPA/static, caller-provided ``extra_routers``) remain in
+``create_app()`` because they are separate
 composition-root concerns.
 
 Every heavy / FastAPI import is deferred inside the hook bodies so importing
@@ -56,6 +56,11 @@ STORE_BACKED_ROUTE_FACTORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
             "runner_tunnel_tokens",
             "runner_exit_reports",
         ),
+    ),
+    (
+        "omnigent.server.routes.runners",
+        "create_runners_router",
+        ("runner_control_registry", "runner_exit_reports"),
     ),
     (
         "omnigent.server.routes.data_surfaces",
@@ -140,6 +145,7 @@ class RoutesExtension:
         from omnigent.server.routes.default_policies import create_default_policies_router
         from omnigent.server.routes.policy_registry import create_policy_registry_router
         from omnigent.server.routes.push import create_push_router
+        from omnigent.server.routes.runners import create_runners_router
         from omnigent.server.routes.session_policies import create_session_policies_router
         from omnigent.server.routes.sessions import create_sessions_router
         from omnigent.server.routes.skills import create_skills_router
@@ -163,6 +169,15 @@ class RoutesExtension:
             ),
             prefix="/v1",
             tags=["sessions"],
+        )
+        host.include_router(
+            create_runners_router(
+                state.runner_control_registry,
+                auth_provider=auth_provider,
+                runner_exit_reports=state.runner_exit_reports,
+            ),
+            prefix="/v1",
+            tags=["runners"],
         )
         host.include_router(
             create_data_surfaces_router(

@@ -71,7 +71,8 @@ class LifespanContext:
     :param conversation_store: Conversation persistence (notifier + resource
         registry liveness).
     :param runner_router: The shared runner router.
-    :param tunnel_registry: The runner tunnel registry (WS factory).
+    :param runner_control_registry: Runner control registry retained for create_app
+        context compatibility.
     :param mcp_pool: The AP-side MCP proxy pool, closed on shutdown.
     :param server_metrics: Process-local server metrics tracker.
     :param server_metrics_otel: OTel publisher for server metrics.
@@ -87,7 +88,7 @@ class LifespanContext:
     agent_cache: Any
     conversation_store: Any
     runner_router: Any
-    tunnel_registry: Any
+    runner_control_registry: Any
     mcp_pool: Any
     server_metrics: Any
     server_metrics_otel: Any
@@ -406,22 +407,20 @@ class ResourceRegistryPhase(LifespanPhase):
 
 
 class RunnerWsFactoryPhase(LifespanPhase):
-    """Install the tunnel-backed runner WS factory; clear it on shutdown."""
+    """Ensure no legacy runner WS factory is installed."""
 
     name = "runner_ws_factory"
     depends_on = ("runner_router",)
 
     async def startup(self, ctx: LifespanContext) -> None:
-        """Install the WS factory so terminal attach proxies over the tunnel.
+        """Clear the runner WS factory.
 
         :param ctx: The shared lifespan context.
         """
         from omnigent.runtime import set_runner_ws_factory
-        from omnigent.server._runner_ws_tunnel import make_tunnel_ws_factory
 
-        set_runner_ws_factory(
-            make_tunnel_ws_factory(ctx.runner_router, ctx.tunnel_registry)
-        )
+        del ctx
+        set_runner_ws_factory(None)
 
     async def shutdown(self, ctx: LifespanContext) -> None:
         """Clear the WS factory runtime global.

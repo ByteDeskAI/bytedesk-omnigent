@@ -22,7 +22,6 @@ from omnigent.onboarding.sandboxes import (
     RemoteProcess,
     SandboxLauncher,
 )
-from omnigent.runner.transports.ws_tunnel.frames import HelloFrame
 from omnigent.runtime import session_stream
 
 # Sentinel ready event so a stream collector's registration is a
@@ -440,32 +439,6 @@ class ApiResponse:
     body: dict[str, Any]
 
 
-class FakeRunnerWebSocket:
-    """
-    Minimal WebSocket object accepted by ``TunnelRegistry.register``.
-
-    The runner registry only stores the object in tests that do not
-    actually exchange tunnel frames.
-    """
-
-    async def send_text(self, data: str) -> None:
-        """
-        Accept a text frame.
-
-        :param data: Encoded tunnel frame.
-        :returns: None.
-        """
-        del data
-
-    async def receive_text(self) -> str:
-        """
-        Return an empty frame.
-
-        :returns: Empty string.
-        """
-        return ""
-
-
 def register_test_runner(
     app: FastAPI,
     runner_id: str,
@@ -474,28 +447,22 @@ def register_test_runner(
     owner: str | None = None,
 ) -> None:
     """
-    Register a runner in the app's live tunnel registry.
+    Register a launched runner in the app's control registry.
 
     :param app: FastAPI app built by the shared server fixture.
     :param runner_id: Runner id to register, e.g.
         ``"runner_alpha"``.
-    :param harnesses: Harnesses advertised in the runner hello
-        frame, e.g. ``["codex"]``. ``None`` advertises
-        ``["default"]``.
+    :param harnesses: Ignored by the NATS control registry; retained
+        for test call-site compatibility.
     :param owner: Authenticated user who owns this runner, e.g.
         ``"alice@example.com"``. ``None`` for single-user mode.
     :returns: None.
     """
-    app.state.tunnel_registry.register(
+    del harnesses
+    app.state.runner_control_registry.record_launch_owner(
         runner_id,
-        FakeRunnerWebSocket(),
-        HelloFrame(
-            runner_version="0.1.0-test",
-            frame_protocol_version=1,
-            harnesses=harnesses or ["default"],
-            envs=["os_sandbox"],
-        ),
         owner=owner,
+        token=f"test-token-{runner_id}",
     )
 
 

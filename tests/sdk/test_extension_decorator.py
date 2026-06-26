@@ -140,6 +140,24 @@ def test_router_forwards_auth_when_method_accepts_it():
     assert captured == {"auth": ap, "perm": ps}
 
 
+def test_router_injects_provided_services():
+    captured = {}
+
+    @extension(name="router-di")
+    class RouterDi:
+        @provides(Clock)
+        def clock(self) -> SystemClock:
+            return SystemClock()
+
+        @router()
+        def r(self, clock: Clock):
+            captured["clock"] = clock
+            return []
+
+    RouterDi().routers()
+    assert isinstance(captured["clock"], SystemClock)
+
+
 # ── policy synthesis ────────────────────────────────────────────────────────
 def test_policy_synthesises_module_and_registry():
     @extension(name="policy-ext")

@@ -1,35 +1,49 @@
 """Conversation-aware runner routing for the Omnigent server.
 
-The tunnel registry is the source of truth for online runners on this
-replica. When coordination is enabled, :meth:`RunnerRouter.aclient_*`
-also resolves cross-replica ownership via
-:class:`CoordinationBackplane.resolve_resource` and forwards HTTP through
-the peer tunnel proxy.
+The runner control registry is the source of truth for launched runners on
+this replica. When coordination is enabled, :meth:`RunnerRouter.aclient_*`
+can detect stale cross-replica ownership via
+:class:`CoordinationBackplane.resolve_resource`, but runner HTTP dispatch
+still goes through the configured runner transport factory.
 """
 
 from __future__ import annotations
 
 import threading
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Protocol
 
 import httpx
 
-from omnigent.coordination.peer_forward import PeerTunnelTransport
 from omnigent.coordination.protocol import ResourceKind
-from omnigent.coordination.replica_id import server_replica_id
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.harness_aliases import canonicalize_harness
-from omnigent.runner.transports.ws_tunnel.transport import WSTunnelTransport
+from omnigent.runner.transports.factory import (
+    RunnerTransportFactory,
+    resolve_runner_transport_factory,
+)
 from omnigent.runtime.harnesses import _HARNESS_MODULES
 from omnigent.spec import AgentSpec
 
 if TYPE_CHECKING:
-    from omnigent.runner.transports.ws_tunnel.registry import RunnerSession, TunnelRegistry
     from omnigent.stores import ConversationStore
 
 
 _EXECUTOR_TYPE_TO_HARNESS: dict[str, str] = {"claude_sdk": "claude-sdk"}
+
+
+class RunnerSession(Protocol):
+    hello: Any
+
+
+class RunnerRegistry(Protocol):
+    def get(self, runner_id: str) -> RunnerSession | None: ...
+
+    def runner_owner(self, runner_id: str) -> str | None: ...
+
+    def launch_owner(self, runner_id: str) -> str | None: ...
+
+    def launch_token(self, runner_id: str) -> str | None: ...
 
 
 def runner_dispatch_harness(spec: AgentSpec) -> str | None:
@@ -60,7 +74,7 @@ class RoutedRunner:
     :param runner_id: Runner UUID, e.g.
         ``"runner_0123456789abcdef"``.
     :param client: ``httpx.AsyncClient`` that routes requests to
-        ``runner_id`` through the tunnel registry.
+        ``runner_id`` through the configured control-plane transport.
     """
 
     runner_id: str
@@ -69,10 +83,10 @@ class RoutedRunner:
 
 class RunnerRouter:
     """
-    Select runners from the live tunnel registry.
+    Select runners from the control registry.
 
-    :param registry: In-memory tunnel registry populated by
-        ``WS /v1/runners/{runner_id}/tunnel``.
+    :param registry: Registry that records trusted runner launch ownership
+        and optional live local session state.
     :param conversation_store: Store used to read
         ``conversations.runner_id`` affinity.
     """
@@ -80,11 +94,15 @@ class RunnerRouter:
     def __init__(
         self,
         *,
-        registry: TunnelRegistry,
+        registry: RunnerRegistry,
         conversation_store: ConversationStore,
+        transport_factory: RunnerTransportFactory | None = None,
     ) -> None:
         self._registry = registry
         self._conversation_store = conversation_store
+        self._transport_factory = transport_factory or resolve_runner_transport_factory(
+            auth_token_resolver=self._launch_token,
+        )
         self._clients: dict[str, httpx.AsyncClient] = {}
         self._lock = threading.RLock()
 
@@ -188,21 +206,23 @@ class RunnerRouter:
             ``"runner_0123456789abcdef"``.
         :returns: ``True`` when the registry has a live session.
         """
-        return self._registry.get(runner_id) is not None
+        return (
+            self._registry.get(runner_id) is not None
+            or self._launch_token(runner_id) is not None
+        )
 
     def runner_owner(self, runner_id: str) -> str | None:
         """
         Return the authenticated owner of *runner_id*, or ``None``.
 
-        Delegates to the tunnel registry. Returns ``None`` when the
-        runner is offline or was registered without an owner (single-
-        user / no-auth mode).
+        Delegates to the control registry. Returns ``None`` when the
+        runner has no live-session or launch-owner record.
 
         :param runner_id: Runner UUID, e.g.
             ``"runner_0123456789abcdef"``.
         :returns: Owner user id, or ``None``.
         """
-        return self._registry.runner_owner(runner_id)
+        return self._registry.runner_owner(runner_id) or self._launch_owner(runner_id)
 
     async def aclose(self) -> None:
         """
@@ -224,6 +244,18 @@ class RunnerRouter:
             return None
         return await backplane.resolve_resource(kind, resource_id)
 
+    def _launch_token(self, runner_id: str) -> str | None:
+        token_lookup = getattr(self._registry, "launch_token", None)
+        if not callable(token_lookup):
+            return None
+        return token_lookup(runner_id)
+
+    def _launch_owner(self, runner_id: str) -> str | None:
+        owner_lookup = getattr(self._registry, "launch_owner", None)
+        if not callable(owner_lookup):
+            return None
+        return owner_lookup(runner_id)
+
     async def _route_runner(
         self,
         runner_id: str,
@@ -241,6 +273,11 @@ class RunnerRouter:
                 runner_id=runner_id,
                 client=self._client_for_runner(runner_id),
             )
+        if self._launch_token(runner_id) is not None:
+            return RoutedRunner(
+                runner_id=runner_id,
+                client=self._client_for_runner(runner_id),
+            )
 
         owner = await self._resolve_owner("runner", runner_id)
         if owner is None:
@@ -248,20 +285,14 @@ class RunnerRouter:
                 f"runner {runner_id!r} is offline; resume the session to bind a registered runner",
                 code=ErrorCode.RUNNER_UNAVAILABLE,
             )
-        local = server_replica_id()
-        if owner == local:
-            raise OmnigentError(
-                f"runner {runner_id!r} is offline on replica {local!r}",
-                code=ErrorCode.RUNNER_UNAVAILABLE,
-            )
-        return RoutedRunner(
-            runner_id=runner_id,
-            client=self._client_for_peer_runner(owner, runner_id),
+        raise OmnigentError(
+            f"runner {runner_id!r} is owned by replica {owner!r} but has no NATS launch token",
+            code=ErrorCode.RUNNER_UNAVAILABLE,
         )
 
     def _routed_runner_local(self, runner_id: str, conversation_id: str) -> RoutedRunner:
         session = self._registry.get(runner_id)
-        if session is None:
+        if session is None and self._launch_token(runner_id) is None:
             raise OmnigentError(
                 f"runner {runner_id!r} is offline for conversation {conversation_id!r}",
                 code=ErrorCode.RUNNER_UNAVAILABLE,
@@ -273,12 +304,12 @@ class RunnerRouter:
 
     def _routed_pinned_runner_local(self, runner_id: str, *, harness: str) -> RoutedRunner:
         session = self._registry.get(runner_id)
-        if session is None:
+        if session is None and self._launch_token(runner_id) is None:
             raise OmnigentError(
                 f"runner {runner_id!r} is offline; resume the session to bind a registered runner",
                 code=ErrorCode.RUNNER_UNAVAILABLE,
             )
-        if not _runner_supports_harness(session, harness):
+        if session is not None and not _runner_supports_harness(session, harness):
             raise OmnigentError(
                 f"runner {runner_id!r} does not support harness {harness!r}",
                 code=ErrorCode.RUNNER_CAPABILITY_MISMATCH,
@@ -287,50 +318,29 @@ class RunnerRouter:
 
     def _client_for_runner(self, runner_id: str) -> httpx.AsyncClient:
         """
-        Return a cached tunnel-backed client for *runner_id*.
+        Return a cached control-plane client for *runner_id*.
 
         :param runner_id: Runner UUID, e.g.
             ``"runner_0123456789abcdef"``.
         :returns: ``httpx.AsyncClient`` using
-            :class:`WSTunnelTransport`.
+            the configured runner control-plane transport.
         """
         with self._lock:
             client = self._clients.get(runner_id)
             if client is None:
                 client = httpx.AsyncClient(
-                    transport=WSTunnelTransport(self._registry, runner_id),
+                    transport=self._transport_factory(runner_id),
                     base_url="http://runner",
                     timeout=httpx.Timeout(5.0, read=None),
                 )
                 self._clients[runner_id] = client
             return client
 
-    def _client_for_peer_runner(
-        self,
-        owner_replica: str,
-        runner_id: str,
-    ) -> httpx.AsyncClient:
-        cache_key = f"peer:{owner_replica}:{runner_id}"
-        with self._lock:
-            client = self._clients.get(cache_key)
-            if client is None:
-                client = httpx.AsyncClient(
-                    transport=PeerTunnelTransport(
-                        target_replica=owner_replica,
-                        runner_id=runner_id,
-                    ),
-                    base_url="http://runner",
-                    timeout=httpx.Timeout(5.0, read=None),
-                )
-                self._clients[cache_key] = client
-            return client
-
-
 def _runner_supports_harness(session: RunnerSession, harness: str) -> bool:
     """
     Return whether a runner advertised support for *harness*.
 
-    :param session: Live runner session from the tunnel registry.
+    :param session: Optional live runner session.
     :param harness: Harness kind requested by the agent spec,
         e.g. ``"claude-sdk"``.
     :returns: ``True`` when the runner hello frame includes the

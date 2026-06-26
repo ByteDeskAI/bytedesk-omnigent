@@ -1,20 +1,11 @@
 """Host tunnel frame schema for ``omnigent host``.
 
-Host-specific frame kinds, all JSON (see :class:`HostFrameKind`),
-plus reuse of ``PingFrame``/``PongFrame`` from the runner tunnel
-for keepalive.
+Host-specific frame kinds, all JSON (see :class:`HostFrameKind`).
+Keepalive frames live in :mod:`omnigent.host.keepalive`.
 
 Host frames carry only control messages (launch/stop runner
-requests and their results). They do NOT carry HTTP
-request/response traffic — runners connect directly to the server
-with their own tunnels.
-
-This module is intentionally separate from the runner tunnel's
-``frames.py`` to keep the two protocols partitioned. The runner
-module has a closed ``FrameKind`` enum and ``decode_frame`` match
-statement that handles all runner frame kinds. Adding host kinds
-there would force runner-side decoders to handle frames they never
-see.
+requests and their results). They do NOT carry HTTP request/response
+traffic; runner control traffic uses the configured runner transport.
 """
 
 from __future__ import annotations

@@ -71,7 +71,7 @@ def _app_state(
         sandbox_config=sandbox_config or _sandbox_config(),
         managed_launches=tracker or ManagedLaunchTracker(),
         host_registry=MagicMock(),
-        tunnel_registry=MagicMock(),
+        runner_control_registry=MagicMock(),
     )
 
 

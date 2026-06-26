@@ -297,7 +297,7 @@ async def test_launch_runner_on_host_records_owner_and_returns_success() -> None
         registry,
         conn,
         owner="alice@example.com",
-        tunnel_registry=tunnel,
+        runner_control_registry=tunnel,
     )
     await complete_launch_task
 
@@ -338,7 +338,7 @@ async def test_launch_runner_on_host_returns_structured_failure_from_host() -> N
         registry,
         conn,
         owner=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
     await fail_launch_task
 
@@ -362,7 +362,7 @@ async def test_launch_runner_on_host_survives_connection_error() -> None:
         registry,
         conn,
         owner=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert attempt.runner_id
@@ -394,7 +394,7 @@ async def test_launch_runner_on_host_timeout_marks_unacked(
         registry,
         conn,
         owner=None,
-        tunnel_registry=None,
+        runner_control_registry=None,
     )
 
     assert attempt.runner_id

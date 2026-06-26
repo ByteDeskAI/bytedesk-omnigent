@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -63,7 +62,7 @@ async def test_wait_for_runner_client_returns_none_when_runner_id_missing() -> N
     )
 
 
-async def test_wait_for_runner_client_without_tunnel_registry_delegates(
+async def test_wait_for_runner_client_without_control_registry_delegates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = httpx.AsyncClient()
@@ -90,19 +89,19 @@ async def test_wait_for_runner_client_without_tunnel_registry_delegates(
     await client.aclose()
 
 
-async def test_wait_for_runner_client_returns_client_when_runner_connects(
+async def test_wait_for_runner_client_returns_client_when_health_probe_succeeds(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = httpx.AsyncClient()
-
-    class _Registry:
-        async def wait_for_runner(self, runner_id: str, *, timeout_s: float) -> str:
-            assert runner_id == "runner_ok"
-            assert timeout_s == 2.5
-            return "tunnel-session"
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"status": "ok"}, request=request)
+        ),
+        base_url="http://runner",
+    )
 
     async def _fake_get_runner_client(session_id: str, runner_router: object) -> httpx.AsyncClient:
         assert session_id == "conv_ok"
+        assert runner_router == "router"
         return client
 
     monkeypatch.setattr(
@@ -112,8 +111,8 @@ async def test_wait_for_runner_client_returns_client_when_runner_connects(
 
     resolved = await _wait_for_runner_client(
         "conv_ok",
-        None,
-        _Registry(),  # type: ignore[arg-type]
+        "router",  # type: ignore[arg-type]
+        object(),  # legacy tunnel slot is ignored
         runner_id="runner_ok",
         timeout_s=2.5,
         runner_exit_reports=None,
@@ -126,15 +125,20 @@ async def test_wait_for_runner_client_returns_client_when_runner_connects(
 async def test_wait_for_runner_client_returns_none_when_connect_times_out(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class _Registry:
-        async def wait_for_runner(self, runner_id: str, *, timeout_s: float) -> None:
-            return None
-
-    calls: list[str] = []
+    calls = 0
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, json={"status": "starting"}, request=request)
+        ),
+        base_url="http://runner",
+    )
 
     async def _should_not_run(session_id: str, runner_router: object) -> httpx.AsyncClient:
-        calls.append(session_id)
-        raise AssertionError("runner client must not resolve after a connect timeout")
+        nonlocal calls
+        calls += 1
+        assert session_id == "conv_timeout"
+        assert runner_router == "router"
+        return client
 
     monkeypatch.setattr(
         "omnigent.server.routes.sessions._get_runner_client",
@@ -143,28 +147,30 @@ async def test_wait_for_runner_client_returns_none_when_connect_times_out(
 
     resolved = await _wait_for_runner_client(
         "conv_timeout",
-        None,
-        _Registry(),  # type: ignore[arg-type]
+        "router",  # type: ignore[arg-type]
+        object(),
         runner_id="runner_slow",
         timeout_s=0.01,
         runner_exit_reports=None,
     )
 
     assert resolved is None
-    assert calls == []
+    assert calls >= 1
+    await client.aclose()
 
 
-async def test_wait_for_runner_client_race_returns_client_when_connect_wins(
+async def test_wait_for_runner_client_returns_none_when_exit_report_arrives(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    client = httpx.AsyncClient()
-
-    class _Registry:
-        async def wait_for_runner(self, runner_id: str, *, timeout_s: float) -> str:
-            await asyncio.sleep(0.05)
-            return "tunnel-session"
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(503, json={"status": "starting"}, request=request)
+        ),
+        base_url="http://runner",
+    )
 
     async def _fake_get_runner_client(session_id: str, runner_router: object) -> httpx.AsyncClient:
+        del session_id, runner_router
         return client
 
     monkeypatch.setattr(
@@ -173,13 +179,13 @@ async def test_wait_for_runner_client_race_returns_client_when_connect_wins(
     )
 
     resolved = await _wait_for_runner_client(
-        "conv_race",
-        None,
-        _Registry(),  # type: ignore[arg-type]
-        runner_id="runner_race",
+        "conv_exit",
+        "router",  # type: ignore[arg-type]
+        object(),
+        runner_id="runner_dead",
         timeout_s=2.0,
-        runner_exit_reports=MagicMock(get=lambda _rid: None),
+        runner_exit_reports=MagicMock(get=lambda _rid: "runner exited"),
     )
 
-    assert resolved is client
+    assert resolved is None
     await client.aclose()

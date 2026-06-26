@@ -42,7 +42,7 @@ def _lifespan_ctx(**overrides: object) -> LifespanContext:
         "agent_cache": MagicMock(),
         "conversation_store": MagicMock(),
         "runner_router": AsyncMock(),
-        "tunnel_registry": MagicMock(),
+        "runner_control_registry": MagicMock(),
         "mcp_pool": AsyncMock(),
         "server_metrics": MagicMock(),
         "server_metrics_otel": MagicMock(),
@@ -157,15 +157,10 @@ async def test_resource_registry_phase_sets_runtime_global(
 
 
 @pytest.mark.asyncio
-async def test_runner_ws_factory_phase_installs_tunnel_factory(
+async def test_runner_ws_factory_phase_clears_factory(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    factory = MagicMock()
     set_calls: list[object | None] = []
-    monkeypatch.setattr(
-        "omnigent.server._runner_ws_tunnel.make_tunnel_ws_factory",
-        lambda router, registry: factory,
-    )
     monkeypatch.setattr(
         "omnigent.runtime.set_runner_ws_factory",
         lambda value: set_calls.append(value),
@@ -173,7 +168,7 @@ async def test_runner_ws_factory_phase_installs_tunnel_factory(
     phase = RunnerWsFactoryPhase()
     await phase.startup(_lifespan_ctx())
     await phase.shutdown(_lifespan_ctx())
-    assert set_calls == [factory, None]
+    assert set_calls == [None, None]
 
 
 @pytest.mark.asyncio

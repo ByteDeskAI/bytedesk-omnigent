@@ -719,7 +719,7 @@ async def test_claude_native_message_tunnel_close_mid_forward_returns_502(
     """
     A WS-tunnel drop between terminal ensure and message forward is a 502.
 
-    WSTunnelTransport raises bare ``ConnectionError`` — not an
+    runner transport raises bare ``ConnectionError`` — not an
     ``httpx.HTTPError`` — when the runner tunnel closes mid-request.
     Before this fix the exception escaped the forward's
     ``except httpx.HTTPError`` clause to the global catch-all and the
@@ -2765,7 +2765,7 @@ async def test_native_dispatch_transport_error_does_not_fallback_to_forwarding()
 async def test_native_dispatch_tunnel_close_is_definitive_ensure_error() -> None:
     """A WS-tunnel drop during terminal ensure fails the turn durably.
 
-    WSTunnelTransport raises bare ``ConnectionError`` — not an
+    runner transport raises bare ``ConnectionError`` — not an
     ``httpx.HTTPError`` — when the runner's tunnel closes mid-request
     ("tunnel closed before request completed"). Before this fix the
     exception escaped the ensure probe's ``except httpx.HTTPError``

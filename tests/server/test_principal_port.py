@@ -327,11 +327,11 @@ def _runner_token_conn(token: str | None) -> HTTPConnection:
 def test_runner_token_provider_resolves_launch_owner() -> None:
     # A runner request with a valid token bound to a recorded launch owner
     # authenticates AS that owner.
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.runner.identity import token_bound_runner_id
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
     from omnigent.server.auth import RunnerTokenAuthProvider
 
-    registry = TunnelRegistry()
+    registry = RunnerControlRegistry()
     token = "runner-binding-token-abc"
     runner_id = token_bound_runner_id(token)
     registry.record_launch_owner(runner_id, "alice@example.com")
@@ -346,10 +346,10 @@ def test_runner_token_provider_resolves_launch_owner() -> None:
 def test_runner_token_provider_forged_token_rejected() -> None:
     # SECURITY: a token the server never launched has NO launch record, so the
     # provider must NOT authenticate it (fall through → 401).
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.server.auth import RunnerTokenAuthProvider
 
-    registry = TunnelRegistry()
+    registry = RunnerControlRegistry()
     provider = RunnerTokenAuthProvider(registry)
     forged = _runner_token_conn("attacker-chosen-token")
     assert provider.get_user_id(forged) is None
@@ -358,20 +358,20 @@ def test_runner_token_provider_forged_token_rejected() -> None:
 
 def test_runner_token_provider_no_header_is_none() -> None:
     # A normal user request (no runner token header) yields no identity.
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.server.auth import RunnerTokenAuthProvider
 
-    registry = TunnelRegistry()
+    registry = RunnerControlRegistry()
     provider = RunnerTokenAuthProvider(registry)
     assert provider.get_user_id(_runner_token_conn(None)) is None
     assert provider.get_principal(_runner_token_conn(None)) is None
 
 
 def test_runner_token_provider_empty_header_is_none() -> None:
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.server.auth import RunnerTokenAuthProvider
 
-    registry = TunnelRegistry()
+    registry = RunnerControlRegistry()
     provider = RunnerTokenAuthProvider(registry)
     assert provider.get_user_id(_runner_token_conn("   ")) is None
 
@@ -380,11 +380,11 @@ def test_runner_token_provider_ignores_authorization_bearer() -> None:
     # Single-header contract (BDP-2437): the runner token is read ONLY from
     # X-Omnigent-Runner-Tunnel-Token, never from Authorization: Bearer (which
     # the accounts provider owns for session JWTs).
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.runner.identity import token_bound_runner_id
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
     from omnigent.server.auth import RunnerTokenAuthProvider
 
-    registry = TunnelRegistry()
+    registry = RunnerControlRegistry()
     token = "runner-binding-token-xyz"
     registry.record_launch_owner(token_bound_runner_id(token), "bob@example.com")
 
@@ -396,11 +396,11 @@ def test_runner_token_provider_ignores_authorization_bearer() -> None:
 def test_runner_token_provider_owner_read_live_not_cached() -> None:
     # The token→runner_id derivation may be memoized, but the owner must always
     # be re-read from the registry so eviction/relaunch is reflected.
+    from omnigent.runner.control_registry import RunnerControlRegistry
     from omnigent.runner.identity import token_bound_runner_id
-    from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
     from omnigent.server.auth import RunnerTokenAuthProvider
 
-    registry = TunnelRegistry()
+    registry = RunnerControlRegistry()
     token = "runner-binding-token-live"
     runner_id = token_bound_runner_id(token)
     provider = RunnerTokenAuthProvider(registry)
