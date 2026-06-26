@@ -21,9 +21,9 @@ agents on ByteDesk's Codex inference path; OpenClaw keeps running untouched.
 ┌──────────────────────────────────────────────────────────────────┐
 │  omnigent-server  (control plane only — NEVER executes agents)     │
 │    • REST/SSE API + SPA + policies + sessions                      │
-│    • accepts runner WS tunnels at /v1/runner/tunnel                 │
+│    • coordinates runners through the configured transport           │
 │    • state → omnigent-postgres (dedicated, self-contained)         │
-│            ▲ WS tunnel                                              │
+│            ▲ runner control plane                                   │
 │  omnigent-runner (host)  ── executes agents, holds Codex creds ─────│
 │    • openai-agents harness → HARNESS_OPENAI_AGENTS_* (Codex gw)     │
 │    • runs the bundles in deploy/bytedesk/agents/                    │

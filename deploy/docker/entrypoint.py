@@ -5,10 +5,10 @@ configured for a plain Postgres database and a local-filesystem
 artifact store. Intended to run inside the image built by
 ``deploy/docker/Dockerfile``.
 
-Execution mode: external runners only. The server accepts runner
-WebSocket connections at ``/v1/runner/tunnel`` and never spawns
-harness subprocesses on its own. Users run ``omnigent run … --server
-<url>`` on their own machine; that runner dials in.
+Execution mode: external runners only. The server coordinates runner
+control traffic through the configured runner transport and never
+spawns harness subprocesses on its own. Users run ``omnigent run …
+--server <url>`` on their own machine; that runner dials in.
 
 Configuration is via environment variables:
 
@@ -52,12 +52,10 @@ try:
     import uvicorn
 
     from omnigent.db.utils import normalize_database_url
-    from omnigent.runner.transports.ws_tunnel.limits import (
-        RUNNER_TUNNEL_MAX_MESSAGE_BYTES,
-    )
     from omnigent.server.app import create_app
     from omnigent.server.paas_env import detect_base_url, resolve_bind_host
     from omnigent.server.server_config import config_str_list, load_server_config
+    from omnigent.server.websocket_limits import CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES
 
     # ── Configuration ────────────────────────────────────────
     # Non-secret settings come from a YAML config file (default
@@ -276,7 +274,7 @@ try:
             app,
             host=HOST,
             port=PORT,
-            ws_max_size=RUNNER_TUNNEL_MAX_MESSAGE_BYTES,
+            ws_max_size=CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES,
         )
 
 except Exception:  # noqa: BLE001 — startup catch-all so failures land in logs

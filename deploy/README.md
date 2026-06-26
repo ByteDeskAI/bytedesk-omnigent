@@ -148,15 +148,15 @@ Modal app pins `memory=1024` for the same reason.
 
 ## Execution model
 
-Omnigent runs in two pieces that talk to each other over a
-WebSocket tunnel:
+Omnigent runs in two pieces that talk to each other over the configured
+runner transport:
 
 - **Server**: the FastAPI app you deploy here. Handles HTTP / SSE
   routes, terminal-attach WebSockets, persistence, web UI.
 - **Runner (host)**: a Python subprocess that runs on the **user's
-  machine** (laptop, dev container, etc.). Dials in to the server
-  via `WS /v1/runner/tunnel`, executes the LLM loop + tools locally,
-  streams events back.
+  machine** (laptop, dev container, etc.). Connects to the server
+  control plane, executes the LLM loop + tools locally, and streams
+  events back.
 
 The deploy options here are all about the server. Runners aren't
 deployed; every user launches one on their own machine with
