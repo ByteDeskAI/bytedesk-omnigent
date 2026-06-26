@@ -78,20 +78,27 @@ async def test_try_acquire_is_create_only_mutex() -> None:
     class _FakeKv:
         def __init__(self) -> None:
             self._keys: set[str] = set()
+            self.created_keys: list[str] = []
+            self.deleted_keys: list[str] = []
 
         async def create(self, key: str, value: bytes) -> int:
             del value
+            assert ":" not in key
+            self.created_keys.append(key)
             if key in self._keys:
                 raise RuntimeError("wrong last sequence: key exists")
             self._keys.add(key)
             return 1
 
         async def delete(self, key: str) -> bool:
+            assert ":" not in key
+            self.deleted_keys.append(key)
             self._keys.discard(key)
             return True
 
     bp = NatsBackplane("nats://127.0.0.1:4222", replica_id="replica-a")
-    bp._locks_kv = _FakeKv()  # bypass lazy bucket creation (no live NATS)
+    kv = _FakeKv()
+    bp._locks_kv = kv  # bypass lazy bucket creation (no live NATS)
 
     assert await bp.try_acquire("session-heal:conv_1", ttl_s=30.0) is True
     # Second concurrent acquirer on the same lock loses.
@@ -101,3 +108,5 @@ async def test_try_acquire_is_create_only_mutex() -> None:
     # Release frees it for the next holder.
     await bp.release("session-heal:conv_1")
     assert await bp.try_acquire("session-heal:conv_1", ttl_s=30.0) is True
+    assert kv.created_keys[0] == NatsBackplane._lock_key("session-heal:conv_1")
+    assert kv.deleted_keys == [NatsBackplane._lock_key("session-heal:conv_1")]
