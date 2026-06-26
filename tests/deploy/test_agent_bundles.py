@@ -94,5 +94,12 @@ def test_maya_no_longer_declares_a_static_child() -> None:
     assert not tools.get("agents")
 
 
+def test_brand_creative_agent_can_generate_images() -> None:
+    cfg = _yaml("brand-and-creative-director")
+    builtins = cfg["tools"]["builtins"]
+    assert {"name": "bytedesk_generate_image"} in builtins
+    assert "bytedesk_generate_image" in cfg["prompt"]
+
+
 def test_nested_platform_developer_child_removed() -> None:
     assert not (_AGENTS / "chief-of-staff" / "agents").exists()

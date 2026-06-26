@@ -245,10 +245,12 @@ class FileBlock(StreamBlock):
 
     :param file_id: Server-assigned file ID.
     :param filename: Original filename, or ``None`` if unknown.
+    :param content_type: MIME content type, or ``None`` if unknown.
     """
 
     file_id: str
     filename: str | None = None
+    content_type: str | None = None
 
 
 @dataclass(kw_only=True)

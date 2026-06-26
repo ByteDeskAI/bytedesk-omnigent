@@ -230,6 +230,31 @@ describe("buildBubbles — bubble grouping", () => {
     ]);
   });
 
+  it("file blocks render as assistant file items", () => {
+    const blocks: AnyBlock[] = [
+      {
+        type: "file",
+        ctx: ctx({ itemId: "file_item", responseId: "resp_1" }),
+        fileId: "file_img_123",
+        filename: "hero.png",
+        contentType: "image/png",
+      },
+    ];
+
+    const bubbles = buildBubbles(blocks, null);
+
+    const asst = bubbles[0] as Extract<Bubble, { kind: "assistant" }>;
+    expect(asst.items).toEqual([
+      {
+        kind: "file",
+        itemId: "file_item",
+        fileId: "file_img_123",
+        filename: "hero.png",
+        contentType: "image/png",
+      },
+    ]);
+  });
+
   it("compaction block becomes a standalone compaction bubble", () => {
     const blocks: AnyBlock[] = [
       {
@@ -490,6 +515,44 @@ describe("buildBubbles — tool joining", () => {
     expect(t.itemId).toBe("fc_1");
     expect(t.startedAt).toBe(10);
     expect(t.duration).toBe(2.25);
+  });
+
+  it("tool result JSON with a file_id also renders a visible file item", () => {
+    const output = JSON.stringify({
+      ok: true,
+      file_id: "file_img_123",
+      filename: "hero.png",
+      content_type: "image/png",
+    });
+    const blocks: AnyBlock[] = [
+      {
+        type: "tool_group",
+        ctx: ctx({ itemId: "fc_1", timestamp: 10 }),
+        executions: [mkExec("bytedesk_generate_image", "c1")],
+        iteration: 0,
+      },
+      {
+        type: "tool_result",
+        ctx: ctx({ itemId: "fco_1", timestamp: 12.25 }),
+        name: "bytedesk_generate_image",
+        callId: "c1",
+        agentName: "test",
+        output,
+      },
+    ];
+
+    const bubbles = buildBubbles(blocks, null);
+    const items = (bubbles[0] as Extract<Bubble, { kind: "assistant" }>).items;
+
+    expect(items.map((item) => item.kind)).toEqual(["tool", "file"]);
+    const file = items[1] as Extract<RenderItem, { kind: "file" }>;
+    expect(file).toEqual({
+      kind: "file",
+      itemId: "fc_1:c1:file",
+      fileId: "file_img_123",
+      filename: "hero.png",
+      contentType: "image/png",
+    });
   });
 
   it("tool_group without matching result, lifecycle streaming → state input-available", () => {

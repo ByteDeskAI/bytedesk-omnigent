@@ -2328,6 +2328,7 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
   // common case. The "Working…" shimmer for the empty-items / streaming
   // gap is rendered at the page level, not inside this component.
   const sessionStatus = useChatStore((s) => s.sessionStatus);
+  const conversationId = useChatStore((s) => s.conversationId);
   const [isCopied, setIsCopied] = useState(false);
   const copyTimeoutRef = useRef<number>(0);
   // null outside AppShell's provider (isolated tests) → hide the action.
@@ -2379,7 +2380,11 @@ function AssistantBubble({ bubble }: { bubble: Extract<Bubble, { kind: "assistan
         className={isWide ? "max-w-full" : "max-w-3xl"}
       >
         <MessageContent className={isWide ? "w-full" : undefined}>
-          <BlockRenderer items={bubble.items} sessionStatus={sessionStatus} />
+          <BlockRenderer
+            items={bubble.items}
+            sessionStatus={sessionStatus}
+            conversationId={conversationId}
+          />
         </MessageContent>
         {bubble.lifecycle === "cancelled" && (
           <p

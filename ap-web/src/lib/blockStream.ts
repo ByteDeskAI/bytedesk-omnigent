@@ -771,6 +771,7 @@ function* processEvent(state: ReducerState, event: StreamEvent): Generator<AnyBl
         ctx: ctx(state),
         fileId: event.fileId,
         filename: event.filename,
+        contentType: event.contentType,
       } satisfies FileBlock;
       return;
     }
