@@ -242,16 +242,20 @@ def create_host_tunnel_router(
                     receive_task,
                     return_exceptions=True,
                 )
-                host_registry.deregister(host_id)
-                await asyncio.to_thread(host_store.set_offline, host_id)
-                if on_host_disconnect is not None:
-                    try:
-                        await on_host_disconnect(host_id)
-                    except Exception:
-                        _logger.exception(
-                            "on_host_disconnect callback failed for %s",
-                            host_id,
-                        )
+                # Conn-guarded teardown (BDP-2540): when a newer connection has
+                # already replaced this one (host co-roll), deregister is a
+                # no-op and we run NO cleanup — the old pod's teardown must not
+                # deregister / mark-offline / disconnect-signal the new live host.
+                if host_registry.deregister(conn):
+                    await asyncio.to_thread(host_store.set_offline, host_id)
+                    if on_host_disconnect is not None:
+                        try:
+                            await on_host_disconnect(host_id)
+                        except Exception:
+                            _logger.exception(
+                                "on_host_disconnect callback failed for %s",
+                                host_id,
+                            )
 
         except WebSocketDisconnect:
             _logger.warning("Host %s disconnected", host_id)
@@ -261,22 +265,26 @@ def create_host_tunnel_router(
             # connects with another owner's host_id — must not deregister
             # or flip that owner's host offline (cross-user DoS).
             if conn is not None:
-                host_registry.deregister(host_id)
-                await asyncio.to_thread(host_store.set_offline, host_id)
-                if on_host_disconnect is not None:
-                    try:
-                        await on_host_disconnect(host_id)
-                    except Exception:
-                        _logger.exception(
-                            "on_host_disconnect callback failed for %s",
-                            host_id,
-                        )
+                # Conn-guarded teardown (BDP-2540): when a newer connection has
+                # already replaced this one (host co-roll), deregister is a
+                # no-op and we run NO cleanup — the old pod's teardown must not
+                # deregister / mark-offline / disconnect-signal the new live host.
+                if host_registry.deregister(conn):
+                    await asyncio.to_thread(host_store.set_offline, host_id)
+                    if on_host_disconnect is not None:
+                        try:
+                            await on_host_disconnect(host_id)
+                        except Exception:
+                            _logger.exception(
+                                "on_host_disconnect callback failed for %s",
+                                host_id,
+                            )
         except Exception:
             _logger.exception("Host tunnel error for %s", host_id)
             # Same guard as above: don't touch a host we never registered.
             if conn is not None:
-                host_registry.deregister(host_id)
-                await asyncio.to_thread(host_store.set_offline, host_id)
+                if host_registry.deregister(conn):
+                    await asyncio.to_thread(host_store.set_offline, host_id)
 
     return router
 

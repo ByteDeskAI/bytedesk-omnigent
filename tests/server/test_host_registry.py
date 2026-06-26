@@ -79,21 +79,24 @@ def test_deregister() -> None:
     pop() call is missing or targeting the wrong key.
     """
     registry = HostRegistry()
-    registry.register("host_bbb", FakeWebSocket(), _make_hello(), owner="bob")
-    registry.deregister("host_bbb")
+    conn = registry.register("host_bbb", FakeWebSocket(), _make_hello(), owner="bob")
+    assert registry.deregister(conn) is True
 
     assert registry.get("host_bbb") is None
 
 
-def test_deregister_noop_for_unknown() -> None:
+def test_deregister_is_idempotent_noop_when_not_current() -> None:
     """
-    Verify that deregister is a no-op for an unknown host_id.
+    Verify deregister never raises and is a no-op when the conn isn't the
+    current registration (already removed).
 
-    The disconnect callback may fire for hosts that failed
-    registration; it must not raise.
+    The disconnect callback may fire for a conn that was superseded /
+    already torn down; it must not raise and must return ``False`` (BDP-2540).
     """
     registry = HostRegistry()
-    registry.deregister("host_nonexistent")
+    conn = registry.register("host_z", FakeWebSocket(), _make_hello(), owner="zoe")
+    assert registry.deregister(conn) is True
+    assert registry.deregister(conn) is False
 
 
 def test_online_host_ids() -> None:
@@ -105,13 +108,13 @@ def test_online_host_ids() -> None:
     If a registered host is missing, the dict insert is broken.
     """
     registry = HostRegistry()
-    registry.register("host_c1", FakeWebSocket(), _make_hello(), owner="carol")
+    conn_c1 = registry.register("host_c1", FakeWebSocket(), _make_hello(), owner="carol")
     registry.register("host_c2", FakeWebSocket(), _make_hello(), owner="carol")
 
     ids = registry.online_host_ids()
     assert set(ids) == {"host_c1", "host_c2"}
 
-    registry.deregister("host_c1")
+    registry.deregister(conn_c1)
     ids = registry.online_host_ids()
     assert ids == ["host_c2"]
 
@@ -139,6 +142,30 @@ def test_register_replaces_stale_connection() -> None:
     # The None sentinel tells the sender loop to exit.
     poison = old_conn.outbound_queue.get_nowait()
     assert poison is None
+
+
+def test_deregister_is_conn_guarded_against_coroll_race() -> None:
+    """BDP-2540: an OLD conn's teardown must not deregister the NEW conn that
+    replaced it.
+
+    The recurring "runner didn't come online" wedge: on a host co-roll the new
+    pod registers (newest-wins), then the old pod's tunnel teardown called
+    ``deregister(host_id)`` and blindly popped the new live conn — orphaning a
+    connected, dispatchable host out of the registry until it happened to
+    reconnect. deregister is now conn-guarded (mirrors ``evict``/``send_text``).
+    """
+    registry = HostRegistry()
+    old_conn = registry.register("host_co", FakeWebSocket(), _make_hello(), owner="o")
+    new_conn = registry.register("host_co", FakeWebSocket(), _make_hello(), owner="o")
+    assert registry.get("host_co") is new_conn
+
+    # Old conn's teardown deregisters — must be a no-op; the live host stays.
+    assert registry.deregister(old_conn) is False
+    assert registry.get("host_co") is new_conn
+
+    # The current conn's own teardown does remove it.
+    assert registry.deregister(new_conn) is True
+    assert registry.get("host_co") is None
 
 
 def test_evict_retires_current_connection_and_poisons_queue() -> None:
