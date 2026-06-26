@@ -14,7 +14,7 @@ from omnigent.db.utils import (
     make_managed_session_maker,
     now_epoch,
 )
-from omnigent.entities import Agent, PagedList
+from omnigent.entities import Automation, PagedList
 from omnigent.stores.agent_store import AgentStore
 
 
@@ -46,7 +46,7 @@ class SqlAlchemyAgentStore(AgentStore):
         name: str,
         bundle_location: str,
         description: str | None = None,
-    ) -> Agent:
+    ) -> Automation:
         """
         Register a new agent in the database.
 
@@ -71,7 +71,7 @@ class SqlAlchemyAgentStore(AgentStore):
             session.add(row)
             return sql_agent_to_entity(row)
 
-    def get(self, agent_id: str) -> Agent | None:
+    def get(self, agent_id: str) -> Automation | None:
         """
         Fetch an agent by its unique ID.
 
@@ -83,7 +83,7 @@ class SqlAlchemyAgentStore(AgentStore):
             row = session.get(SqlAgent, agent_id)
             return sql_agent_to_entity(row) if row else None
 
-    def get_by_name(self, name: str) -> Agent | None:
+    def get_by_name(self, name: str) -> Automation | None:
         """
         Look up a registered template agent by its unique name.
 
@@ -106,7 +106,8 @@ class SqlAlchemyAgentStore(AgentStore):
         after: str | None = None,
         before: str | None = None,
         order: str = "desc",
-    ) -> PagedList[Agent]:
+        category: str | None = None,
+    ) -> PagedList[Automation]:
         """
         List registered template agents with cursor-based pagination.
 
@@ -117,13 +118,17 @@ class SqlAlchemyAgentStore(AgentStore):
         :param before: Cursor agent ID; return agents appearing
             before this agent in sort order.
         :param order: Sort direction, ``"desc"`` or ``"asc"``.
-        :returns: A :class:`PagedList` of :class:`Agent` objects.
+        :param category: When set, restrict to one tier (``"system"`` |
+            ``"employee"`` | ``"workflow"``); ``None`` returns all tiers.
+        :returns: A :class:`PagedList` of :class:`Automation` objects.
         """
         with self._session() as session:
             is_desc = order == "desc"
             sort_fn = desc if is_desc else asc
             template_agent = SqlAgent.session_id.is_(None)
             stmt = select(SqlAgent).where(template_agent)
+            if category is not None:
+                stmt = stmt.where(SqlAgent.category == category)
             if after:
                 sub = (
                     select(SqlAgent.created_at)
@@ -185,7 +190,7 @@ class SqlAlchemyAgentStore(AgentStore):
         bundle_location: str,
         *,
         expected_version: int | None = None,
-    ) -> Agent | None:
+    ) -> Automation | None:
         """
         Update an agent's bundle location, bump version, and set
         ``updated_at``.
@@ -305,6 +310,29 @@ class SqlAlchemyAgentStore(AgentStore):
             if not isinstance(parsed, list):
                 return ()
             return tuple(c for c in parsed if isinstance(c, str))
+
+    def set_category(self, agent_id: str, category: str | None) -> bool:
+        """Persist the agent's tier (agent-tiering step 1). Mirrors set_sot_tier.
+
+        ``"system"`` | ``"employee"`` | ``"workflow"``, or ``None`` to clear.
+
+        :param agent_id: The registered agent id.
+        :param category: The tier, or ``None`` to clear it.
+        :returns: ``True`` if the agent exists and was updated, else ``False``.
+        """
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            if not row:
+                return False
+            row.category = category
+            row.updated_at = now_epoch()
+            return True
+
+    def get_category(self, agent_id: str) -> str | None:
+        """Return the agent's persisted tier, or ``None`` (unclassified/unset)."""
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            return row.category if row else None
 
     def delete(self, agent_id: str) -> bool:
         """

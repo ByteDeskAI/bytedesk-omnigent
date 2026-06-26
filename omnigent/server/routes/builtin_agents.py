@@ -24,7 +24,7 @@ import logging
 
 from fastapi import APIRouter, Query, Request
 
-from omnigent.entities import Agent
+from omnigent.entities import Automation
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user as _require_user
@@ -34,7 +34,7 @@ from omnigent.stores import AgentStore
 _logger = logging.getLogger(__name__)
 
 
-def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
+def _to_agent_object(agent: Automation, agent_cache: AgentCache) -> AgentObject:
     """
     Convert a runtime Agent entity to an API-layer AgentObject.
 
@@ -57,7 +57,10 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
     managers: list = []
     department: str | None = None
     title: str | None = None
-    workflow: bool = False
+    # Tier comes from the persisted entity (column-backed), not the spec.
+    # ``workflow`` is kept as a derived back-compat alias for ap-web (BDP-2187).
+    category: str = agent.category
+    workflow: bool = category == "workflow"
     # Prefer the stored entity's description; fall back to the spec's
     # top-level description when the stored value is unset (single-file
     # YAML agents don't persist it at registration today). Lets the
@@ -110,10 +113,6 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
             department = str(_dept) if _dept else None
             _title = _params.get("title")
             title = str(_title) if _title else None
-            # Workflow/orchestrator agents (BDP-2180/2181) carry params.workflow:
-            # true. The platform reads this to keep them off the org chart while
-            # still listing them in omnigent's picker (BDP-2187).
-            workflow = bool(_params.get("workflow"))
     except Exception:  # noqa: BLE001 — spec load failure must not break the list
         _logger.debug(
             "Failed to load spec for agent %s; mcp_servers/skills will be empty",
@@ -136,6 +135,7 @@ def _to_agent_object(agent: Agent, agent_cache: AgentCache) -> AgentObject:
         department=department,
         title=title,
         workflow=workflow,
+        category=category,
     )
 
 
@@ -166,6 +166,9 @@ def create_builtin_agents_router(
         after: str | None = Query(default=None),
         before: str | None = Query(default=None),
         order: str = Query(default="desc", pattern="^(asc|desc)$"),
+        category: str | None = Query(
+            default=None, pattern="^(system|employee|workflow)$"
+        ),
     ) -> PaginatedList:
         """List built-in agents with cursor-based pagination.
 
@@ -177,10 +180,14 @@ def create_builtin_agents_router(
         :param after: Cursor — return agents after this id.
         :param before: Cursor — return agents before this id.
         :param order: Sort order, ``"asc"`` or ``"desc"``.
+        :param category: Optional tier filter (``"system"`` | ``"employee"`` |
+            ``"workflow"``); ``None`` returns all tiers.
         :returns: A :class:`PaginatedList` of built-in agents.
         """
         _require_user(request, auth_provider)
-        page = agent_store.list(limit=limit, after=after, before=before, order=order)
+        page = agent_store.list(
+            limit=limit, after=after, before=before, order=order, category=category
+        )
         return PaginatedList(
             data=[_to_agent_object(a, agent_cache) for a in page.data],
             first_id=page.first_id,

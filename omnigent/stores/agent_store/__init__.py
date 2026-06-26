@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 
-from omnigent.entities import Agent, PagedList
+from omnigent.entities import Automation, PagedList
 
 
 class AgentStore(ABC):
@@ -34,7 +34,7 @@ class AgentStore(ABC):
         name: str,
         bundle_location: str,
         description: str | None = None,
-    ) -> Agent:
+    ) -> Automation:
         """
         Register a new template agent. Name must be unique among
         template agents and raises if a template with that name
@@ -54,7 +54,7 @@ class AgentStore(ABC):
         ...
 
     @abstractmethod
-    def get(self, agent_id: str) -> Agent | None:
+    def get(self, agent_id: str) -> Automation | None:
         """
         Return the agent, or ``None`` if it does not exist.
 
@@ -65,7 +65,7 @@ class AgentStore(ABC):
         ...
 
     @abstractmethod
-    def get_by_name(self, name: str) -> Agent | None:
+    def get_by_name(self, name: str) -> Automation | None:
         """
         Look up a registered template agent by its unique name.
 
@@ -82,7 +82,8 @@ class AgentStore(ABC):
         after: str | None = None,
         before: str | None = None,
         order: str = "desc",
-    ) -> PagedList[Agent]:
+        category: str | None = None,
+    ) -> PagedList[Automation]:
         """
         List registered template agents with cursor-based pagination.
 
@@ -96,7 +97,9 @@ class AgentStore(ABC):
         :param before: Cursor agent ID; only return agents appearing
             *before* this agent in the sort order.
         :param order: Sort direction, ``"desc"`` or ``"asc"``.
-        :returns: A :class:`PagedList` of :class:`Agent` objects.
+        :param category: When set, restrict to one tier (``"system"`` |
+            ``"employee"`` | ``"workflow"``); ``None`` returns all tiers.
+        :returns: A :class:`PagedList` of :class:`Automation` objects.
         """
         ...
 
@@ -122,7 +125,7 @@ class AgentStore(ABC):
         bundle_location: str,
         *,
         expected_version: int | None = None,
-    ) -> Agent | None:
+    ) -> Automation | None:
         """
         Update an agent's bundle location, bump its version, and
         set ``updated_at``. Returns the updated agent, or ``None``
@@ -211,6 +214,36 @@ class AgentStore(ABC):
         :returns: The declared capability slugs as a tuple (possibly empty).
         """
         return ()
+
+    def set_category(self, agent_id: str, category: str | None) -> bool:  # noqa: ARG002
+        """
+        Persist the agent's tier classification (agent-tiering step 1).
+
+        ``"system"`` | ``"employee"`` | ``"workflow"``, or ``None`` to clear.
+        Written by the post-seed backfill so the column is authoritative for
+        ``/v1/agents?category=``. Privilege axis, orthogonal to ``sot_tier``.
+
+        Backends that don't persist it stay a no-op (it reads back as ``None``,
+        and the converter falls back to name-only inference); the SQLAlchemy
+        store overrides with the real implementation.
+
+        :param agent_id: The registered agent id.
+        :param category: The tier, or ``None`` to clear it.
+        :returns: ``True`` if the agent exists and was updated, else ``False``.
+        """
+        return False
+
+    def get_category(self, agent_id: str) -> str | None:  # noqa: ARG002
+        """
+        Return the agent's persisted tier, or ``None`` (unclassified/unset).
+
+        Default ``None`` for stores that don't track it; the SQLAlchemy store
+        overrides.
+
+        :param agent_id: The registered agent id.
+        :returns: The tier string, or ``None``.
+        """
+        return None
 
     @abstractmethod
     def delete(self, agent_id: str) -> bool:

@@ -11,8 +11,8 @@ import time
 
 from omnigent.db.converters import sql_agent_to_entity
 from omnigent.db.db_models import SqlAgent
-from omnigent.db.utils import get_or_create_engine, make_managed_session_maker
-from omnigent.entities import Agent
+from omnigent.db.utils import builtin_agent_id, get_or_create_engine, make_managed_session_maker
+from omnigent.entities import Agent, SystemAgent, Workflow
 
 
 def _now() -> int:
@@ -193,3 +193,52 @@ class TestSqlAgentToEntity:
         )
         entity = sql_agent_to_entity(row)
         assert entity.description == ""
+
+
+class TestCategoryDispatch:
+    """The factory returns the right Automation concrete per ``category`` (step 1)."""
+
+    def _row(self, *, name: str = "some-agent", category: str | None) -> SqlAgent:
+        return SqlAgent(
+            id="ag_x",
+            created_at=1700000000,
+            name=name,
+            bundle_location="ag_x/hash",
+            version=1,
+            category=category,
+        )
+
+    def test_column_system_yields_system_agent(self) -> None:
+        entity = sql_agent_to_entity(self._row(category="system"))
+        assert isinstance(entity, SystemAgent)
+        assert entity.category == "system"
+
+    def test_column_workflow_yields_workflow(self) -> None:
+        entity = sql_agent_to_entity(self._row(category="workflow"))
+        assert isinstance(entity, Workflow)
+        assert entity.category == "workflow"
+
+    def test_column_employee_yields_agent(self) -> None:
+        entity = sql_agent_to_entity(self._row(category="employee"))
+        assert isinstance(entity, Agent)
+        assert entity.category == "employee"
+
+    def test_null_column_allowlist_name_infers_system(self) -> None:
+        """Pre-column rows fall back to name-only inference: an allowlisted name → SystemAgent."""
+        entity = sql_agent_to_entity(self._row(name="polly", category=None))
+        assert isinstance(entity, SystemAgent)
+
+    def test_null_column_ordinary_name_defaults_agent(self) -> None:
+        """Row-only inference can't see ``params.workflow``, so a non-system NULL row → Agent."""
+        entity = sql_agent_to_entity(self._row(name="vivian", category=None))
+        assert isinstance(entity, Agent)
+        assert entity.category == "employee"
+
+    def test_unknown_category_defaults_agent(self) -> None:
+        """A corrupt/unknown category value degrades to Agent, never raises."""
+        entity = sql_agent_to_entity(self._row(category="bogus"))
+        assert isinstance(entity, Agent)
+
+    def test_allowlist_ids_match_builtin_agent_id(self) -> None:
+        """The migration's system backfill keys on builtin_agent_id(name) — guard that contract."""
+        assert builtin_agent_id("polly").startswith("ag_")

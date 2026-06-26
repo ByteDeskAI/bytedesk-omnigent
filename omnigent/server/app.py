@@ -376,6 +376,60 @@ def _ensure_default_agents(
     _ensure_default_debby_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_polly_agent(agent_store, artifact_store, agent_cache)
     _ensure_extra_builtin_agents(agent_store, artifact_store, agent_cache)
+    # Classify every seeded agent once, after all defaults + extra dirs are in
+    # (agent-tiering step 1). Single choke point — keeps the hot idempotent
+    # _ensure_builtin_agent paths untouched; the only tier needing the spec
+    # (workflow) is resolved here.
+    _backfill_agent_categories(agent_store, agent_cache)
+
+
+def _backfill_agent_categories(
+    agent_store: AgentStore,
+    agent_cache: Any,
+) -> None:
+    """Persist each template agent's tier (agent-tiering step 1).
+
+    Runs once per startup after all agents are seeded. Writes the authoritative
+    ``category`` column so ``/v1/agents?category=`` (which queries the column)
+    is correct — the migration can only backfill system/employee; ``workflow``
+    lives in the bundle ``params`` and is resolved here. Idempotent: only writes
+    when the stored column differs, so steady-state boots are read-only. A bad
+    bundle degrades to ``employee`` (the load failure is swallowed) rather than
+    blocking startup.
+
+    :param agent_store: Store for agent metadata.
+    :param agent_cache: Cache for loading agent specs (to read ``params``).
+    """
+    from omnigent.entities import SYSTEM_AGENT_NAMES, infer_category
+
+    after: str | None = None
+    while True:
+        page = agent_store.list(limit=200, after=after)
+        for agent in page.data:
+            if agent.name in SYSTEM_AGENT_NAMES:
+                inferred = "system"  # name alone classifies; skip the spec load
+            else:
+                params: dict = {}
+                try:
+                    loaded = agent_cache.load(
+                        agent.id,
+                        agent.bundle_location,
+                        expand_env=agent.session_id is None,
+                    )
+                    _p = loaded.spec.params
+                    params = _p if isinstance(_p, dict) else {}
+                except Exception:  # noqa: BLE001 — a bad bundle must not block startup
+                    _logger.debug(
+                        "Category backfill: failed to load spec for %s; defaulting employee",
+                        agent.id,
+                        exc_info=True,
+                    )
+                inferred = infer_category(agent.name, params)
+            if agent_store.get_category(agent.id) != inferred:
+                agent_store.set_category(agent.id, inferred)
+        if not page.has_more:
+            break
+        after = page.last_id
 
 
 # Env var listing extra built-in agent specs to seed at startup, in addition
