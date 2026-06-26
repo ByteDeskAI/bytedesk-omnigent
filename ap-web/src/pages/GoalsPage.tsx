@@ -719,6 +719,88 @@ function GoalRow({
   );
 }
 
+// ADR-0154: delivery milestones live in goal.payload.hierarchy.milestones, each
+// gated by the two-key rule (Jira Task Done AND PR merged). awaiting_pr /
+// awaiting_jira surface which key is still missing.
+interface GoalMilestone {
+  taskKey?: string;
+  title?: string;
+  status?: string;
+  steps?: string[];
+  stepsDone?: string[];
+}
+
+function goalMilestones(goal: GoalRecord): GoalMilestone[] {
+  const hierarchy = (goal.payload as { hierarchy?: { milestones?: unknown } } | null)
+    ?.hierarchy;
+  const milestones = hierarchy?.milestones;
+  return Array.isArray(milestones) ? (milestones as GoalMilestone[]) : [];
+}
+
+const MILESTONE_LABELS: Record<string, string> = {
+  pending: "Pending",
+  in_progress: "In progress",
+  awaiting_pr: "Awaiting PR",
+  awaiting_jira: "Awaiting Jira",
+  done: "Done",
+};
+
+function milestoneLabel(status?: string): string {
+  return MILESTONE_LABELS[status ?? "pending"] ?? "Pending";
+}
+
+function milestoneIcon(status?: string) {
+  if (status === "done") return <CheckCircle2Icon className="size-3.5" />;
+  if (status === "awaiting_pr" || status === "awaiting_jira")
+    return <AlertTriangleIcon className="size-3.5" />;
+  if (status === "in_progress") return <CircleDotIcon className="size-3.5" />;
+  return <CircleDashedIcon className="size-3.5" />;
+}
+
+function MilestoneRail({ goal }: { goal: GoalRecord }) {
+  const milestones = goalMilestones(goal);
+  if (milestones.length === 0) return null;
+  const doneCount = milestones.filter((milestone) => milestone.status === "done").length;
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center justify-between text-xs font-medium text-muted-foreground">
+        <span className="flex items-center gap-2">
+          <FlagIcon className="size-3.5" /> Milestones
+        </span>
+        <span>
+          {doneCount}/{milestones.length} done
+        </span>
+      </div>
+      <ol className="space-y-1.5">
+        {milestones.map((milestone, index) => {
+          const steps = milestone.steps ?? [];
+          const stepsDone = milestone.stepsDone ?? [];
+          return (
+            <li
+              key={milestone.taskKey ?? index}
+              className="flex items-center justify-between gap-2 rounded-md border border-border px-2 py-1.5"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm">
+                  {milestone.title ?? milestone.taskKey ?? `Milestone ${index + 1}`}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {milestone.taskKey ?? ""}
+                  {steps.length > 0 ? ` · ${stepsDone.length}/${steps.length} steps` : ""}
+                </p>
+              </div>
+              <Badge variant={milestone.status === "done" ? "secondary" : "outline"}>
+                {milestoneIcon(milestone.status)}
+                {milestoneLabel(milestone.status)}
+              </Badge>
+            </li>
+          );
+        })}
+      </ol>
+    </div>
+  );
+}
+
 function GoalDetail({
   goal,
   busy,
@@ -758,6 +840,8 @@ function GoalDetail({
           <InfoCell label="Priority" value={`P${goal.priority}`} />
           <InfoCell label="Updated" value={formattedTime(goal.updated_at)} />
         </div>
+
+        <MilestoneRail goal={goal} />
 
         <Field label="Lifecycle">
           <Select
