@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from omnigent.entities import DEFAULT_ENVIRONMENT_ID, Conversation, ConversationItem, PagedList
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime import _globals, session_stream, set_runner_client, set_runner_router
+from omnigent.server.routes import sessions as sessions_mod
 from omnigent.server.routes.sessions import create_sessions_router
 from omnigent.server.schemas import SessionEventInput
 
@@ -56,6 +57,16 @@ class _ConversationStore:
                     "omnigent.ui": "terminal",
                     "omnigent.wrapper": "claude-code-native-ui",
                 },
+            ),
+            "conv_hostbound": Conversation(
+                id="conv_hostbound",
+                created_at=1,
+                updated_at=1,
+                root_conversation_id="conv_hostbound",
+                agent_id="ag_test",
+                runner_id="runner_dead",
+                host_id="host_a",
+                workspace="/workspace",
             ),
             # A spec-driven native sub-agent child (e.g. a nessie
             # claude_code reviewer): kind="sub_agent" with a parent
@@ -520,6 +531,85 @@ async def test_list_session_resources_proxies_to_bound_runner(
     body = resp.json()
     ids = [resource["id"] for resource in body["data"]]
     assert ids == [DEFAULT_ENVIRONMENT_ID, "terminal_runner_s1"]
+
+
+@pytest.mark.asyncio
+async def test_list_session_resources_heals_host_bound_missing_runner_client(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A host-bound pinned runner with no client is dead, not a local fallback."""
+    fake_runner = _FakeRunnerClient(payload=_runner_payload())
+    resolve_calls: list[str] = []
+    heal_calls: list[str] = []
+
+    async def _staged_runner_client(session_id: str) -> _FakeRunnerClient | None:
+        resolve_calls.append(session_id)
+        return None if len(resolve_calls) == 1 else fake_runner
+
+    async def _heal(session_id: str, _request: Request) -> bool:
+        heal_calls.append(session_id)
+        return True
+
+    monkeypatch.setattr(
+        sessions_mod,
+        "_get_runner_client_for_resource_access",
+        _staged_runner_client,
+    )
+    monkeypatch.setattr(sessions_mod, "_heal_session_runner", _heal)
+
+    resp = await client.get("/v1/sessions/conv_hostbound/resources")
+
+    assert resp.status_code == 200
+    assert heal_calls == ["conv_hostbound"]
+    assert resolve_calls == ["conv_hostbound", "conv_hostbound"]
+    assert fake_runner.calls == [("GET", "/v1/sessions/conv_hostbound/resources")]
+
+
+@pytest.mark.asyncio
+async def test_stream_session_heals_host_bound_missing_runner_client(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opening the stream should relaunch a host-bound runner that is unroutable."""
+    fake_runner = _FakeRunnerClient(payload={})
+    resolve_calls: list[str] = []
+    heal_calls: list[str] = []
+    relay_clients: list[object | None] = []
+
+    async def _staged_get_runner_client(
+        session_id: str,
+        _router: object | None,
+    ) -> _FakeRunnerClient | None:
+        resolve_calls.append(session_id)
+        return None if len(resolve_calls) == 1 else fake_runner
+
+    async def _heal(session_id: str, _request: Request) -> bool:
+        heal_calls.append(session_id)
+        return True
+
+    async def _relay_ready(
+        _session_id: str,
+        _runner_id: str | None,
+        runner_client: object | None,
+        _conversation_store: object | None,
+    ) -> None:
+        relay_clients.append(runner_client)
+
+    async def _finite_stream(*_args: object, **_kwargs: object):
+        yield "data: [DONE]\n\n"
+
+    monkeypatch.setattr(sessions_mod, "_get_runner_client", _staged_get_runner_client)
+    monkeypatch.setattr(sessions_mod, "_heal_session_runner", _heal)
+    monkeypatch.setattr(sessions_mod, "_ensure_runner_relay_ready", _relay_ready)
+    monkeypatch.setattr(sessions_mod, "_stream_live_events", _finite_stream)
+
+    resp = await client.get("/v1/sessions/conv_hostbound/stream?idle=true")
+
+    assert resp.status_code == 200
+    assert heal_calls == ["conv_hostbound"]
+    assert resolve_calls == ["conv_hostbound", "conv_hostbound"]
+    assert relay_clients == [fake_runner]
 
 
 @pytest.mark.asyncio
