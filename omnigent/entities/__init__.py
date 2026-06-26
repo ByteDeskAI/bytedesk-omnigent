@@ -11,6 +11,7 @@ from omnigent.entities.automation import (
     Workflow,
     WorkflowRole,
     infer_category,
+    is_system,
 )
 from omnigent.entities.comment import Comment, CommentsFingerprint
 from omnigent.entities.conversation import (
@@ -83,6 +84,7 @@ __all__ = [
     "filter_resources_by_type",
     "get_resource_by_id",
     "infer_category",
+    "is_system",
     "parse_item_data",
     "resolve_terminal_entry_by_resource_id",
     "synthesize_conversation_title",

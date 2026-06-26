@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
+import { tierForAgent } from "@/lib/agentTiers";
 import {
   useApplySkillPreview,
   useCreateSkillPreview,
@@ -115,7 +116,9 @@ export function SkillsPage() {
   const agentRows = useMemo(
     () =>
       agents
-        .filter((agent) => agent.workflow !== true && Boolean(agent.department || agent.title))
+        .filter(
+          (agent) => tierForAgent(agent) !== "workflow" && Boolean(agent.department || agent.title),
+        )
         .sort(
           (a, b) =>
             departmentId(a).localeCompare(departmentId(b), undefined, { sensitivity: "base" }) ||

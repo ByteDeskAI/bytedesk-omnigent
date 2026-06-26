@@ -51,6 +51,18 @@ beforeEach(() => {
         department: "Operations",
         title: "Workflow",
         workflow: true,
+        category: "workflow",
+      },
+      {
+        id: "ag_sys",
+        name: "system-agent",
+        display_name: "System Agent",
+        description: null,
+        harness: "claude-sdk",
+        skills: [],
+        department: "Platform",
+        title: "Platform Ops",
+        category: "system",
       },
     ],
   } as never);
@@ -112,6 +124,14 @@ afterEach(() => {
 });
 
 describe("SchedulesPage", () => {
+  it("badges agents by tier (System + Workflows), employees unbadged", () => {
+    renderPage();
+    // System and workflow agents carry their tier label; Maya (employee)
+    // gets no badge.
+    expect(screen.getByText("System")).toBeInTheDocument();
+    expect(screen.getByText("Workflows")).toBeInTheDocument();
+  });
+
   it("opens the create surface and submits a schedule for the selected agent", async () => {
     renderPage();
 

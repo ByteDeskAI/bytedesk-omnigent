@@ -299,6 +299,22 @@ class ConversationStore(ABC):
         """
         return None
 
+    def agent_id_for_runner(self, runner_id: str) -> str | None:  # noqa: ARG002
+        """
+        Return the ``agent_id`` of the session bound to ``runner_id``, or ``None``.
+
+        Resolves the *calling agent* behind a runner-tunnel-authenticated
+        request (BDP-2577): the runner's tunnel token binds to a runner id, and
+        the live session bound to that runner carries the agent it is running.
+        The route-level skill-manage authz gate uses this to identify which
+        agent is requesting a cross-agent skill apply. Returns ``None`` when no
+        session is bound to ``runner_id`` (a forged / never-launched runner),
+        preserving the invariant that an unbound runner resolves to no agent.
+        Default ``None`` for store impls that do not back runner→agent
+        resolution.
+        """
+        return None
+
     @abstractmethod
     def get_session_connectivity(
         self, conversation_ids: list[str]

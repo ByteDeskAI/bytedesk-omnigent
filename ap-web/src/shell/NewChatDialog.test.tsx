@@ -1055,6 +1055,60 @@ describe("NewChatLandingScreen", () => {
   });
 });
 
+// The agent picker groups agents into the three tiers (System / Employees /
+// Workflows), each a labelled section, with System rows marked read-only.
+describe("NewChatLandingScreen agent tiers", () => {
+  beforeEach(setupLandingMocks);
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  function tierAgent(overrides: Partial<AvailableAgent> & Pick<AvailableAgent, "id">): AvailableAgent {
+    return {
+      name: overrides.id,
+      display_name: overrides.id,
+      description: null,
+      harness: "claude-sdk",
+      skills: [],
+      ...overrides,
+    };
+  }
+
+  it("renders a labelled section per non-empty tier and locks system rows", () => {
+    mockAgents([
+      tierAgent({ id: "sys1", display_name: "System Bot", category: "system" }),
+      tierAgent({ id: "emp1", display_name: "Employee One", workflow: false }),
+      tierAgent({ id: "wf1", display_name: "Workflow One", category: "workflow" }),
+    ]);
+    renderLanding();
+    // Open the agent picker (Radix opens on pointerdown in jsdom).
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    // All three tier headers render with their labels.
+    expect(screen.getByTestId("new-chat-landing-agent-tier-system").textContent).toBe("System");
+    expect(screen.getByTestId("new-chat-landing-agent-tier-employee").textContent).toBe(
+      "Employees",
+    );
+    expect(screen.getByTestId("new-chat-landing-agent-tier-workflow").textContent).toBe(
+      "Workflows",
+    );
+    // The system row carries the read-only lock; the others don't.
+    expect(screen.getByTestId("new-chat-landing-agent-lock-sys1")).toBeTruthy();
+    expect(screen.queryByTestId("new-chat-landing-agent-lock-emp1")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-agent-lock-wf1")).toBeNull();
+  });
+
+  it("omits a tier section when no agent falls into it", () => {
+    // Only employees → no System or Workflow header.
+    mockAgents([tierAgent({ id: "emp1", display_name: "Employee One", workflow: false })]);
+    renderLanding();
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-tier-employee")).toBeTruthy();
+    expect(screen.queryByTestId("new-chat-landing-agent-tier-system")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-agent-tier-workflow")).toBeNull();
+  });
+});
+
 // The landing composer's "/" skills menu: bundled skills of the chosen
 // agent surface as suggestions before any session exists, so a skill can
 // be invoked from the very first message. Native terminal agents are

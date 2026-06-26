@@ -239,6 +239,29 @@ describe("useAvailableAgents", () => {
     expect(result.current.data?.[0].description).toBeNull();
   });
 
+  it("maps the tier category through and leaves it undefined when absent", async () => {
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        object: "list",
+        data: [
+          // category present → passes through verbatim for tierForAgent.
+          { id: "ag_sys", name: "system-agent", category: "system" },
+          // category omitted → undefined, so tierForAgent falls back to the
+          // workflow flag.
+          { id: "ag_plain", name: "plain-agent", workflow: true },
+        ],
+        has_more: false,
+      }),
+      [SCAN_URL]: EMPTY_SCAN,
+    });
+
+    const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data?.[0].category).toBe("system");
+    expect(result.current.data?.[1].category).toBeUndefined();
+  });
+
   it("surfaces an error when the built-in request fails", async () => {
     routeFetch({
       [BUILTINS_URL]: mockResponse({ detail: "nope" }, { ok: false, status: 500 }),

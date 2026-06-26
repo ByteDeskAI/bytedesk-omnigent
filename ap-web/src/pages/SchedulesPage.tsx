@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
+import { tierForAgent, TIER_LABELS } from "@/lib/agentTiers";
 import {
   useCreateSchedule,
   useCreateTaskTemplate,
@@ -311,6 +312,9 @@ function AgentRow({
   selected: boolean;
   onSelect: () => void;
 }) {
+  // Employees carry no badge (matching the prior bare-workflow rule); only
+  // the System and Workflow tiers get a tier label.
+  const tier = tierForAgent(agent);
   return (
     <button
       type="button"
@@ -329,7 +333,7 @@ function AgentRow({
         <span className="block truncate text-sm font-medium">{agent.display_name}</span>
         <span className="block truncate text-xs">{agent.title ?? agent.name}</span>
       </span>
-      {agent.workflow && <Badge variant="secondary">Workflow</Badge>}
+      {tier !== "employee" && <Badge variant="secondary">{TIER_LABELS[tier]}</Badge>}
     </button>
   );
 }

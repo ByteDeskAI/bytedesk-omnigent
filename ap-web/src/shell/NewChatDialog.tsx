@@ -1,4 +1,4 @@
-import { type DragEvent, useEffect, useMemo, useRef, useState } from "react";
+import { type DragEvent, Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "@/lib/routing";
 import { useQueryClient } from "@tanstack/react-query";
 import {
@@ -11,6 +11,7 @@ import {
   FileTextIcon,
   FolderIcon,
   ImageIcon,
+  LockIcon,
   PaperclipIcon,
   PlusIcon,
   SettingsIcon,
@@ -50,6 +51,7 @@ import {
   nativeAgentSortRank,
   nativeWrapperLabelsForAgent,
 } from "@/lib/nativeCodingAgents";
+import { groupAgentsByTier, tierForAgent, TIER_LABELS } from "@/lib/agentTiers";
 import { useHosts, type Host } from "@/hooks/useHosts";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAutoGrowTextarea } from "@/hooks/useAutoGrowTextarea";
@@ -69,18 +71,6 @@ import { AgentRowTooltip } from "@/components/AgentHoverCard";
 // created_at desc), so pin the order users expect; any agent not listed
 // here falls after, in server order.
 const AGENT_DISPLAY_ORDER = ["Claude Code", "Codex", "Pi", "Polly", "Debby"];
-
-// Built-in agents (by name slug) — the long-lived agents the server
-// ships out of the box. The picker groups these first, then a divider,
-// then custom (user-registered) agents. GET /v1/agents doesn't yet
-// distinguish the two, so this is a frontend allowlist for now.
-const BUILTIN_AGENTS = new Set([
-  "claude-native-ui", // Claude Code
-  "codex-native-ui", // Codex
-  "pi-native-ui", // Pi
-  "polly",
-  "debby",
-]);
 
 // Hidden on the new-session picker only (superseded by polly; older
 // deployments still carry a seeded nessie row this filter keeps out).
@@ -700,17 +690,11 @@ export function NewChatLandingScreen() {
       );
   }, [agents]);
 
-  // Split the picker into built-in agents (shipped out of the box) and
-  // custom (user-registered) agents so the menu can group them with a
-  // divider between, mirroring the permission-mode separator below.
-  const builtinAgents = useMemo(
-    () => agentList.filter((a) => BUILTIN_AGENTS.has(a.name)),
-    [agentList],
-  );
-  const customAgents = useMemo(
-    () => agentList.filter((a) => !BUILTIN_AGENTS.has(a.name)),
-    [agentList],
-  );
+  // Group the picker into the three tiers (System / Employees / Workflows),
+  // each rendered as a labelled section with a divider between. Grouping
+  // preserves agentList's order, so the native-agent sort above is kept
+  // within each tier.
+  const agentTiers = useMemo(() => groupAgentsByTier(agentList), [agentList]);
 
   const [message, setMessage] = useState<string>("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1087,6 +1071,15 @@ export function NewChatLandingScreen() {
         <AgentRowTooltip agent={agent}>
           <div className="flex min-w-0 flex-1 items-baseline gap-2.5">
             <span className="truncate">{agent.display_name}</span>
+            {/* System agents are platform-managed (read-only): a small lock
+                marks them; there is no per-agent edit/delete UI to suppress. */}
+            {tierForAgent(agent) === "system" && (
+              <LockIcon
+                className="size-3 shrink-0 self-center text-muted-foreground"
+                data-testid={`new-chat-landing-agent-lock-${agent.id}`}
+                aria-label="System agent (read-only)"
+              />
+            )}
             {blurb && (
               <span className="truncate text-[11px] text-muted-foreground/70">{blurb}</span>
             )}
@@ -1471,17 +1464,27 @@ export function NewChatLandingScreen() {
                       side="bottom"
                       className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-64 max-w-[calc(100vw-2rem)] overflow-y-auto p-1"
                     >
-                      {/* Built-in agents first, then a divider, then any
-                          custom (user-registered) agents. renderAgentRow is
-                          defined once and reused for both groups. The divider
-                          only renders when BOTH groups are non-empty, so a
-                          deployment with only custom agents (or only built-ins)
-                          never shows a leading/dangling separator. */}
-                      {builtinAgents.map((agent) => renderAgentRow(agent))}
-                      {builtinAgents.length > 0 && customAgents.length > 0 && (
-                        <DropdownMenuSeparator />
-                      )}
-                      {customAgents.map((agent) => renderAgentRow(agent))}
+                      {/* Three tiers — System, Employees, Workflows — each a
+                          labelled section reusing renderAgentRow. Only
+                          non-empty tiers render, and the separator sits between
+                          rendered sections (never leading/dangling). Section
+                          headers are plain divs (like the Advanced menu's
+                          harness label), so the rows stay direct roving-focus
+                          children of DropdownMenuContent. */}
+                      {(["system", "employee", "workflow"] as const)
+                        .filter((tier) => agentTiers[tier].length > 0)
+                        .map((tier, index) => (
+                          <Fragment key={tier}>
+                            {index > 0 && <DropdownMenuSeparator />}
+                            <div
+                              className="px-2 pt-1.5 pb-0.5 text-[11px] font-medium text-muted-foreground"
+                              data-testid={`new-chat-landing-agent-tier-${tier}`}
+                            >
+                              {TIER_LABELS[tier]}
+                            </div>
+                            {agentTiers[tier].map((agent) => renderAgentRow(agent))}
+                          </Fragment>
+                        ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
                 ) : (

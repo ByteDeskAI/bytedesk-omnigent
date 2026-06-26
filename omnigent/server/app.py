@@ -377,56 +377,72 @@ def _ensure_default_agents(
     _ensure_default_polly_agent(agent_store, artifact_store, agent_cache)
     _ensure_extra_builtin_agents(agent_store, artifact_store, agent_cache)
     # Classify every seeded agent once, after all defaults + extra dirs are in
-    # (agent-tiering step 1). Single choke point — keeps the hot idempotent
+    # (agent-tiering step 1/2). Single choke point — keeps the hot idempotent
     # _ensure_builtin_agent paths untouched; the only tier needing the spec
-    # (workflow) is resolved here.
-    _backfill_agent_categories(agent_store, agent_cache)
+    # (workflow) and the spec's declared capabilities are resolved here.
+    _backfill_agent_classification(agent_store, agent_cache)
 
 
-def _backfill_agent_categories(
+def _backfill_agent_classification(
     agent_store: AgentStore,
     agent_cache: Any,
 ) -> None:
-    """Persist each template agent's tier (agent-tiering step 1).
+    """Persist each template agent's tier + declared capabilities (agent-tiering step 1/2).
 
-    Runs once per startup after all agents are seeded. Writes the authoritative
-    ``category`` column so ``/v1/agents?category=`` (which queries the column)
-    is correct — the migration can only backfill system/employee; ``workflow``
-    lives in the bundle ``params`` and is resolved here. Idempotent: only writes
-    when the stored column differs, so steady-state boots are read-only. A bad
-    bundle degrades to ``employee`` (the load failure is swallowed) rather than
-    blocking startup.
+    Runs once per startup after all agents are seeded.
+
+    Category (step 1): writes the authoritative ``category`` column so
+    ``/v1/agents?category=`` (which queries the column) is correct — the
+    migration can only backfill system/employee; ``workflow`` lives in the
+    bundle ``params`` and is resolved here. System classification reads the
+    entity's own category (:func:`is_system`), which the converter derives from
+    the allowlisted name, so it stays correct even if the bundle fails to load.
+
+    Capabilities (step 2, BDP-2577): built-in capabilities are otherwise never
+    materialized onto the row at seed (only the skills/admin write paths call
+    ``set_capabilities``), but the route-level skill-manage authz gate reads
+    them back via ``get_capabilities`` — so the spec's ``capabilities:`` are
+    synced onto the row here.
+
+    Idempotent: only writes when the stored value differs, so steady-state boots
+    are read-only. A bad bundle degrades to ``employee`` with no capability sync
+    (the load failure is swallowed) rather than blocking startup.
 
     :param agent_store: Store for agent metadata.
-    :param agent_cache: Cache for loading agent specs (to read ``params``).
+    :param agent_cache: Cache for loading agent specs (to read ``params`` + ``capabilities``).
     """
-    from omnigent.entities import SYSTEM_AGENT_NAMES, infer_category
+    from omnigent.entities import infer_category, is_system
 
     after: str | None = None
     while True:
         page = agent_store.list(limit=200, after=after)
         for agent in page.data:
-            if agent.name in SYSTEM_AGENT_NAMES:
-                inferred = "system"  # name alone classifies; skip the spec load
-            else:
-                params: dict = {}
-                try:
-                    loaded = agent_cache.load(
-                        agent.id,
-                        agent.bundle_location,
-                        expand_env=agent.session_id is None,
-                    )
-                    _p = loaded.spec.params
-                    params = _p if isinstance(_p, dict) else {}
-                except Exception:  # noqa: BLE001 — a bad bundle must not block startup
-                    _logger.debug(
-                        "Category backfill: failed to load spec for %s; defaulting employee",
-                        agent.id,
-                        exc_info=True,
-                    )
-                inferred = infer_category(agent.name, params)
+            # Load the spec for ALL agents now: system classification ignores it
+            # (name wins via is_system), but capability sync needs it.
+            params: dict = {}
+            capabilities: tuple[str, ...] | None = None
+            try:
+                loaded = agent_cache.load(
+                    agent.id,
+                    agent.bundle_location,
+                    expand_env=agent.session_id is None,
+                )
+                _p = loaded.spec.params
+                params = _p if isinstance(_p, dict) else {}
+                capabilities = loaded.spec.capabilities
+            except Exception:  # noqa: BLE001 — a bad bundle must not block startup
+                _logger.debug(
+                    "Classification backfill: failed to load spec for %s; defaulting employee",
+                    agent.id,
+                    exc_info=True,
+                )
+            inferred = "system" if is_system(agent) else infer_category(agent.name, params)
             if agent_store.get_category(agent.id) != inferred:
                 agent_store.set_category(agent.id, inferred)
+            # Materialize the spec's declared capabilities onto the row so the
+            # cross-agent skill-apply authz gate (BDP-2577) can read them.
+            if capabilities is not None and agent_store.get_capabilities(agent.id) != capabilities:
+                agent_store.set_capabilities(agent.id, list(capabilities))
         if not page.has_more:
             break
         after = page.last_id
