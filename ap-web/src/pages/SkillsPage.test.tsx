@@ -163,6 +163,9 @@ describe("SkillsPage", () => {
     // marketplace name (which made getByText("ByteDesk Catalog") ambiguous).
     expect(screen.getByRole("heading", { name: "Catalog" })).toBeInTheDocument();
     expect(screen.getByText("ByteDesk Catalog")).toBeInTheDocument();
+    // The source badge shows a friendly label, not the raw source_id.
+    expect(screen.getByText("GitHub")).toBeInTheDocument();
+    expect(screen.queryByText("github_marketplace")).toBeNull();
     expect(screen.getByLabelText("Search ByteDesk catalog")).toBeInTheDocument();
     expect(screen.getByText("platform-dev")).toBeInTheDocument();
     expect(screen.getByText("Installed Skills")).toBeInTheDocument();

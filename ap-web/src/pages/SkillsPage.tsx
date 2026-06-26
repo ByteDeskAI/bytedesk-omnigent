@@ -271,7 +271,7 @@ export function SkillsPage() {
             <section className="rounded-md border border-border bg-background">
               <div className="flex items-center justify-between border-b border-border px-3 py-2">
                 <h2 className="text-sm font-medium">Catalog</h2>
-                <Badge variant="secondary">github_marketplace</Badge>
+                <Badge variant="secondary">GitHub</Badge>
               </div>
               <div className="space-y-3 px-3 py-3">
                 <div className="flex flex-wrap gap-1.5">
