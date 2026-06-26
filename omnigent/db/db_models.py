@@ -74,9 +74,17 @@ class SqlAgent(Base):
     # = no capabilities declared / not yet materialized. Queryable so the
     # resolver / admin surfaces can filter agents by declared capability.
     capabilities: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Agent tier classification (agent-tiering step 1): "system" | "employee" |
+    # "workflow". Queryable so /v1/agents?category= and admin surfaces can filter
+    # without loading every spec. NULL = not yet classified → the converter
+    # falls back to name-only inference (system/employee) and the post-seed
+    # backfill writes the authoritative value (incl. workflow). Privilege axis,
+    # orthogonal to ``sot_tier`` (SoT ownership).
+    category: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     __table_args__ = (
         Index("ix_agents_created_at", "created_at"),
+        Index("ix_agents_category", "category"),
         Index(
             "ix_agents_template_name",
             "name",

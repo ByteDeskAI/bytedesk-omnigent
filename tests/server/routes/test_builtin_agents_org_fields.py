@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omnigent.entities import Agent, LoadedAgent
+from omnigent.entities import Agent, LoadedAgent, SystemAgent, Workflow
 from omnigent.server.routes.builtin_agents import _to_agent_object
 from omnigent.spec import parse
 
@@ -48,23 +48,37 @@ def test_org_fields_default_when_spec_unloadable() -> None:
     assert obj.title is None
 
 
-def test_workflow_flag_true_for_workflow_agent() -> None:
-    # Workflow/orchestrator agents carry params.workflow: true (BDP-2180/2181);
-    # the platform uses this to keep them off the org chart (BDP-2187).
+def test_workflow_flag_true_for_workflow_entity() -> None:
+    # Agent-tiering step 1: ``workflow`` is now derived from the persisted entity
+    # tier (category == "workflow"), not from spec params. A workflow is a
+    # ``Workflow`` entity; ``category`` rides into the DTO alongside the alias.
     spec = parse(_AGENTS / "weekly-business-review", expand_env=False)
-    agent = Agent(id="ag_wf", created_at=0, name="weekly-business-review", bundle_location="x")
+    agent = Workflow(id="ag_wf", created_at=0, name="weekly-business-review", bundle_location="x")
     obj = _to_agent_object(agent, _FakeCache(spec))
     assert obj.workflow is True
+    assert obj.category == "workflow"
 
 
-def test_workflow_flag_false_for_employee() -> None:
+def test_employee_entity_is_not_workflow() -> None:
     spec = parse(_AGENTS / "platform-developer", expand_env=False)
     agent = Agent(id="ag_emp", created_at=0, name="platform-developer", bundle_location="x")
     obj = _to_agent_object(agent, _FakeCache(spec))
     assert obj.workflow is False
+    assert obj.category == "employee"
 
 
-def test_workflow_flag_default_when_spec_unloadable() -> None:
+def test_system_entity_carries_system_category() -> None:
+    spec = parse(_AGENTS / "platform-developer", expand_env=False)
+    agent = SystemAgent(id="ag_sys", created_at=0, name="skill-manager", bundle_location="x")
+    obj = _to_agent_object(agent, _FakeCache(spec))
+    assert obj.category == "system"
+    assert obj.workflow is False
+
+
+def test_category_default_when_spec_unloadable() -> None:
+    # Tier comes from the entity, not the spec — so an unreadable bundle still
+    # reports the right category (and workflow alias).
     agent = Agent(id="ag_z", created_at=0, name="x", bundle_location="x")
     obj = _to_agent_object(agent, _BoomCache())
     assert obj.workflow is False
+    assert obj.category == "employee"
