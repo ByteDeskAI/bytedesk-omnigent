@@ -1,10 +1,10 @@
 # Omnigent images: server (default target) + host (`--target host`).
 #
 # The default/final target builds the server image (external-runner
-# mode): the FastAPI / WebSocket coordinator — HTTP + SSE routes, the
-# runner WebSocket tunnel acceptor, and the SQLAlchemy stores. It does
+# mode): the FastAPI coordinator — HTTP + SSE routes, the
+# runner control-plane bridge, and the SQLAlchemy stores. It does
 # NOT execute agent harnesses — runners run on the user's local machine
-# and dial in via WS /v1/runner/tunnel.
+# and connect through the configured runner transport.
 #
 # As a consequence: no tmux and no harness SDK runtime requirements
 # in the final image. It does include the small acquisition-tool set

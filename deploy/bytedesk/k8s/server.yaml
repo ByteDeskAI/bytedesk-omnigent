@@ -1,6 +1,6 @@
 # Omnigent SERVER = control plane only. Per deploy/docker/entrypoint.py it runs
 # in "external runners only" mode: it persists sessions/agents/policies, serves
-# the SPA + REST/SSE API, accepts runner WebSocket tunnels at /v1/runner/tunnel,
+# the SPA + REST/SSE API, coordinates runners through the configured transport,
 # and NEVER executes agents itself. Agents run on the RUNNER (runner.yaml).
 apiVersion: v1
 kind: Service
