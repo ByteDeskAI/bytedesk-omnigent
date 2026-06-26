@@ -334,6 +334,7 @@ def _intercept_tool(
                 return None
     return None
 
+
 # ── Module-level constants (rule 34) ──────────────────────────────
 
 # Wire literal for the interrupt input type. Lives here so the
@@ -1849,9 +1850,7 @@ def _agent_display_names_for(
                 if dn:
                     out[aid] = str(dn)
         except Exception:  # noqa: BLE001 — never break the list on one bad spec
-            _logger.debug(
-                "display_name resolution failed for agent %s", aid, exc_info=True
-            )
+            _logger.debug("display_name resolution failed for agent %s", aid, exc_info=True)
     return out
 
 
@@ -4762,7 +4761,7 @@ def _publish_status(
         push_service = get_push_service()
         if push_service is not None:
             push_service.on_status_change(session_id, previous_status, status)
-    except Exception:
+    except Exception:  # noqa: BLE001 - push fanout is best-effort.
         pass
     event = SessionStatusEvent(
         type="session.status",
@@ -5978,7 +5977,14 @@ async def _get_runner_client_for_resource_access(
 
     runner_router = get_runner_router()
     if runner_router is not None:
-        routed_runner = await runner_router.aclient_for_session_resources(session_id)
+        aroute = getattr(runner_router, "aclient_for_session_resources", None)
+        if aroute is not None:
+            routed_runner = await aroute(session_id)
+        else:
+            routed_runner = await asyncio.to_thread(
+                runner_router.client_for_session_resources,
+                session_id,
+            )
         return routed_runner.client
     return cast("httpx.AsyncClient | None", get_runner_client())
 
@@ -8146,9 +8152,7 @@ async def _rescue_compaction_to_memory(
     if not any(getattr(it, "type", None) == "compaction" for it in persisted_items):
         return
     try:
-        conv = await asyncio.to_thread(
-            conversation_store.get_conversation, session_id
-        )
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         agent_id = conv.agent_id if conv is not None else None
 
         from omnigent.runtime import get_memory_store
@@ -12211,9 +12215,7 @@ def create_sessions_router(
         # posture ``_require_user`` already tolerates above), so guard the
         # call — an unguarded ``None.get_principal`` 500s every create in that
         # mode (and broke the host-launch integration harness).
-        _principal = (
-            auth_provider.get_principal(request) if auth_provider is not None else None
-        )
+        _principal = auth_provider.get_principal(request) if auth_provider is not None else None
         tenant_id = _principal.tenant_id if _principal is not None else None
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type == "multipart/form-data":
@@ -12505,9 +12507,7 @@ def create_sessions_router(
                 # no launch_owner record and its tunnel handshake is rejected 403
                 # in accounts mode (the runner reads as "offline" and the session
                 # stays unbound until a later message relaunches it).
-                _create_tunnel_registry = getattr(
-                    request.app.state, "tunnel_registry", None
-                )
+                _create_tunnel_registry = getattr(request.app.state, "tunnel_registry", None)
                 if user_id is not None and _create_tunnel_registry is not None:
                     _create_tunnel_registry.record_launch_owner(runner_id, user_id)
                 host_registry.send_text(conn, launch_frame)
@@ -12665,9 +12665,7 @@ def create_sessions_router(
         # Cross-tenant isolation (BDP-2395): a tenant-scoped principal cannot
         # read another tenant's session even when owner-scoping would allow it.
         _principal = auth_provider.get_principal(request) if auth_provider else None
-        _enforce_tenant_scope(
-            _principal.tenant_id if _principal else None, access.conversation
-        )
+        _enforce_tenant_scope(_principal.tenant_id if _principal else None, access.conversation)
         return await _get_session_snapshot(
             conversation_store,
             session_id,
@@ -16509,9 +16507,7 @@ def create_sessions_router(
                 [item],
             )
             # D6 (BDP-2276): rescue the summary into the agent's episodic memory.
-            await _rescue_compaction_to_memory(
-                conversation_store, session_id, persisted_items
-            )
+            await _rescue_compaction_to_memory(conversation_store, session_id, persisted_items)
             return {"queued": True}
         if body.type == _EXTERNAL_ASSISTANT_MESSAGE_TYPE:
             item_id = await _persist_external_assistant_message(

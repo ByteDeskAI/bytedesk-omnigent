@@ -16,11 +16,11 @@ data:
     # emptyDir that vanished on every roll. The entrypoint is config-first, so
     # this — not the ARTIFACT_DIR env — is the authoritative value; it MUST match
     # ARTIFACT_DIR in server.yaml. A nats:// scheme selects the NATS Object Store
-    # backend via the pluggable artifact-store factory. Bundles share the
-    # coordination NATS (omnigent-nats); isolating them onto a dedicated NATS
-    # server is a tracked follow-up, not done here. Local cookie-secret /
-    # agent-cache dirs still fall back to the container's /data/artifacts.
-    artifact_location: nats://omnigent-nats:4222/omnigent-artifacts
+    # backend via the pluggable artifact-store factory. Bundles use a dedicated
+    # NATS server/PVC so artifact growth cannot exhaust the coordination
+    # backplane's KV/stream storage. Local cookie-secret / agent-cache dirs still
+    # fall back to the container's /data/artifacts.
+    artifact_location: nats://omnigent-nats-artifacts:4222/omnigent-artifacts
     skills:
       default_search_sources:
         - skills

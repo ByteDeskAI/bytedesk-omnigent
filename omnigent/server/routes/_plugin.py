@@ -8,37 +8,18 @@ argues the framework's own routes should flow through the *same*
 can host every first-party router it can host anyone's, and core gains no
 privileged route set.
 
-This module is the first step of that migration: it declares a first-party
-:class:`RoutesExtension` via the :mod:`omnigent.sdk` ``@extension`` facade whose
-``@router`` methods return this subpackage's **existing** concrete router
-factories. It does **not** move or rewrite any factory — it only re-registers
-them through the seam (the providers stay exactly where they are in
-``policy_registry.py`` et al.).
+This module declares a first-party :class:`RoutesExtension` whose ``post_init``
+hook mounts this subpackage's **existing** concrete router factories using the
+stores already built by ``create_app()`` and exposed on ``app.state``. It does
+**not** move or rewrite any factory — it only registers them through the same
+extension lifecycle the third-party route seam already uses.
 
-Scope of *this* phase (Section 9.3 boot order shows ``routes plugin registers``
-runs late, after every store is built): the plugin must
-
-  * import cleanly with the kernel only (no store construction at import), and
-  * expose a correct, non-empty ``routers()`` return.
-
-Only the **dependency-free** router is wired live here: ``policy_registry``
-needs nothing but the ``auth_provider`` the seam already forwards, so it is a
-real, self-contained contribution that proves the seam end-to-end. The
-remaining route factories in this subpackage (``sessions``, ``data_surfaces``,
-``builtin_agents``, ``agents_write``, ``skills``, ``terminal_attach``,
-``comments``, ``session_policies``, ``default_policies``) each require concrete
-stores (``conversation_store``, ``agent_store``, ``file_store``,
-``artifact_store``, ``comment_store``, ``policy_store``, …) that only exist
-*inside* ``create_app()``. The seam's synthesised ``routers()`` forwards only
-``auth_provider`` / ``permission_store``, so those store-backed factories are
-left to the Integration phase, which will thread the built stores into this
-plugin (e.g. via DI ``@provides`` on the host container). They are enumerated in
-:data:`STORE_BACKED_ROUTE_FACTORIES` as documentation of the remaining surface.
-
-This plugin is **not** wired into boot here — ``create_app()`` keeps mounting
-the factories inline (the non-negotiable back-compat rule). Wiring it into the
-``install_extensions()`` path, and removing the now-duplicated inline mounts, is
-the Integration phase's job.
+Scope of this slice: the plugin must import cleanly with the kernel only (no
+store construction at import) and mount the documented store-backed route group
+after the app host has built its stores. Route factories outside this subpackage
+(peer tunnel, runner tunnel, hosts, accounts/auth, SPA/static, caller-provided
+``extra_routers``) remain in ``create_app()`` because they are separate
+composition-root concerns.
 
 Every heavy / FastAPI import is deferred inside the hook bodies so importing
 this module stays kernel-light and circular-import-safe (the routes modules pull
@@ -49,29 +30,37 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from omnigent.sdk import extension, router
+from omnigent.sdk import extension
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime
-    from fastapi import APIRouter
-
-    from omnigent.server.auth import AuthProvider
+    from fastapi import FastAPI
 
 
-#: The store-backed route factories in this subpackage that this plugin will own
-#: once the Integration phase threads the built stores into it. Documented here
-#: (not wired) so the remaining surface is explicit; the dotted paths resolve to
-#: the *existing* factories — nothing is moved. Each tuple is
-#: ``(module, factory, required_stores)``.
+#: The store-backed route factories in this subpackage owned by this plugin.
+#: Documented as ``(module, factory, required_state_keys)`` so the cutover has a
+#: stable, reviewable route inventory in one place.
 STORE_BACKED_ROUTE_FACTORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "omnigent.server.routes.sessions",
         "create_sessions_router",
-        ("conversation_store", "agent_store", "file_store", "artifact_store"),
+        (
+            "conversation_store",
+            "agent_store",
+            "file_store",
+            "artifact_store",
+            "runner_router",
+            "agent_cache",
+            "server_mcp_pool",
+            "session_liveness_lookup",
+            "comment_store",
+            "runner_tunnel_tokens",
+            "runner_exit_reports",
+        ),
     ),
     (
         "omnigent.server.routes.data_surfaces",
         "create_data_surfaces_router",
-        ("conversation_store",),
+        ("conversation_store", "host_store"),
     ),
     (
         "omnigent.server.routes.builtin_agents",
@@ -86,7 +75,13 @@ STORE_BACKED_ROUTE_FACTORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
     (
         "omnigent.server.routes.skills",
         "create_skills_router",
-        ("agent_store", "agent_cache", "artifact_store"),
+        (
+            "agent_store",
+            "agent_cache",
+            "artifact_store",
+            "conversation_store",
+            "runner_router",
+        ),
     ),
     (
         "omnigent.server.routes.terminal_attach",
@@ -108,6 +103,16 @@ STORE_BACKED_ROUTE_FACTORIES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
         "create_default_policies_router",
         ("policy_store",),
     ),
+    (
+        "omnigent.server.routes.policy_registry",
+        "create_policy_registry_router",
+        (),
+    ),
+    (
+        "omnigent.server.routes.push",
+        "create_push_router",
+        ("push_subscription_store",),
+    ),
 )
 
 
@@ -116,35 +121,141 @@ class RoutesExtension:
     """First-party plugin contributing ``omnigent/server/routes/`` factories.
 
     A plain class the :func:`omnigent.sdk.extension` decorator compiles down to
-    an :class:`omnigent.kernel.extensions.OmnigentExtension`: the ``@router`` method
-    below is gathered into a synthesised
-    ``routers(auth_provider=..., permission_store=...)`` that returns the same
-    ``list[APIRouter]`` shape ``create_app()`` mounts today.
+    an :class:`omnigent.kernel.extensions.OmnigentExtension`. The synthesized
+    ``routers()`` method returns ``[]``; the store-backed route group mounts in
+    ``post_init`` after ``create_app()`` has exposed the built stores on
+    ``app.state``.
     """
 
-    @router()
-    def policy_registry_router(
-        self,
-        auth_provider: "AuthProvider | None" = None,
-        permission_store: object | None = None,
-    ) -> "APIRouter":
-        """Contribute the dependency-free ``/policy-registry`` router.
+    def post_init(self, host: FastAPI) -> None:
+        """Mount the first-party core route group from the app-host context."""
+        state = host.state
+        auth_provider = getattr(state, "auth_provider", None)
+        permission_store = getattr(state, "permission_store", None)
 
-        Mirrors the inline ``app.include_router(create_policy_registry_router(
-        auth_provider=auth_provider))`` mount in ``create_app()``. Imported
-        lazily so this module imports without pulling FastAPI / the routes
-        stack — and so it is safe against circular imports (the routes package
-        imports the store + identity stack this plugin lives alongside).
+        from omnigent.server.routes.agents_write import create_agents_write_router
+        from omnigent.server.routes.builtin_agents import create_builtin_agents_router
+        from omnigent.server.routes.comments import create_comments_router
+        from omnigent.server.routes.data_surfaces import create_data_surfaces_router
+        from omnigent.server.routes.default_policies import create_default_policies_router
+        from omnigent.server.routes.policy_registry import create_policy_registry_router
+        from omnigent.server.routes.push import create_push_router
+        from omnigent.server.routes.session_policies import create_session_policies_router
+        from omnigent.server.routes.sessions import create_sessions_router
+        from omnigent.server.routes.skills import create_skills_router
+        from omnigent.server.routes.terminal_attach import create_terminal_attach_router
 
-        ``permission_store`` is accepted (the seam forwards it) but unused: this
-        factory authorizes purely on ``auth_provider`` presence, identical to
-        the current inline mount.
-        """
-        from omnigent.server.routes.policy_registry import (
-            create_policy_registry_router,
+        host.include_router(
+            create_sessions_router(
+                state.conversation_store,
+                state.agent_store,
+                file_store=state.file_store,
+                artifact_store=state.artifact_store,
+                runner_router=state.runner_router,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+                agent_cache=state.agent_cache,
+                mcp_pool=state.server_mcp_pool,
+                liveness_lookup=state.session_liveness_lookup,
+                comment_store=state.comment_store,
+                runner_tunnel_tokens=state.runner_tunnel_tokens,
+                runner_exit_reports=state.runner_exit_reports,
+            ),
+            prefix="/v1",
+            tags=["sessions"],
+        )
+        host.include_router(
+            create_data_surfaces_router(
+                state.conversation_store,
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+                host_store=state.host_store,
+            ),
+            prefix="/v1",
+            tags=["data-surfaces"],
+        )
+        host.include_router(
+            create_builtin_agents_router(
+                state.agent_store,
+                state.agent_cache,
+                auth_provider=auth_provider,
+            ),
+            prefix="/v1",
+            tags=["agents"],
+        )
+        host.include_router(
+            create_agents_write_router(
+                state.agent_store,
+                state.agent_cache,
+                state.artifact_store,
+                auth_provider=auth_provider,
+            ),
+            prefix="/v1",
+            tags=["agents"],
+        )
+        host.include_router(
+            create_skills_router(
+                state.agent_store,
+                state.agent_cache,
+                state.artifact_store,
+                auth_provider=auth_provider,
+                conversation_store=state.conversation_store,
+                runner_router=state.runner_router,
+                permission_store=permission_store,
+            ),
+            prefix="/v1",
+            tags=["skills"],
+        )
+        host.include_router(
+            create_terminal_attach_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+                conversation_store=state.conversation_store,
+            ),
+            prefix="/v1",
+            tags=["terminals"],
+        )
+        if state.comment_store is not None:
+            host.include_router(
+                create_comments_router(
+                    state.comment_store,
+                    auth_provider=auth_provider,
+                    permission_store=permission_store,
+                    conversation_store=state.conversation_store,
+                ),
+                prefix="/v1",
+                tags=["comments"],
+            )
+        if state.policy_store is not None:
+            host.include_router(
+                create_session_policies_router(
+                    state.policy_store,
+                    state.conversation_store,
+                    auth_provider=auth_provider,
+                    permission_store=permission_store,
+                ),
+                prefix="/v1",
+                tags=["session_policies"],
+            )
+            host.include_router(
+                create_default_policies_router(
+                    state.policy_store,
+                    auth_provider=auth_provider,
+                    permission_store=permission_store,
+                ),
+                prefix="/v1",
+                tags=["default_policies"],
+            )
+        host.include_router(
+            create_policy_registry_router(auth_provider=auth_provider),
+            prefix="/v1",
+            tags=["policy_registry"],
+        )
+        host.include_router(
+            create_push_router(state.push_subscription_store, auth_provider),
+            prefix="/v1",
+            tags=["push"],
         )
 
-        return create_policy_registry_router(auth_provider=auth_provider)
 
-
-__all__ = ["RoutesExtension", "STORE_BACKED_ROUTE_FACTORIES"]
+__all__ = ["STORE_BACKED_ROUTE_FACTORIES", "RoutesExtension"]

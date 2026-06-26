@@ -960,7 +960,9 @@ async def test_skill_slash_command_persists_visible_item_and_hidden_meta_message
             "content": meta["content"],
             "agent_id": agent["id"],
             "model": "skill-agent",
-            "has_mcp_servers": False,
+            # First-party/extension seams are now authoritative on default boot,
+            # so the ByteDesk memory MCP front is merged into loaded agent specs.
+            "has_mcp_servers": True,
             # The forwarded message is the meta item; its store id lets the
             # runner dedup it on a cold-cache history reload.
             "persisted_item_id": meta["id"],

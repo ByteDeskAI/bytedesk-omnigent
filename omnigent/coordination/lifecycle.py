@@ -27,6 +27,27 @@ def get_active_backplane() -> CoordinationBackplane | None:
     return _backplane
 
 
+def coordination_status() -> dict[str, str | bool | None]:
+    """Return redacted runtime status for health/capability surfaces."""
+    backplane = _backplane
+    if backplane is None:
+        return {
+            "active": False,
+            "provider": None,
+            "replica_id": None,
+        }
+    provider = type(backplane).__name__
+    if provider == "NatsBackplane":
+        provider = "nats"
+    elif provider == "InProcessBackplane":
+        provider = "inprocess"
+    return {
+        "active": True,
+        "provider": provider,
+        "replica_id": backplane.replica_id,
+    }
+
+
 def schedule_backplane(coro: Any) -> None:
     """Schedule a backplane coroutine from sync code (best-effort)."""
     if _backplane is None or _loop is None:
@@ -55,6 +76,7 @@ async def start_coordination() -> CoordinationBackplane:
     _loop = asyncio.get_running_loop()
     _backplane = resolve_coordination_backplane()
     await _backplane.start()
+    await _hydrate_pending_index(_backplane)
     _fanout_task = asyncio.create_task(_fanout_listener(_backplane))
     return _backplane
 
@@ -91,9 +113,7 @@ def fanout_pending_upsert(
         },
         separators=(",", ":"),
     ).encode("utf-8")
-    schedule_backplane(
-        _backplane.publish(f"omnigent.coord.fanout.{_PENDING_UPSERT}", payload)
-    )
+    schedule_backplane(_backplane.publish(f"omnigent.coord.fanout.{_PENDING_UPSERT}", payload))
 
 
 def fanout_pending_delete(conversation_id: str, elicitation_id: str) -> None:
@@ -109,9 +129,21 @@ def fanout_pending_delete(conversation_id: str, elicitation_id: str) -> None:
         },
         separators=(",", ":"),
     ).encode("utf-8")
-    schedule_backplane(
-        _backplane.publish(f"omnigent.coord.fanout.{_PENDING_DELETE}", payload)
-    )
+    schedule_backplane(_backplane.publish(f"omnigent.coord.fanout.{_PENDING_DELETE}", payload))
+
+
+async def _hydrate_pending_index(backplane: CoordinationBackplane) -> None:
+    """Restore pending elicitation hot state from the durable pending KV index."""
+    from omnigent.runtime import pending_elicitations as pe
+
+    try:
+        records = await backplane.index_list_prefix("pending", "")
+    except Exception:  # noqa: BLE001 — recovery failure must not block boot
+        _logger.warning("coordination pending-index hydration failed", exc_info=True)
+        return
+    hydrated = pe.hydrate_from_backplane_records(records)
+    if hydrated:
+        _logger.info("hydrated %s pending elicitations from coordination backplane", hydrated)
 
 
 async def _fanout_listener(backplane: CoordinationBackplane) -> None:
@@ -160,6 +192,7 @@ def reset_for_tests() -> None:
 
 
 __all__ = [
+    "coordination_status",
     "fanout_pending_delete",
     "fanout_pending_upsert",
     "get_active_backplane",

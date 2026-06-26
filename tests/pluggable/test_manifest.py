@@ -73,6 +73,18 @@ def test_manifest_is_json_serializable() -> None:
     assert isinstance(dumped, str)
 
 
+def test_seam_accessors_return_stable_registry_instances() -> None:
+    """Every SEAMS accessor returns the same registry instance per process.
+
+    BDP-2503's core cleanup depends on first-party and extension contributions
+    landing on one stable seam plane. A SEAMS row that constructs a new registry
+    on each call makes discovery/registration transient and prevents the core
+    plugin path from becoming authoritative.
+    """
+    unstable = [seam for seam, accessor, _hook in SEAMS if accessor() is not accessor()]
+    assert not unstable
+
+
 def test_discover_all_extensions_is_safe_noop() -> None:
     """With no extensions installed, discovery runs without raising.
 

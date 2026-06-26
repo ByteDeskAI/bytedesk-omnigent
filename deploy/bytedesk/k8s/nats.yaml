@@ -1,9 +1,7 @@
 # Omnigent coordination NATS — JetStream with durable PVC.
 # Enables omnigent-server replicas > 1 when OMNIGENT_NATS_URL is set.
-# Also backs the durable agent-bundle artifact store (BDP-2380, ADR-0148):
-# the `omnigent-artifacts` JetStream Object Store bucket persists to this same
-# file-backed PVC, so the 2Gi → 5Gi bump below leaves headroom for bundles
-# (small gzipped specs) alongside the coordination KV/streams.
+# Agent-bundle artifacts use the separate omnigent-nats-artifacts instance below
+# so large Object Store writes cannot exhaust the coordination store_dir/PVC.
 apiVersion: v1
 kind: Service
 metadata:
@@ -73,13 +71,115 @@ spec:
               cpu: "1"
               memory: 1Gi
           volumeMounts:
-            - name: jetstream-data
+            - name: coordination-jetstream-data
               mountPath: /data
   volumeClaimTemplates:
     - metadata:
-        name: jetstream-data
+        name: coordination-jetstream-data
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: 5Gi
+            storage: 2Gi
+---
+# Dedicated artifact NATS — JetStream Object Store for agent bundles.
+# Separate StatefulSet/PVC gives artifact growth its own blast radius (BDP-2385).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: omnigent-nats-artifacts-config
+  labels:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+data:
+  nats.conf: |
+    port: 4222
+    http: 8222
+    jetstream {
+      store_dir: /data
+      max_mem: 128M
+      max_file: 8G
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-nats-artifacts
+  labels:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+spec:
+  selector:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+  ports:
+    - name: client
+      port: 4222
+      targetPort: 4222
+    - name: monitor
+      port: 8222
+      targetPort: 8222
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-nats-artifacts
+  labels:
+    app.kubernetes.io/name: omnigent-nats-artifacts
+spec:
+  serviceName: omnigent-nats-artifacts
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-nats-artifacts
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-nats-artifacts
+    spec:
+      containers:
+        - name: nats
+          image: nats:2.14.2-alpine3.22
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-c"
+            - "/etc/nats/nats.conf"
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8222
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          volumeMounts:
+            - name: artifact-nats-config
+              mountPath: /etc/nats
+              readOnly: true
+            - name: artifact-jetstream-data
+              mountPath: /data
+      volumes:
+        - name: artifact-nats-config
+          configMap:
+            name: omnigent-nats-artifacts-config
+  volumeClaimTemplates:
+    - metadata:
+        name: artifact-jetstream-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
