@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.coordination.replica_id import server_replica_id
-from omnigent.kernel.pluggable.registry import PluggableRegistry
+from omnigent.kernel.pluggable.registry import PluggableRegistry, _override_env_name
 
 if TYPE_CHECKING:
     from omnigent.coordination.protocol import CoordinationBackplane
@@ -53,11 +53,12 @@ def resolve_coordination_backplane() -> CoordinationBackplane:
     wins.
     """
     registry = get_coordination_registry()
-    override = os.getenv(f"OMNIGENT_USE_{_SEAM.upper()}", "").strip()
-    if override:
-        return registry.get(override)
+    # The registry owns OMNIGENT_USE_<SEAM> resolution (resolve_default); only the
+    # NATS_URL auto-select (not modeled by the registry) stays here, and an explicit
+    # override must still win over it.
+    has_override = bool(os.getenv(_override_env_name(_SEAM), "").strip())
     nats_url = os.getenv("OMNIGENT_NATS_URL", "").strip()
-    if nats_url:
+    if not has_override and nats_url:
         return registry.get("nats")
     return registry.resolve_default()
 

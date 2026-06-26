@@ -80,6 +80,7 @@ from dataclasses import dataclass
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from bytedesk_omnigent.policies._prefix import strip_server_prefix
 from omnigent.policies.schema import PolicyEvent, PolicyResponse, StateUpdateEntry
 
 # ── Shared constants ──────────────────────────────────────────────────────────
@@ -229,22 +230,6 @@ def _deny(reason: str) -> PolicyResponse:
     :returns: A :class:`PolicyResponse` with a DENY decision.
     """
     return {"result": "DENY", "reason": reason}
-
-
-def _canonical_tool_name(tool_name: str, prefixes: tuple[str, ...]) -> str:
-    """
-    Strip the first matching server prefix to get the canonical name.
-
-    :param tool_name: Raw tool name, e.g. ``"mcp__google__drive_file_get"`` or
-        ``"google__drive_file_get"``.
-    :param prefixes: Prefixes to try, longest-first.
-    :returns: The canonical name (``"drive_file_get"``), or *tool_name*
-        unchanged when no prefix matches.
-    """
-    for prefix in prefixes:
-        if tool_name.startswith(prefix):
-            return tool_name[len(prefix) :]
-    return tool_name
 
 
 def _normalize_file_ref(value: str) -> str:
@@ -438,7 +423,7 @@ def _parse_tool_call(event: PolicyEvent, prefixes: tuple[str, ...]) -> _ParsedTo
         return None
     args = data.get("arguments")
     args = args if isinstance(args, dict) else {}
-    return _ParsedToolCall(_canonical_tool_name(raw_tool, prefixes), raw_tool, args)
+    return _ParsedToolCall(strip_server_prefix(raw_tool, prefixes), raw_tool, args)
 
 
 # ── Google Drive / Docs / Sheets / Slides ─────────────────────────────────────
@@ -529,7 +514,7 @@ def _record_created_drive(event: PolicyEvent, prefixes: tuple[str, ...]) -> Poli
     raw_tool = event.get("target")
     if not isinstance(raw_tool, str):
         return None
-    if _canonical_tool_name(raw_tool, prefixes) not in _DRIVE_CREATE_TOOLS:
+    if strip_server_prefix(raw_tool, prefixes) not in _DRIVE_CREATE_TOOLS:
         return None
     new_ids = _extract_created_ids(_parse_result_payload(event.get("data")), _FILE_RESULT_ID_KEYS)
     if not new_ids:
@@ -686,7 +671,7 @@ def _record_created_draft(event: PolicyEvent, prefixes: tuple[str, ...]) -> Poli
     raw_tool = event.get("target")
     if not isinstance(raw_tool, str):
         return None
-    if _canonical_tool_name(raw_tool, prefixes) not in _GMAIL_DRAFT_CREATE_TOOLS:
+    if strip_server_prefix(raw_tool, prefixes) not in _GMAIL_DRAFT_CREATE_TOOLS:
         return None
     new_ids = _extract_created_ids(
         _parse_result_payload(event.get("data")), _GMAIL_DRAFT_RESULT_ID_KEYS
