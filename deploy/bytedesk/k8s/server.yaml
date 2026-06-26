@@ -40,9 +40,9 @@ metadata:
     app.kubernetes.io/name: omnigent-server
 spec:
   # Multi-replica HA requires OMNIGENT_NATS_URL (coordination backplane).
-  # Artifacts (agent bundles) are stored durably in the NATS JetStream Object
-  # Store (BDP-2380, ADR-0148) — see ARTIFACT_DIR below — so every replica
-  # shares one store and a roll no longer wipes bundles. No emptyDir volume.
+  # Artifacts (agent bundles) are stored durably in a separate NATS JetStream
+  # Object Store (BDP-2380/2385, ADR-0148) — see ARTIFACT_DIR below — so every
+  # replica shares one store without coupling bundle growth to coordination KV.
   replicas: 2
   strategy:
     type: RollingUpdate
@@ -114,7 +114,7 @@ spec:
             # every roll wiped (durable Postgres row → vanished bundle →
             # "unable to load agent spec"). Bucket auto-creates on first use.
             - name: ARTIFACT_DIR
-              value: nats://omnigent-nats:4222/omnigent-artifacts
+              value: nats://omnigent-nats-artifacts:4222/omnigent-artifacts
             - name: OMNIGENT_CONFIG
               value: /etc/omnigent/config.yaml
             # Phase 0: no login, single "local" user — fine for an internal,

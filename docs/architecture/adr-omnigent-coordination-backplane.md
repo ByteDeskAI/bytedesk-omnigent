@@ -45,6 +45,7 @@ Stream delivery is at-least-once; consumers dedupe on `(conversation_id, event_i
 - Replacing live WebSocket termination (backplane routes *to* owner replica)
 - Platform `ByteDesk.Realtime` / RabbitMQ / gateway changes
 - NATS broker clustering in MVP (JetStream PVC fixes process-state loss; broker HA is phase 4)
+- Sharing the same NATS store_dir/PVC for coordination and agent artifacts
 
 ## Cross-replica runner dispatch (peer tunnel)
 
@@ -60,6 +61,8 @@ returns this replica but the local tunnel is absent, return ``runner_unavailable
 ## Consequences
 
 - `nats-py` dependency in omnigent
-- Omnigent k8s adds `omnigent-nats` with JetStream PVC
+- Omnigent k8s adds `omnigent-nats` with JetStream PVC for coordination
+- Agent artifacts use a separate `omnigent-nats-artifacts` JetStream Object Store
+  instance/PVC so bundle growth cannot exhaust coordination KV/streams
 - `omnigent-server` may scale past 1 replica when NATS coordination is configured
 - Platform Redis bridge (`bytedesk_omnigent/realtime/`) unchanged

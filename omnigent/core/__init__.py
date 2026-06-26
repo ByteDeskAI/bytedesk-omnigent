@@ -7,13 +7,12 @@ This package is the *middle* tier: the set of first-party plugins that ship in
 the repo and dogfood the very same ``OmnigentExtension`` Protocol + seam
 machinery a third-party extension uses.
 
-Today these first-party capabilities are wired inline by ``create_app`` /
-``_lifespan``. :func:`default_extensions` is the additive, flag-guarded path
-(``OMNIGENT_USE_FIRSTPARTY_PLUGINS``) that lets the composition root install the
-same capabilities *as extensions* — through ``install_extensions`` and the seam
-registries — so the inline wiring can eventually be retired without changing the
-contract. The flag is OFF by default; when unset, nothing here runs and boot is
-byte-for-byte unchanged.
+First-party seam contributions are registered unconditionally at server startup
+through :func:`default_extensions` + :func:`register_firstparty_seams`, so core
+dogfoods the same registries third-party extensions use. The documented core
+route group is mounted through :func:`firstparty_route_extensions`, whose
+``RoutesExtension`` reads the built store context from ``app.state`` during the
+extension ``post_init`` phase.
 
 Boot dependency order (Section 9.3): the plugins are instantiated in the order
 the boot sequence requires — stores → identity → coordination → harnesses →
@@ -44,13 +43,13 @@ logger = logging.getLogger(__name__)
 # ``@extension`` decorator). The order is load-bearing — see module docstring.
 #
 # BDP-2516: ``omnigent.metrics`` and ``omnigent.memory_maintenance`` are NO
-# LONGER in this flag-gated shadow list — they were cut over to the
+# LONGER in this first-party seam/plugin list — they were cut over to the
 # *authoritative* boot path (``create_app`` starts their background loops
-# unconditionally via :func:`firstparty_background_task_extensions`, independent
-# of ``OMNIGENT_USE_FIRSTPARTY_PLUGINS``). Keeping them here too would
-# double-register / double-start them when the flag is on. The other 11 plugins
-# remain flag-gated shadows of the inline ``create_app`` wiring until their own
-# slices are cut over.
+# unconditionally via :func:`firstparty_background_task_extensions`). Keeping
+# them here too would double-register / double-start them. The other 11 plugins
+# contribute seams unconditionally; only ``RoutesExtension`` is installed
+# synchronously for route mounting to avoid legacy router hooks in other plugins
+# double-mounting slices it now owns.
 _FIRSTPARTY_PLUGINS: tuple[tuple[str, str], ...] = (
     # db/stores
     ("omnigent.stores._plugin", "StoresExtension"),
@@ -110,6 +109,28 @@ def default_extensions() -> list[OmnigentExtension]:
     return extensions
 
 
+def firstparty_route_extensions() -> list[OmnigentExtension]:
+    """Build first-party extensions that own synchronous route mounting.
+
+    ``default_extensions()`` includes non-route seam plugins and legacy shadow
+    plugins such as ``omnigent.skills`` that still expose a narrow router hook
+    for compatibility tests. Installing that whole set would double-mount route
+    slices now owned by ``RoutesExtension``. Keep the authoritative route phase
+    explicit until every legacy router hook is retired.
+    """
+    import importlib
+
+    try:
+        module = importlib.import_module("omnigent.server.routes._plugin")
+        return [module.RoutesExtension()]
+    except Exception:  # noqa: BLE001 — a broken plugin must not break boot
+        logger.warning(
+            "first-party route plugin omnigent.routes failed to load — skipping",
+            exc_info=True,
+        )
+        return []
+
+
 def register_firstparty_seams(extensions: list[OmnigentExtension]) -> None:
     """Register *extensions*' seam contributions through the SAME seam registries.
 
@@ -127,11 +148,9 @@ def register_firstparty_seams(extensions: list[OmnigentExtension]) -> None:
     via the inline wiring or a re-run — is caught by the registry's conflict
     guard), so this is safe to run alongside ``discover_all_extensions``.
 
-    Note: several seam accessors build a *fresh* registry per call (Section: the
-    manifest's per-call registries). Registering into those is harmless but
-    transient; the singleton-backed seams (``harness``, ``spec_source``) persist.
-    This matches exactly the behaviour ``discover_all_extensions`` already has
-    for those same seams, so it introduces no new asymmetry.
+    The manifest accessors return stable per-process registries, so
+    first-party contributions persist on the same seam plane that
+    ``discover_all_extensions`` and ``capability_manifest`` use.
 
     :param extensions: the first-party extensions (typically
         :func:`default_extensions`'s result).
@@ -141,12 +160,6 @@ def register_firstparty_seams(extensions: list[OmnigentExtension]) -> None:
 
     for seam, accessor, hook in SEAMS:
         try:
-            # WART (BDP-2516, not redesigned this run): several SEAMS accessors
-            # build a FRESH throwaway registry per call (the per-call-registries
-            # leaky seam), so registrations into those are transient — only the
-            # singleton-backed seams (harness, spec_source) persist. Mirrors what
-            # discover_all_extensions already does; a proper fix (one persistent
-            # registry per seam) is out of scope for the safe-slice cutover.
             registry = accessor()
         except Exception:  # noqa: BLE001 — one bad seam must not break the rest
             logger.warning(
@@ -226,8 +239,7 @@ def firstparty_background_task_extensions(
     The lowest-risk first-party slices —  ``omnigent.metrics`` and
     ``omnigent.memory_maintenance`` — were cut over from the inline
     ``create_app`` / ``_lifespan`` wiring to this core plugin path. ``create_app``
-    calls this **unconditionally** (independent of
-    ``OMNIGENT_USE_FIRSTPARTY_PLUGINS``) and starts the returned extensions'
+    calls this **unconditionally** and starts the returned extensions'
     ``background_tasks()`` factories through the same lifespan task-creation path
     it already uses for third-party extension loops. Pass the result to
     :func:`firstparty_background_factories` to obtain the flat factory list.
@@ -267,15 +279,12 @@ def firstparty_background_task_extensions(
         )
     except Exception:  # noqa: BLE001 — a broken plugin must not break boot
         logger.warning(
-            "authoritative background plugin omnigent.metrics failed to load — "
-            "skipping",
+            "authoritative background plugin omnigent.metrics failed to load — skipping",
             exc_info=True,
         )
 
     try:
-        memmaint_mod = importlib.import_module(
-            "omnigent.runtime._plugin_memory_maintenance"
-        )
+        memmaint_mod = importlib.import_module("omnigent.runtime._plugin_memory_maintenance")
         extensions.append(memmaint_mod.MemoryMaintenanceExtension())
     except Exception:  # noqa: BLE001 — a broken plugin must not break boot
         logger.warning(
@@ -291,5 +300,6 @@ __all__ = [
     "default_extensions",
     "firstparty_background_factories",
     "firstparty_background_task_extensions",
+    "firstparty_route_extensions",
     "register_firstparty_seams",
 ]

@@ -89,7 +89,7 @@ relocated. The verdicts below were each checked against the real code.
 | `omnigent/extensions.py` | **MOVABLE** → `omnigent/kernel/extensions.py` | 17 importers; domain-free at module scope, FastAPI only under `TYPE_CHECKING` (confirmed line 24 `if TYPE_CHECKING:` / line 29 `from fastapi import APIRouter, FastAPI`). Mutually decoupled from `pluggable` since `registry.py` defers the extensions import. |
 | `omnigent/server/service_registry.py` | **MOVABLE** → `omnigent/kernel/service_registry.py` | **Zero** `omnigent` imports at module scope (confirmed: the only "omnigent" line is the docstring "deliberately holds no omnigent service imports"). 4 reference sites. |
 | `omnigent/server/lifespan_phases.py` | **MOVABLE** → `omnigent/kernel/lifespan_phases.py` | `LifespanContext` fields are typed `Any` (confirmed lines 85–92: `agent_store: Any`, `runner_router: Any`, …); concrete phases defer domain imports inside `startup()`/`shutdown()`. 5 reference sites. The default concrete-phase set is core wiring that stays co-located behind the shim. |
-| `omnigent/server/app.py` | **FACADE — cannot move** | Only the `create_app()` composition-root fragment is kernel; the file imports domain code and mounts 2000+ lines of routes + store/auth wiring (incl. the `OMNIGENT_USE_FIRSTPARTY_PLUGINS`-gated path at app.py lines 1062–1939). Already excluded from the guard test's `_KERNEL_PURE_FILES`. Stays CORE; imports orchestration primitives **from** `omnigent.kernel.*`. |
+| `omnigent/server/app.py` | **FACADE — cannot move** | Only the `create_app()` composition-root fragment is kernel; the file imports domain code and still owns non-core composition concerns (auth, peer/runner tunnel, hosts, caller-provided extra routers, SPA/static). Already excluded from the guard test's `_KERNEL_PURE_FILES`. Stays CORE; imports orchestration primitives **from** `omnigent.kernel.*`. |
 | `omnigent/server/container.py` | **FACADE — cannot move yet** | DI composition root by ROLE but NOT import-safe: imports six domain types at module scope (`RunnerRouter`, `TunnelRegistry`, `HostRegistry`/`RunnerExitReports`, `ManagedLaunchTracker`, `ServerMcpPool`, `ServerPerformanceMetrics`/`ServerMetricsOtelPublisher`) + the `dependency_injector` Cython C-ext. Today safe only because gated behind `OMNIGENT_USE_DI_CONTAINER` (default-OFF) and never on the runner hot path. Promotable to kernel only after deferring these imports into `build_core_container`/provider factories the way `lifespan_phases.py` does. Keep as CORE. |
 
 ---
@@ -190,25 +190,25 @@ Stage 1's boundary is real.
 
 ### Stage 3 — Core consolidation: make the BDP-2503 first-party plugin path authoritative (BDP-2517)
 
-Today the first-party plugin path is a **shadow**: the `_plugin.py` files in 10
+Today the first-party seam path is authoritative: the `_plugin.py` files in 10
 subpackages (`stores`, `identity`, `coordination`, `spec`, `policies`, `skills`,
-`terminals`, `runtime/harnesses`, `server/routes`, `tools/builtins`) describe
-the plugin registration, but boot still runs the inline `create_app()` wiring
-unless `OMNIGENT_USE_FIRSTPARTY_PLUGINS` is truthy (app.py lines 1062–1939). The
-shadow runs *in parallel* and is not authoritative.
+`terminals`, `runtime/harnesses`, `server/routes`, `tools/builtins`) register
+their seam contributions unconditionally through stable kernel registries. The
+core route group is also authoritative through `RoutesExtension.post_init`: boot
+exposes the already-built stores/cache/router dependencies on `app.state`, then
+installs `firstparty_route_extensions()` through `install_extensions()` before
+third-party extension routers so route precedence matches the former inline
+mount order.
 
-This stage flips that:
+This stage has flipped the core seam + route path:
 
-1. Add **parity tests** that assert the `OMNIGENT_USE_FIRSTPARTY_PLUGINS=on`
-   boot produces the same mounted routes, registered seams, and background tasks
-   as the inline path. Parity, not a second source of truth.
-2. Once parity holds, **retire the inline wiring incrementally** — one
-   subpackage at a time, deleting the corresponding inline block from
-   `create_app()` and letting the `_plugin.py` registration become the only
-   path. Each retirement is its own commit, gated by the parity test.
-3. When the last inline block is gone, the flag's two branches collapse and
-   `OMNIGENT_USE_FIRSTPARTY_PLUGINS` is removed (feeds the flag-cleanup in §5
-   risk register / BDP-2511).
+1. Keep seam parity tests green: first-party and third-party contributions must
+   persist on the same stable `SEAMS` registries.
+2. Keep route cutover tests green: the documented core route group must mount
+   without any legacy first-party flag.
+3. Keep the remaining direct `create_app()` route mounts scoped to
+   composition-root concerns outside the core route group: peer tunnel, runner
+   tunnel, hosts, accounts/auth, caller-provided `extra_routers`, and SPA/static.
 
 ### Stage 4 — Extract domain integrations into entry-point extension packages (BDP-2518)
 
@@ -292,7 +292,7 @@ the §5 risk register tracks "shim rot" as a named risk.
 | **FastAPI on the runner hot path.** A kernel module gains a module-scope FastAPI import (directly or transitively) and drags the FastAPI stack onto the runner subprocess. | kernel | Keep `tests/runner/test_identity.py::test_importing_identity_does_not_pull_in_fastapi` + the runtime `sys.modules`-delta cross-check green at every commit. FastAPI only under `TYPE_CHECKING` or inside function bodies. This is the load-bearing invariant; a red here blocks the merge. |
 | **Circular imports.** `extensions ↔ pluggable` (or kernel ↔ core) re-couple during the move. | kernel | Preserve the existing decoupling: `registry.py` already defers the `omnigent.extensions` import. Never add a module-scope cross-import between the two. The AST guard catches module-scope leaks; the `sys.modules`-delta guard catches transitive ones. |
 | **Route double-mount.** Stage 3 runs the first-party plugin path *and* the inline `create_app()` wiring simultaneously, mounting the same routers twice. | core | Parity tests assert route-set *equality*, not superset. Retire inline blocks one subpackage at a time, each gated by the parity test, so a double-mount surfaces as a parity failure before merge. |
-| **Flag sprawl (BDP-2511).** 16+ `OMNIGENT_USE_*` strangler flags are live (`OMNIGENT_USE_FIRSTPARTY_PLUGINS`, `_LIFESPAN_PHASES`, `_SERVICE_REGISTRY`, `_DI_CONTAINER`, `_STORE_BOOTSTRAPPER`, `_HARNESS_PROVIDER_REGISTRY`, `_TOOL_DISPATCHER_REGISTRY`, `_TOOL_EXECUTION_CONTEXT`, `_SPEC_SOURCE`, `_COORDINATION_BACKPLANE`, `_AGENT_MEMORY`, `_MEMORY_EMBEDDER`, `_BACKOFF_POLICY`, `_SCHEMA_VALIDATOR`, `_REMOTE_FUNCTION`, + `OMNIGENT_DISABLED_EXTENSIONS`). Each flag is a dual-run path that can drift. | core | Treat each flag as a strangler with an explicit retirement: dual-run → parity → flip-default → delete-twin → remove-flag. Stage 3 retires `OMNIGENT_USE_FIRSTPARTY_PLUGINS`; track the rest under BDP-2511 so flags don't outlive their cutover. |
+| **Flag sprawl (BDP-2511).** Multiple `OMNIGENT_USE_*` strangler flags are still live (`_LIFESPAN_PHASES`, `_SERVICE_REGISTRY`, `_DI_CONTAINER`, `_STORE_BOOTSTRAPPER`, `_HARNESS_PROVIDER_REGISTRY`, `_TOOL_DISPATCHER_REGISTRY`, `_TOOL_EXECUTION_CONTEXT`, `_SPEC_SOURCE`, `_COORDINATION_BACKPLANE`, `_AGENT_MEMORY`, `_MEMORY_EMBEDDER`, `_BACKOFF_POLICY`, `_SCHEMA_VALIDATOR`, `_REMOTE_FUNCTION`, + `OMNIGENT_DISABLED_EXTENSIONS`). Each flag is a dual-run path that can drift. | core | Treat each flag as a strangler with an explicit retirement: dual-run → parity → flip-default → delete-twin → remove-flag. Stage 3 retired the first-party-plugin route-shadow flag; track the rest under BDP-2511 so flags don't outlive their cutover. |
 | **Shim rot.** Strangler shims outlive Stage 2 and become permanent indirection. | kernel/core | Stage 2 deletes each shim the moment its importer count hits zero (grep-verified). A CI check (Stage 5) can assert no `omnigent/pluggable/`, `omnigent/extensions.py`, `omnigent/server/{service_registry,lifespan_phases}.py` shim survives once Stage 2 closes. |
 | **Patchable-attribute breakage.** A `from X import *` shim silently doesn't forward `monkeypatch.setattr` on module attributes, so a test that patches a moved module's attribute via the old path no-ops and goes green-but-wrong. | tests | Audit every `monkeypatch.setattr(<moved-module>, ...)` in Stage 1 and repoint to the canonical kernel module (already enumerated for `test_registry.py`). |
 | **container.py premature promotion.** Someone moves `container.py` into the kernel before deferring its six domain imports. | kernel | Documented as facade-for-now. Promotion is gated on refactoring the six module-scope domain imports into `build_core_container`/provider factories (the `lifespan_phases.py` deferred-import pattern). Until then it stays CORE and is reached only behind `OMNIGENT_USE_DI_CONTAINER` (default-OFF). |
@@ -305,7 +305,7 @@ the §5 risk register tracks "shim rot" as a named risk.
 |---|---|---|
 | **BDP-2515** | 1 | Create `omnigent/kernel/`; move `pluggable/`, `extensions.py`, `service_registry.py`, `lifespan_phases.py` with strangler shims; rewrite internal absolute imports; update `_KERNEL_PURE_FILES` + `_ALLOWED_KERNEL_MODULES` + `test_registry.py` monkeypatch targets in lockstep. Exit: both guard tests + FastAPI hot-path test green; old & new paths share class identity. |
 | **BDP-2516** | 2 | Migrate the ~83 call sites off the kernel shims (per-subpackage batches); delete each shim at zero-importer. Exit: no kernel shim remains; full suite green. |
-| **BDP-2517** | 3 | Parity tests for `OMNIGENT_USE_FIRSTPARTY_PLUGINS`; retire inline `create_app()` wiring one subpackage at a time; remove the flag when the last inline block is gone. Exit: first-party plugin path is authoritative; route-set parity proven. |
+| **BDP-2517** | 3 | First-party seams are authoritative; the core route group is mounted by `RoutesExtension.post_init` through `install_extensions()`; the route-shadow flag is gone from boot. Exit: first-party seam and route paths are authoritative. |
 | **BDP-2518** | 4 | Extract `google.py` → `google-workspace-policy` and `github.py` → `github-policy` entry-point extension packages via `policy_modules()`; confirm `bytedesk_omnigent` registers purely through seams. Exit: empty system boots with zero domain integrations installed. |
 | **BDP-2519** | 5 | Extend the import guard to enforce the full one-way tier rule (kernel ← core ← extensions) in CI; add the no-surviving-shim assertion. Exit: a wrong-direction import fails CI. |
 | **BDP-2511** | cross-cutting | Flag-sprawl cleanup: retire the `OMNIGENT_USE_*` strangler flags through dual-run → parity → flip → delete → remove-flag, coordinated with Stages 3–5. |
@@ -316,9 +316,9 @@ the §5 risk register tracks "shim rot" as a named risk.
   consolidation, extraction, and enforcement on top of that move.
 - Stage 2 must fully close (all shims deleted) before Stage 5's no-surviving-shim
   assertion can land.
-- Stage 3 and Stage 4 both reduce the `OMNIGENT_USE_FIRSTPARTY_PLUGINS` /
-  domain-import surface; run Stage 3 first (make the plugin path authoritative)
-  so Stage 4's extraction has a clean seam to register into.
+- Stage 3 and Stage 4 both reduce the core/domain-import surface; run Stage 3
+  first (make the plugin path authoritative) so Stage 4's extraction has a clean
+  seam to register into.
 - `container.py` kernel promotion is explicitly **out of scope** for BDP-2514
   until its six domain imports are deferred; track separately if/when the DI
   container becomes default-ON.

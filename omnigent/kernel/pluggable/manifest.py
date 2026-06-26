@@ -15,11 +15,13 @@ startup concern and lives in :func:`discover_all_extensions`, called once from t
 server lifespan.
 
 The registry accessors are intentionally *thunks* (zero-arg callables) rather than
-pre-built instances. Two seams expose a module-level singleton registry
-(``harness``, ``spec_source``); the other four build their registry per call and a
-couple need a location/URI argument. ``describe()`` and ``discover_extensions()``
-only enumerate names / consult hooks — they never invoke the stored factories — so
-a placeholder location is harmless for the manifest view.
+pre-built instances so importing this manifest stays light. Each thunk returns a
+stable per-process registry instance. That matters for the core plugin cutover:
+first-party and third-party contributions must land on one durable seam plane,
+not a throwaway registry created only for one manifest/discovery call. Registries
+that need a location/URI use harmless placeholder values here because
+``describe()`` and ``discover_extensions()`` only enumerate names / consult hooks;
+they never invoke provider factories.
 """
 
 from __future__ import annotations
@@ -31,6 +33,19 @@ from typing import Any
 from omnigent.kernel.pluggable.registry import PluggableRegistry, _override_env_name
 
 _logger = logging.getLogger(__name__)
+_REGISTRY_CACHE: dict[str, PluggableRegistry[Any]] = {}
+
+
+def _cached_registry(
+    seam: str,
+    build: Callable[[], PluggableRegistry[Any]],
+) -> PluggableRegistry[Any]:
+    """Return the stable registry instance for one manifest seam."""
+    registry = _REGISTRY_CACHE.get(seam)
+    if registry is None:
+        registry = build()
+        _REGISTRY_CACHE[seam] = registry
+    return registry
 
 
 def _harness_registry() -> PluggableRegistry[Any]:
@@ -40,33 +55,33 @@ def _harness_registry() -> PluggableRegistry[Any]:
 
 
 def _artifact_store_registry() -> PluggableRegistry[Any]:
-    # Built per call, keyed by URI scheme; the location only matters when a
-    # factory is invoked (it is not, for describe/discover), so a placeholder
-    # local path is harmless for the manifest/discovery view.
     from omnigent.stores.factory import _build_artifact_store_registry
 
-    return _build_artifact_store_registry("./artifacts")
+    return _cached_registry(
+        "artifact_store",
+        lambda: _build_artifact_store_registry("./artifacts"),
+    )
 
 
 def _web_search_registry() -> PluggableRegistry[Any]:
     from omnigent.tools.builtins.web_search import _build_provider_registry
 
-    return _build_provider_registry()
+    return _cached_registry("web_search", _build_provider_registry)
 
 
 def _memory_embedder_registry() -> PluggableRegistry[Any]:
     from omnigent.stores.memory_store.provider import build_embedder_registry
 
-    return build_embedder_registry()
+    return _cached_registry("memory_embedder", build_embedder_registry)
 
 
 def _agent_memory_registry() -> PluggableRegistry[Any]:
-    # Built per call, closing over a storage URI; the URI is only touched when a
-    # provider factory runs (not for describe/discover), so an in-memory SQLite
-    # placeholder is harmless for the manifest/discovery view.
     from omnigent.stores.memory_store.provider import build_memory_provider_registry
 
-    return build_memory_provider_registry("sqlite://")
+    return _cached_registry(
+        "agent_memory",
+        lambda: build_memory_provider_registry("sqlite://"),
+    )
 
 
 def _spec_source_registry() -> PluggableRegistry[Any]:
@@ -82,28 +97,27 @@ def _coordination_backplane_registry() -> PluggableRegistry[Any]:
 
 
 def _assertion_verifier_registry() -> PluggableRegistry[Any]:
-    # Identity seam: how an inbound assertion is trusted (HMAC default; swap for
-    # JWKS/OIDC). The identity package is light (no FastAPI), so this is a cheap,
-    # per-call build for describe/discover.
     from omnigent.identity.registry import build_assertion_verifier_registry
 
-    return build_assertion_verifier_registry()
+    return _cached_registry(
+        "assertion_verifier",
+        build_assertion_verifier_registry,
+    )
 
 
 def _outbound_credential_registry() -> PluggableRegistry[Any]:
-    # Identity seam: how a tool "acts as" an identity (static-secret default over
-    # the three live egress strategies; swap for token-exchange/OBO).
     from omnigent.identity.registry import build_outbound_credential_registry
 
-    return build_outbound_credential_registry()
+    return _cached_registry(
+        "outbound_credential",
+        build_outbound_credential_registry,
+    )
 
 
 def _authorizer_registry() -> PluggableRegistry[Any]:
-    # Identity seam: whether an action is allowed (owner-allow default; swap for a
-    # capability-enforcing authorizer).
     from omnigent.identity.registry import build_authorizer_registry
 
-    return build_authorizer_registry()
+    return _cached_registry("authorizer", build_authorizer_registry)
 
 
 # (seam_name, registry_accessor, extension_hook) — the one declaration that drives

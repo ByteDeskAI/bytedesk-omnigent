@@ -216,6 +216,43 @@ def apply_remote_delete(conversation_id: str, elicitation_id: str) -> None:
             _pending.pop(conversation_id, None)
 
 
+def hydrate_from_backplane_records(records: dict[str, dict[str, Any]]) -> int:
+    """Hydrate outstanding pending elicitations from coordination KV records.
+
+    The coordination backplane is the recovery source. Startup hydration must not
+    re-publish, fan out, notify observers, or trigger push side effects; it only
+    restores the sidebar/snapshot index to the durable KV view.
+
+    :param records: Mapping from ``conversation_id/elicitation_id`` to
+        ``{"event": <response.elicitation_request>}`` records.
+    :returns: Number of valid records applied.
+    """
+    hydrated: list[tuple[str, str, dict[str, Any]]] = []
+    for key, record in records.items():
+        if not isinstance(key, str) or "/" not in key:
+            continue
+        conversation_id, elicitation_id = key.split("/", 1)
+        if not conversation_id or not elicitation_id:
+            continue
+        if not isinstance(record, dict):
+            continue
+        event = record.get("event")
+        if not isinstance(event, dict):
+            continue
+        if event.get("type") != "response.elicitation_request":
+            continue
+        if event.get("elicitation_id") != elicitation_id:
+            continue
+        hydrated.append((conversation_id, elicitation_id, copy.deepcopy(event)))
+
+    if not hydrated:
+        return 0
+    with _lock:
+        for conversation_id, elicitation_id, event in hydrated:
+            _pending.setdefault(conversation_id, {})[elicitation_id] = event
+    return len(hydrated)
+
+
 def _sync_backplane_upsert(
     conversation_id: str,
     elicitation_id: str,
@@ -231,9 +268,7 @@ def _sync_backplane_upsert(
     if backplane is None:
         return
     key = f"{conversation_id}/{elicitation_id}"
-    schedule_backplane(
-        backplane.index_put("pending", key, {"event": event}, ttl_s=3600)
-    )
+    schedule_backplane(backplane.index_put("pending", key, {"event": event}, ttl_s=3600))
     fanout_pending_upsert(conversation_id, elicitation_id, event)
 
 

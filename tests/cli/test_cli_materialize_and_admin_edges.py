@@ -44,6 +44,22 @@ def test_create_artifact_store_nats_branch() -> None:
     assert isinstance(store, NatsObjectStoreArtifactStore)
 
 
+def test_create_artifact_store_delegates_to_shared_factory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, str] = {}
+    sentinel = object()
+
+    def fake_create(location: str) -> object:
+        captured["location"] = location
+        return sentinel
+
+    monkeypatch.setattr("omnigent.stores.factory._create_artifact_store", fake_create)
+
+    assert _create_artifact_store("custom://artifact-store") is sentinel
+    assert captured == {"location": "custom://artifact-store"}
+
+
 def test_materialize_bundled_example_returns_existing_path(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

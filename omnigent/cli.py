@@ -918,11 +918,8 @@ def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any] 
     """
     Create an artifact store based on the location URI scheme.
 
-    ``dbfs:/Volumes/...`` URIs use
-    :class:`DatabricksVolumesArtifactStore` (requires
-    ``databricks-sdk``). ``nats://`` URIs use the durable JetStream
-    Object Store backend (BDP-2380). All other locations use
-    :class:`LocalArtifactStore`.
+    Delegates to the shared store factory so the CLI, server bootstrapper, and
+    container entrypoint use the same pluggable artifact-store selection path.
 
     :param location: Artifact storage location, e.g.
         ``"./artifacts"`` for local,
@@ -930,23 +927,9 @@ def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any] 
         ``"nats://host:4222/omnigent-artifacts"`` for JetStream.
     :returns: An :class:`ArtifactStore` instance.
     """
-    if location.startswith("dbfs:/Volumes/"):
-        from omnigent.stores.artifact_store.databricks_volumes import (
-            DatabricksVolumesArtifactStore,
-        )
+    from omnigent.stores.factory import _create_artifact_store as _shared_factory
 
-        return DatabricksVolumesArtifactStore(location)
-
-    if location.startswith("nats://"):
-        from omnigent.stores.artifact_store.nats_object_store import (
-            NatsObjectStoreArtifactStore,
-        )
-
-        return NatsObjectStoreArtifactStore(location)
-
-    from omnigent.stores.artifact_store.local import LocalArtifactStore
-
-    return LocalArtifactStore(location)
+    return _shared_factory(location)
 
 
 def _preregister_agent(  # type: ignore[explicit-any]  # agent_store / artifact_store / agent_cache typed Any to avoid import cycle
@@ -3035,9 +3018,7 @@ def server(
     # Reuse the StoreBootstrapper-built host_store when that path ran
     # (BDP-2327); otherwise construct inline as before.
     host_store = (
-        _bootstrapped_host_store
-        if _bootstrapped_host_store is not None
-        else HostStore(db_uri)
+        _bootstrapped_host_store if _bootstrapped_host_store is not None else HostStore(db_uri)
     )
 
     # Managed sandbox hosts (host_type="managed" sessions): parse the

@@ -86,6 +86,27 @@ def test_register_webhook_adapter_builds_registry_when_uninitialized() -> None:
         ingress_mod._webhook_adapter_registry = saved
 
 
+def test_register_webhook_adapter_is_idempotent_for_same_source() -> None:
+    saved = ingress_mod._webhook_adapter_registry
+    try:
+        ingress_mod._webhook_adapter_registry = None
+
+        class _CustomAdapter:
+            def verify(self, raw_body, headers, secret) -> bool:
+                return True
+
+            def match_key(self, headers) -> str:
+                return headers.get("x-event", "*")
+
+        register_webhook_adapter("custom", _CustomAdapter)
+        register_webhook_adapter("custom", _CustomAdapter)
+
+        adapter = resolve_webhook_adapter("custom")
+        assert isinstance(adapter, _CustomAdapter)
+    finally:
+        ingress_mod._webhook_adapter_registry = saved
+
+
 def test_get_binding_store_caches_by_location(monkeypatch, tmp_path) -> None:
     location = f"sqlite:///{tmp_path / 'conv.db'}"
     monkeypatch.setattr(

@@ -167,10 +167,12 @@ class JiraWebhookAdapter:
     """
 
     def verify(self, raw_body: bytes, headers: Mapping[str, str], secret: str) -> bool:
+        del raw_body
         provided = _header(headers, "x-omnigent-secret")
         return bool(provided) and hmac.compare_digest(provided, secret)
 
     def match_key(self, headers: Mapping[str, str]) -> str:
+        del headers
         return "*"
 
 
@@ -205,13 +207,19 @@ def _build_webhook_adapter_registry():
 _webhook_adapter_registry = None
 
 
-def register_webhook_adapter(
-    source: str, factory: Callable[[], WebhookSourceAdapter]
-) -> None:
-    """Register a per-source webhook adapter *factory* (BDP-2354)."""
+def register_webhook_adapter(source: str, factory: Callable[[], WebhookSourceAdapter]) -> None:
+    """Register a per-source webhook adapter *factory* (BDP-2354).
+
+    Route factories may be constructed more than once in a process during tests,
+    app rebuilds, or extension reinstall checks. Re-registering the same source is
+    intentionally idempotent so app construction does not depend on global
+    registry freshness.
+    """
     global _webhook_adapter_registry
     if _webhook_adapter_registry is None:
         _webhook_adapter_registry = _build_webhook_adapter_registry()
+    if source in _webhook_adapter_registry.names():
+        return
     _webhook_adapter_registry.register(source, factory)
 
 
@@ -380,7 +388,9 @@ def process_inbound(
         return IngressResult(IngressStatus.DELIVERED, 202, signal_id=binding.signal_id)
     if result.status is DeliveryStatus.ALREADY_RESOLVED:
         return IngressResult(
-            IngressStatus.ALREADY_RESOLVED, 409, signal_id=binding.signal_id,
+            IngressStatus.ALREADY_RESOLVED,
+            409,
+            signal_id=binding.signal_id,
             detail="already resolved",
         )
     if result.status is DeliveryStatus.EXPIRED:
@@ -388,11 +398,15 @@ def process_inbound(
         # woken (dead-lettered for recovery). 410 (never 2xx, BDP-1419) so the
         # sender retries/alerts rather than treating it as benignly handled.
         return IngressResult(
-            IngressStatus.EXPIRED, 410, signal_id=binding.signal_id,
+            IngressStatus.EXPIRED,
+            410,
+            signal_id=binding.signal_id,
             detail="wait expired before delivery",
         )
     return IngressResult(
-        IngressStatus.DEAD_LETTERED, 404, signal_id=binding.signal_id,
+        IngressStatus.DEAD_LETTERED,
+        404,
+        signal_id=binding.signal_id,
         detail="no pending wait for signal",
     )
 

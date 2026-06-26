@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.coordination import lifecycle as coord_lifecycle
+from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.runtime import pending_elicitations as pe
 
 
@@ -39,7 +39,7 @@ def test_apply_remote_upsert_and_delete() -> None:
 async def test_fanout_listener_applies_peer_messages() -> None:
     bp = InProcessBackplane("replica-b")
     await bp.start()
-    listener = asyncio.create_task(coord_lifecycle._fanout_listener(bp))  # noqa: SLF001
+    listener = asyncio.create_task(coord_lifecycle._fanout_listener(bp))
     await asyncio.sleep(0.1)
 
     import json
@@ -76,3 +76,30 @@ async def test_fanout_listener_applies_peer_messages() -> None:
     with pytest.raises(asyncio.CancelledError):
         await listener
     await bp.stop()
+
+
+@pytest.mark.asyncio
+async def test_start_coordination_hydrates_pending_from_backplane(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    event = {
+        "type": "response.elicitation_request",
+        "elicitation_id": "elicit_boot",
+        "params": {"message": "approve after restart?"},
+    }
+    bp = InProcessBackplane("replica-hydrate")
+    await bp.start()
+    await bp.index_put("pending", "conv_boot/elicit_boot", {"event": event})
+
+    monkeypatch.setattr(coord_lifecycle, "resolve_coordination_backplane", lambda: bp)
+
+    await coord_lifecycle.start_coordination()
+    try:
+        assert coord_lifecycle.coordination_status() == {
+            "active": True,
+            "provider": "inprocess",
+            "replica_id": "replica-hydrate",
+        }
+        assert pe.lookup("elicit_boot") == ("conv_boot", event)
+    finally:
+        await coord_lifecycle.stop_coordination()

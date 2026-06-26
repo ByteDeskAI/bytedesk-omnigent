@@ -97,7 +97,7 @@ CORE and import the orchestration primitives **from** `omnigent.kernel.*`:
 
 | File | Why it stays CORE (facade) |
 |---|---|
-| `omnigent/server/app.py` | Only the `create_app()` composition-root fragment is kernel-shaped; the file imports domain code and mounts 2000+ lines of routes + store/auth wiring (incl. the `OMNIGENT_USE_FIRSTPARTY_PLUGINS`-gated path). Already excluded from the guard test's pure-kernel set. |
+| `omnigent/server/app.py` | Only the `create_app()` composition-root fragment is kernel-shaped; the file imports domain code and still owns non-core composition concerns (auth, peer/runner tunnel, hosts, caller-provided extra routers, SPA/static). Already excluded from the guard test's pure-kernel set. |
 | `omnigent/server/container.py` | DI composition root by ROLE but NOT import-safe: imports six domain types at module scope + the `dependency_injector` Cython C-ext. Promotable only after those imports are deferred into `build_core_container` / provider factories (the `lifespan_phases.py` pattern). Until then it stays CORE behind `OMNIGENT_USE_DI_CONTAINER` (default-OFF). |
 
 ### 2.3 Kernel invariants (the executable rules)
@@ -151,10 +151,13 @@ register their defaults into those seams. Examples present in the tree today:
 `artifact_store`, `agent_memory` / `memory_embedder`, `spec_source`, the harness
 descriptor registry, and the tool / policy registries.
 
-The first-party plugin path is, today, a **shadow** that runs in parallel with the
-inline `create_app()` wiring and is only authoritative when
-`OMNIGENT_USE_FIRSTPARTY_PLUGINS` is truthy. The shadow is described by the
-`_plugin.py` files that exist in these ten core subpackages on this branch:
+First-party seam registration is now authoritative at server startup: the core
+`_plugin.py` files register their seam contributions unconditionally through
+the same stable `SEAMS` registries that third-party extensions use. The
+documented core route group is also authoritative through `RoutesExtension`:
+`create_app()` exposes the already-built route dependencies on `app.state`, then
+installs `firstparty_route_extensions()` through the same extension lifecycle
+used by third-party routers. The first-party plugin files present today are:
 
 ```
 omnigent/stores/_plugin.py            omnigent/identity/_plugin.py
@@ -164,9 +167,10 @@ omnigent/terminals/_plugin.py         omnigent/runtime/harnesses/_plugin.py
 omnigent/server/routes/_plugin.py     omnigent/tools/builtins/_plugin.py
 ```
 
-Making that path **authoritative** (parity test → retire inline wiring one
-subpackage at a time → remove the flag) is Stage 3 (BDP-2517) in the migration plan,
-not this run.
+The route plugin intentionally owns only the core `omnigent/server/routes/`
+group. `create_app()` still mounts composition-root route surfaces directly
+when they are not part of that group: peer tunnel, runner tunnel, hosts,
+accounts/auth, caller-provided `extra_routers`, and the SPA/static mount.
 
 ### 3.3 The SDK Facade — `omnigent/sdk/` (public surface over the kernel)
 
@@ -293,7 +297,7 @@ shims + lockstep guard-test updates. Everything else is staged in
 |---|---|---|---|
 | 1 — kernel extraction | BDP-2515 | Create `omnigent/kernel/`; move pluggable / extensions / service_registry / lifespan_phases with shims | **realized this run** |
 | 2 — migrate call sites, delete shims | BDP-2516 | Rewrite the ~83 importers to the canonical kernel path; delete each shim at zero-importer | pending |
-| 3 — core consolidation | BDP-2517 | Make the `OMNIGENT_USE_FIRSTPARTY_PLUGINS` first-party-plugin path authoritative (parity → retire inline wiring → remove flag) | pending |
+| 3 — core consolidation | BDP-2517 | First-party seams authoritative; core route group mounted by `RoutesExtension`; legacy route-shadow flag removed from boot | **realized this run** |
 | 4 — extract domain integrations | BDP-2518 | Lift `google.py` / `github.py` to entry-point packages; confirm `bytedesk_omnigent` registers purely through seams | pending |
 | 5 — enforce tier boundaries in CI | BDP-2519 | Extend the import guard to the full one-way rule + no-surviving-shim assertion | pending |
 

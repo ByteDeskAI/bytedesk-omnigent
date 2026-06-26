@@ -48,6 +48,19 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         "host_registry",
         "host_store",
         "sandbox_config",
+        "agent_store",
+        "file_store",
+        "conversation_store",
+        "artifact_store",
+        "agent_cache",
+        "comment_store",
+        "policy_store",
+        "permission_store",
+        "runner_tunnel_tokens",
+        "runner_exit_reports",
+        "server_mcp_pool",
+        "session_liveness_lookup",
+        "push_subscription_store",
         "managed_launches",
         "server_metrics",
         "server_metrics_otel",
@@ -68,9 +81,7 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
 # Phase 3 don't collide on the same app.state hunk.
 _EXPECTED_LIFESPAN_APP_STATE_KEYS = frozenset({"harness_process_manager"})
 # Full set the AST scan sees across the whole module (body + lifespan).
-_EXPECTED_ALL_APP_STATE_KEYS = (
-    _EXPECTED_BODY_APP_STATE_KEYS | _EXPECTED_LIFESPAN_APP_STATE_KEYS
-)
+_EXPECTED_ALL_APP_STATE_KEYS = _EXPECTED_BODY_APP_STATE_KEYS | _EXPECTED_LIFESPAN_APP_STATE_KEYS
 
 # ── Phase 5 anchor: dispatch elif chain (tool_dispatch.py 3412–3570). ──
 # 17 set-family branches + 4 predicate tails
@@ -146,7 +157,7 @@ def test_app_state_lifespan_key_is_separate_from_body():
     """
     lifespan_keys = _assigned_app_state_keys(_read(_APP_PY), root_names={"app_inst"})
     assert lifespan_keys == _EXPECTED_LIFESPAN_APP_STATE_KEYS, (
-        "_lifespan app.state keys drifted (Phase 3). Got: " f"{sorted(lifespan_keys)}"
+        f"_lifespan app.state keys drifted (Phase 3). Got: {sorted(lifespan_keys)}"
     )
     # The two write sets are disjoint — the structural guarantee the plan relies on.
     assert _EXPECTED_BODY_APP_STATE_KEYS.isdisjoint(_EXPECTED_LIFESPAN_APP_STATE_KEYS)
@@ -202,12 +213,8 @@ def test_omnigent_compat_allowlist_consumes_the_same_harness_names():
     tree = ast.parse(compat_src)
     allowlist: set[str] = set()
     for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Assign)
-            and any(
-                isinstance(t, ast.Name) and t.id == "OMNIGENT_HARNESSES"
-                for t in node.targets
-            )
+        if isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "OMNIGENT_HARNESSES" for t in node.targets
         ):
             # frozenset({ "a", "b", ... }) → Call(args=[Set(elts=[Constant,...])]).
             for sub in ast.walk(node.value):
@@ -246,9 +253,7 @@ def test_dispatch_elif_chain_branch_counts_are_pinned():
     assert "_is_uc_function_tool(tool_name, agent_spec)" in src
     assert "_execute_spec_callable_tool(tool_name, args, agent_spec=agent_spec)" in src
     # Total routing branches quoted by the plan (17 + 4 = 21).
-    assert (
-        _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 21
-    )
+    assert _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 21
 
 
 # ── Phase 1/3: the generic extension seam getters the plan mirrors ──
@@ -261,11 +266,7 @@ def test_extension_seam_getters_exist_and_keep_their_names():
     cancel path. Pinning these names means the plan's seam references stay valid.
     """
     src = _read(_EXTENSIONS)
-    defined = {
-        node.name
-        for node in ast.walk(ast.parse(src))
-        if isinstance(node, ast.FunctionDef)
-    }
+    defined = {node.name for node in ast.walk(ast.parse(src)) if isinstance(node, ast.FunctionDef)}
     missing = _EXPECTED_EXTENSION_GETTERS - defined
     assert not missing, (
         f"extension seam getters missing {sorted(missing)} — the abstraction-spine "

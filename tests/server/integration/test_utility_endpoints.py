@@ -118,6 +118,16 @@ async def test_capabilities_returns_manifest(client: httpx.AsyncClient) -> None:
     data = resp.json()
     seams = {entry["seam"]: entry for entry in data["seams"]}
     assert set(seams) == set(_EXPECTED_SEAM_DEFAULTS)
+    coordination = data["coordination"]
+    assert set(coordination) == {"active", "provider", "replica_id"}
+    assert coordination["active"] in {True, False}
+    if coordination["active"]:
+        assert coordination["provider"] in {"inprocess", "nats"}
+        assert isinstance(coordination["replica_id"], str)
+        assert coordination["replica_id"]
+    else:
+        assert coordination["provider"] is None
+        assert coordination["replica_id"] is None
     for seam, default_impl in _EXPECTED_SEAM_DEFAULTS.items():
         entry = seams[seam]
         # describe() keys + the manifest's override_env are all present.

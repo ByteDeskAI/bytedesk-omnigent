@@ -42,20 +42,11 @@ from omnigent.server.performance_metrics import (
     ServerPerformanceMetrics,
     set_request_duration_for_access_log,
 )
-from omnigent.server.routes.agents_write import create_agents_write_router
-from omnigent.server.routes.builtin_agents import create_builtin_agents_router
-from omnigent.server.routes.comments import create_comments_router
-from omnigent.server.routes.default_policies import create_default_policies_router
-from omnigent.server.routes.policy_registry import create_policy_registry_router
 from omnigent.server.routes.runner_tunnel import create_runner_tunnel_router
-from omnigent.server.routes.session_policies import create_session_policies_router
 from omnigent.server.routes.sessions import (
     SessionLiveness,
-    create_sessions_router,
     set_server_runner_router,
 )
-from omnigent.server.routes.skills import create_skills_router
-from omnigent.server.routes.terminal_attach import create_terminal_attach_router
 from omnigent.server.ws_origin import WebSocketOriginMiddleware
 from omnigent.stores import (
     AgentStore,
@@ -330,8 +321,7 @@ def _ensure_builtin_agent(
             if not artifact_store.exists(new_loc):
                 artifact_store.put(new_loc, bundle_bytes)
                 _logger.info(
-                    "Self-healed missing artifact for built-in %s agent %s "
-                    "(bundle %s)",
+                    "Self-healed missing artifact for built-in %s agent %s (bundle %s)",
                     name,
                     existing.id,
                     bundle_hash[:12],
@@ -1057,24 +1047,20 @@ def create_app(
 
         register_extension_tools()
 
-        # BDP-2509: flag-guarded first-party-plugin boot path (default OFF). When
-        # OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy, register the first-party
-        # ("core") plugins' seam contributions through the SAME seam registries
-        # third-party extensions use — IN ADDITION to the discovered ones above.
-        # The instances are built here (deferred domain import) and stashed for
-        # the router-install + background-task stages below. Unset/false: this
-        # block is skipped and boot is byte-for-byte unchanged.
-        _firstparty_extensions: list[Any] = []
-        from omnigent.server.auth import env_var_is_truthy as _env_truthy_fp
+        # BDP-2503: first-party ("core") plugins now register seam
+        # contributions unconditionally through the SAME registries third-party
+        # extensions use. Registry conflicts are skipped by
+        # register_firstparty_seams, so this is safe alongside existing built-in
+        # defaults while making the core plugin path authoritative for seams.
+        # Synchronous route mounting is handled later by firstparty_route_extensions(),
+        # after the app state carries the built stores and route collaborators.
+        from omnigent.core import (
+            default_extensions,
+            register_firstparty_seams,
+        )
 
-        if _env_truthy_fp("OMNIGENT_USE_FIRSTPARTY_PLUGINS"):
-            from omnigent.core import (
-                default_extensions,
-                register_firstparty_seams,
-            )
-
-            _firstparty_extensions = default_extensions()
-            register_firstparty_seams(_firstparty_extensions)
+        _firstparty_extensions: list[Any] = default_extensions()
+        register_firstparty_seams(_firstparty_extensions)
 
         from omnigent.coordination.lifecycle import start_coordination
 
@@ -1116,13 +1102,11 @@ def create_app(
         from omnigent.kernel.extensions import extension_background_factories
 
         _ext_bg_tasks = [
-            asyncio.create_task(factory())
-            for factory in extension_background_factories()
+            asyncio.create_task(factory()) for factory in extension_background_factories()
         ]
         # BDP-2516: the omnigent.metrics + omnigent.memory_maintenance loops are
-        # now AUTHORITATIVE first-party plugins — started UNCONDITIONALLY (no
-        # OMNIGENT_USE_FIRSTPARTY_PLUGINS flag) through the SAME lifespan task
-        # path as the extension loops above. This replaces the former inline
+        # now AUTHORITATIVE first-party plugins — started through the SAME
+        # lifespan task path as the extension loops above. This replaces the former inline
         # asyncio.create_task(publish_server_metrics_periodically(...)) +
         # memory_maintenance_loop() callsites. The metrics loop is injected with
         # the live server_metrics / server_metrics_otel (the SAME instances the
@@ -1142,18 +1126,14 @@ def create_app(
             asyncio.create_task(factory())
             for factory in firstparty_background_factories(_bg_task_extensions)
         )
-        # BDP-2509: the OTHER first-party-plugin background loops (if any) started
-        # through the SAME lifespan task path. Only populated when
-        # OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy (``_firstparty_extensions`` is
-        # empty otherwise); metrics + memory_maintenance are excluded from that
-        # shadow list (they are authoritative above), so no double-start. Cancelled
-        # in the finally below with the other bg tasks.
+        # BDP-2509: the OTHER first-party-plugin background loops (if any) start
+        # through the SAME lifespan task path. Metrics + memory_maintenance are
+        # excluded from this list (they are authoritative above), so no
+        # double-start. Cancelled in the finally below with the other bg tasks.
         if _firstparty_extensions:
             _ext_bg_tasks.extend(
                 asyncio.create_task(factory())
-                for factory in firstparty_background_factories(
-                    _firstparty_extensions
-                )
+                for factory in firstparty_background_factories(_firstparty_extensions)
             )
         try:
             yield
@@ -1250,6 +1230,7 @@ def create_app(
     # and WSTunnelTransport to the same session registry.
     app.state.tunnel_registry = tunnel_registry
     app.state.runner_router = runner_router
+    app.state.runner_exit_reports = runner_exit_reports
     # The fully-assembled principal composite (BDP-2437) — the runner-token tail
     # resolver is wired ahead of route registration. Exposed for diagnostics and
     # tests that assert the configured accounts/OIDC provider still sits in the
@@ -1262,6 +1243,16 @@ def create_app(
     from omnigent.identity.signer import HmacAssertionSigner
 
     app.state.assertion_signer = HmacAssertionSigner.from_env()
+    app.state.agent_store = agent_store
+    app.state.file_store = file_store
+    app.state.conversation_store = conversation_store
+    app.state.artifact_store = artifact_store
+    app.state.agent_cache = agent_cache
+    app.state.comment_store = comment_store
+    app.state.policy_store = policy_store
+    app.state.permission_store = permission_store
+    app.state.runner_tunnel_tokens = runner_tunnel_tokens
+    app.state.server_mcp_pool = _mcp_pool
     app.state.host_registry = host_registry
     app.state.host_store = host_store
     app.state.sandbox_config = sandbox_config
@@ -1275,9 +1266,7 @@ def create_app(
     # BDP-2368: resolve from the DI container when active (Singleton), else
     # construct inline — same object either way.
     app.state.managed_launches = (
-        _di_container.managed_launches()
-        if _di_container is not None
-        else ManagedLaunchTracker()
+        _di_container.managed_launches() if _di_container is not None else ManagedLaunchTracker()
     )
     app.state.server_metrics = server_metrics
     app.state.server_metrics_otel = server_metrics_otel
@@ -1757,6 +1746,7 @@ def create_app(
 
         :returns: ``{"seams": [<describe() + override_env>, ...]}``.
         """
+        from omnigent.coordination.lifecycle import coordination_status
         from omnigent.kernel.pluggable.manifest import capability_manifest
         from omnigent.server.event_schema import (
             EVENT_SCHEMA_VERSION,
@@ -1766,6 +1756,7 @@ def create_app(
 
         return {
             "seams": capability_manifest(),
+            "coordination": coordination_status(),
             "schema": {
                 "events": {
                     "version": EVENT_SCHEMA_VERSION,
@@ -1786,140 +1777,7 @@ def create_app(
 
         return event_schema_document()
 
-    app.include_router(
-        create_sessions_router(
-            conversation_store,
-            agent_store,
-            file_store=file_store,
-            artifact_store=artifact_store,
-            runner_router=runner_router,
-            auth_provider=auth_provider,
-            permission_store=permission_store,
-            agent_cache=agent_cache,
-            mcp_pool=_mcp_pool,
-            # Lets WS /v1/sessions/updates fold runner + host liveness into
-            # its pushes so the web app can drop its GET /health poll.
-            liveness_lookup=_bulk_session_liveness,
-            # Lets GET /sessions and WS /sessions/updates carry the
-            # per-session comments fingerprint so the web app refreshes
-            # its comment list on external mutations.
-            comment_store=comment_store,
-            # Same allow-list the tunnel router gets: authorizes runner
-            # writes to the policy-owned cost_control.* session labels.
-            runner_tunnel_tokens=runner_tunnel_tokens,
-            # Lets the session snapshot surface a crashed runner's cause
-            # (host.runner_exited) as last_task_error so a reload still
-            # renders the error banner after the live push is gone.
-            runner_exit_reports=runner_exit_reports,
-        ),
-        prefix="/v1",
-        tags=["sessions"],
-    )
-    # Read-only data surfaces (Phase 9a, BDP-2444, ADR-0152): additive GET
-    # projections over existing state — long-term memory, per-session/per-user
-    # cost, the spawn tree, pending elicitations, fleet health. Same owner /
-    # session access-scoping as the sibling session/host reads.
-    from omnigent.server.routes.data_surfaces import create_data_surfaces_router
-
-    app.include_router(
-        create_data_surfaces_router(
-            conversation_store,
-            auth_provider=auth_provider,
-            permission_store=permission_store,
-            host_store=host_store,
-        ),
-        prefix="/v1",
-        tags=["data-surfaces"],
-    )
-    # Read-only built-in agent discovery (designs/BUILTIN_AGENTS.md).
-    # Successor to the removed GET /api/agents list; lists only
-    # built-in (session_id IS NULL) agents for the new-session picker.
-    app.include_router(
-        create_builtin_agents_router(
-            agent_store,
-            agent_cache,
-            auth_provider=auth_provider,
-        ),
-        prefix="/v1",
-        tags=["agents"],
-    )
-    # Template-agent image read/write (GET/PUT /v1/agents/{id}/image).
-    # Lets the org chart reconfigure a template agent's full spec live —
-    # rebuild + warm-swap with no server restart. Template agents only;
-    # session-scoped agents go through PUT /v1/sessions/{id}/agent.
-    app.include_router(
-        create_agents_write_router(
-            agent_store,
-            agent_cache,
-            artifact_store,
-            auth_provider=auth_provider,
-        ),
-        prefix="/v1",
-        tags=["agents"],
-    )
-    app.include_router(
-        create_skills_router(
-            agent_store,
-            agent_cache,
-            artifact_store,
-            auth_provider=auth_provider,
-            # Lets POST /v1/skills/concierge/sessions open a concierge-bound
-            # session through the same create path as POST /v1/sessions.
-            conversation_store=conversation_store,
-            runner_router=runner_router,
-            permission_store=permission_store,
-        ),
-        prefix="/v1",
-        tags=["skills"],
-    )
-    app.include_router(
-        create_terminal_attach_router(
-            auth_provider=auth_provider,
-            permission_store=permission_store,
-            conversation_store=conversation_store,
-        ),
-        prefix="/v1",
-        tags=["terminals"],
-    )
-    if comment_store is not None:
-        app.include_router(
-            create_comments_router(
-                comment_store,
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-                conversation_store=conversation_store,
-            ),
-            prefix="/v1",
-            tags=["comments"],
-        )
-    if policy_store is not None:
-        app.include_router(
-            create_session_policies_router(
-                policy_store,
-                conversation_store,
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-            ),
-            prefix="/v1",
-            tags=["session_policies"],
-        )
-        app.include_router(
-            create_default_policies_router(
-                policy_store,
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-            ),
-            prefix="/v1",
-            tags=["default_policies"],
-        )
-    app.include_router(
-        create_policy_registry_router(auth_provider=auth_provider),
-        prefix="/v1",
-        tags=["policy_registry"],
-    )
-
     from omnigent.server.push.service import create_push_service, set_push_service
-    from omnigent.server.routes.push import create_push_router
     from omnigent.stores.push_subscription_store.sqlalchemy_store import (
         SqlAlchemyPushSubscriptionStore,
     )
@@ -1932,44 +1790,35 @@ def create_app(
             conversation_store=conversation_store,
         )
     )
-    app.include_router(
-        create_push_router(push_subscription_store, auth_provider),
-        prefix="/v1",
-        tags=["push"],
-    )
+    app.state.push_subscription_store = push_subscription_store
+    app.state.session_liveness_lookup = _bulk_session_liveness
 
-    # BDP-2291/2300 (ADR-0143): discover + mount first-party extensions via the
-    # generic omnigent.kernel.extensions seam — the single seam that keeps ByteDesk
-    # functionality (routes, tools, policies, background loops) out of
-    # upstream-tracked core. auth_provider is threaded to extension routes that
-    # need it. One bad extension is logged and skipped, never fatal.
+    # BDP-2517: first-party core routes are now authoritative through the
+    # extension lifecycle. ``RoutesExtension.post_init`` reads the already-built
+    # route dependencies from ``app.state`` and mounts the documented core route
+    # group. Keep this BEFORE discovered extensions to preserve the historical
+    # precedence of core inline routes over extension routes with overlapping
+    # paths.
+    from omnigent.core import firstparty_route_extensions
     from omnigent.kernel.extensions import install_extensions
 
+    install_extensions(
+        app,
+        extensions=firstparty_route_extensions(),
+        auth_provider=auth_provider,
+        permission_store=permission_store,
+    )
+
+    # BDP-2291/2300 (ADR-0143): discover + mount extension routers via the
+    # generic omnigent.kernel.extensions seam — the single seam that keeps
+    # ByteDesk functionality (routes, tools, policies, background loops) out of
+    # upstream-tracked core. auth_provider is threaded to extension routes that
+    # need it. One bad extension is logged and skipped, never fatal.
     install_extensions(
         app,
         auth_provider=auth_provider,
         permission_store=permission_store,
     )
-
-    # BDP-2509: flag-guarded first-party-plugin router install (default OFF).
-    # When OMNIGENT_USE_FIRSTPARTY_PLUGINS is truthy, mount the first-party
-    # ("core") plugins' routers (e.g. omnigent.routes, omnigent.skills) through
-    # the SAME install_extensions() machinery — passing the explicit
-    # default_extensions() list — IN ADDITION to the discovered extensions
-    # above. install_extensions runs the same pre_init/register/post_init
-    # staging and mounts under /v1, so first-party routers go through the
-    # identical path. Unset/false: skipped, boot byte-for-byte unchanged.
-    from omnigent.server.auth import env_var_is_truthy as _env_truthy_fp_routes
-
-    if _env_truthy_fp_routes("OMNIGENT_USE_FIRSTPARTY_PLUGINS"):
-        from omnigent.core import default_extensions
-
-        install_extensions(
-            app,
-            extensions=default_extensions(),
-            auth_provider=auth_provider,
-            permission_store=permission_store,
-        )
 
     # ── Tunnel lifecycle callbacks (Step 8.5 crash recovery) ───
     async def _on_runner_disconnect(runner_id: str) -> None:
@@ -2215,9 +2064,7 @@ def create_app(
             )
 
             app.include_router(
-                create_accounts_auth_router(
-                    _base_ap, account_store, admin_list, permission_store
-                ),
+                create_accounts_auth_router(_base_ap, account_store, admin_list, permission_store),
                 prefix="/auth",
                 tags=["auth"],
             )
