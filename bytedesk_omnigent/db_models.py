@@ -369,7 +369,8 @@ class SqlGoalDependency(Base):
         Index("ix_goal_dependencies_status", "status"),
         Index("ix_goal_dependencies_goal_status", "goal_id", "status"),
         CheckConstraint(
-            "kind in ('manual', 'goal', 'system_state')",
+            "kind in ('manual', 'goal', 'system_state', "
+            "'milestone', 'epic', 'github_pr', 'jira_issue')",
             name="ck_goal_dependencies_kind",
         ),
         CheckConstraint(
