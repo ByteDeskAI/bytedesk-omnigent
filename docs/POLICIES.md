@@ -96,7 +96,7 @@ policies:
       limit: 100
   github_access:
     type: function
-    handler: omnigent.policies.builtins.github.github_policy
+    handler: bytedesk_omnigent.policies.github.github_policy
     factory_params:
       write_repos:
         - myorg/my-repo
@@ -104,7 +104,7 @@ policies:
         - "feature/*"
   google_policy:
     type: function
-    handler: omnigent.policies.builtins.google.gdrive_policy
+    handler: bytedesk_omnigent.policies.google.gdrive_policy
     factory_params:
       read_all: true
       allow_create: true
@@ -280,7 +280,7 @@ Controls GitHub access across MCP tools and `git`/`gh` shell commands. Restricts
 ```yaml
 github_access:
   type: function
-  handler: omnigent.policies.builtins.github.github_policy
+  handler: bytedesk_omnigent.policies.github.github_policy
   factory_params:
     write_repos:
       - myorg/frontend

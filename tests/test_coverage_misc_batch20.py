@@ -22,7 +22,7 @@ from omnigent.coordination.replica_id import server_replica_id
 from omnigent.coordination.sync import claim_resource, release_resource
 from omnigent.entities.environment_filesystem import ResourceError
 from omnigent.grok_native import _materialize_grok_agent_spec
-from omnigent.policies.builtins.github import _ShellOp, github_policy
+from bytedesk_omnigent.policies.github import _ShellOp, github_policy
 from omnigent.policies.builtins.prompt import prompt_policy
 from omnigent.server import presence
 from omnigent.server.routes.comments import create_comments_router
@@ -72,7 +72,7 @@ def test_materialize_grok_agent_spec_omits_model_when_unset(tmp_path: Path) -> N
     assert "model" not in payload["executor"]
 
 
-# ── omnigent/policies/builtins/github.py ─────────────────────────────────────
+# ── bytedesk_omnigent/policies/github.py ─────────────────────────────────────
 
 
 def test_github_policy_abstains_on_unclassified_shell_op_kind() -> None:
@@ -86,7 +86,7 @@ def test_github_policy_abstains_on_unclassified_shell_op_kind() -> None:
         detail="local git status",
     )
     with patch(
-        "omnigent.policies.builtins.github._classify_shell_command",
+        "bytedesk_omnigent.policies.github._classify_shell_command",
         return_value=[ignored],
     ):
         result = policy(

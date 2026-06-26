@@ -1,10 +1,10 @@
-"""Edge-case coverage for :mod:`omnigent.policies.builtins.google`."""
+"""Edge-case coverage for :mod:`bytedesk_omnigent.policies.google`."""
 
 from __future__ import annotations
 
 import json
 
-from omnigent.policies.builtins.google import (
+from bytedesk_omnigent.policies.google import (
     CREATED_DRAFTS_STATE_KEY,
     CREATED_FILES_STATE_KEY,
     _append_updates,

@@ -47,7 +47,7 @@ def _lifespan_ctx(**overrides: object) -> LifespanContext:
         "server_metrics": MagicMock(),
         "server_metrics_otel": MagicMock(),
         "bootstrap_result": None,
-        "policy_modules": ["omnigent.policies.builtins.github"],
+        "policy_modules": ["bytedesk_omnigent.policies.github"],
     }
     defaults.update(overrides)
     return LifespanContext(**defaults)  # type: ignore[arg-type]
@@ -291,13 +291,22 @@ async def test_extension_background_tasks_phase_cancels_all_tasks(
         "omnigent.kernel.extensions.extension_background_factories",
         lambda: [_factory],
     )
+    # BDP-2516: the phase now ALSO starts the authoritative first-party loops
+    # (omnigent.metrics + omnigent.memory_maintenance). Neutralise that source
+    # here so this test stays scoped to *extension* background-task cancellation
+    # (the first-party loops have their own parity coverage in
+    # tests/server/test_firstparty_background_cutover.py).
+    monkeypatch.setattr(
+        "omnigent.core.firstparty_background_task_extensions",
+        lambda **_kwargs: [],
+    )
     ctx = _lifespan_ctx()
     phase = ExtensionBackgroundTasksPhase()
     await phase.startup(ctx)
     tasks = ctx.state["ext_bg_tasks"]
     assert len(tasks) == 1
     await phase.shutdown(ctx)
-    assert tasks[0].cancelled() or tasks[0].done()
+    assert all(t.cancelled() or t.done() for t in tasks)
 
 
 @pytest.mark.asyncio
