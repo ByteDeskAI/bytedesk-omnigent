@@ -40,7 +40,9 @@ def test_coordination_and_artifact_nats_are_isolated() -> None:
         claim["metadata"]["name"]
         for claim in statefulsets["omnigent-nats-artifacts"]["spec"]["volumeClaimTemplates"]
     }
-    assert coord_claims == {"coordination-jetstream-data"}
+    # Existing StatefulSets already use this claim-template name; changing it
+    # makes kubectl apply fail because volumeClaimTemplates are immutable.
+    assert coord_claims == {"jetstream-data"}
     assert artifact_claims == {"artifact-jetstream-data"}
 
 
