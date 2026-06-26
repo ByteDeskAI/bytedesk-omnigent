@@ -28,6 +28,35 @@ def office_goals_channel(tenant: str) -> str:
     return f"office:goals:{tenant}"
 
 
+def office_inbound_channel(tenant: str) -> str:
+    """The Redis channel ByteDesk.Realtime fans out to the ``office:inbound`` topic
+    (the live inbound-event feed, ADR-0155)."""
+    return f"office:inbound:{tenant}"
+
+
+def inbound_event_changed(
+    *,
+    idempotency_key: str,
+    source: str,
+    event_type: str,
+    status: str,
+    occurred_at: int,
+    received_at: int,
+    duplicate: bool = False,
+) -> dict[str, Any]:
+    """A compact delta announcing an inbound event flowed through the pipeline."""
+    return {
+        "type": "inbound.event",
+        "idempotencyKey": idempotency_key,
+        "source": source,
+        "eventType": event_type,
+        "status": status,
+        "occurredAt": occurred_at,
+        "receivedAt": received_at,
+        "duplicate": duplicate,
+    }
+
+
 def roster_changed(action: str, agent_id: str) -> dict[str, Any]:
     """An agent was created/updated/deleted (incl. live config edits)."""
     return {"type": "roster.changed", "action": action, "agentId": agent_id}
