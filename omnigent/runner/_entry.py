@@ -203,6 +203,18 @@ class _RunnerDatabricksAuth(httpx.Auth):
         :raises httpx.RequestError: When the factory is configured
             but returns no token.
         """
+        # Runner-tunnel identity (BDP-2437) on EVERY callback: a host/daemon-
+        # launched runner authenticates to the server via RunnerTokenAuthProvider
+        # from the ``X-Omnigent-Runner-Tunnel-Token`` header. The bearer factory
+        # below is often absent (no Databricks creds in a self-hosted accounts
+        # deployment), so without this header the forwarder's /events + PATCH
+        # callbacks 401 and no assistant text is ever persisted. The header lives
+        # on a distinct field, so it composes with any bearer set below.
+        tunnel_token = _runner_tunnel_binding_token_from_env()
+        if tunnel_token:
+            from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
+
+            request.headers[RUNNER_TUNNEL_TOKEN_HEADER] = tunnel_token
         if self._factory is not None:
             token = self._factory()
             if not token:
