@@ -94,6 +94,7 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.inbound import create_inbound_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
+        from bytedesk_omnigent.routes.providers import create_providers_router
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
         )
@@ -110,6 +111,10 @@ class BytedeskExtension:
             create_ingress_router(),
             create_goal_delivery_router(),
             create_inbound_router(auth_provider=auth_provider),
+            create_providers_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
             create_agentic_inbox_router(),
             create_goals_router(
                 auth_provider=auth_provider,
@@ -230,6 +235,37 @@ class BytedeskExtension:
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),
         }
+
+    # ── goal-engine provider seam (Phase 4, BDP-2586) ────────────────
+    def goal_sensors(self) -> dict[str, Callable[[], object]]:
+        """Contribute every registered provider's sensors as Remote adapters.
+
+        Consumed by ``SensorRegistry.discover_sensor_extensions`` so a connected
+        app's manifest sensors are usable by the resolver — without core naming any
+        provider. Returns ``{sensor_name: factory}``; empty when no provider is
+        registered (the standalone case).
+        """
+        from bytedesk_omnigent.engine.providers.registry import get_provider_registry
+        from bytedesk_omnigent.engine.providers.remote import RemoteSensor
+
+        factories: dict[str, Callable[[], object]] = {}
+        for manifest in get_provider_registry().providers():
+            for name in manifest.sensors:
+                factories[name] = lambda m=manifest, n=name: RemoteSensor(n, m)
+        return factories
+
+    def goal_actuators(self) -> dict[str, Callable[[], object]]:
+        """Contribute every registered provider's actuators as Remote adapters."""
+        from bytedesk_omnigent.engine.providers.registry import get_provider_registry
+        from bytedesk_omnigent.engine.providers.remote import RemoteActuator
+
+        factories: dict[str, Callable[[], object]] = {}
+        for manifest in get_provider_registry().providers():
+            for spec in manifest.actuators:
+                factories[spec.name] = lambda m=manifest, s=spec: RemoteActuator(
+                    s.name, m, risk_tier=s.risk_tier
+                )
+        return factories
 
     # ── secret backends (consulted by omnigent.onboarding.secrets) ───
     def secret_backends(self) -> list:

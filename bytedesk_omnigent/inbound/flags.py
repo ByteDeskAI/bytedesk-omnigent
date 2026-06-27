@@ -31,6 +31,7 @@ INBOUND_FEED_ENABLED = "inbound.feed.enabled"
 INBOUND_CUTOVER_GOAL_DELIVERY = "inbound.cutover.goal_delivery"
 INBOUND_CUTOVER_SIGNAL_BUS = "inbound.cutover.signal_bus"
 INBOUND_CUTOVER_AGENTIC_INBOX = "inbound.cutover.agentic_inbox"
+INBOUND_CUTOVER_PROVIDER = "inbound.cutover.provider"
 
 _OWNER = "inbound-pipeline"
 _TAGS = ("inbound-pipeline", "adr-0155")
@@ -86,6 +87,11 @@ INBOUND_FLAG_DEFINITIONS = (
         INBOUND_CUTOVER_AGENTIC_INBOX,
         description="Strangler: agentic-inbox (LIVE email) route runs through the pipeline; ramp via percentage rollout.",
         safety_tier=3,
+        prerequisites={INBOUND_PIPELINE_ENABLED: True},
+    ),
+    _bool_flag(
+        INBOUND_CUTOVER_PROVIDER,
+        description="Connected-app provider canonical ingress (POST /v1/inbound/events) → pipeline.",
         prerequisites={INBOUND_PIPELINE_ENABLED: True},
     ),
 )
