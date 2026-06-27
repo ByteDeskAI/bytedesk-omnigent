@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from bytedesk_omnigent.runtime_flags.defaults import (
@@ -33,6 +33,7 @@ from bytedesk_omnigent.runtime_flags.defaults import (
 from bytedesk_omnigent.runtime_flags.models import (
     FlagDefinition,
     FlagDescriptor,
+    FlagRule,
     FlagVariation,
 )
 from bytedesk_omnigent.runtime_flags.store import (
@@ -270,6 +271,41 @@ async def load_goal_engine_config(
     )
 
 
+async def set_autonomy_posture(
+    posture: str,
+    *,
+    tenant_id: str | None = None,
+    store: RuntimeFlagStore | None = None,
+) -> str:
+    """Arm/disarm the ``goals.autonomy.posture`` flag (the command-center switch).
+
+    ``tenant_id`` set → write a per-tenant ``equals tenant`` rule (the explicit
+    per-tenant flip ``config.py`` describes), replacing any prior rule for that
+    tenant. ``tenant_id`` None → flip the global ``default_variation``. Returns the
+    posture written. Raises ``ValueError`` on an invalid posture.
+
+    full_auto is the high-blast-radius arm switch (``safety_tier=3``); callers
+    (the ``goal_set_posture`` tool) gate arming behind admin/governance — this just
+    persists the decision.
+    """
+    if posture not in POSTURES:
+        raise ValueError(f"invalid posture {posture!r}; expected {list(POSTURES)}")
+    flag_store = store or runtime_flag_store_from_env()
+    revision = await flag_store.get_revision(GOAL_AUTONOMY_POSTURE)
+    flag = revision.definition
+    if tenant_id is None:
+        next_flag = replace(flag, default_variation=posture)
+    else:
+        rules = tuple(
+            r for r in flag.rules if not (r.attribute == "tenant" and r.values == (tenant_id,))
+        )
+        rules = (*rules, FlagRule(attribute="tenant", op="equals", values=(tenant_id,),
+                                  variation=posture))
+        next_flag = replace(flag, rules=rules)
+    await flag_store.upsert(next_flag, if_match=revision.revision)
+    return posture
+
+
 # -- attribute schema validation -------------------------------------------
 _JSON_TYPES: dict[str, type | tuple[type, ...]] = {
     "boolean": bool,
@@ -334,5 +370,6 @@ __all__ = [
     "GoalEngineConfig",
     "load_goal_engine_config",
     "seed_goal_engine_flags",
+    "set_autonomy_posture",
     "validate_goal_attributes",
 ]

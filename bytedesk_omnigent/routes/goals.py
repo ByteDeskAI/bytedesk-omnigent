@@ -547,6 +547,29 @@ def create_goals_router(
         decisions = get_treasury().decisions(goal_id=goal_id, tick_id=tick_id)
         return JSONResponse({"decisions": [asdict(d) for d in decisions]})
 
+    @router.get("/goals/frontier")
+    async def get_frontier(
+        request: Request,
+        target_kind: str | None = None,
+        target_id: str | None = None,
+    ) -> JSONResponse:
+        """The actionable+ranked ROI frontier (ROI + waiting_reasons) for the cockpit."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.engine.frontier import build_frontier
+        from bytedesk_omnigent.engine.sensors import build_default_registry
+        from bytedesk_omnigent.engine.treasury import get_treasury
+        from bytedesk_omnigent.goals import get_goal_store
+
+        rows = await asyncio.to_thread(
+            build_frontier,
+            goal_store=get_goal_store(),
+            sensor_registry=build_default_registry(),
+            treasury=get_treasury(),
+            target_kind=target_kind,
+            target_id=target_id,
+        )
+        return JSONResponse({"frontier": rows})
+
     @router.get("/goals/{goal_id}")
     async def get_goal(request: Request, goal_id: str) -> JSONResponse:
         """Return one scoped goal with dependencies."""

@@ -10,7 +10,11 @@ import {
   deleteGoal,
   deleteGoalTemplate,
   getGoal,
+  getGoalBudget,
   instantiateGoalTemplate,
+  listGoalDecisions,
+  listGoalFrontier,
+  listGoalOutcomes,
   listGoals,
   listGoalPlannerSources,
   listGoalTemplates,
@@ -23,6 +27,7 @@ import {
   type CreateGoalRequest,
   type CreateGoalTemplateRequest,
   type GoalFilters,
+  type GoalTargetKind,
   type InstantiateGoalTemplateRequest,
   type StartGoalPlanningSessionRequest,
   type UpdateGoalDependencyRequest,
@@ -220,6 +225,41 @@ export function useUpdateGoalDependency() {
   });
 }
 
+// ── Command Center read projections (BDP-2598) ─────────────────────────────
+
+export function useGoalFrontier(scope: { target_kind?: GoalTargetKind; target_id?: string } = {}) {
+  return useQuery({
+    queryKey: ["goal-frontier", scope],
+    queryFn: () => listGoalFrontier(scope),
+    staleTime: 10_000,
+  });
+}
+
+export function useGoalDecisions(filters: { goal_id?: string; tick_id?: string } = {}) {
+  return useQuery({
+    queryKey: ["goal-decisions", filters],
+    queryFn: () => listGoalDecisions(filters),
+    staleTime: 10_000,
+  });
+}
+
+export function useGoalOutcomes(filters: { goal_id?: string } = {}) {
+  return useQuery({
+    queryKey: ["goal-outcomes", filters],
+    queryFn: () => listGoalOutcomes(filters),
+    staleTime: 10_000,
+  });
+}
+
+export function useGoalBudget(goalId?: string) {
+  return useQuery({
+    queryKey: ["goal-budget", goalId ?? "none"],
+    queryFn: () => getGoalBudget(goalId as string),
+    enabled: Boolean(goalId),
+    staleTime: 10_000,
+  });
+}
+
 export function useGoalEvents(enabled = true) {
   const queryClient = useQueryClient();
 
@@ -255,6 +295,10 @@ export function useGoalEvents(enabled = true) {
             };
             if (event.type === "goal.changed" || event.type === "goal.planning.committed") {
               void queryClient.invalidateQueries({ queryKey: ["goals"] });
+              // BDP-2598: the cockpit projections derive from goal/engine state.
+              void queryClient.invalidateQueries({ queryKey: ["goal-frontier"] });
+              void queryClient.invalidateQueries({ queryKey: ["goal-decisions"] });
+              void queryClient.invalidateQueries({ queryKey: ["goal-outcomes"] });
               if (event.goalId) {
                 void queryClient.invalidateQueries({ queryKey: ["goal", event.goalId] });
               }
@@ -263,6 +307,11 @@ export function useGoalEvents(enabled = true) {
             } else if (event.type === "entity.changed") {
               // BDP-2588: condition/budget/template/delete deltas over the same stream.
               void queryClient.invalidateQueries({ queryKey: ["goals"] });
+              // BDP-2598: budget/decision/outcome deltas drive the cockpit too.
+              void queryClient.invalidateQueries({ queryKey: ["goal-frontier"] });
+              void queryClient.invalidateQueries({ queryKey: ["goal-decisions"] });
+              void queryClient.invalidateQueries({ queryKey: ["goal-outcomes"] });
+              void queryClient.invalidateQueries({ queryKey: ["goal-budget"] });
               if (event.entity === "template") {
                 void queryClient.invalidateQueries({ queryKey: ["goal-templates"] });
               }

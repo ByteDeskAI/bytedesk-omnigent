@@ -200,11 +200,19 @@ class BytedeskExtension:
         )
         from bytedesk_omnigent.tools.github_tools import BytedeskGitHubTool
         from bytedesk_omnigent.tools.goal_tools import (
+            GoalAdjustBudgetTool,
             GoalAdvanceTool,
+            GoalBatchApproveTool,
             GoalClaimTool,
             GoalCreateTool,
+            GoalDecomposeTool,
             GoalDependencyUpdateTool,
             GoalListTool,
+            GoalPrioritizeTool,
+            GoalReadDecisionsTool,
+            GoalReadFrontierTool,
+            GoalReadLedgerTool,
+            GoalSetPostureTool,
         )
         from bytedesk_omnigent.tools.image_generation_tools import BytedeskGenerateImageTool
         from bytedesk_omnigent.tools.jira_tools import BytedeskJiraTool
@@ -229,6 +237,14 @@ class BytedeskExtension:
             "goal_claim": lambda _c: GoalClaimTool(),
             "goal_advance": lambda _c: GoalAdvanceTool(),
             "goal_dependency_update": lambda _c: GoalDependencyUpdateTool(),
+            "goal_prioritize": lambda _c: GoalPrioritizeTool(),
+            "goal_adjust_budget": lambda _c: GoalAdjustBudgetTool(),
+            "goal_set_posture": lambda _c: GoalSetPostureTool(),
+            "goal_read_frontier": lambda _c: GoalReadFrontierTool(),
+            "goal_read_decisions": lambda _c: GoalReadDecisionsTool(),
+            "goal_read_ledger": lambda _c: GoalReadLedgerTool(),
+            "goal_batch_approve": lambda _c: GoalBatchApproveTool(),
+            "goal_decompose": lambda _c: GoalDecomposeTool(),
             "deliberation_start": lambda _c: DeliberationStartTool(),
             "deliberation_position": lambda _c: DeliberationPositionTool(),
             "deliberation_decide": lambda _c: DeliberationDecideTool(),

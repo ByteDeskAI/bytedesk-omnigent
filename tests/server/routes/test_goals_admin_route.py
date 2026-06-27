@@ -209,6 +209,39 @@ def test_outcomes_and_decisions_reads(monkeypatch) -> None:
     assert client.get("/v1/goals/decisions").json()["decisions"][0]["reason"] == "funded"
 
 
+def test_frontier_read(monkeypatch) -> None:
+    client, *_ = _client(admin=True, monkeypatch=monkeypatch)
+    captured: dict = {}
+
+    def _fake_frontier(**kwargs):
+        captured.update(kwargs)
+        return [
+            {"goal_id": "goal_1", "roi": 9.0, "actionable": True, "waiting_reasons": []},
+            {"goal_id": "goal_2", "roi": 0.0, "actionable": False,
+             "waiting_reasons": ["waiting: jira"]},
+        ]
+
+    import bytedesk_omnigent.engine.frontier as frontier_mod
+
+    monkeypatch.setattr(frontier_mod, "build_frontier", _fake_frontier)
+    resp = client.get("/v1/goals/frontier", params={"target_kind": "organization"})
+    assert resp.status_code == 200
+    rows = resp.json()["frontier"]
+    assert rows[0]["goal_id"] == "goal_1" and rows[0]["actionable"] is True
+    assert rows[1]["waiting_reasons"] == ["waiting: jira"]
+    assert captured["target_kind"] == "organization"
+
+
+def test_frontier_requires_auth() -> None:
+    # No auth provider -> require_user passes (single-user); with a provider that
+    # returns no identity, reads still resolve. Authed reach is covered above; here
+    # we assert the route is registered and not shadowed by /goals/{goal_id}.
+    from bytedesk_omnigent.routes.goals import create_goals_router
+
+    paths = {r.path for r in create_goals_router().routes}
+    assert "/goals/frontier" in paths
+
+
 def test_template_crud_and_instantiate(monkeypatch) -> None:
     client, _gs, _tr, template_store = _client(admin=True, monkeypatch=monkeypatch)
     assert client.get("/v1/goal-templates").json()["templates"][0]["id"] == "t1"

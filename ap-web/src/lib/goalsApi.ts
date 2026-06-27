@@ -165,6 +165,52 @@ export interface InstantiateGoalTemplateRequest {
   overrides?: Record<string, unknown>;
 }
 
+// ── Command Center (BDP-2598) ──────────────────────────────────────────────
+// Read projections for the cockpit. Mutations stay conversational (the
+// goal-commander agent's tools), so these are read-only.
+
+export interface GoalFrontierRow {
+  goal_id: string;
+  title: string;
+  status: GoalStatus;
+  priority: number;
+  target_kind: GoalTargetKind;
+  target_id: string;
+  risk_tier: string;
+  expected_value_cents: number;
+  confidence: number;
+  roi: number;
+  actionable: boolean;
+  waiting_reasons: string[];
+}
+
+export interface GoalDecisionRecord {
+  id: string;
+  tick_id: string;
+  goal_id: string;
+  roi_at_decision: number;
+  budget_before: number | null;
+  budget_after: number | null;
+  reason: string;
+  spawned_session_id: string | null;
+  created_at: number;
+}
+
+export interface GoalOutcomeRecord {
+  id: string;
+  goal_id: string;
+  booked_at: number;
+  realized_value_cents: number;
+  source: string;
+  evidence: Record<string, unknown> | null;
+}
+
+export interface GoalBudget {
+  tier: string;
+  target_id: string;
+  spent_cents: number;
+}
+
 async function readJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -179,7 +225,7 @@ async function readJson<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-function goalQuery(filters: GoalFilters): string {
+function goalQuery(filters: object): string {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) {
     if (value === undefined || value === null || value === false) continue;
@@ -353,6 +399,35 @@ export async function deleteGoalTemplate(templateId: string): Promise<void> {
     { method: "DELETE" },
   );
   await readJson<{ deleted: string }>(res);
+}
+
+export async function listGoalFrontier(
+  filters: { target_kind?: GoalTargetKind; target_id?: string } = {},
+): Promise<GoalFrontierRow[]> {
+  const res = await authenticatedFetch(`/v1/goals/frontier${goalQuery(filters)}`);
+  const body = await readJson<{ frontier: GoalFrontierRow[] }>(res);
+  return body.frontier;
+}
+
+export async function listGoalDecisions(
+  filters: { goal_id?: string; tick_id?: string } = {},
+): Promise<GoalDecisionRecord[]> {
+  const res = await authenticatedFetch(`/v1/goals/decisions${goalQuery(filters)}`);
+  const body = await readJson<{ decisions: GoalDecisionRecord[] }>(res);
+  return body.decisions;
+}
+
+export async function listGoalOutcomes(
+  filters: { goal_id?: string } = {},
+): Promise<GoalOutcomeRecord[]> {
+  const res = await authenticatedFetch(`/v1/goals/outcomes${goalQuery(filters)}`);
+  const body = await readJson<{ outcomes: GoalOutcomeRecord[] }>(res);
+  return body.outcomes;
+}
+
+export async function getGoalBudget(goalId: string): Promise<GoalBudget> {
+  const res = await authenticatedFetch(`/v1/goals/${encodeURIComponent(goalId)}/budget`);
+  return readJson<GoalBudget>(res);
 }
 
 export async function instantiateGoalTemplate(
