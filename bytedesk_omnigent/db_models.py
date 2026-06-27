@@ -425,6 +425,27 @@ class SqlGoal(Base):
     )
     cadence_expr: Mapped[str | None] = mapped_column(String(128), nullable=True)
     cadence_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # BDP-2585 economics: the goal as an economic unit (org/department/agent tier,
+    # parent for roll-up, expected/realized value, confidence, risk tier, and an
+    # optional success-condition AST ref). All default so existing goals are
+    # unchanged; realized_value_cents is written ONLY by goals.book_outcome.
+    tier: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="org", default="org"
+    )
+    parent_goal_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expected_value_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    realized_value_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0", default=0
+    )
+    confidence: Mapped[float] = mapped_column(
+        Float, nullable=False, server_default="0.5", default=0.5
+    )
+    risk_tier: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="low", default="low"
+    )
+    success_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
     # BDP-2283 (C4 escalation dedup): set when the accountability loop escalates a
@@ -439,6 +460,7 @@ class SqlGoal(Base):
         Index("ix_goals_owner_status", "owner_agent_id", "status"),
         Index("ix_goals_target_status", "target_kind", "target_id", "status"),
         Index("ix_goals_activation_status", "activation_state", "status"),
+        Index("ix_goals_parent", "parent_goal_id"),
         CheckConstraint(
             "status in ('open', 'assigned', 'in_progress', 'blocked', 'done')",
             name="ck_goals_status",
@@ -496,6 +518,83 @@ class SqlGoalDependency(Base):
             "status in ('pending', 'satisfied', 'waived')",
             name="ck_goal_dependencies_status",
         ),
+    )
+
+
+class SqlGoalBudget(Base):
+    """A per-scope budget cap + spend + circuit-breaker state (BDP-2585, Phase 3).
+
+    One row per ``(tier, target_id)`` scope (e.g. ``org:omnigent``,
+    ``department:sales``). ``cap_cents`` is the spend ceiling; ``spent_cents`` is
+    the running reservation total, corrected to actual on ``settle`` and refunded
+    on ``replenish`` (a booked outcome refills its tier budget — the flywheel).
+    ``circuit_open`` is the manual kill-switch; ``anomaly_threshold_cents`` arms
+    the auto-trip (budget burned past the threshold with zero realized value).
+    """
+
+    __tablename__ = "goal_budgets"
+
+    tier: Mapped[str] = mapped_column(String(16), primary_key=True)
+    target_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    cap_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    spent_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    cap_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    spent_tokens: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    max_spawns: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    spawns_used: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    anomaly_threshold_cents: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    circuit_open: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SqlGoalOutcome(Base):
+    """The realized-value ledger — one row per booked outcome (BDP-2585, Phase 3).
+
+    Append-only; written ONLY by :func:`bytedesk_omnigent.goals.book_outcome`,
+    never by an agent or the optimizer. ``realized_value_cents`` is the cash the
+    goal actually produced; ``evidence`` keeps the proof (invoice id, deal ref).
+    Booking bumps ``goals.realized_value_cents`` and replenishes the tier budget.
+    """
+
+    __tablename__ = "goal_outcomes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    booked_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    realized_value_cents: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="0"
+    )
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (Index("ix_goal_outcomes_goal", "goal_id"),)
+
+
+class SqlGoalDecision(Base):
+    """A replay/audit record of one fund/skip decision in a tick (BDP-2585).
+
+    The optimizer writes one row per goal it considered: the ROI at decision
+    time, the budget before/after, the ``reason`` (``funded`` / ``skip_*`` /
+    ``approval_required`` / ``paper_trade``) and the spawned session if any. The
+    decision log makes the autonomous loop replayable + auditable.
+    """
+
+    __tablename__ = "goal_decisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tick_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    roi_at_decision: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    budget_before: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    budget_after: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    spawned_session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("ix_goal_decisions_goal", "goal_id"),
+        Index("ix_goal_decisions_tick", "tick_id"),
     )
 
 
