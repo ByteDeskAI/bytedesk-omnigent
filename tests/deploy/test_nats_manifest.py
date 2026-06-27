@@ -20,6 +20,17 @@ def _nats_ui_docs() -> list[dict]:
     ]
 
 
+def _local_dev_nats_ui_ingress() -> dict:
+    docs = [
+        doc
+        for doc in yaml.safe_load_all(
+            Path("deploy/bytedesk/local-dev/nats-ui-ingress.yaml").read_text()
+        )
+        if doc
+    ]
+    return docs[0]
+
+
 def _server_env() -> dict[str, str]:
     docs = list(yaml.safe_load_all(Path("deploy/bytedesk/k8s/server.yaml").read_text()))
     deployment = next(
@@ -125,6 +136,23 @@ def test_kustomization_includes_nats_ui() -> None:
     kustomization = yaml.safe_load(Path("deploy/bytedesk/k8s/kustomization.yaml").read_text())
 
     assert "nats-ui.yaml" in kustomization["resources"]
+
+
+def test_local_dev_exposes_nats_ui_on_requested_localhost_host() -> None:
+    ingress = _local_dev_nats_ui_ingress()
+    local_dev = yaml.safe_load(Path("deploy/bytedesk/local-dev/kustomization.yaml").read_text())
+    rule = ingress["spec"]["rules"][0]
+    path = rule["http"]["paths"][0]
+    service = path["backend"]["service"]
+
+    assert "nats-ui-ingress.yaml" in local_dev["resources"]
+    assert ingress["metadata"]["name"] == "omnigent-nats-ui"
+    assert ingress["spec"]["ingressClassName"] == "public"
+    assert rule["host"] == "nats-ui.dev.bytedesk.localhost"
+    assert path["path"] == "/"
+    assert path["pathType"] == "Prefix"
+    assert service["name"] == "omnigent-nats-ui"
+    assert service["port"]["number"] == 31311
 
 
 def test_server_points_artifacts_at_consolidated_nats() -> None:
