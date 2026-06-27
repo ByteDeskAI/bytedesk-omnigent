@@ -71,6 +71,17 @@ from omnigent.server.schemas import (
 
 _logger = logging.getLogger(__name__)
 
+# While a tool call is executing, reschedule the per-turn IDLE watchdog
+# this often (seconds). An in-flight tool call is active work, not an idle
+# turn — but the inner SDK emits no scaffold events between the tool_use
+# block and its result, so a tool that legitimately runs longer than the
+# idle window (a slow calendar/MCP query, a sub-agent, a long shell) would
+# otherwise trip the idle watchdog and guillotine the turn mid-stream. Far
+# below ``HARNESS_TURN_TIMEOUT_S`` (default 240) so one heartbeat lands well
+# inside the window; the ABSOLUTE per-turn ceiling still backstops a truly
+# hung tool, so this never makes a wedged turn immortal.
+_TOOL_IN_FLIGHT_WATCHDOG_HEARTBEAT_S = 30.0
+
 # Status string the per-harness wraps emit on observed
 # function_call items (i.e., tools the inner SDK already executed
 # natively). Distinct from ``"action_required"`` which is what
@@ -518,13 +529,63 @@ class ExecutorAdapter(HarnessApp):
         correlated_call_id: str | None = None
         if self._pending_mcp_call_ids:
             correlated_call_id = self._pending_mcp_call_ids.popleft()
-        return await _bridge_one_dispatch(
+        return await self._dispatch_with_idle_heartbeat(
             ctx,
             agent,
             tool_name,
             args,
-            call_id=correlated_call_id,
+            correlated_call_id,
         )
+
+    async def _dispatch_with_idle_heartbeat(
+        self,
+        ctx: TurnContext,
+        agent: Any,
+        tool_name: str,
+        args: dict[str, Any],
+        correlated_call_id: str | None,
+    ) -> dict[str, Any]:
+        """
+        Run one tool dispatch, keeping the per-turn IDLE watchdog alive.
+
+        The inner SDK emits no scaffold events between a ``tool_use`` block
+        and its result, so a tool that runs longer than the idle window
+        (slow MCP/calendar query, sub-agent, long shell) would otherwise be
+        seen as an idle/wedged turn and killed mid-stream even though the
+        harness is actively working. Reschedule the idle watchdog on a
+        heartbeat while the dispatch is in flight; the ABSOLUTE per-turn
+        ceiling still backstops a genuinely hung tool.
+
+        :param ctx: Active turn context (carries ``_reset_idle_watchdog``).
+        :param agent: Active agent for the dispatch.
+        :param tool_name: Tool name from the SDK callback.
+        :param args: Decoded argument dict.
+        :param correlated_call_id: Reused MCP call id, or ``None``.
+        :returns: The tool result dict from :func:`_bridge_one_dispatch`.
+        """
+        reset = getattr(ctx, "_reset_idle_watchdog", None)
+        if reset is None:
+            # No idle watchdog wired (disabled / non-guarded turn) — nothing
+            # to keep alive, so dispatch directly.
+            return await _bridge_one_dispatch(
+                ctx, agent, tool_name, args, call_id=correlated_call_id
+            )
+
+        async def _heartbeat() -> None:
+            while True:
+                await asyncio.sleep(_TOOL_IN_FLIGHT_WATCHDOG_HEARTBEAT_S)
+                with contextlib.suppress(Exception):
+                    reset()
+
+        hb = asyncio.create_task(_heartbeat())
+        try:
+            return await _bridge_one_dispatch(
+                ctx, agent, tool_name, args, call_id=correlated_call_id
+            )
+        finally:
+            hb.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await hb
 
     async def _stable_elicitation_handler(
         self,

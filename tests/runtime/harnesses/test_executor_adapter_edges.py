@@ -793,3 +793,54 @@ async def test_watch_injections_emits_consumed_marker_with_injection_id() -> Non
     marker = ctx.emitted[0]
     assert isinstance(marker, InjectionConsumedEvent)
     assert marker.injection_id == "inj_ok"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_with_idle_heartbeat_resets_watchdog_during_slow_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tool call that outlasts the idle window must keep rescheduling the
+    idle watchdog — an in-flight tool is active work, not a wedged turn."""
+    import omnigent.runtime.harnesses._executor_adapter as mod
+
+    monkeypatch.setattr(mod, "_TOOL_IN_FLIGHT_WATCHDOG_HEARTBEAT_S", 0.01)
+    resets: list[int] = []
+
+    async def _slow_dispatch(ctx, agent, tool_name, args, call_id=None):  # type: ignore[no-untyped-def]
+        await asyncio.sleep(0.06)  # ~6 heartbeat intervals
+        return {"ok": True, "tool": tool_name}
+
+    monkeypatch.setattr(mod, "_bridge_one_dispatch", _slow_dispatch)
+
+    class _Ctx:
+        def _reset_idle_watchdog(self) -> None:
+            resets.append(1)
+
+    ctx = _Ctx()
+    adapter = object.__new__(mod.ExecutorAdapter)
+    result = await mod.ExecutorAdapter._dispatch_with_idle_heartbeat(
+        adapter, ctx, object(), "query_calendar", {}, None
+    )
+    assert result == {"ok": True, "tool": "query_calendar"}
+    # The slow dispatch spanned several heartbeat intervals, so the watchdog
+    # was rescheduled at least once while the tool was in flight.
+    assert len(resets) >= 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_with_idle_heartbeat_dispatches_when_no_watchdog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No idle watchdog wired (disabled/non-guarded turn) → direct dispatch,
+    no error, result passed through."""
+    import omnigent.runtime.harnesses._executor_adapter as mod
+
+    async def _dispatch(ctx, agent, tool_name, args, call_id=None):  # type: ignore[no-untyped-def]
+        return {"ok": True}
+
+    monkeypatch.setattr(mod, "_bridge_one_dispatch", _dispatch)
+    adapter = object.__new__(mod.ExecutorAdapter)
+    result = await mod.ExecutorAdapter._dispatch_with_idle_heartbeat(
+        adapter, object(), object(), "t", {}, None
+    )
+    assert result == {"ok": True}
