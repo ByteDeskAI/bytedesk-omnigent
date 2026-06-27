@@ -140,6 +140,31 @@ export interface CommitGoalPlanningSessionRequest {
   draft: GoalDraft;
 }
 
+export interface GoalTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  definition: Record<string, unknown>;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface CreateGoalTemplateRequest {
+  name: string;
+  description?: string | null;
+  definition?: Record<string, unknown>;
+}
+
+export interface UpdateGoalTemplateRequest {
+  name?: string;
+  description?: string | null;
+  definition?: Record<string, unknown>;
+}
+
+export interface InstantiateGoalTemplateRequest {
+  overrides?: Record<string, unknown>;
+}
+
 async function readJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
@@ -268,4 +293,80 @@ export async function updateGoalDependency(
   );
   const body = await readJson<{ dependency: GoalDependencyRecord }>(res);
   return body.dependency;
+}
+
+export async function deleteGoal(goalId: string): Promise<void> {
+  const res = await authenticatedFetch(`/v1/goals/${encodeURIComponent(goalId)}`, {
+    method: "DELETE",
+  });
+  await readJson<{ deleted: string }>(res);
+}
+
+export async function deleteGoalDependency(
+  goalId: string,
+  dependencyId: string,
+): Promise<void> {
+  const res = await authenticatedFetch(
+    `/v1/goals/${encodeURIComponent(goalId)}/dependencies/${encodeURIComponent(dependencyId)}`,
+    { method: "DELETE" },
+  );
+  await readJson<{ deleted: string }>(res);
+}
+
+export async function listGoalTemplates(): Promise<GoalTemplate[]> {
+  const res = await authenticatedFetch("/v1/goal-templates");
+  const body = await readJson<{ templates: GoalTemplate[] }>(res);
+  return body.templates;
+}
+
+export async function createGoalTemplate(
+  payload: CreateGoalTemplateRequest,
+): Promise<GoalTemplate> {
+  const res = await authenticatedFetch("/v1/goal-templates", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await readJson<{ template: GoalTemplate }>(res);
+  return body.template;
+}
+
+export async function updateGoalTemplate(
+  templateId: string,
+  payload: UpdateGoalTemplateRequest,
+): Promise<GoalTemplate> {
+  const res = await authenticatedFetch(
+    `/v1/goal-templates/${encodeURIComponent(templateId)}`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const body = await readJson<{ template: GoalTemplate }>(res);
+  return body.template;
+}
+
+export async function deleteGoalTemplate(templateId: string): Promise<void> {
+  const res = await authenticatedFetch(
+    `/v1/goal-templates/${encodeURIComponent(templateId)}`,
+    { method: "DELETE" },
+  );
+  await readJson<{ deleted: string }>(res);
+}
+
+export async function instantiateGoalTemplate(
+  templateId: string,
+  payload: InstantiateGoalTemplateRequest = {},
+): Promise<GoalRecord> {
+  const res = await authenticatedFetch(
+    `/v1/goal-templates/${encodeURIComponent(templateId)}/instantiate`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  const body = await readJson<{ goal: GoalRecord }>(res);
+  return body.goal;
 }
