@@ -104,7 +104,7 @@ spec:
             # every roll wiped (durable Postgres row → vanished bundle →
             # "unable to load agent spec"). Bucket auto-creates on first use.
             - name: ARTIFACT_DIR
-              value: nats://omnigent-nats-artifacts:4222/omnigent-artifacts
+              value: nats://omnigent-nats:4222/omnigent-artifacts
             - name: OMNIGENT_CONFIG
               value: /etc/omnigent/config.yaml
             # Phase 0: no login, single "local" user — fine for an internal,
