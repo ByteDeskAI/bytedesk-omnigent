@@ -693,6 +693,16 @@ class _DatabricksTokenAuth(httpx.Auth):
         self._server_url = server_url
         raw = os.environ.get(_REMOTE_AUTH_TOKEN_ENV)
         self._static_token = raw.strip() if raw else None
+        # Runner-tunnel identity (BDP-2437): a runner launched by the host /
+        # connect daemon carries only its tunnel binding token, not a user
+        # bearer. The server's RunnerTokenAuthProvider authenticates the runner
+        # from the ``X-Omnigent-Runner-Tunnel-Token`` header, so the forwarder
+        # (and every runner->server client using this Auth) must send it on
+        # EVERY request — independent of, and alongside, any user bearer.
+        from omnigent.runner.identity import RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR
+
+        tunnel_raw = os.environ.get(RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR)
+        self._runner_tunnel_token = tunnel_raw.strip() if tunnel_raw else None
         # Lazily-resolved, then reused, SDK auth (one Config → one token
         # cache). Resolving per request rebuilt Config and shelled out to
         # the Databricks CLI (~0.5s) every time — a heavy tax on the
@@ -751,6 +761,13 @@ class _DatabricksTokenAuth(httpx.Auth):
         :param request: The outgoing httpx request.
         :yields: The request with auth header set.
         """
+        # Runner-tunnel identity rides on EVERY request, regardless of which
+        # (if any) user bearer is resolved below — the server reads it from a
+        # distinct header, so it never collides with ``Authorization``.
+        if self._runner_tunnel_token:
+            from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
+
+            request.headers[RUNNER_TUNNEL_TOKEN_HEADER] = self._runner_tunnel_token
         if self._static_token:
             request.headers["Authorization"] = f"Bearer {self._static_token}"
             yield request
@@ -810,6 +827,15 @@ def _server_auth(
     """
     raw = os.environ.get(_REMOTE_AUTH_TOKEN_ENV)
     if raw and raw.strip():
+        return _DatabricksTokenAuth(server_url=server_url)
+    # Runner-tunnel identity (BDP-2437): a host/daemon-launched runner has only
+    # its tunnel binding token (no user bearer). Return the interceptor so it
+    # injects ``X-Omnigent-Runner-Tunnel-Token`` on every request — otherwise
+    # the forwarder runs with ``auth=None`` and every runner->server call 401s.
+    from omnigent.runner.identity import RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR
+
+    tunnel = os.environ.get(RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR)
+    if tunnel and tunnel.strip():
         return _DatabricksTokenAuth(server_url=server_url)
     # Check stored `omnigent login` records: a session JWT or a
     # Databricks Apps pointer record.

@@ -542,6 +542,14 @@ _CODEX_NATIVE_MODEL = CODEX_NATIVE_CODING_AGENT.agent_name
 _CLAUDE_NATIVE_MESSAGE_TIMEOUT_S = 30.0
 _NATIVE_TERMINAL_START_FAILED_CODE = "native_terminal_start_failed"
 _NATIVE_TERMINAL_ENSURE_FAILED_CODE = "native_terminal_ensure_failed"
+# Cold-start retry budget for the native terminal-ensure preflight: a fresh
+# runner's tmux terminal launch takes ~10s, so a single short attempt races it.
+# Per-attempt timeout covers a cold launch; attempts × delay covers a runner
+# still coming online on the NATS transport. Transport/timeout errors retry;
+# a definitive non-2xx does not.
+_NATIVE_TERMINAL_ENSURE_TIMEOUT_S = 30.0
+_NATIVE_TERMINAL_ENSURE_MAX_ATTEMPTS = 4
+_NATIVE_TERMINAL_ENSURE_RETRY_DELAY_S = 2.0
 # Banner code for the non-fatal notice shown when a native codex session
 # starts but tool-call policy enforcement is NOT active (fail-open: codex
 # too old, or the policy hook could not be trusted). The runner reports
@@ -6916,31 +6924,58 @@ async def _ensure_native_terminal_ready(
     """
     display_name, _, harness = _native_terminal_runtime(conv)
     terminal_name = _native_terminal_name_for_harness(harness)
-    try:
-        resp = await runner_client.post(
-            f"/v1/sessions/{session_id}/resources/terminals",
-            json={
-                "terminal": terminal_name,
-                "session_key": "main",
-                "ensure_native_terminal": True,
-            },
-            timeout=10.0,
-        )
-    except (httpx.HTTPError, ConnectionError) as exc:
-        # Runner transports may raise bare ConnectionError; without this clause
-        # a runner transport drop escaped to the catch-all handler and the
-        # web client showed an opaque 500 ``internal_error`` instead of
-        # the durable ensure-failure turn error below.
-        _logger.warning(
-            "%s terminal ensure transport failed for session=%s",
-            display_name,
-            session_id,
-            exc_info=True,
-        )
-        return _NativeTerminalEnsureOutcome(
-            error=_native_terminal_ensure_transport_error(exc, display_name=display_name),
-            policy_notice=None,
-        )
+    # Cold-start tolerance (BDP-2579 extension): on a FRESH session the runner
+    # is still launching its tmux terminal (~10s) when this preflight fires, so
+    # the first request either (a) hits a runner not yet subscribed on the NATS
+    # transport (NoRespondersError → ConnectError, immediate) or (b) the runner
+    # accepts it but the in-handler tmux launch outlasts a short per-request
+    # timeout. A single 10s attempt therefore races the launch and surfaces a
+    # spurious ``native_terminal_ensure_failed`` that aborts the user's first
+    # turn. Retry transport failures with a small backoff over a budget that
+    # comfortably covers a cold tmux launch; a definitive non-2xx (real boot
+    # failure) still fails fast below — only transport/timeout errors retry.
+    last_exc: httpx.HTTPError | ConnectionError | None = None
+    resp = None
+    for attempt in range(_NATIVE_TERMINAL_ENSURE_MAX_ATTEMPTS):
+        try:
+            resp = await runner_client.post(
+                f"/v1/sessions/{session_id}/resources/terminals",
+                json={
+                    "terminal": terminal_name,
+                    "session_key": "main",
+                    "ensure_native_terminal": True,
+                },
+                timeout=_NATIVE_TERMINAL_ENSURE_TIMEOUT_S,
+            )
+            break
+        except (httpx.HTTPError, ConnectionError) as exc:
+            last_exc = exc
+            if attempt + 1 < _NATIVE_TERMINAL_ENSURE_MAX_ATTEMPTS:
+                _logger.info(
+                    "%s terminal ensure transport retry %d/%d for session=%s (runner warming up)",
+                    display_name,
+                    attempt + 1,
+                    _NATIVE_TERMINAL_ENSURE_MAX_ATTEMPTS,
+                    session_id,
+                )
+                await asyncio.sleep(_NATIVE_TERMINAL_ENSURE_RETRY_DELAY_S)
+                continue
+            # Runner transports may raise bare ConnectionError; without this clause
+            # a runner transport drop escaped to the catch-all handler and the
+            # web client showed an opaque 500 ``internal_error`` instead of
+            # the durable ensure-failure turn error below.
+            _logger.warning(
+                "%s terminal ensure transport failed for session=%s after %d attempts",
+                display_name,
+                session_id,
+                _NATIVE_TERMINAL_ENSURE_MAX_ATTEMPTS,
+                exc_info=True,
+            )
+            return _NativeTerminalEnsureOutcome(
+                error=_native_terminal_ensure_transport_error(last_exc, display_name=display_name),
+                policy_notice=None,
+            )
+    assert resp is not None  # loop either set resp or returned
     if resp.status_code < 400:
         return _NativeTerminalEnsureOutcome(
             error=None,
