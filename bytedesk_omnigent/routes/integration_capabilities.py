@@ -5,6 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from bytedesk_omnigent.integration_autonomy_policy import (
+    compile_integration_autonomy_policy,
+)
 from bytedesk_omnigent.integration_capabilities import (
     CapabilityCategory,
     get_integration_capability,
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/autonomy-policy")
+    async def get_capability_autonomy_policy(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile safe default autonomy boundaries for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        policy = compile_integration_autonomy_policy(slug)
+        if policy is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(policy)
 
     return router
