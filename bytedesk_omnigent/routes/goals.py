@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 PLANNING_EVENT_TYPES = {
     "goal.changed",
+    "entity.changed",  # BDP-2588: condition/budget/template/delete deltas
     "goal.planning.started",
     "goal.draft.updated",
     "goal.planning.committed",
@@ -86,6 +87,43 @@ class UpdateDependencyBody(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=512)
     status: str | None = Field(default=None, max_length=16)
     metadata: dict[str, Any] | None = None
+
+
+class ConditionBody(BaseModel):
+    """PUT body for a goal's success-condition AST (``None`` clears it)."""
+
+    condition: dict[str, Any] | None = None
+
+
+class BudgetBody(BaseModel):
+    """PATCH body for a scope budget (treasury). Omitted fields are unchanged."""
+
+    cap_cents: int | None = Field(default=None, ge=0)
+    cap_tokens: int | None = Field(default=None, ge=0)
+    max_spawns: int | None = Field(default=None, ge=0)
+    anomaly_threshold_cents: int | None = Field(default=None, ge=0)
+
+
+class GoalTemplateBody(BaseModel):
+    """Create body for a reusable goal template."""
+
+    name: str = Field(min_length=1, max_length=256)
+    description: str | None = Field(default=None, max_length=2000)
+    definition: dict[str, Any] = Field(default_factory=dict)
+
+
+class UpdateGoalTemplateBody(BaseModel):
+    """PUT body for a goal template (omitted fields unchanged)."""
+
+    name: str | None = Field(default=None, min_length=1, max_length=256)
+    description: str | None = Field(default=None, max_length=2000)
+    definition: dict[str, Any] | None = None
+
+
+class InstantiateTemplateBody(BaseModel):
+    """POST body to create a goal from a template with overrides."""
+
+    overrides: dict[str, Any] = Field(default_factory=dict)
 
 
 class GoalPlannerSource(BaseModel):
@@ -489,6 +527,26 @@ def create_goals_router(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    @router.get("/goals/outcomes")
+    async def list_all_outcomes(request: Request, goal_id: str | None = None) -> JSONResponse:
+        """Read the realized-value ledger (optionally filtered to one goal)."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.engine.treasury import get_treasury
+
+        outcomes = get_treasury().outcomes(goal_id=goal_id)
+        return JSONResponse({"outcomes": [asdict(o) for o in outcomes]})
+
+    @router.get("/goals/decisions")
+    async def list_decisions(
+        request: Request, goal_id: str | None = None, tick_id: str | None = None
+    ) -> JSONResponse:
+        """Read the fund/skip decision replay log (optionally filtered)."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.engine.treasury import get_treasury
+
+        decisions = get_treasury().decisions(goal_id=goal_id, tick_id=tick_id)
+        return JSONResponse({"decisions": [asdict(d) for d in decisions]})
+
     @router.get("/goals/{goal_id}")
     async def get_goal(request: Request, goal_id: str) -> JSONResponse:
         """Return one scoped goal with dependencies."""
@@ -574,5 +632,216 @@ def create_goals_router(
         if dependency is None:
             raise OmnigentError("goal dependency not found", code=ErrorCode.NOT_FOUND)
         return JSONResponse({"dependency": asdict(dependency)})
+
+    @router.delete("/goals/{goal_id}")
+    async def delete_goal(request: Request, goal_id: str) -> JSONResponse:
+        """Hard-delete a goal and its dependencies."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_store
+
+        if not get_goal_store().delete_goal(goal_id=goal_id):
+            raise OmnigentError("goal not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"deleted": goal_id})
+
+    @router.delete("/goals/{goal_id}/dependencies/{dependency_id}")
+    async def remove_dependency(
+        request: Request, goal_id: str, dependency_id: str
+    ) -> JSONResponse:
+        """Detach a dependency from a goal."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_store
+
+        if not get_goal_store().remove_dependency(
+            goal_id=goal_id, dependency_id=dependency_id
+        ):
+            raise OmnigentError("goal dependency not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"deleted": dependency_id})
+
+    @router.get("/goals/{goal_id}/conditions")
+    async def get_conditions(request: Request, goal_id: str) -> JSONResponse:
+        """Return the goal's success-condition AST (or null)."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.goals import get_goal_store
+
+        store = get_goal_store()
+        if store.get_goal(goal_id=goal_id, include_dependencies=False) is None:
+            raise OmnigentError("goal not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"condition": store.get_condition(goal_id=goal_id)})
+
+    @router.put("/goals/{goal_id}/conditions")
+    async def put_conditions(
+        request: Request, goal_id: str, body: ConditionBody
+    ) -> JSONResponse:
+        """Set or clear the goal's success-condition AST (validated)."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_store
+
+        try:
+            goal = get_goal_store().set_condition(
+                goal_id=goal_id, ast_dict=body.condition
+            )
+        except ValueError as exc:
+            raise _invalid_input(exc) from exc
+        if goal is None:
+            raise OmnigentError("goal not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"condition": body.condition})
+
+    @router.get("/goals/{goal_id}/budget")
+    async def get_budget(request: Request, goal_id: str) -> JSONResponse:
+        """Return the treasury budget for the goal's (tier, target) scope."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.engine.treasury import get_treasury
+        from bytedesk_omnigent.goals import get_goal_store
+
+        goal = get_goal_store().get_goal(goal_id=goal_id, include_dependencies=False)
+        if goal is None:
+            raise OmnigentError("goal not found", code=ErrorCode.NOT_FOUND)
+        treasury = get_treasury()
+        return JSONResponse(
+            {
+                "tier": goal.tier,
+                "target_id": goal.target_id,
+                "spent_cents": treasury.spent_cents(tier=goal.tier, target_id=goal.target_id),
+            }
+        )
+
+    @router.patch("/goals/{goal_id}/budget")
+    async def patch_budget(
+        request: Request, goal_id: str, body: BudgetBody
+    ) -> JSONResponse:
+        """Set the treasury cap/limits for the goal's scope."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.engine.treasury import get_treasury
+        from bytedesk_omnigent.goals import _publish_entity_event, get_goal_store
+
+        goal = get_goal_store().get_goal(goal_id=goal_id, include_dependencies=False)
+        if goal is None:
+            raise OmnigentError("goal not found", code=ErrorCode.NOT_FOUND)
+        treasury = get_treasury()
+        treasury.set_budget(
+            tier=goal.tier,
+            target_id=goal.target_id,
+            cap_cents=body.cap_cents if body.cap_cents is not None else 0,
+            cap_tokens=body.cap_tokens,
+            max_spawns=body.max_spawns,
+            anomaly_threshold_cents=body.anomaly_threshold_cents,
+        )
+        scope = f"{goal.tier}:{goal.target_id}"
+        _publish_entity_event("budget", "updated", scope, goalId=goal_id)
+        return JSONResponse(
+            {
+                "tier": goal.tier,
+                "target_id": goal.target_id,
+                "spent_cents": treasury.spent_cents(tier=goal.tier, target_id=goal.target_id),
+            }
+        )
+
+    @router.get("/goals/{goal_id}/outcomes")
+    async def get_goal_outcomes(request: Request, goal_id: str) -> JSONResponse:
+        """Read the realized-value ledger for one goal."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.engine.treasury import get_treasury
+
+        outcomes = get_treasury().outcomes(goal_id=goal_id)
+        return JSONResponse({"outcomes": [asdict(o) for o in outcomes]})
+
+    return router
+
+
+def create_goal_templates_router(
+    auth_provider: AuthProvider | None = None,
+    permission_store: PermissionStore | None = None,
+) -> APIRouter:
+    """Build the reusable goal-templates admin router (BDP-2588).
+
+    Reads require authentication; mutations require admin (same gate as goals).
+    """
+    router = APIRouter()
+
+    @router.get("/goal-templates")
+    async def list_templates(request: Request) -> JSONResponse:
+        """List reusable goal templates."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.goals import get_goal_template_store
+
+        templates = get_goal_template_store().list_templates()
+        return JSONResponse({"templates": [asdict(t) for t in templates]})
+
+    @router.post("/goal-templates")
+    async def create_template(request: Request, body: GoalTemplateBody) -> JSONResponse:
+        """Create a reusable goal template."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_template_store
+
+        try:
+            template = get_goal_template_store().create_template(
+                name=body.name,
+                description=body.description,
+                definition=body.definition,
+            )
+        except ValueError as exc:
+            raise _invalid_input(exc) from exc
+        return JSONResponse({"template": asdict(template)}, status_code=201)
+
+    @router.get("/goal-templates/{template_id}")
+    async def get_template(request: Request, template_id: str) -> JSONResponse:
+        """Return one goal template."""
+        require_user(request, auth_provider)
+        from bytedesk_omnigent.goals import get_goal_template_store
+
+        template = get_goal_template_store().get_template(template_id=template_id)
+        if template is None:
+            raise OmnigentError("goal template not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"template": asdict(template)})
+
+    @router.put("/goal-templates/{template_id}")
+    async def update_template(
+        request: Request, template_id: str, body: UpdateGoalTemplateBody
+    ) -> JSONResponse:
+        """Update a goal template (omitted fields unchanged)."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import _UNSET, get_goal_template_store
+
+        fields = body.model_dump(exclude_unset=True)
+        try:
+            template = get_goal_template_store().update_template(
+                template_id=template_id,
+                name=fields.get("name"),
+                definition=fields.get("definition"),
+                description=fields["description"] if "description" in fields else _UNSET,
+            )
+        except ValueError as exc:
+            raise _invalid_input(exc) from exc
+        if template is None:
+            raise OmnigentError("goal template not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"template": asdict(template)})
+
+    @router.delete("/goal-templates/{template_id}")
+    async def delete_template(request: Request, template_id: str) -> JSONResponse:
+        """Delete a goal template."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_template_store
+
+        if not get_goal_template_store().delete_template(template_id=template_id):
+            raise OmnigentError("goal template not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"deleted": template_id})
+
+    @router.post("/goal-templates/{template_id}/instantiate")
+    async def instantiate_template(
+        request: Request, template_id: str, body: InstantiateTemplateBody
+    ) -> JSONResponse:
+        """Create a goal from a template merged with overrides."""
+        await _require_admin(request, auth_provider, permission_store)
+        from bytedesk_omnigent.goals import get_goal_template_store
+
+        try:
+            goal = get_goal_template_store().instantiate(
+                template_id=template_id, overrides=body.overrides
+            )
+        except ValueError as exc:
+            raise _invalid_input(exc) from exc
+        if goal is None:
+            raise OmnigentError("goal template not found", code=ErrorCode.NOT_FOUND)
+        return JSONResponse({"goal": asdict(goal)}, status_code=201)
 
     return router

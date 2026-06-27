@@ -1,6 +1,28 @@
 {
   "components": {
     "schemas": {
+      "ActuatorSpecBody": {
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "risk_tier": {
+            "default": 2,
+            "maximum": 5.0,
+            "minimum": 0.0,
+            "title": "Risk Tier",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ActuatorSpecBody",
+        "type": "object"
+      },
       "AddCommentRequest": {
         "description": "Request body for ``POST /sessions/{id}/comments``.\n\n:param path: File path relative to workspace root,\n    e.g. ``\"src/App.tsx\"``.\n:param body: The comment text.\n:param start_index: 0-based absolute character offset (inclusive)\n    within the file where the anchor range begins.\n:param end_index: 0-based absolute character offset (exclusive)\n    within the file where the anchor range ends.\n:param anchor_content: Plain-text snapshot of the selected range, used\n    to re-anchor the comment after file edits. ``None`` if not provided.",
         "properties": {
@@ -734,6 +756,61 @@
         "title": "Body_upload_session_file_v1_sessions__session_id__resources_files_post",
         "type": "object"
       },
+      "BudgetBody": {
+        "description": "PATCH body for a scope budget (treasury). Omitted fields are unchanged.",
+        "properties": {
+          "anomaly_threshold_cents": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anomaly Threshold Cents"
+          },
+          "cap_cents": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap Cents"
+          },
+          "cap_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap Tokens"
+          },
+          "max_spawns": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Spawns"
+          }
+        },
+        "title": "BudgetBody",
+        "type": "object"
+      },
       "CadenceDraftBody": {
         "description": "Natural-language cadence text to convert into a schedule expression.",
         "properties": {
@@ -779,6 +856,85 @@
           "response"
         ],
         "title": "CancelledEvent",
+        "type": "object"
+      },
+      "CanonicalEventBody": {
+        "description": "An already-canonical inbound event posted by a connected app.",
+        "properties": {
+          "event_id": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Id"
+          },
+          "idempotency_key": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotency Key"
+          },
+          "normalized": {
+            "additionalProperties": true,
+            "title": "Normalized",
+            "type": "object"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "raw_payload": {
+            "additionalProperties": true,
+            "title": "Raw Payload",
+            "type": "object"
+          },
+          "source": {
+            "default": "provider",
+            "maxLength": 128,
+            "title": "Source",
+            "type": "string"
+          },
+          "tenant_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenant Id"
+          },
+          "type": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "CanonicalEventBody",
         "type": "object"
       },
       "ClientTaskCancelEvent": {
@@ -1060,6 +1216,25 @@
           "web_path"
         ],
         "title": "ConciergeSessionResponse",
+        "type": "object"
+      },
+      "ConditionBody": {
+        "description": "PUT body for a goal's success-condition AST (``None`` clears it).",
+        "properties": {
+          "condition": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condition"
+          }
+        },
+        "title": "ConditionBody",
         "type": "object"
       },
       "ConversationRef": {
@@ -2007,6 +2182,39 @@
         "title": "GoalDraftBody",
         "type": "object"
       },
+      "GoalTemplateBody": {
+        "description": "Create body for a reusable goal template.",
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GoalTemplateBody",
+        "type": "object"
+      },
       "GrantPermissionRequest": {
         "description": "Request body for ``PUT /v1/sessions/{id}/permissions``.\n\n:param user_id: The user to grant access to, e.g.\n    ``\"alice@example.com\"`` or ``\"__public__\"`` for public\n    read access.\n:param level: Numeric permission level: ``1`` = read,\n    ``2`` = edit, ``3`` = manage.",
         "properties": {
@@ -2236,6 +2444,18 @@
           "data"
         ],
         "title": "InstalledSkillsResponse",
+        "type": "object"
+      },
+      "InstantiateTemplateBody": {
+        "description": "POST body to create a goal from a template with overrides.",
+        "properties": {
+          "overrides": {
+            "additionalProperties": true,
+            "title": "Overrides",
+            "type": "object"
+          }
+        },
+        "title": "InstantiateTemplateBody",
         "type": "object"
       },
       "LaunchRunnerRequest": {
@@ -2830,6 +3050,33 @@
         "title": "PresenceViewer",
         "type": "object"
       },
+      "ProviderAuthBody": {
+        "properties": {
+          "header": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Header",
+            "type": "string"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret"
+          }
+        },
+        "required": [
+          "header"
+        ],
+        "title": "ProviderAuthBody",
+        "type": "object"
+      },
       "PushSubscriptionCreate": {
         "properties": {
           "endpoint": {
@@ -2998,6 +3245,66 @@
           "delta"
         ],
         "title": "ReasoningTextDeltaEvent",
+        "type": "object"
+      },
+      "RegisterProviderBody": {
+        "properties": {
+          "actuators": {
+            "items": {
+              "$ref": "#/components/schemas/ActuatorSpecBody"
+            },
+            "title": "Actuators",
+            "type": "array"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderAuthBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "base_url": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Base Url",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "outcomes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "sensors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sensors",
+            "type": "array"
+          },
+          "webhook_sources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Webhook Sources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ],
+        "title": "RegisterProviderBody",
         "type": "object"
       },
       "ResponseObject": {
@@ -6009,6 +6316,50 @@
         "title": "UpdateGoalBody",
         "type": "object"
       },
+      "UpdateGoalTemplateBody": {
+        "description": "PUT body for a goal template (omitted fields unchanged).",
+        "properties": {
+          "definition": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "UpdateGoalTemplateBody",
+        "type": "object"
+      },
       "UpdateSessionPolicyRequest": {
         "additionalProperties": false,
         "description": "Request body for ``PATCH /v1/sessions/{session_id}/policies/{policy_id}``.\n\nAll fields are optional; ``None`` fields are left unchanged.\nUnknown fields (including ``type``, which is immutable) are\nrejected with ``422``.\n\n:param name: New policy name. ``None`` leaves it unchanged.\n:param handler: New handler path or URL. ``None`` leaves it\n    unchanged.\n:param enabled: New enabled flag. ``None`` leaves it\n    unchanged.",
@@ -7616,6 +7967,280 @@
         "summary": "Receive"
       }
     },
+    "/v1/goal-providers": {
+      "get": {
+        "description": "List registered provider manifests (admin; auth secrets omitted).",
+        "operationId": "list_providers_v1_goal_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Providers"
+      }
+    },
+    "/v1/goal-providers/register": {
+      "post": {
+        "description": "Register/replace a connected-app provider manifest (admin).",
+        "operationId": "register_provider_v1_goal_providers_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterProviderBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Provider"
+      }
+    },
+    "/v1/goal-templates": {
+      "get": {
+        "description": "List reusable goal templates.",
+        "operationId": "list_templates_v1_goal_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Templates"
+      },
+      "post": {
+        "description": "Create a reusable goal template.",
+        "operationId": "create_template_v1_goal_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalTemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Template"
+      }
+    },
+    "/v1/goal-templates/{template_id}": {
+      "delete": {
+        "description": "Delete a goal template.",
+        "operationId": "delete_template_v1_goal_templates__template_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Template"
+      },
+      "get": {
+        "description": "Return one goal template.",
+        "operationId": "get_template_v1_goal_templates__template_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Template"
+      },
+      "put": {
+        "description": "Update a goal template (omitted fields unchanged).",
+        "operationId": "update_template_v1_goal_templates__template_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGoalTemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Template"
+      }
+    },
+    "/v1/goal-templates/{template_id}/instantiate": {
+      "post": {
+        "description": "Create a goal from a template merged with overrides.",
+        "operationId": "instantiate_template_v1_goal_templates__template_id__instantiate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstantiateTemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Instantiate Template"
+      }
+    },
     "/v1/goals": {
       "get": {
         "description": "List the ops backlog (by priority then age), optionally filtered.",
@@ -7796,6 +8421,67 @@
         "summary": "Create Goal"
       }
     },
+    "/v1/goals/decisions": {
+      "get": {
+        "description": "Read the fund/skip decision replay log (optionally filtered).",
+        "operationId": "list_decisions_v1_goals_decisions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "goal_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Goal Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tick_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tick Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Decisions"
+      }
+    },
     "/v1/goals/events": {
       "get": {
         "description": "Subscribe to goal events for live Omnigent admin refresh.",
@@ -7811,6 +8497,51 @@
           }
         },
         "summary": "Subscribe Goal Events"
+      }
+    },
+    "/v1/goals/outcomes": {
+      "get": {
+        "description": "Read the realized-value ledger (optionally filtered to one goal).",
+        "operationId": "list_all_outcomes_v1_goals_outcomes_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "goal_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List All Outcomes"
       }
     },
     "/v1/goals/planner/sessions": {
@@ -7916,6 +8647,42 @@
       }
     },
     "/v1/goals/{goal_id}": {
+      "delete": {
+        "description": "Hard-delete a goal and its dependencies.",
+        "operationId": "delete_goal_v1_goals__goal_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Goal"
+      },
       "get": {
         "description": "Return one scoped goal with dependencies.",
         "operationId": "get_goal_v1_goals__goal_id__get",
@@ -8037,6 +8804,174 @@
         "summary": "Activate Goal"
       }
     },
+    "/v1/goals/{goal_id}/budget": {
+      "get": {
+        "description": "Return the treasury budget for the goal's (tier, target) scope.",
+        "operationId": "get_budget_v1_goals__goal_id__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Budget"
+      },
+      "patch": {
+        "description": "Set the treasury cap/limits for the goal's scope.",
+        "operationId": "patch_budget_v1_goals__goal_id__budget_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Budget"
+      }
+    },
+    "/v1/goals/{goal_id}/conditions": {
+      "get": {
+        "description": "Return the goal's success-condition AST (or null).",
+        "operationId": "get_conditions_v1_goals__goal_id__conditions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conditions"
+      },
+      "put": {
+        "description": "Set or clear the goal's success-condition AST (validated).",
+        "operationId": "put_conditions_v1_goals__goal_id__conditions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConditionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Conditions"
+      }
+    },
     "/v1/goals/{goal_id}/dependencies": {
       "post": {
         "description": "Attach a dependency to a goal.",
@@ -8086,6 +9021,51 @@
       }
     },
     "/v1/goals/{goal_id}/dependencies/{dependency_id}": {
+      "delete": {
+        "description": "Detach a dependency from a goal.",
+        "operationId": "remove_dependency_v1_goals__goal_id__dependencies__dependency_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dependency_id",
+            "required": true,
+            "schema": {
+              "title": "Dependency Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Dependency"
+      },
       "patch": {
         "description": "Update or resolve a dependency.",
         "operationId": "update_dependency_v1_goals__goal_id__dependencies__dependency_id__patch",
@@ -8140,6 +9120,44 @@
           }
         },
         "summary": "Update Dependency"
+      }
+    },
+    "/v1/goals/{goal_id}/outcomes": {
+      "get": {
+        "description": "Read the realized-value ledger for one goal.",
+        "operationId": "get_goal_outcomes_v1_goals__goal_id__outcomes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Goal Outcomes"
       }
     },
     "/v1/governance/leaderboard": {
@@ -8563,6 +9581,41 @@
           }
         },
         "summary": "Subscribe Inbound Events"
+      },
+      "post": {
+        "description": "Canonical inbound ingress \u2014 the first live caller of pipeline.ingest.",
+        "operationId": "ingest_canonical_event_v1_inbound_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanonicalEventBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Canonical Event"
       }
     },
     "/v1/inbound/recent": {

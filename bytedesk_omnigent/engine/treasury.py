@@ -388,19 +388,15 @@ class SqlAlchemyTreasury:
         )
 
     # -- read surfaces (audit) — detached snapshots ------------------
-    def outcomes(self, *, goal_id: str) -> list[Outcome]:
+    def outcomes(self, *, goal_id: str | None = None) -> list[Outcome]:
         from sqlalchemy import select
 
+        stmt = select(SqlGoalOutcome)
+        if goal_id is not None:
+            stmt = stmt.where(SqlGoalOutcome.goal_id == goal_id)
+        stmt = stmt.order_by(SqlGoalOutcome.booked_at)
         with self._session() as session:
-            rows = (
-                session.execute(
-                    select(SqlGoalOutcome)
-                    .where(SqlGoalOutcome.goal_id == goal_id)
-                    .order_by(SqlGoalOutcome.booked_at)
-                )
-                .scalars()
-                .all()
-            )
+            rows = session.execute(stmt).scalars().all()
             return [
                 Outcome(
                     id=r.id,

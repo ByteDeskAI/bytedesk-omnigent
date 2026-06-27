@@ -23,7 +23,12 @@ from typing import Any
 
 from sqlalchemy import select, update
 
-from bytedesk_omnigent.db_models import SqlGoal, SqlGoalDependency, SqlScoreboardEntry
+from bytedesk_omnigent.db_models import (
+    SqlGoal,
+    SqlGoalDependency,
+    SqlGoalTemplate,
+    SqlScoreboardEntry,
+)
 from bytedesk_omnigent.lifecycle import (
     WorkflowLifecycle,
     WorkflowLifecycleStatus,
@@ -279,6 +284,35 @@ def _publish_goal_event(
         publish(GOAL_EVENT_USER_KEY, event)
     except Exception:  # pragma: no cover - best-effort local event stream
         logger.exception("failed to publish goal event-hub delta")
+
+
+def _publish_entity_event(entity: str, op: str, entity_id: str, **extra: Any) -> None:
+    """Publish a typed ``entity.changed`` delta for a non-goal-row goal-engine entity.
+
+    Sibling of :func:`_publish_goal_event` (BDP-2588): condition/budget/template
+    mutations fan out over the SAME realtime bridge + in-process event hub so the
+    SSE stream and Platform consumers see them too. ``goal.changed`` is unchanged.
+    """
+    event: dict[str, Any] = {
+        "type": "entity.changed",
+        "entity": entity,
+        "op": op,
+        "id": entity_id,
+        "occurredAt": extra.pop("occurred_at", None) or now_epoch(),
+        **extra,
+    }
+    try:
+        from bytedesk_omnigent.realtime.bridge import emit_entity_change
+
+        emit_entity_change(event)
+    except Exception:  # pragma: no cover - best-effort bridge
+        logger.exception("failed to publish entity realtime delta")
+    try:
+        from omnigent.runtime.event_hub import publish
+
+        publish(GOAL_EVENT_USER_KEY, event)
+    except Exception:  # pragma: no cover - best-effort local event stream
+        logger.exception("failed to publish entity event-hub delta")
 
 
 class SqlAlchemyGoalStore:
@@ -803,6 +837,99 @@ class SqlAlchemyGoalStore:
             _publish_goal_event("dependency_updated", goal, dependency=dependency, occurred_at=now)
         return dependency
 
+    def delete_goal(self, *, goal_id: str, now: int | None = None) -> bool:
+        """Hard-delete a goal and its dependencies (admin surface, BDP-2588).
+
+        Hard (not soft) delete: the goal lifecycle CHECK constraint has no
+        deleted/archived state, so a soft delete would need a lifecycle + schema
+        change. The admin "remove" verb is a true removal — its dependencies go
+        with it. Returns True if a row was deleted. Emits ``goal.changed`` /
+        ``deleted`` from the pre-delete snapshot so consumers can drop it.
+        """
+        now = now_epoch() if now is None else now
+        goal: Goal | None = None
+        with self._write_session() as session:
+            row = session.get(SqlGoal, goal_id)
+            if row is None:
+                return False
+            dependencies = self._dependency_rows(session, [goal_id]).get(goal_id, ())
+            goal = _to_goal(row, dependencies)
+            session.execute(
+                SqlGoalDependency.__table__.delete().where(
+                    SqlGoalDependency.goal_id == goal_id
+                )
+            )
+            session.delete(row)
+        if goal is not None:
+            _publish_goal_event("deleted", goal, occurred_at=now)
+        return goal is not None
+
+    def remove_dependency(
+        self, *, goal_id: str, dependency_id: str, now: int | None = None
+    ) -> bool:
+        """Detach one dependency and recalculate the owning goal's readiness."""
+        now = now_epoch() if now is None else now
+        goal: Goal | None = None
+        removed: GoalDependency | None = None
+        with self._write_session() as session:
+            goal_row = session.get(SqlGoal, goal_id)
+            if goal_row is None:
+                return False
+            dep_row = session.get(SqlGoalDependency, dependency_id)
+            if dep_row is None or dep_row.goal_id != goal_id:
+                return False
+            removed = _to_dependency(dep_row)
+            session.delete(dep_row)
+            session.flush()
+            self._refresh_activation(session, goal_row, now)
+            goal_row.updated_at = now
+            dependencies = self._dependency_rows(session, [goal_id]).get(goal_id, ())
+            goal = _to_goal(goal_row, dependencies)
+        if goal is not None:
+            _publish_goal_event(
+                "dependency_removed", goal, dependency=removed, occurred_at=now
+            )
+        return True
+
+    def get_condition(self, *, goal_id: str) -> dict[str, Any] | None:
+        """Return the goal's success-condition AST (``payload['condition']``) or None."""
+        goal = self.get_goal(goal_id=goal_id, include_dependencies=False)
+        if goal is None:
+            return None
+        condition = (goal.payload or {}).get("condition")
+        return condition if isinstance(condition, dict) else None
+
+    def set_condition(
+        self, *, goal_id: str, ast_dict: dict[str, Any] | None, now: int | None = None
+    ) -> Goal | None:
+        """Set/clear the goal's condition AST in ``payload['condition']`` (BDP-2584/2588).
+
+        ``ast_dict`` is validated through ``engine.conditions.from_dict`` before
+        persist (a malformed tree raises ``ValueError``); ``None`` clears it. The
+        write is an atomic RMW on the shared payload via :meth:`mutate_payload`.
+        """
+        if ast_dict is not None:
+            from bytedesk_omnigent.engine.conditions import from_dict
+
+            from_dict(ast_dict)  # validate; raises ValueError on a bad tree
+
+        def _mutate(payload: dict[str, Any]) -> None:
+            if ast_dict is None:
+                payload.pop("condition", None)
+            else:
+                payload["condition"] = ast_dict
+
+        goal = self.mutate_payload(goal_id=goal_id, mutator=_mutate, now=now)
+        if goal is not None:
+            _publish_entity_event(
+                "condition",
+                "deleted" if ast_dict is None else "set",
+                goal_id,
+                goalId=goal_id,
+                occurred_at=goal.updated_at,
+            )
+        return goal
+
     def escalate_blocked(self, *, now: int | None = None) -> list[Goal]:
         """Claim not-yet-escalated ``blocked`` goals, marking them escalated (C4)."""
         now = now_epoch() if now is None else now
@@ -925,7 +1052,176 @@ class SqlAlchemyGoalStore:
             return [(r.agent_id, r.value) for r in session.execute(stmt).scalars().all()]
 
 
+@dataclass(frozen=True)
+class GoalTemplate:
+    """A reusable goal blueprint row (BDP-2588)."""
+
+    id: str
+    name: str
+    description: str | None
+    definition: dict[str, Any]
+    created_at: int
+    updated_at: int
+
+
+# Definition keys forwarded straight to ``create_goal`` when instantiating; the
+# admin may override any of them per call. ``conditions`` is handled separately
+# (it lands in payload, not a create_goal kwarg).
+_TEMPLATE_CREATE_KEYS = (
+    "priority",
+    "source",
+    "payload",
+    "target_kind",
+    "target_id",
+    "target_label",
+    "readiness_kind",
+    "cadence_kind",
+    "cadence_expr",
+    "cadence_tz",
+    "tier",
+    "parent_goal_id",
+    "expected_value_cents",
+    "confidence",
+    "risk_tier",
+    "success_condition",
+)
+
+
+def _to_template(row: SqlGoalTemplate) -> GoalTemplate:
+    return GoalTemplate(
+        id=row.id,
+        name=row.name,
+        description=row.description,
+        definition=_loads(row.definition) or {},
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+class GoalTemplateStore:
+    """CRUD + instantiate for reusable goal blueprints (BDP-2588, ADR-0008)."""
+
+    def __init__(self, storage_location: str, goal_store: SqlAlchemyGoalStore) -> None:
+        self._engine = get_or_create_engine(storage_location)
+        self._session = make_managed_session_maker(self._engine)
+        self._write_session = make_managed_session_maker(self._engine, immediate=True)
+        self._goal_store = goal_store
+
+    def list_templates(self) -> list[GoalTemplate]:
+        with self._session() as session:
+            rows = (
+                session.execute(select(SqlGoalTemplate).order_by(SqlGoalTemplate.name))
+                .scalars()
+                .all()
+            )
+            return [_to_template(r) for r in rows]
+
+    def get_template(self, *, template_id: str) -> GoalTemplate | None:
+        with self._session() as session:
+            row = session.get(SqlGoalTemplate, template_id)
+            return _to_template(row) if row is not None else None
+
+    def create_template(
+        self,
+        *,
+        name: str,
+        definition: dict[str, Any] | None = None,
+        description: str | None = None,
+        now: int | None = None,
+    ) -> GoalTemplate:
+        name = name.strip()
+        if not name:
+            raise ValueError("name is required")
+        now = now_epoch() if now is None else now
+        template: GoalTemplate
+        with self._write_session() as session:
+            row = SqlGoalTemplate(
+                id=f"goal_tmpl_{uuid.uuid4().hex}",
+                name=name,
+                description=description,
+                definition=json.dumps(definition or {}),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(row)
+            session.flush()
+            template = _to_template(row)
+        _publish_entity_event("template", "created", template.id, name=template.name)
+        return template
+
+    def update_template(
+        self,
+        *,
+        template_id: str,
+        name: str | None = None,
+        definition: dict[str, Any] | None = None,
+        description: str | None | object = _UNSET,
+        now: int | None = None,
+    ) -> GoalTemplate | None:
+        now = now_epoch() if now is None else now
+        template: GoalTemplate | None = None
+        with self._write_session() as session:
+            row = session.get(SqlGoalTemplate, template_id)
+            if row is None:
+                return None
+            if name is not None:
+                cleaned = name.strip()
+                if not cleaned:
+                    raise ValueError("name is required")
+                row.name = cleaned
+            if definition is not None:
+                row.definition = json.dumps(definition)
+            if description is not _UNSET:
+                row.description = description  # type: ignore[assignment]
+            row.updated_at = now
+            session.flush()
+            template = _to_template(row)
+        if template is not None:
+            _publish_entity_event("template", "updated", template_id, name=template.name)
+        return template
+
+    def delete_template(self, *, template_id: str) -> bool:
+        with self._write_session() as session:
+            row = session.get(SqlGoalTemplate, template_id)
+            if row is None:
+                return False
+            session.delete(row)
+        _publish_entity_event("template", "deleted", template_id)
+        return True
+
+    def instantiate(
+        self,
+        *,
+        template_id: str,
+        overrides: dict[str, Any] | None = None,
+        now: int | None = None,
+    ) -> Goal | None:
+        """Create a goal from a template's definition merged with ``overrides``.
+
+        ``title`` comes from overrides (or the template name); ``conditions`` in
+        the definition/overrides is folded into ``payload['condition']`` and
+        validated via the goal store's condition path.
+        """
+        template = self.get_template(template_id=template_id)
+        if template is None:
+            return None
+        overrides = overrides or {}
+        merged = {**template.definition, **overrides}
+        title = str(merged.pop("title", None) or template.name)
+        conditions = merged.pop("conditions", None)
+        kwargs = {k: merged[k] for k in _TEMPLATE_CREATE_KEYS if k in merged}
+        if conditions is not None:
+            from bytedesk_omnigent.engine.conditions import from_dict
+
+            from_dict(conditions)  # validate before create; raises ValueError
+            payload = dict(kwargs.get("payload") or {})
+            payload["condition"] = conditions
+            kwargs["payload"] = payload
+        return self._goal_store.create_goal(title=title, now=now, **kwargs)
+
+
 _goal_store_cache: dict[str, SqlAlchemyGoalStore] = {}
+_template_store_cache: dict[str, GoalTemplateStore] = {}
 
 
 def get_goal_store() -> SqlAlchemyGoalStore:
@@ -937,4 +1233,16 @@ def get_goal_store() -> SqlAlchemyGoalStore:
     if store is None:
         store = SqlAlchemyGoalStore(location)
         _goal_store_cache[location] = store
+    return store
+
+
+def get_goal_template_store() -> GoalTemplateStore:
+    """Return the durable goal-templates store (BDP-2588)."""
+    from omnigent.runtime import get_conversation_store
+
+    location = get_conversation_store().storage_location
+    store = _template_store_cache.get(location)
+    if store is None:
+        store = GoalTemplateStore(location, get_goal_store())
+        _template_store_cache[location] = store
     return store
