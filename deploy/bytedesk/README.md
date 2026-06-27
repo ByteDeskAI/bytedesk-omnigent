@@ -113,6 +113,9 @@ kubectl -n bytedesk port-forward svc/omnigent-nats-ui 31311:31311
 Open `http://127.0.0.1:31311`. Keep it internal; the UI can inspect and mutate
 streams, KV buckets, and Object Store data.
 
+The local-dev overlay also exposes the console through the local ingress at
+`http://nats-ui.dev.bytedesk.localhost`.
+
 **Smoke ladder** (each rung proves more):
 1. `smoke.sh` green → server + Postgres + health OK.
 2. Laptop one-shot `omnigent run deploy/bytedesk/agents/bytedesk-engineer --server http://localhost:18000 -m "..."` → **Codex inference works** (Option B).

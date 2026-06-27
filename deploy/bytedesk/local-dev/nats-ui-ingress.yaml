@@ -1,0 +1,25 @@
+# LOCAL-DEV ingress: http://nats-ui.dev.bytedesk.localhost -> omnigent-nats-ui.
+#
+# The NATS UI service stays ClusterIP-only in the base manifests. This local-dev
+# overlay gives operators a stable browser URL without exposing the console in
+# production.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: omnigent-nats-ui
+  labels:
+    app.kubernetes.io/name: omnigent-nats-ui
+    app.kubernetes.io/part-of: bytedesk-omnigent
+spec:
+  ingressClassName: public
+  rules:
+    - host: nats-ui.dev.bytedesk.localhost
+      http:
+        paths:
+          - backend:
+              service:
+                name: omnigent-nats-ui
+                port:
+                  number: 31311
+            path: /
+            pathType: Prefix
