@@ -398,6 +398,7 @@ class BytedeskExtension:
             self._signal_bus_reaper,
             self._inbound_retry_reaper,
             self._seed_inbound_flags,
+            self._seed_goal_engine_flags,
             self._cron_scheduler,
             self._goal_engine,
             self._accountability,
@@ -419,6 +420,16 @@ class BytedeskExtension:
             await seed_inbound_flags()
         except Exception:  # noqa: BLE001 - seed must not block boot
             logger.warning("inbound flag seed skipped", exc_info=True)
+
+    async def _seed_goal_engine_flags(self) -> None:
+        """One-shot: seed the goal-engine config flags (BDP-2589) with SAFE defaults
+        (posture ``gated``, high-risk approval required, paper-trading on)."""
+        from bytedesk_omnigent.engine.config import seed_goal_engine_flags
+
+        try:
+            await seed_goal_engine_flags()
+        except Exception:  # noqa: BLE001 - seed must not block boot
+            logger.warning("goal-engine flag seed skipped", exc_info=True)
 
     async def _configure_logging(self) -> None:
         """Surface the ``bytedesk_omnigent`` namespace's INFO logs. Core sets the

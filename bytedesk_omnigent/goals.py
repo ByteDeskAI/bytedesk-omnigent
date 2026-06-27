@@ -322,10 +322,29 @@ class SqlAlchemyGoalStore:
         self._engine = get_or_create_engine(storage_location)
         self._session = make_managed_session_maker(self._engine)
         self._write_session = make_managed_session_maker(self._engine, immediate=True)
+        # BDP-2589: optional per-tenant attribute-schema resolver. None → free-form
+        # attributes allowed (back-compat). Injected so the store stays standalone.
+        self._attribute_schema_resolver: Any | None = None
 
     @property
     def engine(self):
         return self._engine
+
+    def set_attribute_schema_resolver(self, resolver: Any | None) -> None:
+        """Set the ``target_id -> schema|None`` resolver used to validate
+        ``payload["attributes"]`` on create/update (BDP-2589). ``None`` disables
+        validation (free-form attributes)."""
+        self._attribute_schema_resolver = resolver
+
+    def _validate_attributes(self, target_id: str, payload: dict[str, Any] | None) -> None:
+        if self._attribute_schema_resolver is None or not payload:
+            return
+        attributes = payload.get("attributes")
+        if not isinstance(attributes, dict):
+            return
+        from bytedesk_omnigent.engine.config import validate_goal_attributes
+
+        validate_goal_attributes(attributes, schema=self._attribute_schema_resolver(target_id))
 
     # -- goals ---------------------------------------------------------
     def create_goal(
@@ -370,6 +389,7 @@ class SqlAlchemyGoalStore:
         target_kind, target_id, target_label = _normalize_target(
             target_kind, target_id, target_label
         )
+        self._validate_attributes(target_id, payload)
         dependency_specs = list(dependencies or ())
         if dependency_specs and readiness_kind == "immediate":
             readiness_kind = "dependent"
@@ -572,6 +592,9 @@ class SqlAlchemyGoalStore:
             if "priority" in updates:
                 row.priority = int(updates["priority"])
             if "payload" in updates:
+                self._validate_attributes(
+                    str(updates.get("target_id", row.target_id)), updates["payload"]
+                )
                 row.payload = (
                     json.dumps(updates["payload"]) if updates["payload"] is not None else None
                 )

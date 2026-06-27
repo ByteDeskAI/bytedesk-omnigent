@@ -26,8 +26,8 @@ from typing import Any, Protocol, runtime_checkable
 RISK_DECAY = {"low": 1.0, "medium": 0.7, "high": 0.4}
 
 
-def _score(goal: Any) -> float:
-    decay = RISK_DECAY.get(goal.risk_tier, 1.0)
+def _score(goal: Any, decay_map: dict[str, float]) -> float:
+    decay = decay_map.get(goal.risk_tier, 1.0)
     return goal.expected_value_cents * goal.confidence * decay
 
 
@@ -39,13 +39,21 @@ class Optimizer(Protocol):
 
 
 class RoiOptimizer:
-    """Default: rank by risk-decayed ROI desc, stable tie-break (BDP-2585)."""
+    """Default: rank by risk-decayed ROI desc, stable tie-break (BDP-2585).
+
+    BDP-2589: an optional ``risk_decay`` override (from a tenant's
+    ``goals.roi.risk_decay.*`` config) tunes the multipliers without forking;
+    default = the global :data:`RISK_DECAY`, so behaviour is preserved.
+    """
+
+    def __init__(self, *, risk_decay: dict[str, float] | None = None) -> None:
+        self._decay = dict(risk_decay) if risk_decay else dict(RISK_DECAY)
 
     def rank(self, goals: list[Any], *, now: int) -> list[Any]:
         del now  # time-decay hook (deadline urgency) — Phase 6; order is EV-driven now.
         return sorted(
             goals,
-            key=lambda g: (-_score(g), g.priority, g.created_at, g.id),
+            key=lambda g: (-_score(g, self._decay), g.priority, g.created_at, g.id),
         )
 
 
