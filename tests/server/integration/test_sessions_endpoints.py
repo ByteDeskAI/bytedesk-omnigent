@@ -2333,7 +2333,7 @@ async def test_post_external_conversation_item_persists_and_streams_visible_item
         },
         {
             "item_type": "function_call_output",
-            "response_id": "resp_terminal_assistant",
+            "response_id": "resp_terminal_later",
             "source_id": "src_terminal_assistant_1",
             "item_data": {"call_id": "toolu_read_1", "output": "todo contents"},
         },
@@ -2384,6 +2384,7 @@ async def test_post_external_conversation_item_persists_and_streams_visible_item
     assert body["items"][0]["data"]["role"] == "user"
     assert body["items"][1]["data"]["name"] == "Read"
     assert body["items"][2]["data"] == {"call_id": "toolu_read_1", "output": "todo contents"}
+    assert body["items"][2]["response_id"] == "resp_terminal_assistant"
     assert body["items"][3]["data"]["role"] == "assistant"
     assert body["items"][4]["data"] == {
         "kind": "input",
@@ -2409,6 +2410,7 @@ async def test_post_external_conversation_item_persists_and_streams_visible_item
     assert published[0][1]["data"]["data"]["content"][0]["text"] == "read TODO"
     assert published[1][1]["item"]["type"] == "function_call"
     assert published[2][1]["item"]["type"] == "function_call_output"
+    assert published[2][1]["item"]["response_id"] == "resp_terminal_assistant"
     assert published[3][1]["item"]["type"] == "message"
     assert published[4][1]["item"]["type"] == "terminal_command"
     assert published[5][1]["item"]["type"] == "terminal_command"
