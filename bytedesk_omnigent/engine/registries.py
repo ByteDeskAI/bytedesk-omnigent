@@ -46,8 +46,21 @@ def build_treasury_registry(storage_location: str) -> PluggableRegistry:
 
 
 def build_assignment_registry() -> PluggableRegistry:
-    """Registry with :class:`DefaultAssignmentPolicy` as the registered default."""
-    return PluggableRegistry(ASSIGNMENT_SEAM, default=("default", DefaultAssignmentPolicy))
+    """Registry with :class:`DefaultAssignmentPolicy` as the registered default.
+
+    BDP-2597: the market-based :class:`BiddingAssignmentPolicy` is also registered
+    (under ``"bidding"``) but is NOT the default — select it per-env/tenant via
+    ``OMNIGENT_USE_GOAL_ASSIGNMENT=bidding``.
+    """
+    registry = PluggableRegistry(ASSIGNMENT_SEAM, default=("default", DefaultAssignmentPolicy))
+
+    def _bidding():
+        from bytedesk_omnigent.engine.bidding import BiddingAssignmentPolicy
+
+        return BiddingAssignmentPolicy()
+
+    registry.register("bidding", _bidding)
+    return registry
 
 
 __all__ = [

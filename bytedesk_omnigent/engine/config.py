@@ -53,6 +53,9 @@ GOAL_RISK_DECAY_LOW = "goals.roi.risk_decay.low"
 GOAL_RISK_DECAY_MEDIUM = "goals.roi.risk_decay.medium"
 GOAL_RISK_DECAY_HIGH = "goals.roi.risk_decay.high"
 GOAL_CIRCUIT_ANOMALY_THRESHOLD_CENTS = "goals.circuit.anomaly_threshold_cents"
+# BDP-2597: contention arbitration — order same-actor goals by tier×priority×ROI
+# and fund one per actor per tick (losers wait). Off → straight ROI order.
+GOAL_ARBITRATION_ENABLED = "goals.arbitration.enabled"
 # Per-tenant goal-attribute schema (JSON), absent → free-form attributes (back-compat).
 GOAL_ATTRIBUTE_SCHEMA = "goals.attributes.schema"
 
@@ -139,6 +142,14 @@ GOAL_ENGINE_FLAG_DEFINITIONS = (
         description="Gated posture: route EVERY funded goal to approval (not only high-risk).",
     ),
     _bool_flag(
+        GOAL_ARBITRATION_ENABLED,
+        default=False,
+        description=(
+            "Contention arbitration: when multiple ready goals contend for the same "
+            "actor, fund one per actor per tick (by tier×priority×ROI); losers wait."
+        ),
+    ),
+    _bool_flag(
         GOAL_PAPER_TRADING_DEFAULT,
         default=True,
         description="New goals default to paper-trading (simulate, book nothing real).",
@@ -204,6 +215,7 @@ class GoalEngineConfig:
     risk_decay: dict[str, float] = field(default_factory=lambda: dict(_DEFAULT_DECAY))
     anomaly_threshold_cents: int | None = None
     attribute_schema: dict[str, Any] | None = None
+    arbitration_enabled: bool = False
 
 
 async def seed_goal_engine_flags(
@@ -254,6 +266,7 @@ async def load_goal_engine_config(
         },
         anomaly_threshold_cents=threshold or None,
         attribute_schema=schema or None,
+        arbitration_enabled=bool(await g(GOAL_ARBITRATION_ENABLED, False)),
     )
 
 
@@ -305,6 +318,7 @@ def validate_goal_attributes(
 
 __all__ = [
     "GOAL_APPROVAL_HIGH_RISK_REQUIRED",
+    "GOAL_ARBITRATION_ENABLED",
     "GOAL_ATTRIBUTE_SCHEMA",
     "GOAL_AUTONOMY_POSTURE",
     "GOAL_BUDGET_DEFAULT_CAP_CENTS",
