@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_sandbox_fixtures import (
+    compile_integration_sandbox_fixtures,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/sandbox-fixtures")
+    async def get_capability_sandbox_fixtures(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile credentialless sandbox fixtures for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        fixtures = compile_integration_sandbox_fixtures(slug)
+        if fixtures is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(fixtures)
 
     return router
