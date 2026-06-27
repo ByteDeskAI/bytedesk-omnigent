@@ -84,9 +84,10 @@ def dispatch_goal(
 
     owner = goal.owner_agent_id
     if not owner:
-        # ponytail: no auto-assignment in Phase 1 — an unowned goal is left for
-        # assignment.py to claim, then a later dispatch picks it up.
-        # TODO(BDP-2583): hook bytedesk_omnigent.assignment to pick an owner here.
+        # An unowned goal is claimed upstream: the tick's assignment pre-pass
+        # (loop._assign_unowned_goals, BDP-2594) resolves an owner via the
+        # goal_assignment seam and claims it before dispatch, so by here a goal
+        # without an owner simply had no eligible candidate — leave it waiting.
         return DispatchResult(spawned=False, session_id=None, period_key=period_key)
 
     external_key = f"goal:{period_key}"

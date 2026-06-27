@@ -111,4 +111,39 @@ def resolve(
     }
 
 
-__all__ = ["CONDITION_PAYLOAD_KEY", "ResolveResult", "resolve"]
+def evaluate_success_condition(
+    goal: Any,
+    *,
+    registry: Any,
+    goal_store: Any,
+    now: int,
+) -> bool:
+    """True iff ``goal.success_condition`` (a condition-AST dict) is satisfied now.
+
+    "Done is evaluated, not declared" (BDP-2594): a goal that carries a
+    ``success_condition`` is complete when its tree resolves true against the
+    sensor registry — the SAME machinery :func:`resolve` uses, just reading the
+    success tree instead of the readiness tree. A goal with no
+    ``success_condition`` returns ``False`` (never auto-completed).
+    """
+    raw = getattr(goal, "success_condition", None)
+    tree = from_dict(raw) if isinstance(raw, dict) else None
+    if tree is None:
+        return False
+
+    ctx = SensorContext(goal=goal, goal_store=goal_store, now=now)
+    readings: Readings = {}
+    for leaf in tree.leaves():
+        key = leaf.reading_key()
+        if key in readings:
+            continue
+        readings[key] = registry.get(leaf.sensor).evaluate(leaf.query, ctx)
+    return tree.eval(readings)
+
+
+__all__ = [
+    "CONDITION_PAYLOAD_KEY",
+    "ResolveResult",
+    "evaluate_success_condition",
+    "resolve",
+]
