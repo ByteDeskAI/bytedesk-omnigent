@@ -114,8 +114,14 @@ def _match_catalog_slug_from_title(title: str) -> str | None:
     best_score = 0
 
     for capability in list_integration_capabilities():
-        tokens = set(_tokenize(capability.slug)) | set(_tokenize(capability.name))
-        score = len(words & tokens)
+        identity_tokens = set(_tokenize(capability.slug)) | set(_tokenize(capability.name))
+        category_tokens = set(_tokenize(capability.category))
+        description_tokens = set(_tokenize(capability.implementation_description))
+        score = (
+            len(words & identity_tokens) * 3
+            + len(words & category_tokens) * 2
+            + len(words & description_tokens)
+        )
         if score > best_score and score >= 2:
             best_slug = capability.slug
             best_score = score
