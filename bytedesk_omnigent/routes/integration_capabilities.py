@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from typing import Annotated
+
+from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import JSONResponse
 
 from bytedesk_omnigent.integration_capabilities import (
@@ -13,6 +15,9 @@ from bytedesk_omnigent.integration_capabilities import (
 )
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
+)
+from bytedesk_omnigent.integration_workflow_blueprint_validator import (
+    validate_integration_workflow_blueprint,
 )
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
@@ -76,5 +81,14 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.post("/integration-capabilities/workflow-blueprints/validate")
+    async def validate_workflow_blueprint(
+        request: Request, blueprint: Annotated[dict, Body(...)]
+    ) -> JSONResponse:
+        """Validate an Archon-style deterministic integration workflow blueprint."""
+
+        require_user(request, auth_provider)
+        return JSONResponse(validate_integration_workflow_blueprint(blueprint))
 
     return router
