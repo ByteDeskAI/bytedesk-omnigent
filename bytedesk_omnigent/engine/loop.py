@@ -570,6 +570,23 @@ async def goal_engine_loop(
     except Exception:  # noqa: BLE001 - no contributed actuators is the common case
         _logger.debug("no goal actuators discovered")
 
+    # BDP-2595 (Wave 2): activate REMOTE sensors/actuators declared by any connected
+    # app that registered a provider manifest. Each manifest's sensors become live
+    # RemoteSensors the resolver can read; its actuators become RemoteActuators. No
+    # provider registered → empty → no-op (built-ins only). Safe to call once at
+    # boot: a later registration is picked up on the next loop restart.
+    from bytedesk_omnigent.engine.providers.registry import get_provider_registry
+    from bytedesk_omnigent.engine.providers.remote import register_remote_providers
+
+    try:
+        register_remote_providers(
+            get_provider_registry(),
+            sensor_registry=sensor_registry,
+            actuator_registry=actuator_registry,
+        )
+    except Exception:  # noqa: BLE001 - a malformed manifest must never break boot
+        _logger.warning("failed to activate remote providers", exc_info=True)
+
     def _prepare():
         goal_store = get_goal_store()
         conversation_store = get_conversation_store()

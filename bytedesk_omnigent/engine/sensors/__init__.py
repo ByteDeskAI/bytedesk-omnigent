@@ -14,6 +14,9 @@ the goal's already-stored payload, never the network:
 - :class:`DeliverySensor` — a milestone's two-key state from
   ``goal.payload.hierarchy.milestones`` (ADR-0154), read from **stored** delivery
   state, NOT a live jira/github poll.
+- :class:`KpiSensor` — a generic metric read from an in-process source (the goal
+  store's scoreboard by default), so a goal can depend on "metric >= threshold".
+  Domain-blind: it reads a named scalar; it never parses jira/github.
 
 **DEFERRED to Phase 4:** live external jira/github polling sensors. Those belong
 to the connected-app provider contract and arrive via the extension-discovery hook
@@ -21,8 +24,9 @@ to the connected-app provider contract and arrive via the extension-discovery ho
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, ClassVar, Protocol, runtime_checkable
 
 from bytedesk_omnigent.engine.sensors.registry import SensorRegistry
 
@@ -140,7 +144,79 @@ class DeliverySensor:
         return _reading(False, None, ctx)
 
 
-_BUILTINS: tuple[type, ...] = (GoalOutcomeSensor, TimeSensor, ManualSensor, DeliverySensor)
+# A metric source answers ``(metric, scope) -> value | None`` from in-process state.
+MetricSource = Callable[[str, Any], "float | None"]
+
+
+def _scoreboard_metric_source(metric: str, ctx: SensorContext):
+    """Default kpi source: the top scoreboard value for ``metric`` (goal store).
+
+    Domain-blind — it reads a named scalar the platform already records via
+    ``record_score``. The scoreboard is keyed by ``(agent_id, metric, window)`` so
+    the kpi is the leading agent's value, or ``None`` when nothing was recorded.
+
+    ponytail: top-of-scoreboard scalar, ignores ``scope``. A windowed/aggregated or
+    scoped kpi is a richer source — inject ``metric_source`` to override.
+    """
+    store = ctx.goal_store
+    if store is None or not hasattr(store, "scoreboard"):
+        return None
+    rows = store.scoreboard(metric=metric, limit=1)
+    return rows[0][1] if rows else None
+
+
+class KpiSensor:
+    """Reads a generic metric and exposes it for a condition predicate.
+
+    ``query``: ``{"metric": str, "scope"?: Any, "threshold"?: number, "op"?: str}``.
+    ``value`` is the raw metric (so a condition-tree ``gt``/``lt``/``equals``
+    predicate can threshold it). ``satisfied`` is a convenience: with no inline
+    ``threshold`` it is "the metric exists"; with one it is ``value <op> threshold``
+    where ``op`` defaults to ``>=`` (also ``gt``/``lt``/``lte``/``eq``).
+
+    The metric source is injected (default = the goal store's scoreboard), so the
+    engine stays domain-blind and the sensor is pure to test.
+    """
+
+    name = "kpi"
+    _OPS: ClassVar[dict[str, Callable[[Any, Any], bool]]] = {
+        "gte": lambda v, t: v >= t,
+        "gt": lambda v, t: v > t,
+        "lte": lambda v, t: v <= t,
+        "lt": lambda v, t: v < t,
+        "eq": lambda v, t: v == t,
+    }
+
+    def __init__(self, *, metric_source: MetricSource | None = None) -> None:
+        # An injected source takes (metric, scope); the default also needs ctx, so
+        # it is bound per-evaluate below.
+        self._metric_source = metric_source
+
+    def evaluate(self, query: dict[str, Any], ctx: SensorContext) -> SensorReading:
+        metric = query.get("metric")
+        scope = query.get("scope")
+        if self._metric_source is not None:
+            value = self._metric_source(metric, scope)
+        else:
+            value = _scoreboard_metric_source(metric, ctx)
+
+        threshold = query.get("threshold")
+        if threshold is None:
+            satisfied = value is not None
+        else:
+            op = self._OPS.get(query.get("op", "gte"), self._OPS["gte"])
+            satisfied = value is not None and op(value, threshold)
+        # ponytail: a kpi can move every tick — let the resolver re-read each pass.
+        return _reading(satisfied, value, ctx, stale_after_s=0)
+
+
+_BUILTINS: tuple[type, ...] = (
+    GoalOutcomeSensor,
+    TimeSensor,
+    ManualSensor,
+    DeliverySensor,
+    KpiSensor,
+)
 
 
 def build_default_registry(*, discover_extensions: bool = False) -> SensorRegistry:
@@ -163,7 +239,9 @@ def build_default_registry(*, discover_extensions: bool = False) -> SensorRegist
 __all__ = [
     "DeliverySensor",
     "GoalOutcomeSensor",
+    "KpiSensor",
     "ManualSensor",
+    "MetricSource",
     "Sensor",
     "SensorContext",
     "SensorReading",
