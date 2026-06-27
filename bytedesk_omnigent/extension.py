@@ -356,6 +356,7 @@ class BytedeskExtension:
             self._inbound_retry_reaper,
             self._seed_inbound_flags,
             self._cron_scheduler,
+            self._goal_engine,
             self._accountability,
             self._tool_step_resume,
             self._seed_workflow_tasks,
@@ -402,11 +403,20 @@ class BytedeskExtension:
         await signal_bus_reaper_loop()
 
     async def _cron_scheduler(self) -> None:
+        from bytedesk_omnigent.engine.cron import build_goal_cron_dispatch
         from bytedesk_omnigent.fabric.outbox import build_fabric_cron_dispatch
         from bytedesk_omnigent.scheduler import cron_scheduler_loop
 
-        logger.info("cron dispatch: fabric SQL outbox enabled")
-        await cron_scheduler_loop(dispatch=build_fabric_cron_dispatch())
+        # Goal triggers (payload.kind == "goal") spawn a working session (BDP-2583);
+        # every other trigger falls through to the fabric SQL outbox.
+        logger.info("cron dispatch: goal-aware (goal → session, else fabric outbox)")
+        dispatch = build_goal_cron_dispatch(build_fabric_cron_dispatch())
+        await cron_scheduler_loop(dispatch=dispatch)
+
+    async def _goal_engine(self) -> None:
+        from bytedesk_omnigent.engine.loop import goal_engine_loop
+
+        await goal_engine_loop()
 
     async def _accountability(self) -> None:
         from bytedesk_omnigent.accountability import accountability_loop
