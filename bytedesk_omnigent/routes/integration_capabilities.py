@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_invocation_contracts import (
+    compile_integration_invocation_contract,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -76,5 +79,26 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.post("/integration-capabilities/{slug}/invocation-contract")
+    async def get_capability_invocation_contract(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile a connected-app invocation contract for one blueprint."""
+
+        require_user(request, auth_provider)
+        payload = await request.json()
+        contract = compile_integration_invocation_contract(
+            slug,
+            requester=str(payload.get("requester", "")),
+            context_refs=tuple(str(ref) for ref in payload.get("context_refs", ())),
+            idempotency_key=str(payload.get("idempotency_key", "")),
+        )
+        if contract is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(contract)
 
     return router
