@@ -104,6 +104,31 @@ def goal_changed(
     return payload
 
 
+def entity_changed(
+    *,
+    entity: str,
+    op: str,
+    entity_id: str,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A typed delta for a non-goal-row goal-engine entity (condition/budget/template).
+
+    Generalizes ``goal.changed`` (BDP-2588): ``entity`` discriminates the changed
+    thing (``condition`` / ``budget`` / ``template`` / ``goal``), ``op`` is the
+    verb (``set`` / ``deleted`` / ``created`` / ``updated`` ...). Consumers refetch
+    the matching REST snapshot; the envelope stays tiny like the others.
+    """
+    payload: dict[str, Any] = {
+        "type": "entity.changed",
+        "entity": entity,
+        "op": op,
+        "id": entity_id,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
 def goal_planning_event(
     *,
     event_type: str,

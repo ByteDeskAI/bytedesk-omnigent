@@ -91,6 +91,39 @@ def test_emit_goal_change_publishes_when_tenant_set(monkeypatch):
     ]
 
 
+def test_emit_entity_change_publishes_when_tenant_set(monkeypatch):
+    monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "tenant-abc")
+    calls = _capture(monkeypatch)
+    bridge.emit_entity_change(
+        {
+            "type": "entity.changed",
+            "entity": "budget",
+            "op": "updated",
+            "id": "org:omnigent",
+            "occurredAt": 101,
+        }
+    )
+    assert calls == [
+        (
+            "office:goals:tenant-abc",
+            {
+                "type": "entity.changed",
+                "entity": "budget",
+                "op": "updated",
+                "id": "org:omnigent",
+                "occurredAt": 101,
+            },
+        )
+    ]
+
+
+def test_emit_entity_change_noop_when_tenant_unset(monkeypatch):
+    monkeypatch.delenv("BYTEDESK_REALTIME_TENANT_ID", raising=False)
+    calls = _capture(monkeypatch)
+    bridge.emit_entity_change({"entity": "template", "op": "created", "id": "t_1"})
+    assert calls == []
+
+
 def test_emit_goal_change_noop_when_tenant_unset(monkeypatch):
     monkeypatch.delenv("BYTEDESK_REALTIME_TENANT_ID", raising=False)
     calls = _capture(monkeypatch)

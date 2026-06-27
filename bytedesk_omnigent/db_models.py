@@ -598,6 +598,27 @@ class SqlGoalDecision(Base):
     )
 
 
+class SqlGoalTemplate(Base):
+    """A reusable goal blueprint (BDP-2588, Phase 6a).
+
+    ``definition`` is the JSON blueprint (``cadence``, ``conditions``, ``budget``,
+    ``risk_tier``, target framing, default payload ...). Instantiating a template
+    creates a normal ``goals`` row from this definition merged with per-call
+    overrides — the template itself is never claimable.
+    """
+
+    __tablename__ = "goal_templates"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(256), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    definition: Mapped[str] = mapped_column(Text, nullable=False, server_default="{}")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (UniqueConstraint("name", name="uq_goal_templates_name"),)
+
+
 class SqlTask(Base):
     """A durable task: a goal with assignment + execution binding (BDP-2333, ADR-0142).
 

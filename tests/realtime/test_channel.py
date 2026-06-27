@@ -4,6 +4,7 @@ of the hand-mirrored agreement with the C# RealtimeTopicRegistry)."""
 from __future__ import annotations
 
 from bytedesk_omnigent.realtime.channel import (
+    entity_changed,
     goal_changed,
     goal_planning_event,
     office_agents_channel,
@@ -11,6 +12,30 @@ from bytedesk_omnigent.realtime.channel import (
     presence_changed,
     roster_changed,
 )
+
+
+def test_entity_changed_envelope():
+    assert entity_changed(
+        entity="condition",
+        op="set",
+        entity_id="goal_1",
+        extra={"goalId": "goal_1"},
+    ) == {
+        "type": "entity.changed",
+        "entity": "condition",
+        "op": "set",
+        "id": "goal_1",
+        "goalId": "goal_1",
+    }
+
+
+def test_entity_changed_envelope_no_extra():
+    assert entity_changed(entity="template", op="deleted", entity_id="t_1") == {
+        "type": "entity.changed",
+        "entity": "template",
+        "op": "deleted",
+        "id": "t_1",
+    }
 
 
 def test_office_agents_channel_is_dashed_guid_suffix():

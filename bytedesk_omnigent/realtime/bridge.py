@@ -26,6 +26,7 @@ from typing import Any
 
 from bytedesk_omnigent.realtime import config
 from bytedesk_omnigent.realtime.channel import (
+    entity_changed,
     goal_changed,
     goal_planning_event,
     inbound_event_changed,
@@ -107,6 +108,26 @@ def emit_goal_change(event: dict[str, Any]) -> None:
         updated_at=int(event["updatedAt"]),
         occurred_at=int(event["occurredAt"]),
         dependency=event.get("dependency"),
+    )
+    publish(office_goals_channel(tenant), payload)
+
+
+def emit_entity_change(event: dict[str, Any]) -> None:
+    """Publish an ``entity.changed`` delta for a non-goal-row goal-engine entity.
+
+    Generalizes :func:`emit_goal_change` to condition/budget/template/delete
+    mutations (BDP-2588) over the SAME ``office:goals`` channel. Dormant until
+    ``BYTEDESK_REALTIME_TENANT_ID`` is set.
+    """
+    tenant = config.tenant_id()
+    if not tenant:
+        return
+    reserved = {"type", "entity", "op", "id"}
+    payload = entity_changed(
+        entity=str(event["entity"]),
+        op=str(event["op"]),
+        entity_id=str(event["id"]),
+        extra={k: v for k, v in event.items() if k not in reserved},
     )
     publish(office_goals_channel(tenant), payload)
 
