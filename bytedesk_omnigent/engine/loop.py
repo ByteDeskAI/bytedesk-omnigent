@@ -358,6 +358,40 @@ def _run_actuator_goals(goal_store, *, now, actuator_registry, treasury) -> None
                 _settle_goal(goal, treasury)
 
 
+def _apply_arbitration(ranked, *, goal_store, config, configs, now):
+    """Filter ``ranked`` to arbitration winners when the resolved config enables it.
+
+    A goal participates in arbitration only when its own resolved config has
+    ``arbitration_enabled`` (per-tenant): such goals are grouped by contending actor
+    and only the per-actor winner stays fundable; losers are stamped a
+    ``waiting_reason`` on their payload and dropped from this tick. Goals whose config
+    leaves arbitration off always pass through (legacy ROI order). Off everywhere →
+    ``ranked`` is returned unchanged.
+    """
+    from bytedesk_omnigent.engine.arbitration import arbitrate
+
+    contenders = [
+        g
+        for g in ranked
+        if getattr(_posture_for(g, config, configs), "arbitration_enabled", False)
+    ]
+    if not contenders:
+        return ranked
+    winners, losers = arbitrate(contenders)
+    winner_ids = {g.id for g in winners}
+    for goal, reason in losers:
+        goal_store.mutate_payload(
+            goal_id=goal.id,
+            mutator=lambda p, r=reason: p.setdefault("attributes", {}).update(
+                {"waiting_reason": r}
+            ),
+            now=now,
+        )
+    # Preserve the optimizer's order; drop only the arbitration losers.
+    loser_ids = {g.id for g, _ in losers}
+    return [g for g in ranked if g.id not in loser_ids or g.id in winner_ids]
+
+
 def _run_portfolio_tick(
     candidates,
     *,
@@ -376,6 +410,13 @@ def _run_portfolio_tick(
     """
     tick_id = uuid.uuid4().hex
     ranked = optimizer.rank(candidates, now=now or 0)
+    # BDP-2597: contention arbitration runs AFTER rank, BEFORE funding. When the
+    # resolved config enables it, same-actor contenders are grouped and only the
+    # tier×priority×ROI winner per actor stays fundable this tick; losers are
+    # stamped waiting and skipped (no double-spawn). Off → ``ranked`` unchanged.
+    ranked = _apply_arbitration(
+        ranked, goal_store=goal_store, config=config, configs=configs, now=now
+    )
     spawned = 0
     for goal in ranked:
         scope = f"{goal.tier}:{goal.target_id}"
