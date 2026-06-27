@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 
 from bytedesk_omnigent.integration_capabilities import (
@@ -10,6 +10,9 @@ from bytedesk_omnigent.integration_capabilities import (
     get_integration_capability,
     integration_capability_categories,
     list_integration_capabilities,
+)
+from bytedesk_omnigent.integration_recommendations import (
+    recommend_integration_capabilities,
 )
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
@@ -49,6 +52,21 @@ def create_integration_capabilities_router(
             }
         )
 
+    @router.get("/integration-capabilities/recommendations")
+    async def recommend_capabilities(
+        request: Request,
+        goal: str = Query(..., description="Natural-language integration goal"),
+        category: CapabilityCategory | None = None,
+        limit: int = Query(default=3, ge=1, le=10),
+    ) -> JSONResponse:
+        """Rank catalog entries for a natural-language integration goal."""
+
+        require_user(request, auth_provider)
+        if not goal.strip():
+            raise HTTPException(status_code=422, detail="goal must not be blank")
+        report = recommend_integration_capabilities(goal, category=category, limit=limit)
+        return JSONResponse(report.to_dict())
+
     @router.get("/integration-capabilities/{slug}")
     async def get_capability(request: Request, slug: str) -> JSONResponse:
         """Read one integration blueprint by slug."""
@@ -63,9 +81,7 @@ def create_integration_capabilities_router(
         return JSONResponse(entry.to_dict())
 
     @router.get("/integration-capabilities/{slug}/verification-matrix")
-    async def get_capability_verification_matrix(
-        request: Request, slug: str
-    ) -> JSONResponse:
+    async def get_capability_verification_matrix(request: Request, slug: str) -> JSONResponse:
         """Compile rollout verification gates for one integration blueprint."""
 
         require_user(request, auth_provider)
