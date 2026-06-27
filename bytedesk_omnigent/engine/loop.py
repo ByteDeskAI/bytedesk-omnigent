@@ -20,8 +20,9 @@ from bytedesk_omnigent.maintenance import advisory_locked_loop
 
 _logger = logging.getLogger(__name__)
 
-# Default estimated cost (cents) of one agent turn when a caller doesn't supply one.
-# ponytail: flat estimate; per-agent/per-model cost model is Phase 6.
+# Fallback estimated cost (cents) of one agent turn when a goal names no model.
+# BDP-2594: a goal that declares payload['model'] is priced per-model via
+# engine.cost; this flat value covers legacy goals with no model hint.
 _DEFAULT_EST_COST = 100
 
 # Stable 64-bit advisory-lock key for the goal engine ("goalengn") — distinct from
@@ -42,6 +43,8 @@ def run_goal_engine_tick(
     est_cost: int = _DEFAULT_EST_COST,
     config=None,
     configs=None,
+    roster_provider=None,
+    actuator_registry=None,
 ) -> int:
     """Dispatch ready, immediate, owned ``assigned`` goals. Returns count spawned.
 
@@ -71,7 +74,38 @@ def run_goal_engine_tick(
     but the blast-radius gate (high-risk + ``high_risk_required``) ALWAYS holds, so
     full_auto never auto-spawns a high-risk goal. ``config=None`` preserves today's
     behaviour (gated, high-risk gated).
+
+    BDP-2594 (Phase 2 Wave 1 — close the loop), all additive + behaviour-preserving
+    when the new seams are not injected:
+
+    - ``roster_provider`` (``() -> [CandidateAgent]``): when provided, unowned ready
+      ``open`` goals are routed through the ``goal_assignment`` seam, claimed, and
+      become dispatch candidates. No provider → unowned goals are left untouched.
+    - ``sensor_registry`` also drives **success-condition auto-completion**: any
+      non-``done`` goal carrying a ``success_condition`` whose tree is satisfied is
+      advanced to ``done`` (idempotent) — "done is evaluated, not declared".
+    - ``actuator_registry``: a goal that declares ``payload['actuator']`` is executed
+      deterministically (no agent spawn) and advanced to ``done`` on success.
+    - ``est_cost`` is now a per-goal estimate (model price × tokens) and the goal's
+      reservation is settled to its actual cost when it completes.
     """
+    # BDP-2594: assignment pre-pass — claim an owner for unowned ready open goals so
+    # they enter the candidate frontier (no-op without a roster_provider).
+    if roster_provider is not None:
+        _assign_unowned_goals(goal_store, now=now, roster_provider=roster_provider)
+
+    # BDP-2594: success-condition auto-completion + deterministic actuator path run
+    # ahead of dispatch — a goal that is already complete or actuator-satisfiable
+    # should not also spawn a working session this tick.
+    if sensor_registry is not None:
+        _complete_satisfied_goals(
+            goal_store, now=now, sensor_registry=sensor_registry, treasury=treasury,
+        )
+    if actuator_registry is not None:
+        _run_actuator_goals(
+            goal_store, now=now, actuator_registry=actuator_registry, treasury=treasury,
+        )
+
     candidates = [
         g
         for g in goal_store.list_goals(
@@ -141,6 +175,181 @@ def _posture_for(goal, config, configs):
     return config
 
 
+# -- BDP-2594 close-the-loop helpers ---------------------------------------
+
+
+def _goal_cost(goal, est_cost: int) -> int:
+    """Per-goal reservation cost: model-priced when the goal names a model, else
+    the caller's flat ``est_cost`` (behaviour-preserving for legacy goals)."""
+    payload = goal.payload or {}
+    if isinstance(payload, dict) and payload.get("model"):
+        from bytedesk_omnigent.engine.cost import goal_est_cost_cents
+
+        return goal_est_cost_cents(goal)
+    return est_cost
+
+
+def _ensure_scope_budget(treasury, goal, cfg) -> None:
+    """Wire dormant config knobs onto the goal's own budget scope (BDP-2594).
+
+    When the scope has no budget row and ``budget_default_cap_cents > 0``, seed it
+    with that cap. When ``anomaly_threshold_cents`` is set, ensure the row carries
+    it so the treasury's auto-trip is live. No-op when knobs are 0/unset, and never
+    lowers an existing explicit cap.
+    """
+    if cfg is None:
+        return
+    cap = getattr(cfg, "budget_default_cap_cents", 0) or 0
+    threshold = getattr(cfg, "anomaly_threshold_cents", None)
+    if cap <= 0 and not threshold:
+        return
+    set_budget = getattr(treasury, "set_budget", None)
+    if set_budget is None:
+        return
+    existing = _scope_budget_row(treasury, goal)
+    if existing is None:
+        set_budget(
+            tier=goal.tier, target_id=goal.target_id,
+            cap_cents=cap, anomaly_threshold_cents=threshold,
+        )
+        return
+    # Row exists: only add an anomaly threshold if it's missing (don't touch caps).
+    if threshold and existing.anomaly_threshold_cents is None:
+        set_budget(
+            tier=goal.tier, target_id=goal.target_id,
+            cap_cents=existing.cap_cents, cap_tokens=existing.cap_tokens,
+            max_spawns=existing.max_spawns, anomaly_threshold_cents=threshold,
+        )
+
+
+def _scope_budget_row(treasury, goal):
+    """The goal scope's budget row, or None (best-effort; SqlAlchemyTreasury only)."""
+    engine = getattr(treasury, "engine", None)
+    if engine is None:
+        return None
+    from sqlalchemy.orm import Session
+
+    from bytedesk_omnigent.db_models import SqlGoalBudget
+
+    with Session(engine) as session:
+        return session.get(SqlGoalBudget, (goal.tier, goal.target_id))
+
+
+def _settle_goal(goal, treasury) -> None:
+    """Settle a completed goal's reservation to its actual cost (BDP-2594).
+
+    Reconstructs the in-memory-only :class:`Reservation` from the goal's scope +
+    the estimate it reserved (stored on the payload at reserve time), then settles
+    to the goal's actual cost. ``settle`` is a delta UPDATE — a zero delta is a
+    no-op, so a goal that completed without a real measured cost (the common case)
+    settles cleanly to the estimate.
+    """
+    if treasury is None or not hasattr(treasury, "settle"):
+        return
+    from bytedesk_omnigent.engine.cost import actual_cost_cents
+    from bytedesk_omnigent.engine.treasury import Reservation
+
+    reserved = goal.attributes.get("reserved_cost_cents")
+    if not isinstance(reserved, int):
+        return  # this goal was never funded through the treasury — nothing to settle.
+    actual = actual_cost_cents(goal, fallback=reserved)
+    treasury.settle(
+        Reservation(
+            id="", goal_id=goal.id, tier=goal.tier, target_id=goal.target_id,
+            est_cost=reserved, period_key=goal.id,
+        ),
+        actual,
+    )
+
+
+def _assign_unowned_goals(goal_store, *, now, roster_provider) -> None:
+    """Claim an owner for unowned ready ``open`` goals via the assignment seam.
+
+    Resolves each via the ``goal_assignment`` registry (capability ∩ department +
+    scoreboard, ``assignment.resolve_assignee``) over the provided roster, then
+    ``claim_goal`` to assign it. No candidate → the goal is left ``open`` (waiting)
+    with no crash. The roster excludes system/workflow agents by construction (the
+    provider supplies employee-tier candidates).
+    """
+    from bytedesk_omnigent.engine.registries import build_assignment_registry
+
+    unowned = [
+        g
+        for g in goal_store.list_goals(status="open", activation_state="ready")
+        if g.cadence_kind == "immediate" and not g.owner_agent_id
+    ]
+    if not unowned:
+        return
+    roster = roster_provider()
+    if not roster:
+        return
+    policy = build_assignment_registry().resolve_default()
+    for goal in unowned:
+        hints = (goal.payload or {}).get("assignment") if isinstance(goal.payload, dict) else None
+        hints = hints if isinstance(hints, dict) else {}
+        resolution = policy.resolve_assignee(
+            metric=hints.get("metric", "goal"),
+            roster=roster,
+            capability=hints.get("capability"),
+            department=hints.get("department"),
+            scoreboard_fn=lambda metric: goal_store.scoreboard(metric=metric, limit=1000),
+        )
+        if resolution.assignee:
+            goal_store.claim_goal(goal_id=goal.id, owner_agent_id=resolution.assignee, now=now)
+
+
+def _complete_satisfied_goals(goal_store, *, now, sensor_registry, treasury) -> None:
+    """Advance non-done goals whose ``success_condition`` is satisfied to ``done``.
+
+    "Done is evaluated, not declared" (BDP-2594). Idempotent: only ``assigned`` /
+    ``in_progress`` goals are evaluated (a ``done`` goal is skipped, so a re-tick
+    never hits the terminal ``done -> done`` transition). Realized value is NOT
+    fabricated here — a rail's ``book_outcome`` owns that.
+    """
+    from bytedesk_omnigent.engine.resolver import evaluate_success_condition
+
+    for status in ("assigned", "in_progress"):
+        for goal in goal_store.list_goals(status=status):
+            if goal.success_condition is None:
+                continue
+            if evaluate_success_condition(
+                goal, registry=sensor_registry, goal_store=goal_store, now=now or 0
+            ):
+                goal_store.advance_goal(goal_id=goal.id, status="done", now=now)
+                _settle_goal(goal, treasury)
+
+
+def _run_actuator_goals(goal_store, *, now, actuator_registry, treasury) -> None:
+    """Execute goals that declare a deterministic actuator (no agent spawn, BDP-2594).
+
+    A goal with ``payload['actuator'] = {name, input}`` is run via the
+    ``goal_actuator`` seam instead of spawning an agent: resolve the actuator,
+    ``execute(input)``, and advance to ``done`` on ``ok``. A failed actuator leaves
+    the goal as-is (a later tick / agent can retry).
+
+    ponytail: deterministic path only. Exposing actuators to a SPAWNED agent as MCP
+    tools is heavier — deferred to a later wave; the seam + this hook are the upgrade
+    point.
+    """
+    import asyncio
+
+    for status in ("assigned", "in_progress"):
+        for goal in goal_store.list_goals(status=status):
+            payload = goal.payload or {}
+            spec = payload.get("actuator") if isinstance(payload, dict) else None
+            if not isinstance(spec, dict) or not spec.get("name"):
+                continue
+            try:
+                actuator = actuator_registry.get(spec["name"])
+            except Exception:  # noqa: BLE001 - an unknown actuator leaves the goal for retry
+                _logger.warning("goal %s names unknown actuator %r", goal.id, spec["name"])
+                continue
+            result = asyncio.run(actuator.execute(spec.get("input", {})))
+            if result.ok:
+                goal_store.advance_goal(goal_id=goal.id, status="done", now=now)
+                _settle_goal(goal, treasury)
+
+
 def _run_portfolio_tick(
     candidates,
     *,
@@ -162,8 +371,14 @@ def _run_portfolio_tick(
     spawned = 0
     for goal in ranked:
         scope = f"{goal.tier}:{goal.target_id}"
-        goal_roi = roi(goal, remaining_budget_cents=max(est_cost, 1))
         cfg = _posture_for(goal, config, configs)
+        # BDP-2594: per-goal cost = the model-priced estimate when the goal names a
+        # model, else the caller's flat est_cost (behaviour-preserving for legacy).
+        goal_cost = _goal_cost(goal, est_cost)
+        goal_roi = roi(goal, remaining_budget_cents=max(goal_cost, 1))
+        # BDP-2594: wire the dormant config knobs onto the goal's budget scope
+        # (auto-seed a default cap / anomaly threshold). No-op when unset/0.
+        _ensure_scope_budget(treasury, goal, cfg)
 
         if treasury.circuit_open(scope):
             treasury.record_decision(
@@ -171,7 +386,7 @@ def _run_portfolio_tick(
                 reason="skip_circuit_open", now=now,
             )
             continue
-        if not treasury.can_fund(goal, est_cost, goal_store=goal_store):
+        if not treasury.can_fund(goal, goal_cost, goal_store=goal_store):
             treasury.record_decision(
                 tick_id=tick_id, goal_id=goal.id, roi_at_decision=goal_roi,
                 reason="skip_no_budget", now=now,
@@ -211,13 +426,22 @@ def _run_portfolio_tick(
             )
             continue
 
-        reservation = treasury.reserve(goal, est_cost, now=now)
+        reservation = treasury.reserve(goal, goal_cost, now=now)
         if reservation is None:
             treasury.record_decision(
                 tick_id=tick_id, goal_id=goal.id, roi_at_decision=goal_roi,
                 reason="skip_no_budget", now=now,
             )
             continue
+        # Remember the reserved estimate on the goal so completion can settle the
+        # exact delta later (the reservation object is in-memory only).
+        goal_store.mutate_payload(
+            goal_id=goal.id,
+            mutator=lambda p, c=goal_cost: p.setdefault("attributes", {}).update(
+                {"reserved_cost_cents": c}
+            ),
+            now=now,
+        )
         result = dispatch_goal(
             goal, conversation_store=conversation_store, goal_store=goal_store, now=now
         )
@@ -264,6 +488,41 @@ def _roll_up_child_outcomes(goal_store, *, now: int | None) -> None:
             )
 
 
+def _employee_roster():
+    """Build the assignment roster from employee-tier agents (BDP-2594).
+
+    Tier-aware by construction: ``list(category="employee")`` excludes system and
+    workflow agents, so the assignment seam never routes a goal to an orchestrator
+    or a system automation. Each candidate carries its declared capabilities;
+    department enrichment is a later seam (an absent department simply never matches
+    a department-filtered goal). Best-effort — a roster build error yields an empty
+    roster (no assignment this tick) rather than crashing the loop.
+    """
+    from bytedesk_omnigent.assignment import CandidateAgent
+
+    try:
+        from omnigent.runtime import get_agent_store
+
+        store = get_agent_store()
+        roster: list[CandidateAgent] = []
+        after: str | None = None
+        while True:
+            page = store.list(limit=100, after=after, category="employee")
+            for agent in page.data:
+                try:
+                    caps = store.get_capabilities(agent.id)
+                except Exception:  # noqa: BLE001 - enrichment must never crash the roster
+                    caps = ()
+                roster.append(CandidateAgent(agent_id=agent.id, capabilities=tuple(caps)))
+            if not page.has_more or page.last_id is None:
+                break
+            after = page.last_id
+        return roster
+    except Exception:  # noqa: BLE001 - runtime may be uninitialized; degrade to no assignment
+        _logger.debug("employee roster unavailable; skipping assignment this tick")
+        return []
+
+
 async def goal_engine_loop(
     *,
     interval_seconds: int | None = None,
@@ -301,6 +560,16 @@ async def goal_engine_loop(
     if type(optimizer).__name__ == "RoiOptimizer":
         optimizer = type(optimizer)(risk_decay=_global_config.risk_decay)
 
+    # BDP-2594: the deterministic actuator seam — built once, extensions discovered.
+    # A goal that declares ``payload['actuator']`` is executed here (no agent spawn).
+    from bytedesk_omnigent.engine.providers.contract import ActuatorRegistry
+
+    actuator_registry = ActuatorRegistry()
+    try:
+        actuator_registry.discover_actuator_extensions()
+    except Exception:  # noqa: BLE001 - no contributed actuators is the common case
+        _logger.debug("no goal actuators discovered")
+
     def _prepare():
         goal_store = get_goal_store()
         conversation_store = get_conversation_store()
@@ -327,6 +596,8 @@ async def goal_engine_loop(
                 optimizer=optimizer,
                 config=default_config,
                 configs=configs,
+                roster_provider=lambda: _employee_roster(),
+                actuator_registry=actuator_registry,
             )
             if spawned:
                 _logger.info("goal engine: spawned=%d", spawned)
