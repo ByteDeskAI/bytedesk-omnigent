@@ -42,6 +42,10 @@ GOAL_EVENT_USER_KEY = "__all__"
 TARGET_KINDS = ("organization", "department", "agent")
 READINESS_KINDS = ("immediate", "dependent", "deferred")
 ACTIVATION_STATES = ("ready", "waiting", "paused")
+# BDP-2583 goal cadence: immediate dispatches once when ready; recurring/until_done
+# register a cron trigger (cadence_expr) that re-dispatches the goal on a schedule.
+CADENCE_KINDS = ("immediate", "recurring", "until_done")
+_RECURRING_CADENCES = ("recurring", "until_done")
 # ADR-0154 adds milestone/epic/github_pr/jira_issue kinds for goal-delivery DAGs.
 DEPENDENCY_KINDS = (
     "manual",
@@ -91,6 +95,9 @@ class Goal:
     target_label: str | None = None
     readiness_kind: str = "immediate"
     activation_state: str = "ready"
+    cadence_kind: str = "immediate"
+    cadence_expr: str | None = None
+    cadence_tz: str | None = None
     dependencies: tuple[GoalDependency, ...] = ()
 
 
@@ -172,6 +179,9 @@ def _to_goal(
         target_label=getattr(row, "target_label", None),
         readiness_kind=getattr(row, "readiness_kind", None) or "immediate",
         activation_state=getattr(row, "activation_state", None) or "ready",
+        cadence_kind=getattr(row, "cadence_kind", None) or "immediate",
+        cadence_expr=getattr(row, "cadence_expr", None),
+        cadence_tz=getattr(row, "cadence_tz", None),
         dependencies=dep_snapshot,
     )
 
@@ -255,12 +265,27 @@ class SqlAlchemyGoalStore:
         target_id: str | None = None,
         target_label: str | None = None,
         readiness_kind: str = "immediate",
+        cadence_kind: str = "immediate",
+        cadence_expr: str | None = None,
+        cadence_tz: str | None = None,
         dependencies: Sequence[dict[str, Any]] | None = None,
+        scheduler: Any | None = None,
         now: int | None = None,
     ) -> Goal:
-        """Create an ``open`` goal. Lower ``priority`` numbers sort first."""
+        """Create an ``open`` goal. Lower ``priority`` numbers sort first.
+
+        ``cadence_kind`` defaults to ``immediate`` (dispatch once when ready, no
+        trigger — existing behaviour unchanged). ``recurring`` / ``until_done``
+        require ``cadence_expr`` (a five-field cron string) and register a goal
+        cron trigger via ``scheduler`` (BDP-2583). ``scheduler`` is injectable for
+        tests; when omitted for a recurring cadence the canonical cron scheduler
+        is resolved lazily.
+        """
         if not title.strip():
             raise ValueError("title is required")
+        cadence_kind = _validate("cadence_kind", cadence_kind, CADENCE_KINDS)
+        if cadence_kind in _RECURRING_CADENCES and not (cadence_expr and cadence_expr.strip()):
+            raise ValueError(f"cadence_expr is required for {cadence_kind!r} goals")
         now = now_epoch() if now is None else now
         target_kind, target_id, target_label = _normalize_target(
             target_kind, target_id, target_label
@@ -294,6 +319,9 @@ class SqlAlchemyGoalStore:
                 target_label=target_label,
                 readiness_kind=readiness_kind,
                 activation_state=activation_state,
+                cadence_kind=cadence_kind,
+                cadence_expr=cadence_expr,
+                cadence_tz=cadence_tz,
                 created_at=now,
                 updated_at=now,
             )
@@ -334,8 +362,32 @@ class SqlAlchemyGoalStore:
                 dep_rows.append(dep_row)
             session.flush()
             goal = _to_goal(row, dep_rows)
+        if cadence_kind in _RECURRING_CADENCES:
+            self._register_cadence_trigger(goal, scheduler=scheduler, now=now)
         _publish_goal_event("created", goal, occurred_at=now)
         return goal
+
+    def _register_cadence_trigger(
+        self, goal: Goal, *, scheduler: Any | None, now: int
+    ) -> None:
+        """Register a goal cron trigger for a recurring/until_done goal (BDP-2583).
+
+        The trigger fires on ``cadence_expr``; its payload carries
+        ``{goal_id, agent_id, kind:"goal"}`` so :func:`engine.cron.goal_cron_dispatch`
+        routes the fire to :func:`engine.dispatcher.dispatch_goal`.
+        """
+        if scheduler is None:
+            from bytedesk_omnigent.runtime import get_cron_scheduler
+
+            scheduler = get_cron_scheduler()
+        scheduler.register_trigger(
+            agent_id=goal.owner_agent_id or goal.target_id,
+            key=f"goal:{goal.id}",
+            schedule_kind="cron",
+            schedule_expr=goal.cadence_expr or "",
+            payload={"goal_id": goal.id, "agent_id": goal.owner_agent_id, "kind": "goal"},
+            now=now,
+        )
 
     def get_goal(self, *, goal_id: str, include_dependencies: bool = True) -> Goal | None:
         """Return a single goal by id."""

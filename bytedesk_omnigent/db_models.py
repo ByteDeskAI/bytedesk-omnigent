@@ -417,6 +417,14 @@ class SqlGoal(Base):
     activation_state: Mapped[str] = mapped_column(
         String(16), nullable=False, server_default="ready", default="ready"
     )
+    # BDP-2583 cadence: how often the goal is dispatched to its agent.
+    # immediate = dispatch once when ready; recurring/until_done = a cron trigger
+    # (cadence_expr) re-dispatches on a schedule.
+    cadence_kind: Mapped[str] = mapped_column(
+        String(16), nullable=False, server_default="immediate", default="immediate"
+    )
+    cadence_expr: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cadence_tz: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
     # BDP-2283 (C4 escalation dedup): set when the accountability loop escalates a
@@ -446,6 +454,10 @@ class SqlGoal(Base):
         CheckConstraint(
             "activation_state in ('ready', 'waiting', 'paused')",
             name="ck_goals_activation_state",
+        ),
+        CheckConstraint(
+            "cadence_kind in ('immediate', 'recurring', 'until_done')",
+            name="ck_goals_cadence_kind",
         ),
     )
 
