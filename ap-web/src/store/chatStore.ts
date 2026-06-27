@@ -2574,37 +2574,97 @@ function makeLiveTextBlock(itemId: string, text: string): TextDone {
  * arrives it replaces this block in place (`pumpStreamEvents`),
  * preserving that position.
  *
- * Chunks for a message arrive in `index` order (the forwarder tails the
- * deltas file sequentially and dedupes by `(message_id, index)`), so each
- * new chunk's text is appended; a chunk at or below the high-water index
- * is ignored, making a duplicate/replayed chunk a no-op.
+ * Chunks normally arrive in `index` order, but reconnects and relay
+ * scheduling can deliver a later chunk before a gap is filled. Keep a
+ * per-message buffer so the preview only appends contiguous text; if the
+ * first chunk observed has `index > 0`, render it as the replay baseline and
+ * still allow late lower chunks to prefix it if they arrive.
  *
  * :param set: store setter.
  * :param messageId: vendor's stable per-message id.
  * :param index: 0-based chunk order within the message.
  * :param delta: incremental text for this chunk, e.g. ``"Hello "``.
- * :param lastIndex: per-message high-water index, mutated in place.
+ * :param liveStates: per-message ordering state, mutated in place.
  * :returns: nothing; mutates `blocks` in the store.
  */
+type LiveDeltaState = {
+  firstRenderedIndex: number;
+  renderedThrough: number;
+  pending: Map<number, string>;
+};
+
 function applyLiveDelta(
   set: Setter,
   messageId: string,
   index: number,
   delta: string,
-  lastIndex: Map<string, number>,
+  liveStates: Map<string, LiveDeltaState>,
 ): void {
-  const prev = lastIndex.get(messageId);
-  if (prev !== undefined && index <= prev) return;
-  lastIndex.set(messageId, index);
   const itemId = LIVE_ITEM_PREFIX + messageId;
+  let state = liveStates.get(messageId);
+  if (state === undefined) {
+    liveStates.set(messageId, {
+      firstRenderedIndex: index,
+      renderedThrough: index,
+      pending: new Map(),
+    });
+    set((s) => {
+      const at = s.blocks.findIndex((b) => b.ctx.itemId === itemId);
+      if (at === -1) {
+        return { blocks: [...s.blocks, makeLiveTextBlock(itemId, delta)] };
+      }
+      const existing = s.blocks[at]!;
+      if (existing.type !== "text_done") return {};
+      const fullText = existing.fullText + delta;
+      const next = s.blocks.slice();
+      next[at] = { ...existing, fullText, hasCodeBlocks: fullText.includes("```") };
+      return { blocks: next };
+    });
+    return;
+  }
+
+  if (index >= state.firstRenderedIndex && index <= state.renderedThrough) return;
+  if (state.pending.has(index)) return;
+  state.pending.set(index, delta);
+
+  let prefix = "";
+  if (index < state.firstRenderedIndex) {
+    let prefixReady = true;
+    for (let i = 0; i < state.firstRenderedIndex; i += 1) {
+      const chunk = state.pending.get(i);
+      if (chunk === undefined) {
+        prefixReady = false;
+        break;
+      }
+      prefix += chunk;
+    }
+    if (prefixReady) {
+      for (let i = 0; i < state.firstRenderedIndex; i += 1) {
+        state.pending.delete(i);
+      }
+      state.firstRenderedIndex = 0;
+    } else {
+      prefix = "";
+    }
+  }
+
+  let suffix = "";
+  while (state.pending.has(state.renderedThrough + 1)) {
+    const nextIndex = state.renderedThrough + 1;
+    suffix += state.pending.get(nextIndex)!;
+    state.pending.delete(nextIndex);
+    state.renderedThrough = nextIndex;
+  }
+  if (!prefix && !suffix) return;
+
   set((s) => {
     const at = s.blocks.findIndex((b) => b.ctx.itemId === itemId);
     if (at === -1) {
-      return { blocks: [...s.blocks, makeLiveTextBlock(itemId, delta)] };
+      return { blocks: [...s.blocks, makeLiveTextBlock(itemId, prefix + suffix)] };
     }
     const existing = s.blocks[at]!;
     if (existing.type !== "text_done") return {};
-    const fullText = existing.fullText + delta;
+    const fullText = prefix + existing.fullText + suffix;
     const next = s.blocks.slice();
     next[at] = { ...existing, fullText, hasCodeBlocks: fullText.includes("```") };
     return { blocks: next };
@@ -2634,8 +2694,8 @@ function applyLiveDelta(
  * :param retired: message ids whose preview has been finalized; their
  *     late deltas are ignored. Shared with the pump loop, which adds to
  *     it when it replaces a preview.
- * :param lastIndex: per-message high-water chunk index, shared with
- *     `applyLiveDelta` for duplicate suppression.
+ * :param liveStates: per-message chunk-ordering state shared with
+ *     `applyLiveDelta`.
  * :param set: store setter.
  * :param get: store getter.
  * :returns: events with native live deltas removed.
@@ -2644,14 +2704,14 @@ async function* tapLiveDeltas(
   events: AsyncIterable<StreamEvent>,
   id: string,
   retired: Set<string>,
-  lastIndex: Map<string, number>,
+  liveStates: Map<string, LiveDeltaState>,
   set: Setter,
   get: Getter,
 ): AsyncIterable<StreamEvent> {
   for await (const ev of events) {
     if (ev.type === "text_delta" && ev.messageId !== undefined) {
       if (get().conversationId === id && !retired.has(ev.messageId)) {
-        applyLiveDelta(set, ev.messageId, ev.index ?? 0, ev.delta, lastIndex);
+        applyLiveDelta(set, ev.messageId, ev.index ?? 0, ev.delta, liveStates);
       }
       continue;
     }
@@ -2705,13 +2765,13 @@ export async function pumpStreamEvents(
   // session rebinds a fresh pump) so a message's trailing chunk that
   // arrives after its done event can't re-create the preview.
   const retiredLiveMessages = new Set<string>();
-  // Per-message high-water chunk index, for delta duplicate suppression.
-  const liveLastIndex = new Map<string, number>();
+  // Per-message chunk-ordering state, for delta duplicate suppression and gap fill.
+  const liveDeltaStates = new Map<string, LiveDeltaState>();
   const events = tapLiveDeltas(
     tapSessionEvents(rawEvents),
     id,
     retiredLiveMessages,
-    liveLastIndex,
+    liveDeltaStates,
     set,
     get,
   );

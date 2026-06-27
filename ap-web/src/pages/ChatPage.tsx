@@ -1316,6 +1316,7 @@ function MainAgentSurface({
             <HistoryAutoLoader
               hasMoreHistory={hasMoreHistory}
               loadingMoreHistory={loadingMoreHistory}
+              sendScrollNonce={sendScrollNonce}
             />
             <ConversationBubbleList
               bubbles={bubbles}
@@ -1552,9 +1553,11 @@ function ScrollToBottomOnSend({ nonce }: { nonce: number }) {
 export function HistoryAutoLoader({
   hasMoreHistory,
   loadingMoreHistory,
+  sendScrollNonce = 0,
 }: {
   hasMoreHistory: boolean;
   loadingMoreHistory: boolean;
+  sendScrollNonce?: number;
 }) {
   // useStickToBottomContext exposes scrollRef (the actual scroll container
   // element) in the runtime context even though the public TS types only
@@ -1567,12 +1570,24 @@ export function HistoryAutoLoader({
   // fetch. Snapshot scrollHeight before the call; restore the offset in a
   // layout effect so the visible content doesn't jump.
   const prevScrollHeightRef = useRef<number | null>(null);
+  const lastSendScrollAtRef = useRef(0);
+  useEffect(() => {
+    if (sendScrollNonce === 0) return;
+    lastSendScrollAtRef.current =
+      typeof performance !== "undefined" ? performance.now() : Date.now();
+  }, [sendScrollNonce]);
+  const isSendScrollSettling = useCallback(() => {
+    if (lastSendScrollAtRef.current === 0) return false;
+    const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+    return now - lastSendScrollAtRef.current < 300;
+  }, []);
   const loadOlderPreservingOffset = useCallback(() => {
     if (!hasMoreHistory || loadingMoreHistory) return;
+    if (isSendScrollSettling()) return;
     const el = ctx.scrollRef?.current;
     if (el) prevScrollHeightRef.current = el.scrollHeight;
     void useChatStore.getState().loadMoreHistory();
-  }, [ctx.scrollRef, hasMoreHistory, loadingMoreHistory]);
+  }, [ctx.scrollRef, hasMoreHistory, isSendScrollSettling, loadingMoreHistory]);
 
   useLayoutEffect(() => {
     const el = ctx.scrollRef?.current;
@@ -1604,10 +1619,11 @@ export function HistoryAutoLoader({
   const maybeFillViewport = useCallback(() => {
     const el = ctx.scrollRef?.current;
     if (!el || !hasMoreHistory || loadingMoreHistory) return;
+    if (isSendScrollSettling()) return;
     if (el.scrollHeight <= el.clientHeight) {
       void useChatStore.getState().loadMoreHistory();
     }
-  }, [ctx.scrollRef, hasMoreHistory, loadingMoreHistory]);
+  }, [ctx.scrollRef, hasMoreHistory, isSendScrollSettling, loadingMoreHistory]);
 
   // Re-check on mount and whenever a fetch settles (loadingMoreHistory flips
   // back to false): if content still doesn't overflow, the callback pages again.

@@ -122,6 +122,43 @@ class SessionConnectivity:
     needs_workspace: bool
 
 
+@dataclass(frozen=True)
+class NewConversationEventAudit:
+    """
+    Append-only record of a raw session chat event before canonical projection.
+
+    This is intentionally adjacent to, not embedded in, conversation_items:
+    visible chat remains the stable canonical item shape, while this row keeps
+    the raw producer payload for debugging sequencing/correlation decisions.
+    """
+
+    conversation_id: str
+    source: str
+    event_type: str
+    raw_payload: dict[str, Any]
+    provider_event_id: str | None = None
+    response_id: str | None = None
+    call_id: str | None = None
+    message_id: str | None = None
+    canonical_payload: dict[str, Any] | None = None
+    decision: str = "received"
+    conversation_item_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ConversationEventAudit(NewConversationEventAudit):
+    """
+    Persisted raw-event audit row.
+
+    :param id: Store-assigned audit id.
+    :param created_at: Unix epoch seconds when the event was recorded.
+    """
+
+    id: str = ""
+    created_at: int = 0
+    position: int = 0
+
+
 class ConversationNotFoundError(Exception):
     """
     Raised when a required conversation row is missing.
@@ -280,7 +317,7 @@ class ConversationStore(ABC):
         """
         ...
 
-    def owner_for_runner(self, runner_id: str) -> str | None:
+    def owner_for_runner(self, runner_id: str) -> str | None:  # noqa: ARG002
         """
         Return the ``created_by`` owner of the session bound to ``runner_id``.
 
@@ -462,6 +499,53 @@ class ConversationStore(ABC):
             with store-assigned IDs and timestamps.
         """
         ...
+
+    def record_event_audit(self, audit: NewConversationEventAudit) -> ConversationEventAudit:
+        """
+        Persist a raw chat event audit record.
+
+        Store implementations that do not support the audit surface may return
+        a synthetic row; production SQL stores override this.
+        """
+        return ConversationEventAudit(
+            **audit.__dict__,
+            id="",
+            created_at=0,
+        )
+
+    def update_event_audit(
+        self,
+        audit_id: str,
+        *,
+        decision: str | None = None,
+        canonical_payload: dict[str, Any] | None = None,
+        conversation_item_id: str | None = None,
+        response_id: str | None = None,
+    ) -> ConversationEventAudit | None:
+        """
+        Update sequencing outcome metadata for a raw event audit row.
+
+        Default no-op keeps existing lightweight test doubles compatible.
+        """
+        del audit_id, decision, canonical_payload, conversation_item_id, response_id
+        return None
+
+    def list_event_audit(
+        self,
+        conversation_id: str,
+        *,
+        decision: str | None = None,
+        call_id: str | None = None,
+        limit: int = 100,
+        order: str = "asc",
+    ) -> list[ConversationEventAudit]:
+        """
+        List raw chat event audit rows for diagnostics and sequencer buffers.
+
+        Default empty result keeps non-SQL store fakes opt-in.
+        """
+        del conversation_id, decision, call_id, limit, order
+        return []
 
     @abstractmethod
     def list_conversations(
