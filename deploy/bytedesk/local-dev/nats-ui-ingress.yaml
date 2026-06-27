@@ -1,4 +1,4 @@
-# LOCAL-DEV ingress: http://nats-ui.dev.bytedesk.localhost -> omnigent-nats-ui.
+# LOCAL-DEV ingress: http://nats-ui.bytedesk.localhost -> omnigent-nats-ui.
 #
 # The NATS UI service stays ClusterIP-only in the base manifests. This local-dev
 # overlay gives operators a stable browser URL without exposing the console in
@@ -13,7 +13,7 @@ metadata:
 spec:
   ingressClassName: public
   rules:
-    - host: nats-ui.dev.bytedesk.localhost
+    - host: nats-ui.bytedesk.localhost
       http:
         paths:
           - backend:
