@@ -317,6 +317,14 @@ def _complete_satisfied_goals(goal_store, *, now, sensor_registry, treasury) -> 
             ):
                 goal_store.advance_goal(goal_id=goal.id, status="done", now=now)
                 _settle_goal(goal, treasury)
+                # BDP-2596: learn confidence from realized-vs-expected on completion.
+                # Re-read so realized_value (booked by a rail before this tick) is
+                # current; a goal with expected==0 is a no-op (no learning regression).
+                from bytedesk_omnigent.engine.learning import apply_completion_learning
+
+                completed = goal_store.get_goal(goal_id=goal.id, include_dependencies=False)
+                if completed is not None:
+                    apply_completion_learning(goal_store, completed, now=now)
 
 
 def _run_actuator_goals(goal_store, *, now, actuator_registry, treasury) -> None:
@@ -539,6 +547,7 @@ async def goal_engine_loop(
     next loop restart; default 30s). An explicit caller value always wins.
     """
     from bytedesk_omnigent.engine.config import load_goal_engine_config
+    from bytedesk_omnigent.engine.cost import estimate_goal_cost_cents
     from bytedesk_omnigent.engine.registries import (
         build_optimizer_registry,
         build_treasury_registry,
@@ -604,6 +613,13 @@ async def goal_engine_loop(
             configs = {
                 tid: await load_goal_engine_config(tid) for tid in sorted(tenant_ids)
             }
+            # BDP-2596: the flat legacy est_cost learns from completed goals' measured
+            # cost (model-named goals still price per-model in the tick). Falls back to
+            # the coarse default on a cold engine.
+            from bytedesk_omnigent.engine.learning import learn_tokens_per_goal
+
+            learned_tokens = await asyncio.to_thread(learn_tokens_per_goal, goal_store)
+            est_cost = estimate_goal_cost_cents(tokens=learned_tokens)
             spawned = await asyncio.to_thread(
                 run_goal_engine_tick,
                 goal_store,
@@ -611,6 +627,7 @@ async def goal_engine_loop(
                 sensor_registry=sensor_registry,
                 treasury=treasury,
                 optimizer=optimizer,
+                est_cost=est_cost,
                 config=default_config,
                 configs=configs,
                 roster_provider=lambda: _employee_roster(),

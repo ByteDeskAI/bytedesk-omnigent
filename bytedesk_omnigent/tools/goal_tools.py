@@ -73,6 +73,20 @@ class GoalCreateTool(Tool):
                             "description": "immediate, dependent, or deferred.",
                             "default": "immediate",
                         },
+                        "proposed": {
+                            "type": "boolean",
+                            "description": (
+                                "File this as a governance DRAFT (a proposal) instead of "
+                                "an active goal — it is parked for human/manager approval "
+                                "and is NOT auto-dispatched. Use this when proposing "
+                                "discovered opportunities (the scout path)."
+                            ),
+                            "default": False,
+                        },
+                        "rationale": {
+                            "type": "string",
+                            "description": "Why this goal is worth doing (shown at approval).",
+                        },
                         "dependencies": {
                             "type": "array",
                             "description": "Unblock conditions for dependent goals.",
@@ -108,16 +122,31 @@ class GoalCreateTool(Tool):
             return json.dumps({"error": "missing required 'title'"})
         from bytedesk_omnigent.goals import get_goal_store
 
-        goal = get_goal_store().create_goal(
-            title=title,
-            priority=int(args.get("priority", 3)),
-            source=ctx.agent_id,
-            target_kind=args.get("target_kind", "organization"),
-            target_id=args.get("target_id"),
-            target_label=args.get("target_label"),
-            readiness_kind=args.get("readiness_kind", "immediate"),
-            dependencies=args.get("dependencies") or None,
-        )
+        store = get_goal_store()
+        if args.get("proposed"):
+            # Governance draft path (BDP-2596 scout): never auto-armed.
+            from bytedesk_omnigent.engine.scout import propose_goal
+
+            goal = propose_goal(
+                store,
+                title=title,
+                source=ctx.agent_id or "scout",
+                rationale=args.get("rationale"),
+                target_kind=args.get("target_kind", "organization"),
+                target_id=args.get("target_id"),
+                target_label=args.get("target_label"),
+            )
+        else:
+            goal = store.create_goal(
+                title=title,
+                priority=int(args.get("priority", 3)),
+                source=ctx.agent_id,
+                target_kind=args.get("target_kind", "organization"),
+                target_id=args.get("target_id"),
+                target_label=args.get("target_label"),
+                readiness_kind=args.get("readiness_kind", "immediate"),
+                dependencies=args.get("dependencies") or None,
+            )
         return json.dumps(
             {
                 "goal_id": goal.id,

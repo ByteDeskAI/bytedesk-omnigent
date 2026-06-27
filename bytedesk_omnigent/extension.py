@@ -29,6 +29,9 @@ _TOOL_STEP_RESUME_LOCK = 0x746F6F6C73746570
 #: PG advisory-lock key for the boot-time workflow-orchestrator task seed (BDP-2337).
 _WORKFLOW_TASK_SEED_LOCK = 0x776B666C77746B73
 
+#: PG advisory-lock key for the boot-time scout standing-goal seed (BDP-2596).
+_SCOUT_GOAL_SEED_LOCK = 0x73636F75746C6F63
+
 #: Tool-name prefix the ByteDesk extension claims for server-side execution
 #: (the three-tier keyed ``memory__*`` tools — BDP-2458 / BDP-2505).
 _MEMORY_TOOL_PREFIX = "memory__"
@@ -404,6 +407,7 @@ class BytedeskExtension:
             self._accountability,
             self._tool_step_resume,
             self._seed_workflow_tasks,
+            self._seed_scout_goal,
             self._realtime_bridge,
         ]
 
@@ -499,6 +503,28 @@ class BytedeskExtension:
                     )
         except Exception as exc:  # noqa: BLE001 — boot seed is best-effort
             logger.warning("workflow-task seed failed: %s", exc, exc_info=True)
+
+    async def _seed_scout_goal(self) -> None:
+        """One-shot: ensure the standing recurring scout goal exists (BDP-2596).
+
+        The scout's dispatched agent scans sensors and PROPOSES new goals as drafts
+        (governance-gated, never auto-armed). Advisory-locked so only one pod seeds;
+        idempotent via the goal's slug so a re-run is a no-op."""
+        from bytedesk_omnigent.engine.scout import ensure_scout_goal
+        from bytedesk_omnigent.goals import get_goal_store
+        from omnigent.runtime import get_cron_scheduler
+        from omnigent.runtime.memory_maintenance import advisory_lock
+
+        try:
+            store = get_goal_store()
+            with advisory_lock(store.engine, _SCOUT_GOAL_SEED_LOCK) as acquired:
+                if acquired:
+                    goal = await asyncio.to_thread(
+                        ensure_scout_goal, store, scheduler=get_cron_scheduler()
+                    )
+                    logger.info("scout standing goal present: goal=%s", goal.id)
+        except Exception as exc:  # noqa: BLE001 — boot seed is best-effort
+            logger.warning("scout goal seed failed: %s", exc, exc_info=True)
 
     async def _tool_step_resume(self) -> None:
         from bytedesk_omnigent.runtime import get_tool_step_store

@@ -25,6 +25,8 @@ class AccountabilityReport:
 
     rebalanced: int
     escalated: int
+    # BDP-2596: cents of budget redeployed from stalled scopes to high-ROI scopes.
+    reallocated_cents: int = 0
 
 
 def run_accountability_tick(
@@ -33,6 +35,7 @@ def run_accountability_tick(
     *,
     manager_agent_id: str | None = None,
     stall_seconds: int = _DEFAULT_STALL_SECONDS,
+    treasury=None,
     now: int | None = None,
 ) -> AccountabilityReport:
     """Rebalance stalled owned goals + escalate blocked goals.
@@ -42,10 +45,21 @@ def run_accountability_tick(
     DMs the dropped owner. Escalation surfaces every ``blocked`` goal to
     ``manager_agent_id`` as a peer ``escalation`` message; when no manager is
     configured escalation is skipped (rebalance still runs).
+
+    BDP-2596: when ``treasury`` is provided, the tick ALSO reallocates budget — it
+    harvests idle headroom from the scopes of goals reopened this tick (stalled =
+    holding budget it isn't converting) and redeploys it to the highest-ROI active
+    scope, recorded as treasury decisions. Without a treasury this is unchanged
+    (reopen + escalate only).
     """
     now = now_epoch() if now is None else now
 
     reopened = goals.reopen_stalled(older_than_seconds=stall_seconds, now=now)
+    reallocated_cents = 0
+    if treasury is not None:
+        from bytedesk_omnigent.engine.rebalance import rebalance_budget
+
+        reallocated_cents = rebalance_budget(treasury, reopened, now=now)
     for goal in reopened:
         if goal.owner_agent_id:
             peers.send(
@@ -79,7 +93,11 @@ def run_accountability_tick(
             )
             escalated += 1
 
-    return AccountabilityReport(rebalanced=len(reopened), escalated=escalated)
+    return AccountabilityReport(
+        rebalanced=len(reopened),
+        escalated=escalated,
+        reallocated_cents=reallocated_cents,
+    )
 
 
 async def accountability_loop(
@@ -95,12 +113,14 @@ async def accountability_loop(
     tick is logged and the loop continues; cancellation propagates for clean
     shutdown. The blocking DB work runs in a worker thread.
     """
+    from bytedesk_omnigent.engine.treasury import get_treasury
     from bytedesk_omnigent.goals import get_goal_store
     from bytedesk_omnigent.peer import get_peer_message_store
 
     def _prepare():
         goals = get_goal_store()
         peers = get_peer_message_store()
+        treasury = get_treasury()
 
         async def _work() -> None:
             report = await asyncio.to_thread(
@@ -109,12 +129,14 @@ async def accountability_loop(
                 peers,
                 manager_agent_id=manager_agent_id,
                 stall_seconds=stall_seconds,
+                treasury=treasury,
             )
-            if report.rebalanced or report.escalated:
+            if report.rebalanced or report.escalated or report.reallocated_cents:
                 _logger.info(
-                    "accountability: rebalanced=%d escalated=%d",
+                    "accountability: rebalanced=%d escalated=%d reallocated_cents=%d",
                     report.rebalanced,
                     report.escalated,
+                    report.reallocated_cents,
                 )
 
         return goals.engine, _work

@@ -180,6 +180,15 @@ class SqlAlchemyTreasury:
             row = session.get(SqlGoalBudget, (tier, target_id))
             return row.spent_cents if row is not None else 0
 
+    def remaining_cents(self, tier: str, target_id: str) -> int | None:
+        """Remaining headroom (``cap - spent``) for a scope, or ``None`` if uncapped.
+
+        Public read used by the economic rebalancer (BDP-2596) to find idle headroom
+        and confirm a redeploy landed.
+        """
+        with self._session() as session:
+            return self._remaining(session, tier, target_id)
+
     def _remaining(self, session: Any, tier: str, target_id: str) -> int | None:
         row = session.get(SqlGoalBudget, (tier, target_id))
         if row is None:

@@ -120,8 +120,12 @@ async def _run_accountability_one_tick(
 ) -> None:
     """Drive exactly one ``accountability_loop`` iteration then cancel."""
     goals, peers = _stores(tmp_path)
+    from bytedesk_omnigent.engine.treasury import SqlAlchemyTreasury
+
+    treasury = SqlAlchemyTreasury(f"sqlite:///{tmp_path / 'org.db'}")
     monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: goals)
     monkeypatch.setattr("bytedesk_omnigent.peer.get_peer_message_store", lambda: peers)
+    monkeypatch.setattr("bytedesk_omnigent.engine.treasury.get_treasury", lambda: treasury)
 
     calls = {"n": 0}
 
@@ -191,6 +195,6 @@ async def test_accountability_loop_logs_nonzero_report(
     await _run_accountability_one_tick(monkeypatch, tmp_path, manager_agent_id="ag_mgr")
 
     assert logged
-    msg, rebalanced, escalated = logged[0][0]
-    assert msg == "accountability: rebalanced=%d escalated=%d"
+    msg, rebalanced, escalated, reallocated = logged[0][0]
+    assert msg == "accountability: rebalanced=%d escalated=%d reallocated_cents=%d"
     assert escalated == 1
