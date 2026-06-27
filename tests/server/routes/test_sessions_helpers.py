@@ -2346,6 +2346,7 @@ def test_drive_terminal_resolved_elicitation_records_calls_and_resolves_prompts(
         mirrored = sessions_mod._recent_mirrored_tool_calls["call_1"]
         assert mirrored.tool_name == "Bash"
         assert mirrored.tool_input == {"command": "ls"}
+        assert mirrored.response_id == "resp_fc"
 
         resolved = asyncio.Event()
         sessions_mod._harness_parked_elicitations["elicit_term"] = _ParkedHarnessElicitation(
@@ -5302,6 +5303,7 @@ def test_drive_terminal_resolved_elicitation_tolerates_malformed_arguments_json(
         mirrored = sessions_mod._recent_mirrored_tool_calls["call_bad"]
         assert mirrored.tool_name == "Bash"
         assert mirrored.tool_input == {}
+        assert mirrored.response_id == "resp_fc"
     finally:
         sessions_mod._recent_mirrored_tool_calls.clear()
 

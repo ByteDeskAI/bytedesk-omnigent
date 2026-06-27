@@ -852,10 +852,15 @@ class _MirroredToolCall:
     :param tool_input: Parsed tool arguments, e.g.
         ``{"command": "ls"}``; ``{}`` when the arguments were absent or
         not a JSON object.
+    :param response_id: Response id the function call was mirrored
+        under. Matching outputs inherit this id so the transcript keeps
+        tool calls and results in one rendered response even when the
+        forwarder observes the output after a later status edge.
     """
 
     tool_name: str
     tool_input: dict[str, Any]
+    response_id: str
 
 
 # call_id -> tool identity for recently mirrored ``function_call``
@@ -4466,6 +4471,10 @@ async def _persist_external_conversation_item(
     :returns: Store-assigned conversation item id.
     """
     item = _parse_external_conversation_item(body)
+    if item.type == "function_call_output" and isinstance(item.data, FunctionCallOutputData):
+        identity = _recent_mirrored_tool_calls.get(item.data.call_id)
+        if identity is not None and item.response_id != identity.response_id:
+            item = item.model_copy(update={"response_id": identity.response_id})
     # A native user message round-tripping back from the transcript:
     # drain its optimistic pending-input entry (FIFO) and fold the
     # entry's file blocks (image / file) into the item BEFORE persisting.
@@ -4721,6 +4730,7 @@ def _drive_terminal_resolved_elicitation(session_id: str, persisted: Conversatio
         _recent_mirrored_tool_calls[data.call_id] = _MirroredToolCall(
             tool_name=data.name,
             tool_input=parsed if isinstance(parsed, dict) else {},
+            response_id=persisted.response_id,
         )
     elif persisted.type == "function_call_output" and isinstance(data, FunctionCallOutputData):
         identity = _recent_mirrored_tool_calls.get(data.call_id)
