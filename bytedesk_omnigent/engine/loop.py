@@ -682,6 +682,23 @@ async def goal_engine_loop(
     if interval_seconds is None:
         interval_seconds = _global_config.tick_interval_seconds
 
+    # BDP-2599 (Wave 6): one structured boot-state line so an operator can see at a
+    # glance whether the org is armed + multi-replica-safe + which providers are wired.
+    from bytedesk_omnigent.engine.observability import goal_engine_boot_summary
+    from bytedesk_omnigent.tools.goal_tools import _arming_enabled
+    from omnigent.coordination.lifecycle import get_active_backplane
+
+    _logger.info(
+        "goal engine boot state: %s",
+        goal_engine_boot_summary(
+            config=_global_config,
+            backplane=get_active_backplane(),
+            provider_registry=get_provider_registry(),
+            arming_enabled=_arming_enabled(),
+            interval_seconds=interval_seconds,
+        ),
+    )
+
     await advisory_locked_loop(
         interval_seconds=interval_seconds,
         lock_key=lock_key,

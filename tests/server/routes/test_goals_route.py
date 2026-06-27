@@ -190,6 +190,60 @@ def test_start_planning_session_uses_planner_agent_and_seeds_prompt(monkeypatch)
     assert "AskUserQuestion" in seeded_item.data.content[0]["text"]
 
 
+def test_posture_readback_requires_auth_in_multi_user_mode() -> None:
+    client = TestClient(_app(_NoIdentityAuth()), raise_server_exceptions=False)
+    assert client.get("/v1/goals/posture").status_code == 401
+
+
+def test_posture_readback_gated_is_not_armed(monkeypatch) -> None:
+    from bytedesk_omnigent.engine.config import GoalEngineConfig
+
+    async def _fake_load(target_id, **kwargs):
+        assert target_id is None
+        return GoalEngineConfig()  # default gated
+
+    monkeypatch.setattr("bytedesk_omnigent.routes.goals.load_goal_engine_config", _fake_load)
+    monkeypatch.setattr("bytedesk_omnigent.routes.goals._arming_enabled", lambda: True)
+    client = TestClient(_app(None))
+
+    resp = client.get("/v1/goals/posture")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"posture": "gated", "armed": False, "arming_enabled": True}
+
+
+def test_posture_readback_full_auto_with_arming_is_armed(monkeypatch) -> None:
+    from bytedesk_omnigent.engine.config import GoalEngineConfig
+
+    async def _fake_load(target_id, **kwargs):
+        assert target_id == "acme"
+        return GoalEngineConfig(autonomy_posture="full_auto")
+
+    monkeypatch.setattr("bytedesk_omnigent.routes.goals.load_goal_engine_config", _fake_load)
+    monkeypatch.setattr("bytedesk_omnigent.routes.goals._arming_enabled", lambda: True)
+    client = TestClient(_app(None))
+
+    resp = client.get("/v1/goals/posture?target_id=acme")
+
+    assert resp.status_code == 200
+    assert resp.json() == {"posture": "full_auto", "armed": True, "arming_enabled": True}
+
+
+def test_posture_readback_full_auto_without_arming_is_not_armed(monkeypatch) -> None:
+    from bytedesk_omnigent.engine.config import GoalEngineConfig
+
+    async def _fake_load(target_id, **kwargs):
+        return GoalEngineConfig(autonomy_posture="full_auto")
+
+    monkeypatch.setattr("bytedesk_omnigent.routes.goals.load_goal_engine_config", _fake_load)
+    monkeypatch.setattr("bytedesk_omnigent.routes.goals._arming_enabled", lambda: False)
+    client = TestClient(_app(None))
+
+    resp = client.get("/v1/goals/posture")
+
+    assert resp.json() == {"posture": "full_auto", "armed": False, "arming_enabled": False}
+
+
 def test_commit_planning_session_creates_goal_with_planning_payload(monkeypatch) -> None:
     store = _FakeStore([])
     monkeypatch.setattr("bytedesk_omnigent.goals.get_goal_store", lambda: store)

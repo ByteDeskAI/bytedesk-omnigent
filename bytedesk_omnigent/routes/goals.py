@@ -21,6 +21,8 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from bytedesk_omnigent.engine.config import load_goal_engine_config
+from bytedesk_omnigent.tools.goal_tools import _arming_enabled
 from omnigent.db.utils import now_epoch
 from omnigent.entities import MessageData, NewConversationItem
 from omnigent.errors import ErrorCode, OmnigentError
@@ -569,6 +571,25 @@ def create_goals_router(
             target_id=target_id,
         )
         return JSONResponse({"frontier": rows})
+
+    @router.get("/goals/posture")
+    async def get_posture(request: Request, target_id: str | None = None) -> JSONResponse:
+        """Read back the resolved autonomy posture for a scope (Autonomy strip, BDP-2599).
+
+        ``armed`` is the Wave-5 gate readback: full_auto posture AND
+        ``BYTEDESK_GOALS_ARMING_ENABLED`` both hold. ``target_id`` resolves a
+        per-tenant override; absent → the global default.
+        """
+        require_user(request, auth_provider)
+        config = await load_goal_engine_config(target_id)
+        arming_enabled = _arming_enabled()
+        return JSONResponse(
+            {
+                "posture": config.autonomy_posture,
+                "armed": config.autonomy_posture == "full_auto" and arming_enabled,
+                "arming_enabled": arming_enabled,
+            }
+        )
 
     @router.get("/goals/{goal_id}")
     async def get_goal(request: Request, goal_id: str) -> JSONResponse:
