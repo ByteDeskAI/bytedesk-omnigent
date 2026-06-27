@@ -32,6 +32,7 @@ labels:
 resources:
   - postgres.yaml
   - nats.yaml
+  - nats-ui.yaml
   - config.yaml
   - omni-cli-terminal.yaml
   - server.yaml

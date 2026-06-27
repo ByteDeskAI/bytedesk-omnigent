@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -8,6 +9,14 @@ import yaml
 def _docs() -> list[dict]:
     return [
         doc for doc in yaml.safe_load_all(Path("deploy/bytedesk/k8s/nats.yaml").read_text()) if doc
+    ]
+
+
+def _nats_ui_docs() -> list[dict]:
+    return [
+        doc
+        for doc in yaml.safe_load_all(Path("deploy/bytedesk/k8s/nats-ui.yaml").read_text())
+        if doc
     ]
 
 
@@ -75,6 +84,47 @@ def test_single_consolidated_nats_instance() -> None:
     assert claim["metadata"]["name"] == "jetstream-data"
     # Sized to hold both coordination KV (tiny) and the artifact Object Store.
     assert claim["spec"]["resources"]["requests"]["storage"] == "10Gi"
+
+
+def test_nats_ui_autoloads_consolidated_nats_context() -> None:
+    docs = {doc["kind"]: doc for doc in _nats_ui_docs()}
+    secret = docs["Secret"]
+    service = docs["Service"]
+    statefulset = docs["StatefulSet"]
+
+    assert service["metadata"]["name"] == "omnigent-nats-ui"
+    assert service["spec"]["type"] == "ClusterIP"
+    assert not any(doc["kind"] == "Ingress" for doc in _nats_ui_docs())
+
+    context = json.loads(secret["stringData"]["omnigent.json"])
+    assert context["url"] == "nats://omnigent-nats:4222"
+    assert context["user"] == ""
+    assert context["password"] == ""
+
+    container = statefulset["spec"]["template"]["spec"]["containers"][0]
+    assert container["image"].startswith("ghcr.io/nats-nui/nui@sha256:")
+    assert "--nats-cli-contexts=/cli-contexts" in container["args"]
+
+    mounts = {mount["name"]: mount for mount in container["volumeMounts"]}
+    assert mounts["cli-contexts"]["mountPath"] == "/cli-contexts"
+    assert str(mounts["cli-contexts"]["readOnly"]).lower() == "true"
+    assert mounts["db-volume"]["mountPath"] == "/db"
+
+    volumes = {
+        volume["name"]: volume
+        for volume in statefulset["spec"]["template"]["spec"].get("volumes", [])
+    }
+    assert volumes["cli-contexts"]["secret"]["secretName"] == "omnigent-nats-ui-contexts"
+
+    claim = statefulset["spec"]["volumeClaimTemplates"][0]
+    assert claim["metadata"]["name"] == "db-volume"
+    assert claim["spec"]["resources"]["requests"]["storage"] == "1Gi"
+
+
+def test_kustomization_includes_nats_ui() -> None:
+    kustomization = yaml.safe_load(Path("deploy/bytedesk/k8s/kustomization.yaml").read_text())
+
+    assert "nats-ui.yaml" in kustomization["resources"]
 
 
 def test_server_points_artifacts_at_consolidated_nats() -> None:

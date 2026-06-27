@@ -36,6 +36,7 @@ agents on ByteDesk's Codex inference path; OpenClaw keeps running untouched.
 |---|---|
 | `k8s/` | Base manifests (namespace `bytedesk`). **Local:** `kubectl apply -k k8s/`. |
 | `k8s/secret.example.yaml` | Copy → `secret.yaml` (gitignored), fill, apply. Prod uses Infisical/SOPS. |
+| `k8s/nats-ui.yaml` | Internal NUI web console for the consolidated Omnigent NATS instance. |
 | `fleet/production/kustomization.yaml` | Prod overlay (Harbor image, `# pipeline-managed` tag, pull secret). Fleet-reconciled. |
 | `agents/bytedesk-engineer/` | Single agent — proves Codex inference. |
 | `agents/bytedesk-orchestrator/` | Orchestrator + 2 sub-agents — proves delegation (gateway-only, no external CLIs). |
@@ -98,6 +99,19 @@ kubectl apply -k k8s/
 # 3. smoke (control-plane + prints the agent-run commands)
 ./smoke.sh
 ```
+
+## NATS management UI
+
+The bundle includes NUI, a ClusterIP-only web console for the consolidated
+`omnigent-nats` JetStream instance. It preloads an in-cluster CLI context for
+`nats://omnigent-nats:4222`.
+
+```bash
+kubectl -n bytedesk port-forward svc/omnigent-nats-ui 31311:31311
+```
+
+Open `http://127.0.0.1:31311`. Keep it internal; the UI can inspect and mutate
+streams, KV buckets, and Object Store data.
 
 **Smoke ladder** (each rung proves more):
 1. `smoke.sh` green → server + Postgres + health OK.
