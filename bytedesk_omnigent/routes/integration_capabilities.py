@@ -5,6 +5,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
 
+from bytedesk_omnigent.integration_acceptance_suite import (
+    compile_integration_acceptance_suite,
+)
 from bytedesk_omnigent.integration_capabilities import (
     CapabilityCategory,
     get_integration_capability,
@@ -76,5 +79,20 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/acceptance-suite")
+    async def get_capability_acceptance_suite(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile deterministic acceptance scenarios for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        suite = compile_integration_acceptance_suite(slug)
+        if suite is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(suite)
 
     return router
