@@ -172,3 +172,29 @@ BDP-2583), Phase 2 sensor/condition system (BDP-2584), Phase 3 economics
 (treasury/optimizer/ledger/safety, BDP-2585). Admin/real-time surface =
 `adr-omnigent-goal-administration-realtime`; extensibility =
 `adr-omnigent-goal-provider-contract`.
+
+## Phase 2 — Full autonomy (BDP-2592)
+
+Phase 1 shipped the engine skeleton; several decisions in this ADR were built as
+seams/defaults but not fully wired (honestly: `success_condition` was stored but
+never evaluated; assignment + actuator seams were inert; `confidence`/EV were
+static; cost was a flat constant; the learning loop, economic rebalancer,
+opportunity discovery, sub-goal decomposition, and market mechanics were
+deferred). Epic **BDP-2592** completes them:
+
+- **Close the loop** (Wave 1, BDP-2594): the tick evaluates `success_condition`
+  → auto-completes a goal ("done is evaluated, not declared"); the dispatcher
+  consumes the `goal_assignment` registry; actuators are consumed (agent tools +
+  deterministic actuator goals); a per-model cost model feeds `est_cost` and
+  `settle()` runs with real usage; the dormant config knobs are wired; and a real
+  agent working a seeded goal → done → outcome booked → replenish is proven e2e.
+- **Real-world reach** (Wave 2, BDP-2595): live `kpi/jira/github/http/mcp`
+  sensors (native + via the registered connected-app provider); Jira two-way.
+- **Agentic intelligence** (Wave 3, BDP-2596): learning loop (confidence/EV from
+  the ledger), the accountability loop becomes an economic rebalancer, recurring
+  progress accumulator + until_done heartbeat, auto-decomposition, dynamic
+  sub-goal spawn, opportunity discovery.
+- **Market mechanics** (Wave 4, BDP-2597) — see `adr-omnigent-goal-market-mechanics`.
+- **Command center** (Wave 5, BDP-2598) — see `adr-omnigent-goals-command-center`.
+- **Arm full_auto** (Wave 6, BDP-2599): founder org flipped to `full_auto` behind
+  the safety layer + kill switch; other tenants stay `gated`.
