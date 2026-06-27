@@ -566,6 +566,56 @@ class SqlConversationItem(Base):
     )
 
 
+class SqlConversationEventAudit(Base):
+    """
+    Append-only raw event log for chat/event sequencing decisions.
+
+    ``conversation_items`` remains the canonical visible transcript. This table
+    records the raw producer event and the sequencer's decision so operators can
+    prove no accepted chat event disappeared during ordering/correlation.
+    """
+
+    __tablename__ = "conversation_event_audit"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False
+    )
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    event_type: Mapped[str] = mapped_column(String(96), nullable=False)
+    provider_event_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    response_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    call_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    message_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    raw_payload: Mapped[str] = mapped_column(Text, nullable=False)
+    canonical_payload: Mapped[str | None] = mapped_column(Text, nullable=True)
+    decision: Mapped[str] = mapped_column(String(32), nullable=False, default="received")
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    conversation_item_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("conversation_items.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index(
+            "ix_conversation_event_audit_conversation_position",
+            "conversation_id",
+            "position",
+            unique=True,
+        ),
+        Index("ix_conversation_event_audit_conversation_created", "conversation_id", "created_at"),
+        Index("ix_conversation_event_audit_decision", "decision"),
+        Index("ix_conversation_event_audit_call_id", "conversation_id", "call_id"),
+        CheckConstraint(
+            "decision in ('received', 'persisted', 'buffered', 'released', "
+            "'orphan_flushed', 'ignored')",
+            name="ck_conversation_event_audit_decision",
+        ),
+    )
+
+
 class SqlConversationLabel(Base):
     """
     SQLAlchemy model for the ``conversation_labels`` table.

@@ -165,6 +165,11 @@ from omnigent.server.auth import (
     local_single_user_enabled,
 )
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
+from omnigent.server.conversation_event_sequencer import (
+    SequencedPersistResult,
+    flush_orphaned_outputs,
+    persist_sequenced_item,
+)
 from omnigent.server.host_registry import HostConnection, HostRegistry, RunnerExitReports
 from omnigent.server.managed_hosts import (
     ManagedHostLaunch,
@@ -4503,13 +4508,27 @@ async def _persist_external_conversation_item(
             # No pending entry — direct terminal input. Fall back to the
             # identity authenticated on the forwarder's own request.
             item = item.model_copy(update={"created_by": created_by})
-    persisted_items = await asyncio.to_thread(conversation_store.append, session_id, [item])
+    result = await persist_sequenced_item(
+        conversation_store,
+        session_id,
+        item,
+        source="external_conversation_item",
+        event_type=body.type,
+        raw_payload=body.model_dump(exclude_none=True),
+    )
+    if result.buffered:
+        return result.audit.id
+    persisted = result.persisted
+    if persisted is None:
+        return result.audit.id
     await _seed_missing_title_from_user_message(conv, item, conversation_store)
-    persisted = persisted_items[0]
     _publish_external_conversation_item(
         session_id, persisted, cleared_pending_id=cleared_pending_id
     )
     _drive_terminal_resolved_elicitation(session_id, persisted)
+    for released in result.released:
+        _publish_external_conversation_item(session_id, released)
+        _drive_terminal_resolved_elicitation(session_id, released)
     return persisted.id
 
 
@@ -8671,29 +8690,39 @@ async def _relay_persist(
     conversation_store: ConversationStore | None,
     session_id: str,
     item: NewConversationItem,
-) -> None:
+    *,
+    raw_payload: dict[str, Any] | None = None,
+    event_type: str | None = None,
+) -> SequencedPersistResult | None:
     """
     Persist a single conversation item from the relay.
 
     :param conversation_store: Store instance, or ``None`` to skip.
     :param session_id: Session/conversation identifier.
     :param item: The item to persist.
+    :param raw_payload: Raw runner event payload, when available.
+    :param event_type: Raw runner event type, when available.
     """
     if conversation_store is None:
-        return
+        return None
     try:
-        persisted = await asyncio.to_thread(
-            conversation_store.append,
+        result = await persist_sequenced_item(
+            conversation_store,
             session_id,
-            [item],
+            item,
+            source="runner_relay",
+            event_type=event_type or item.type,
+            raw_payload=raw_payload or {"type": item.type},
         )
     except Exception:
         _logger.exception(
             "Relay persist failed for session=%s",
             session_id,
         )
-        return
-    await _rescue_compaction_to_memory(conversation_store, session_id, persisted)
+        return None
+    persisted_items = [item for item in [result.persisted, *result.released] if item is not None]
+    await _rescue_compaction_to_memory(conversation_store, session_id, persisted_items)
+    return result
 
 
 async def _flush_relay_text(
@@ -8771,7 +8800,19 @@ async def _flush_relay_text(
                 },
             ),
         )
-        persisted = await asyncio.to_thread(conversation_store.append, session_id, [item])
+        result = await persist_sequenced_item(
+            conversation_store,
+            session_id,
+            item,
+            source="runner_relay_text",
+            event_type="relay.text_segment",
+            raw_payload={
+                "type": "relay.text_segment",
+                "response_id": item.response_id,
+                "model": model_id,
+                "text": text,
+            },
+        )
     except Exception:
         # Keep text_acc + the in-flight buffer so the narration isn't lost:
         # it still replays on reconnect and is retried at the next flush.
@@ -8779,6 +8820,8 @@ async def _flush_relay_text(
             "Relay: failed to persist assistant text segment for session=%s",
             session_id,
         )
+        return
+    if result.persisted is None:
         return
     # Confirmed persisted — now safe to clear. Synchronous (no await before
     # the next yield), so no reconnect observes the committed message and a
@@ -8792,7 +8835,7 @@ async def _flush_relay_text(
     # by byte-equal content, not by open-section state.
     done_event = OutputItemDoneEvent(
         type="response.output_item.done",
-        item=persisted[0].to_api_dict(),
+        item=result.persisted.to_api_dict(),
     )
     session_stream.publish(session_id, done_event.model_dump())
 
@@ -8873,6 +8916,9 @@ async def _relay_runner_stream(
                     except json.JSONDecodeError:
                         continue
                     evt_type = event.get("type", "")
+                    suppress_current_event_publish = False
+                    pre_publish_items: list[ConversationItem] = []
+                    post_publish_items: list[ConversationItem] = []
                     # The runner emits session.status events
                     # directly.
                     # Re-publish via _publish_status so the event
@@ -9030,11 +9076,16 @@ async def _relay_runner_stream(
                         response_id=_persist_rid,
                     )
                     if conv_item is not None:
-                        await _relay_persist(
+                        persist_result = await _relay_persist(
                             conversation_store,
                             session_id,
                             conv_item,
+                            raw_payload=event,
+                            event_type=evt_type,
                         )
+                        if persist_result is not None:
+                            suppress_current_event_publish = persist_result.buffered
+                            post_publish_items.extend(persist_result.released)
 
                     # On ANY terminal event (not just completed), persist the
                     # final text segment: narration streamed before a failure /
@@ -9060,6 +9111,9 @@ async def _relay_runner_stream(
                             text_acc,
                             current_response_id,
                             _final_model,
+                        )
+                        pre_publish_items.extend(
+                            await flush_orphaned_outputs(conversation_store, session_id)
                         )
 
                     error_item = _error_item_from_sse(
@@ -9199,7 +9253,21 @@ async def _relay_runner_stream(
                                 elicitation_id,
                             )
                         continue
+                    if suppress_current_event_publish:
+                        continue
+                    for flushed in pre_publish_items:
+                        done_event = OutputItemDoneEvent(
+                            type="response.output_item.done",
+                            item=flushed.to_api_dict(),
+                        )
+                        session_stream.publish(session_id, done_event.model_dump())
                     session_stream.publish(session_id, event)
+                    for released in post_publish_items:
+                        done_event = OutputItemDoneEvent(
+                            type="response.output_item.done",
+                            item=released.to_api_dict(),
+                        )
+                        session_stream.publish(session_id, done_event.model_dump())
 
     except (httpx.HTTPError, ConnectionError):
         # Runner transports may raise bare ConnectionError; treat it the
@@ -17152,6 +17220,9 @@ def create_sessions_router(
                     "external_session_status data.response_id must be a string",
                     code=ErrorCode.INVALID_INPUT,
                 )
+            if status in {"idle", "failed"}:
+                for flushed in await flush_orphaned_outputs(conversation_store, session_id):
+                    _publish_external_conversation_item(session_id, flushed)
             _publish_status(session_id, status, response_id=response_id)
             forward_body = body.model_dump()
             forward_body["data"] = await _enrich_idle_status_with_subagent_output(

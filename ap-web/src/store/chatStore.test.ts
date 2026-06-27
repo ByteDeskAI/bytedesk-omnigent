@@ -6416,6 +6416,51 @@ describe("chatStore — live delta streaming (claude-native)", () => {
     controller.abort();
   });
 
+  it("buffers out-of-order native chunks until the missing gap arrives", async () => {
+    useChatStore.setState({
+      conversationId: "conv_live_gap",
+      blocks: [],
+      isNativeTerminalSession: true,
+    });
+    const { sink, controller } = startPump("conv_live_gap");
+
+    sink.push(sse("response.created", { id: "resp_l", status: "in_progress", output: [] }));
+    sink.push(nativeDelta("m1", 0, "All ", false));
+    sink.push(nativeDelta("m1", 2, "ordered", false));
+    await tick();
+    expect(provisional()?.fullText).toBe("All ");
+
+    sink.push(nativeDelta("m1", 1, "chunks ", false));
+    await tick();
+    expect(provisional()?.fullText).toBe("All chunks ordered");
+
+    controller.abort();
+  });
+
+  it("can prefix late lower-index chunks after a replay-baseline chunk", async () => {
+    useChatStore.setState({
+      conversationId: "conv_live_prefix",
+      blocks: [],
+      isNativeTerminalSession: true,
+    });
+    const { sink, controller } = startPump("conv_live_prefix");
+
+    sink.push(sse("response.created", { id: "resp_l", status: "in_progress", output: [] }));
+    sink.push(nativeDelta("m1", 2, "ordered", false));
+    await tick();
+    expect(provisional()?.fullText).toBe("ordered");
+
+    sink.push(nativeDelta("m1", 0, "All ", false));
+    await tick();
+    expect(provisional()?.fullText).toBe("ordered");
+
+    sink.push(nativeDelta("m1", 1, "chunks ", false));
+    await tick();
+    expect(provisional()?.fullText).toBe("All chunks ordered");
+
+    controller.abort();
+  });
+
   it("drops a trailing chunk that arrives after the message was finalized", async () => {
     // Regression: the forwarder can emit a message's last chunk just
     // AFTER its authoritative text_done (the chunk was written to the

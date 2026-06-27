@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any
 
 from sqlalchemy import (
@@ -27,6 +28,7 @@ from omnigent.db.converters import sql_agent_to_entity
 from omnigent.db.db_models import (
     SqlAgent,
     SqlConversation,
+    SqlConversationEventAudit,
     SqlConversationItem,
     SqlConversationLabel,
     SqlUserDailyCost,
@@ -56,9 +58,11 @@ from omnigent.stores.conversation_store import (
     FORK_SOURCE_EXTERNAL_SESSION_LABEL_KEY,
     FORK_SOURCE_LABEL_KEY,
     SWITCH_PREVIOUS_BUILTIN_LABEL_KEY,
+    ConversationEventAudit,
     ConversationNotFoundError,
     ConversationStore,
     CreatedSession,
+    NewConversationEventAudit,
     SessionConnectivity,
 )
 
@@ -422,6 +426,31 @@ def _to_item(row: SqlConversationItem) -> ConversationItem:
         created_at=row.created_at,
         data=parse_item_data(row.type, json.loads(row.data)),
         created_by=row.created_by,
+    )
+
+
+def _to_event_audit(row: SqlConversationEventAudit) -> ConversationEventAudit:
+    """
+    Convert a raw-event audit row into the store entity.
+
+    :param row: SQLAlchemy audit row.
+    :returns: A :class:`ConversationEventAudit`.
+    """
+    return ConversationEventAudit(
+        id=row.id,
+        conversation_id=row.conversation_id,
+        source=row.source,
+        event_type=row.event_type,
+        provider_event_id=row.provider_event_id,
+        response_id=row.response_id,
+        call_id=row.call_id,
+        message_id=row.message_id,
+        raw_payload=json.loads(row.raw_payload),
+        canonical_payload=json.loads(row.canonical_payload) if row.canonical_payload else None,
+        decision=row.decision,
+        conversation_item_id=row.conversation_item_id,
+        created_at=row.created_at,
+        position=row.position,
     )
 
 
@@ -1507,6 +1536,115 @@ class SqlAlchemyConversationStore(ConversationStore):
                 )
 
         return persisted
+
+    def record_event_audit(self, audit: NewConversationEventAudit) -> ConversationEventAudit:
+        """
+        Persist a raw chat event before canonical conversation projection.
+
+        :param audit: Raw event plus initial sequencer decision.
+        :returns: The persisted audit row.
+        """
+        now = now_epoch()
+        with self._session() as session:
+            self._lock_conversation(session, audit.conversation_id)
+            max_pos = session.execute(
+                select(func.coalesce(func.max(SqlConversationEventAudit.position), -1)).where(
+                    SqlConversationEventAudit.conversation_id == audit.conversation_id
+                )
+            ).scalar_one()
+            row = SqlConversationEventAudit(
+                id=f"cea_{uuid.uuid4().hex}",
+                conversation_id=audit.conversation_id,
+                source=audit.source,
+                event_type=audit.event_type,
+                provider_event_id=audit.provider_event_id,
+                response_id=audit.response_id,
+                call_id=audit.call_id,
+                message_id=audit.message_id,
+                raw_payload=strip_nul_bytes(json.dumps(audit.raw_payload)),
+                canonical_payload=(
+                    strip_nul_bytes(json.dumps(audit.canonical_payload))
+                    if audit.canonical_payload is not None
+                    else None
+                ),
+                decision=audit.decision,
+                conversation_item_id=audit.conversation_item_id,
+                created_at=now,
+                position=max_pos + 1,
+            )
+            session.add(row)
+            session.flush()
+            return _to_event_audit(row)
+
+    def update_event_audit(
+        self,
+        audit_id: str,
+        *,
+        decision: str | None = None,
+        canonical_payload: dict[str, Any] | None = None,
+        conversation_item_id: str | None = None,
+        response_id: str | None = None,
+    ) -> ConversationEventAudit | None:
+        """
+        Update outcome metadata after the sequencer commits a decision.
+
+        :param audit_id: Audit id returned by :meth:`record_event_audit`.
+        :param decision: Optional new decision.
+        :param canonical_payload: Optional canonical item snapshot.
+        :param conversation_item_id: Optional linked conversation item id.
+        :param response_id: Optional corrected response id.
+        :returns: Updated audit row, or ``None`` when the row is absent.
+        """
+        values: dict[str, Any] = {}
+        if decision is not None:
+            values["decision"] = decision
+        if canonical_payload is not None:
+            values["canonical_payload"] = strip_nul_bytes(json.dumps(canonical_payload))
+        if conversation_item_id is not None:
+            values["conversation_item_id"] = conversation_item_id
+        if response_id is not None:
+            values["response_id"] = response_id
+        with self._session() as session:
+            row = session.get(SqlConversationEventAudit, audit_id)
+            if row is None:
+                return None
+            for key, value in values.items():
+                setattr(row, key, value)
+            session.flush()
+            return _to_event_audit(row)
+
+    def list_event_audit(
+        self,
+        conversation_id: str,
+        *,
+        decision: str | None = None,
+        call_id: str | None = None,
+        limit: int = 100,
+        order: str = "asc",
+    ) -> list[ConversationEventAudit]:
+        """
+        List raw chat event audits for diagnostics and buffered releases.
+
+        :param conversation_id: Conversation/session id.
+        :param decision: Optional sequencer decision filter.
+        :param call_id: Optional function call correlation id.
+        :param limit: Maximum number of rows.
+        :param order: ``"asc"`` or ``"desc"`` by creation time.
+        :returns: Audit rows.
+        """
+        with self._session() as session:
+            stmt = select(SqlConversationEventAudit).where(
+                SqlConversationEventAudit.conversation_id == conversation_id
+            )
+            if decision is not None:
+                stmt = stmt.where(SqlConversationEventAudit.decision == decision)
+            if call_id is not None:
+                stmt = stmt.where(SqlConversationEventAudit.call_id == call_id)
+            sort_fn = asc if order == "asc" else desc
+            stmt = stmt.order_by(
+                sort_fn(SqlConversationEventAudit.position),
+            ).limit(limit)
+            return [_to_event_audit(row) for row in session.execute(stmt).scalars().all()]
 
     def list_conversations(
         self,
