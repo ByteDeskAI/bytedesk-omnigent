@@ -1,5 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { hostFetch } from "@/lib/host";
 import { HEARTBEAT_WATCHDOG_MS, sessionUpdatesSocket } from "./sessionUpdatesSocket";
+
+// The socket now fetches a short-TTL ws-ticket over HTTP before constructing the
+// WebSocket (BDP-2513) so the cross-site iframe can authenticate the handshake.
+// Mock that fetch so construction is deterministic; resolveWebSocketUrl is
+// stubbed to a fixed origin. Default per-test: empty ticket → bare URL.
+vi.mock("@/lib/host", () => ({
+  resolveWebSocketUrl: (path: string) => `ws://localhost${path}`,
+  hostFetch: vi.fn(),
+}));
+
+const mockHostFetch = vi.mocked(hostFetch);
+
+/** Flush the awaited ws-ticket fetch chain so openSocket constructs the socket. */
+async function flushConnect(): Promise<void> {
+  for (let i = 0; i < 4; i++) await Promise.resolve();
+}
 
 // Minimal stand-in for the browser WebSocket: records sends/closes and lets
 // the test drive the lifecycle (open, message) by hand. A real socket can't be
@@ -59,6 +76,11 @@ describe("sessionUpdatesSocket heartbeat watchdog", () => {
     vi.useFakeTimers();
     FakeWebSocket.instances = [];
     vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+    // Default: no ticket (header / local-style) → connect to the bare URL.
+    mockHostFetch.mockResolvedValue({
+      ok: true,
+      json: async () => ({ ticket: "" }),
+    } as unknown as Response);
   });
 
   afterEach(() => {
@@ -70,8 +92,9 @@ describe("sessionUpdatesSocket heartbeat watchdog", () => {
     vi.useRealTimers();
   });
 
-  it("forces a reconnect after the watchdog window of total silence", () => {
+  it("forces a reconnect after the watchdog window of total silence", async () => {
     sessionUpdatesSocket.start();
+    await flushConnect();
     const ws = latestWs();
     ws.open();
     expect(sessionUpdatesSocket.isConnected()).toBe(true);
@@ -92,12 +115,15 @@ describe("sessionUpdatesSocket heartbeat watchdog", () => {
     // fresh socket is constructed — the stream tries to come back, it doesn't
     // just give up.
     const before = FakeWebSocket.instances.length;
-    vi.advanceTimersByTime(RECONNECT_CEILING_MS);
+    // Async advance: firing the reconnect timer kicks off openSocket's awaited
+    // ticket fetch, so the fresh socket is constructed on the flushed microtasks.
+    await vi.advanceTimersByTimeAsync(RECONNECT_CEILING_MS);
     expect(FakeWebSocket.instances.length).toBe(before + 1);
   });
 
-  it("keeps the connection alive when a heartbeat arrives before the deadline", () => {
+  it("keeps the connection alive when a heartbeat arrives before the deadline", async () => {
     sessionUpdatesSocket.start();
+    await flushConnect();
     const ws = latestWs();
     ws.open();
 
@@ -115,6 +141,30 @@ describe("sessionUpdatesSocket heartbeat watchdog", () => {
     vi.advanceTimersByTime(1);
     expect(ws.closeCount).toBe(1);
     expect(sessionUpdatesSocket.isConnected()).toBe(false);
+  });
+
+  it("attaches the ws-ticket to the handshake URL when one is issued", async () => {
+    mockHostFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ticket: "tkt-123" }),
+    } as unknown as Response);
+
+    sessionUpdatesSocket.start();
+    await flushConnect();
+
+    expect(mockHostFetch).toHaveBeenCalledWith("/v1/auth/ws-ticket");
+    expect(latestWs().url).toContain("ticket=tkt-123");
+  });
+
+  it("connects without a ticket when the ws-ticket fetch fails", async () => {
+    // Best-effort: a failed ticket fetch must never block the socket (the
+    // cookie / proxy identity path still applies where it works).
+    mockHostFetch.mockRejectedValueOnce(new Error("network"));
+
+    sessionUpdatesSocket.start();
+    await flushConnect();
+
+    expect(latestWs().url).not.toContain("ticket=");
   });
 });
 

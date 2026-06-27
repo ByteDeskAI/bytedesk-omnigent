@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import secrets
 from datetime import datetime, timezone
 
 import pytest
@@ -24,6 +25,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import omnigent.server.routes.sessions as sessions_routes
+from omnigent.server.accounts_config import AccountsConfig
 from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
 from omnigent.server.routes.sessions import SessionLiveness, create_sessions_router
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
@@ -426,6 +428,74 @@ def test_unauthenticated_connection_is_rejected(stores) -> None:
         with TestClient(app).websocket_connect("/v1/sessions/updates"):
             pass
     # 1008 = WS_1008_POLICY_VIOLATION — the auth gate fired before accept.
+    assert exc_info.value.code == 1008
+
+
+def test_ws_ticket_endpoint_and_handshake_auth(stores) -> None:
+    """The ws-ticket flow authenticates the updates WS when the cross-site
+    cookie can't ride the handshake (BDP-2513).
+
+    Accounts mode: ``GET /v1/auth/ws-ticket`` (cookie over HTTP, which works)
+    mints a ticket; the WS authenticates with that ``?ticket=`` and NO cookie
+    on the socket; a garbage ticket is still rejected; an unauthenticated
+    ticket fetch 401s.
+    """
+    from omnigent.errors import OmnigentError
+    from omnigent.server.oidc import mint_session_cookie
+
+    cookie_secret = secrets.token_bytes(32)
+    cfg = AccountsConfig(
+        cookie_secret=cookie_secret,
+        session_ttl_hours=8,
+        base_url="http://localhost:8000",
+        init_admin_password=None,
+        invite_ttl_seconds=3600,
+        magic_ttl_seconds=600,
+    )
+    provider = UnifiedAuthProvider(source="accounts", accounts_config=cfg)
+    conversation_store, agent_store, permission_store = stores
+    app = FastAPI()
+    app.include_router(
+        create_sessions_router(
+            conversation_store=conversation_store,
+            agent_store=agent_store,
+            auth_provider=provider,
+            permission_store=permission_store,
+        ),
+        prefix="/v1",
+    )
+    sid = _seed_session(stores, owner=ALICE, title="Alice ticket WS")
+
+    # Unauthenticated ticket fetch → the auth gate fires (a 401 response in the
+    # real app via the OmnigentError handler; the bare test app surfaces the
+    # raise directly — same gate).
+    with pytest.raises(OmnigentError):
+        TestClient(app).get("/v1/auth/ws-ticket")
+
+    # Authenticated over HTTP (the cookie rides HTTP) → a non-empty ticket.
+    authed = TestClient(app)
+    authed.cookies.set(
+        cfg.session_cookie_name,
+        mint_session_cookie(
+            user_id=ALICE, cookie_secret=cookie_secret, ttl_hours=8, provider="accounts"
+        ),
+    )
+    resp = authed.get("/v1/auth/ws-ticket")
+    assert resp.status_code == 200
+    ticket = resp.json()["ticket"]
+    assert ticket
+
+    # The ticket authenticates the WS handshake with NO cookie on the socket.
+    bare = TestClient(app)
+    with bare.websocket_connect(f"/v1/sessions/updates?ticket={ticket}") as ws:
+        ws.send_json({"type": "watch", "session_ids": [sid]})
+        snap = _recv_until(ws, {"snapshot"})
+        assert any(item["id"] == sid for item in snap["items"])
+
+    # A garbage ticket is rejected exactly like no auth.
+    with pytest.raises(WebSocketDisconnect) as exc_info:
+        with bare.websocket_connect("/v1/sessions/updates?ticket=not-a-jwt"):
+            pass
     assert exc_info.value.code == 1008
 
 
