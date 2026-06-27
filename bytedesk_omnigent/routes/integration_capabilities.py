@@ -11,11 +11,16 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_remediation_playbook import (
+    compile_integration_remediation_playbook,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
+
+_FAILED_GATE_ID_QUERY = Query(default_factory=list)
 
 
 def create_integration_capabilities_router(
@@ -76,5 +81,24 @@ def create_integration_capabilities_router(
                 status_code=404,
             )
         return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/remediation-playbook")
+    async def get_capability_remediation_playbook(
+        request: Request,
+        slug: str,
+        failed_gate_id: list[str] = _FAILED_GATE_ID_QUERY,
+    ) -> JSONResponse:
+        """Compile repair steps for failed rollout verification gates."""
+
+        require_user(request, auth_provider)
+        playbook = compile_integration_remediation_playbook(
+            slug, failed_gate_ids=tuple(failed_gate_id)
+        )
+        if playbook is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(playbook)
 
     return router
