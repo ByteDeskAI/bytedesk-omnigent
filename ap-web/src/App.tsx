@@ -32,6 +32,9 @@ const SchedulesPage = lazy(() =>
   import("@/pages/SchedulesPage").then((m) => ({ default: m.SchedulesPage })),
 );
 const GoalsPage = lazy(() => import("@/pages/GoalsPage").then((m) => ({ default: m.GoalsPage })));
+const CommandCenterPage = lazy(() =>
+  import("@/pages/CommandCenterPage").then((m) => ({ default: m.CommandCenterPage })),
+);
 const InboundPage = lazy(() =>
   import("@/pages/InboundPage").then((m) => ({ default: m.InboundPage })),
 );
@@ -143,6 +146,7 @@ function App({ basename }: AppProps = {}) {
           <Route path={`${prefix}/inbox`} element={<InboxPage />} />
           <Route path={`${prefix}/skills`} element={<SkillsPage />} />
           <Route path={`${prefix}/goals`} element={<GoalsPage />} />
+          <Route path={`${prefix}/command-center`} element={<CommandCenterPage />} />
           <Route path={`${prefix}/inbound`} element={<InboundPage />} />
           <Route path={`${prefix}/schedules`} element={<SchedulesPage />} />
           {info.omni_cli_terminal_enabled && (
