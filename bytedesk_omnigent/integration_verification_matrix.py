@@ -170,7 +170,12 @@ def _risk_tier(
 ) -> IntegrationRiskTier:
     if category == "workflow_harness":
         return "internal_harness"
-    if any("write" in scope.lower() or scope.endswith(".write") for scope in required_scopes):
+    mutating_scope_markers = ("write", "update", "insert", "delete", "send")
+    if any(
+        any(marker in scope.lower() for marker in mutating_scope_markers)
+        or scope.endswith(".write")
+        for scope in required_scopes
+    ):
         return "external_write"
     return "external_read"
 
