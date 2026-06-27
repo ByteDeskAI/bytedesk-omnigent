@@ -11438,6 +11438,7 @@ async def _create_session_from_existing_agent(
 
 
 def _create_session_from_bundle(
+    agent_store: AgentStore,
     conversation_store: ConversationStore,
     artifact_store: ArtifactStore,
     metadata: SessionCreateMetadata,
@@ -11456,8 +11457,8 @@ def _create_session_from_bundle(
     points at, silently discarding the uploaded bundle and coupling
     unrelated users who chose the same name.
 
-    :param conversation_store: Store that owns the atomic
-        conversation-plus-agent transaction.
+    :param agent_store: Store that owns agent definitions.
+    :param conversation_store: Store that owns conversation/session rows.
     :param artifact_store: Store for uploaded bundle bytes.
     :param metadata: Validated session metadata. When
         ``metadata.parent_session_id`` is set (already authorized by
@@ -11497,6 +11498,7 @@ def _create_session_from_bundle(
         )
         raise
     return _persist_stored_session_bundle(
+        agent_store,
         conversation_store,
         artifact_store,
         metadata,
@@ -11510,6 +11512,7 @@ def _create_session_from_bundle(
 
 
 def _persist_stored_session_bundle(
+    agent_store: AgentStore,
     conversation_store: ConversationStore,
     artifact_store: ArtifactStore,
     metadata: SessionCreateMetadata,
@@ -11524,8 +11527,8 @@ def _persist_stored_session_bundle(
     """
     Persist database rows for a bundle already written to artifacts.
 
-    :param conversation_store: Store that owns the atomic
-        conversation-plus-agent transaction.
+    :param agent_store: Store that owns the session-scoped agent definition.
+    :param conversation_store: Store that owns the session row.
     :param artifact_store: Store for deleting the bundle on failure.
     :param metadata: Validated session metadata. A set
         ``parent_session_id`` creates the conversation as a
@@ -11542,21 +11545,40 @@ def _persist_stored_session_bundle(
     :raises SQLAlchemyError: If the database transaction fails for
         any non-integrity reason.
     """
+    conversation: Conversation | None = None
+    agent_created = False
     try:
-        created = conversation_store.create_session_with_agent(
+        conversation = conversation_store.create_conversation(
             agent_id=agent_id,
-            agent_name=agent_name,
-            agent_bundle_location=agent_bundle_location,
-            agent_description=agent_description,
             title=metadata.title,
-            labels=metadata.labels,
-            reasoning_effort=metadata.reasoning_effort,
-            workspace=metadata.workspace,
-            terminal_launch_args=metadata.terminal_launch_args,
             parent_conversation_id=metadata.parent_session_id,
             runner_id=runner_id,
+            kind="sub_agent" if metadata.parent_session_id else "default",
+            workspace=metadata.workspace,
+            terminal_launch_args=metadata.terminal_launch_args,
             tenant_id=tenant_id,
         )
+        agent_store.create(
+            agent_id=agent_id,
+            name=agent_name,
+            bundle_location=agent_bundle_location,
+            description=agent_description,
+            session_id=conversation.id,
+        )
+        agent_created = True
+        if metadata.reasoning_effort is not None:
+            updated = conversation_store.update_conversation(
+                conversation.id,
+                reasoning_effort=metadata.reasoning_effort,
+            )
+            if updated is None:
+                raise OmnigentError(
+                    f"Session {conversation.id!r} disappeared while persisting metadata",
+                    code=ErrorCode.INTERNAL_ERROR,
+                )
+            conversation = updated
+        if metadata.labels:
+            conversation_store.set_labels(conversation.id, metadata.labels)
     except ConversationNotFoundError as exc:
         # Parent was authorized by the caller but vanished (deleted)
         # before the insert transaction ran.
@@ -11573,11 +11595,25 @@ def _persist_stored_session_bundle(
             artifact_store,
             agent_bundle_location,
         )
-        # Expected integrity failures here are uniqueness collisions:
-        # generated agent id, generated conversation id, or
-        # agents.session_id. The route maps those to 409.
+        if agent_created:
+            agent_store.delete(agent_id)
+        if conversation is not None:
+            asyncio.run(conversation_store.delete_conversation(conversation.id))
         raise OmnigentError(
-            f"session agent write failed integrity checks: {exc.orig}",
+            f"session write failed integrity checks: {exc.orig}",
+            code=ErrorCode.ALREADY_EXISTS,
+        ) from exc
+    except ValueError as exc:
+        _delete_stored_session_bundle_after_failure(
+            artifact_store,
+            agent_bundle_location,
+        )
+        if agent_created:
+            agent_store.delete(agent_id)
+        if conversation is not None:
+            asyncio.run(conversation_store.delete_conversation(conversation.id))
+        raise OmnigentError(
+            f"session write failed agent store checks: {exc}",
             code=ErrorCode.ALREADY_EXISTS,
         ) from exc
     except SQLAlchemyError:
@@ -11585,9 +11621,23 @@ def _persist_stored_session_bundle(
             artifact_store,
             agent_bundle_location,
         )
+        if agent_created:
+            agent_store.delete(agent_id)
+        if conversation is not None:
+            asyncio.run(conversation_store.delete_conversation(conversation.id))
+        raise
+    except Exception:
+        _delete_stored_session_bundle_after_failure(
+            artifact_store,
+            agent_bundle_location,
+        )
+        if agent_created:
+            agent_store.delete(agent_id)
+        if conversation is not None:
+            asyncio.run(conversation_store.delete_conversation(conversation.id))
         raise
     return CreatedSessionResponse(
-        session_id=created.conversation.id,
+        session_id=conversation.id,
         agent_id=agent_id,
         agent_name=agent_name,
     )
@@ -13162,6 +13212,7 @@ def create_sessions_router(
         bundle_bytes = await bundle.read()
         result = await asyncio.to_thread(
             _create_session_from_bundle,
+            agent_store,
             conversation_store,
             artifact_store,
             parsed_metadata,
@@ -14242,16 +14293,11 @@ def create_sessions_router(
                 )
             base_agent = target_agent
 
-        # Clone the chosen agent's bundle into a fresh session-scoped row so
-        # the fork can be reconfigured without mutating the original.
+        # Clone the chosen agent's bundle into a fresh session-scoped
+        # AgentStore definition so the fork can be reconfigured without
+        # mutating the original.
         cloned_agent_id = generate_agent_id()
-        await asyncio.to_thread(
-            agent_store.create,
-            agent_id=cloned_agent_id,
-            name=f"{base_agent.name} (fork {cloned_agent_id[:10]})",
-            bundle_location=base_agent.bundle_location,
-            description=base_agent.description,
-        )
+        cloned_agent_name = f"{base_agent.name} (fork {cloned_agent_id[:10]})"
 
         # A model id is provider-bound, so the source's model_override /
         # reasoning_effort only carry over when the switch stays in the same
@@ -14303,6 +14349,14 @@ def create_sessions_router(
                 presentation_labels=presentation_labels,
                 up_to_response_id=body.up_to_response_id,
             )
+            await asyncio.to_thread(
+                agent_store.create,
+                agent_id=cloned_agent_id,
+                name=cloned_agent_name,
+                bundle_location=base_agent.bundle_location,
+                description=base_agent.description,
+                session_id=new_conv.id,
+            )
         except LookupError as exc:
             raise OmnigentError(
                 f"Session not found: {source_id!r}",
@@ -14315,6 +14369,10 @@ def create_sessions_router(
                 str(exc),
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
+        except Exception:
+            if "new_conv" in locals():
+                await conversation_store.delete_conversation(new_conv.id)
+            raise
 
         if permission_store is not None and user_id is not None:
             await asyncio.to_thread(permission_store.ensure_user, user_id)
@@ -14484,7 +14542,18 @@ def create_sessions_router(
 
         cloned_agent_id = generate_agent_id()
         cloned_agent_name = f"{target_agent.name} (switch {cloned_agent_id[:10]})"
+        new_agent_created = False
         try:
+            await asyncio.to_thread(
+                agent_store.create,
+                agent_id=cloned_agent_id,
+                name=cloned_agent_name,
+                bundle_location=target_agent.bundle_location,
+                description=target_agent.description,
+                session_id=session_id,
+                replace_session=True,
+            )
+            new_agent_created = True
             updated = await asyncio.to_thread(
                 conversation_store.switch_conversation_agent,
                 session_id,
@@ -14498,10 +14567,38 @@ def create_sessions_router(
                 previous_builtin_id=previous_builtin_id,
             )
         except LookupError as exc:
+            if new_agent_created:
+                await asyncio.to_thread(agent_store.delete, cloned_agent_id)
+                if current_agent.session_id == session_id:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(
+                            agent_store.create,
+                            agent_id=current_agent.id,
+                            name=current_agent.name,
+                            bundle_location=current_agent.bundle_location,
+                            description=current_agent.description,
+                            session_id=session_id,
+                            replace_session=True,
+                        )
             raise OmnigentError(
                 f"Session not found: {session_id!r}",
                 code=ErrorCode.NOT_FOUND,
             ) from exc
+        except Exception:
+            if new_agent_created:
+                await asyncio.to_thread(agent_store.delete, cloned_agent_id)
+                if current_agent.session_id == session_id:
+                    with contextlib.suppress(Exception):
+                        await asyncio.to_thread(
+                            agent_store.create,
+                            agent_id=current_agent.id,
+                            name=current_agent.name,
+                            bundle_location=current_agent.bundle_location,
+                            description=current_agent.description,
+                            session_id=session_id,
+                            replace_session=True,
+                        )
+            raise
 
         # Tell every connected client the binding changed so they re-derive
         # session state (presentation labels, bound agent) from a fresh

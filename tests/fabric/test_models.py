@@ -85,11 +85,19 @@ def test_manifest_declares_required_assets_and_non_overlapping_workqueue_subject
         "OMNIGENT_RUNNER_EVENTS",
         "OMNIGENT_RUNNER_DLQ",
         "OMNIGENT_FABRIC_AUDIT",
+        "OMNIGENT_AGENT_EVENTS",
     }
-    assert "omnigent-fabric-runner-registry" in {bucket.name for bucket in manifest.kv_buckets}
+    bucket_names = {bucket.name for bucket in manifest.kv_buckets}
+    assert "omnigent-fabric-runner-registry" in bucket_names
+    assert {
+        "OMNIGENT_AGENT_HEADS",
+        "OMNIGENT_AGENT_NAME_INDEX",
+        "OMNIGENT_AGENT_SESSION_INDEX",
+    } <= bucket_names
     assert "omnigent-fabric-artifact-manifests" in {
         store.name for store in manifest.object_stores
     }
+    assert "omnigent-agent-revisions" in {store.name for store in manifest.object_stores}
 
     runner_subjects = [
         subject

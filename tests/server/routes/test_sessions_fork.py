@@ -39,6 +39,7 @@ class _AgentStore:
         """
         self._agents: dict[str, Agent] = dict(agents or {})
         self.create_calls: list[dict[str, Any]] = []
+        self.delete_calls: list[str] = []
 
     def get(self, agent_id: str) -> Agent | None:
         """
@@ -55,6 +56,9 @@ class _AgentStore:
         name: str,
         bundle_location: str,
         description: str | None = None,
+        *,
+        session_id: str | None = None,
+        replace_session: bool = False,
     ) -> Agent:
         """
         Record the create call and store the new agent.
@@ -63,6 +67,8 @@ class _AgentStore:
         :param name: Agent name.
         :param bundle_location: Bundle location string.
         :param description: Optional description.
+        :param session_id: Optional owning session id.
+        :param replace_session: Whether to replace an existing session binding.
         :returns: The newly created Agent.
         """
         self.create_calls.append(
@@ -71,8 +77,14 @@ class _AgentStore:
                 "name": name,
                 "bundle_location": bundle_location,
                 "description": description,
+                "session_id": session_id,
+                "replace_session": replace_session,
             }
         )
+        if session_id is not None and replace_session:
+            for existing_id, existing in list(self._agents.items()):
+                if existing.session_id == session_id and existing_id != agent_id:
+                    del self._agents[existing_id]
         agent = Agent(
             id=agent_id,
             created_at=1,
@@ -80,9 +92,15 @@ class _AgentStore:
             bundle_location=bundle_location,
             version=1,
             description=description,
+            session_id=session_id,
         )
         self._agents[agent_id] = agent
         return agent
+
+    def delete(self, agent_id: str) -> bool:
+        """Delete an agent by id."""
+        self.delete_calls.append(agent_id)
+        return self._agents.pop(agent_id, None) is not None
 
 
 class _ConversationStore:
@@ -110,6 +128,7 @@ class _ConversationStore:
         self._convs = conversations
         self._items = items_by_conv or {}
         self.fork_calls: list[dict[str, Any]] = []
+        self.deleted: list[str] = []
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         """
@@ -203,6 +222,11 @@ class _ConversationStore:
             title=title or f"Fork of {src.title}",
             agent_id=effective_agent_id,
         )
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """:returns: Whether the conversation existed."""
+        self.deleted.append(conversation_id)
+        return self._convs.pop(conversation_id, None) is not None
 
     def list_items(
         self,

@@ -2611,12 +2611,6 @@ class SqlAlchemyConversationStore(ConversationStore):
                     src_item.search_text or "",
                 )
 
-            # Bind the cloned agent to the forked session atomically.
-            if agent_id is not None:
-                agent_row = session.get(SqlAgent, agent_id)
-                if agent_row is not None:
-                    agent_row.session_id = new_conv.id
-
             # Copy labels from the source conversation, minus the
             # instance-scoped ones (native bridge ids, context metrics)
             # — those belong to the source's running instance and would
@@ -2715,36 +2709,7 @@ class SqlAlchemyConversationStore(ConversationStore):
             if row is None:
                 raise LookupError(f"conversation not found: {conversation_id!r}")
 
-            # Replace the session-scoped agent. Ordering matters for two
-            # constraints: (1) ``conversations.agent_id`` → ``agents.id`` is
-            # ON DELETE CASCADE, so deleting the old agent while the row still
-            # references it would cascade-delete the WHOLE conversation; null
-            # the reference first. (2) ``ix_agents_session_id`` is UNIQUE, so
-            # the old agent must be gone before the new one claims
-            # ``session_id``. Hence: null agent_id → delete old → insert new →
-            # repoint agent_id. The delete is guarded on
-            # ``session_id == conversation_id`` so a (mistakenly bound)
-            # built-in agent is never deleted.
-            old_agent_id = row.agent_id
-            row.agent_id = None
-            session.flush()
-            if old_agent_id is not None:
-                old_agent = session.get(SqlAgent, old_agent_id)
-                if old_agent is not None and old_agent.session_id == conversation_id:
-                    session.delete(old_agent)
-                    session.flush()
-
-            new_agent = _new_session_agent_row(
-                agent_id=new_agent_id,
-                agent_name=new_agent_name,
-                agent_bundle_location=new_agent_bundle_location,
-                agent_description=new_agent_description,
-                conversation_id=conversation_id,
-                now=now,
-            )
-            session.add(new_agent)
-            session.flush()
-
+            del new_agent_name, new_agent_bundle_location, new_agent_description
             row.agent_id = new_agent_id
             # A model id is provider-bound, so a cross-family switch resets
             # both; a same-family switch keeps the session's current values.

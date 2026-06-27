@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
 
 from omnigent.entities import Automation, PagedList
+
+
+@dataclass(frozen=True)
+class AgentRevision:
+    """One versioned AgentStore snapshot."""
+
+    revision: int
+    agent: Automation
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentStore(ABC):
@@ -34,6 +45,9 @@ class AgentStore(ABC):
         name: str,
         bundle_location: str,
         description: str | None = None,
+        *,
+        session_id: str | None = None,
+        replace_session: bool = False,
     ) -> Automation:
         """
         Register a new template agent. Name must be unique among
@@ -49,6 +63,11 @@ class AgentStore(ABC):
             e.g. ``"ag_abc123/a1b2c3d4e5f6..."``.
         :param description: Optional free-text description of the
             agent's purpose.
+        :param session_id: Owning conversation id for a session-scoped
+            agent. ``None`` creates a template agent.
+        :param replace_session: For session-scoped creation, allow the
+            backend to replace the existing agent currently bound to
+            ``session_id``.
         :returns: The newly created :class:`Agent`.
         """
         ...
@@ -186,7 +205,7 @@ class AgentStore(ABC):
 
     def set_capabilities(
         self, agent_id: str, capabilities: Sequence[str] | None
-    ) -> bool:  # noqa: ARG002
+    ) -> bool:
         """
         Persist the agent's declared capability slugs (BDP-2334, ADR-0142).
 
@@ -201,6 +220,7 @@ class AgentStore(ABC):
         :param capabilities: The capability slugs, or ``None`` to clear them.
         :returns: ``True`` if the agent exists and was updated, else ``False``.
         """
+        del agent_id, capabilities
         return False
 
     def get_capabilities(self, agent_id: str) -> tuple[str, ...]:  # noqa: ARG002
@@ -243,6 +263,45 @@ class AgentStore(ABC):
         :param agent_id: The registered agent id.
         :returns: The tier string, or ``None``.
         """
+        return None
+
+    def bind_session(self, agent_id: str, session_id: str) -> Automation | None:  # noqa: ARG002
+        """Bind an existing agent definition to a session.
+
+        Backends that keep session ownership outside the primary create path
+        override this. The default returns ``None`` to preserve old test stores.
+        """
+        return None
+
+    def list_revisions(self, agent_id: str) -> list[AgentRevision]:  # noqa: ARG002
+        """Return known revisions for *agent_id*, oldest first."""
+        return []
+
+    def get_revision(
+        self,
+        agent_id: str,  # noqa: ARG002
+        revision: int,  # noqa: ARG002
+    ) -> AgentRevision | None:
+        """Return one revision snapshot, or ``None``."""
+        return None
+
+    def diff_revisions(
+        self,
+        agent_id: str,  # noqa: ARG002
+        from_revision: int,  # noqa: ARG002
+        to_revision: int,  # noqa: ARG002
+    ) -> dict[str, tuple[Any, Any]]:
+        """Return a field-level diff between two revisions."""
+        return {}
+
+    def rollback(
+        self,
+        agent_id: str,  # noqa: ARG002
+        revision: int,  # noqa: ARG002
+        *,
+        expected_version: int | None = None,  # noqa: ARG002
+    ) -> Automation | None:
+        """Restore an agent to a previous revision."""
         return None
 
     @abstractmethod

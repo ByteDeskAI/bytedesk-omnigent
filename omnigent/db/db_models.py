@@ -304,10 +304,9 @@ class SqlConversation(Base):
         ``conversation_id``. ``ON DELETE CASCADE`` to keep it
         consistent with ``parent_conversation_id`` when a root is
         deleted.
-    :param agent_id: Foreign key to the agent bound to this
-        conversation at creation time. ``None`` for legacy
-        conversations created without an agent binding (these are
-        excluded from ``GET /v1/sessions`` results).
+    :param agent_id: External AgentStore id bound to this conversation at
+        creation time. ``None`` for legacy conversations created without an
+        agent binding (these are excluded from ``GET /v1/sessions`` results).
     :param runner_id: Runner the conversation is pinned to (hard
         affinity per ``designs/RUNNER.md`` §5). ``None`` until the
         first dispatch claims a runner; thereafter every subsequent
@@ -374,7 +373,6 @@ class SqlConversation(Base):
     )
     agent_id: Mapped[str | None] = mapped_column(
         String(64),
-        ForeignKey("agents.id", ondelete="CASCADE"),
         nullable=True,
     )
     runner_id: Mapped[str | None] = mapped_column(String(64), nullable=True)

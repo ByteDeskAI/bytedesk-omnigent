@@ -788,6 +788,15 @@ def _default_artifact_location() -> str:
     return str(_local_data_dir() / "artifacts")
 
 
+def _is_relative_artifact_location(location: str) -> bool:
+    """Return whether a config artifact location should resolve against the config file."""
+    return (
+        "://" not in location
+        and not location.startswith("dbfs:/")
+        and not Path(location).is_absolute()
+    )
+
+
 def _ensure_sqlite_parent_dir(db_uri: str) -> None:
     """Create the parent directory of a SQLite DB file if it's missing.
 
@@ -2894,14 +2903,6 @@ def server(
     from omnigent.server.auth import create_auth_provider
     from omnigent.server.server_config import config_str_list
     from omnigent.server.websocket_limits import CONTROL_WEBSOCKET_MAX_MESSAGE_BYTES
-    from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
-    from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
-    from omnigent.stores.conversation_store.sqlalchemy_store import (
-        SqlAlchemyConversationStore,
-    )
-    from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
-    from omnigent.stores.policy_store.sqlalchemy_store import SqlAlchemyPolicyStore
-
     cfg = _load_config(config_path)
 
     # CLI args take precedence over config file, which takes precedence
@@ -2911,7 +2912,7 @@ def server(
 
     # Resolve relative artifact location against config file's directory
     # (only when the value came from the config file, not CLI).
-    if config_path and artifact_location is None and not Path(art_loc).is_absolute():
+    if config_path and artifact_location is None and _is_relative_artifact_location(art_loc):
         art_loc = str(Path(config_path).parent / art_loc)
 
     # SQLite won't create the DB file's parent dir; do it before any store
@@ -2919,38 +2920,20 @@ def server(
     # with "unable to open database file".
     _ensure_sqlite_parent_dir(db_uri)
 
-    # BDP-2327 (core-refactor spine, Phase 1): behind
-    # OMNIGENT_USE_STORE_BOOTSTRAPPER (default OFF), build the stores via
-    # the StoreBootstrapper factory — the same Sql* stores + the same
-    # Local-vs-Databricks artifact-store branch this block builds inline.
-    # With the flag off the inline path below stays the default, so wiring
-    # is unchanged. The bootstrapper also builds host_store, so the later
-    # `host_store = HostStore(db_uri)` is skipped when this path runs.
-    from omnigent.server.auth import env_var_is_truthy
-    from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+    # Build stores through the shared composition-root factory. AgentStore is
+    # NATS-only after the cutover; the SQLAlchemy AgentStore class remains in
+    # tree for verification but is not a runtime provider.
+    from omnigent.stores.factory import StoreBootstrapper
 
-    _use_store_bootstrapper = env_var_is_truthy("OMNIGENT_USE_STORE_BOOTSTRAPPER")
-    _bootstrapped_host_store = None
-    if _use_store_bootstrapper:
-        from omnigent.stores.factory import StoreBootstrapper
-
-        _stores = StoreBootstrapper.create(db_uri, art_loc)
-        agent_store = _stores.agent_store
-        file_store = _stores.file_store
-        conversation_store = _stores.conversation_store
-        comment_store = _stores.comment_store
-        policy_store = _stores.policy_store
-        permission_store = _stores.permission_store
-        artifact_store = _stores.artifact_store
-        _bootstrapped_host_store = _stores.host_store
-    else:
-        agent_store = SqlAlchemyAgentStore(db_uri)
-        file_store = SqlAlchemyFileStore(db_uri)
-        conversation_store = SqlAlchemyConversationStore(db_uri)
-        comment_store = SqlAlchemyCommentStore(db_uri)
-        policy_store = SqlAlchemyPolicyStore(db_uri)
-        permission_store = SqlAlchemyPermissionStore(db_uri)
-        artifact_store = _create_artifact_store(art_loc)
+    _stores = StoreBootstrapper.create(db_uri, art_loc)
+    agent_store = _stores.agent_store
+    file_store = _stores.file_store
+    conversation_store = _stores.conversation_store
+    comment_store = _stores.comment_store
+    policy_store = _stores.policy_store
+    permission_store = _stores.permission_store
+    artifact_store = _stores.artifact_store
+    _bootstrapped_host_store = _stores.host_store
 
     # Initialize the runtime with store references so workflow code
     # can access them via getter functions (get_agent_cache(), etc.).
@@ -3017,13 +3000,8 @@ def server(
             agent_cache,
         )
 
-    from omnigent.stores.host_store import HostStore
-
-    # Reuse the StoreBootstrapper-built host_store when that path ran
-    # (BDP-2327); otherwise construct inline as before.
-    host_store = (
-        _bootstrapped_host_store if _bootstrapped_host_store is not None else HostStore(db_uri)
-    )
+    # Reuse the StoreBootstrapper-built host_store.
+    host_store = _bootstrapped_host_store
 
     # Managed sandbox hosts (host_type="managed" sessions): parse the
     # config's `sandbox:` section up front so an operator typo stops
@@ -8804,6 +8782,55 @@ def debug_db_upgrade(url: str) -> None:
     finally:
         engine.dispose()
     click.echo("Upgrade complete.")
+
+
+@debug.command("import-sql-agents")
+@click.option(
+    "--database-uri",
+    default=None,
+    help="SQLAlchemy database URI to import legacy agents from. Defaults to config/default.",
+)
+@click.option(
+    "--artifact-location",
+    default=None,
+    help="Artifact location used to resolve the active NATS AgentStore.",
+)
+@click.option(
+    "--config",
+    "config_path",
+    default=None,
+    type=click.Path(exists=True, dir_okay=False),
+    help="YAML config file supplying database_uri/artifact_location.",
+)
+def debug_import_sql_agents(
+    database_uri: str | None,
+    artifact_location: str | None,
+    config_path: str | None,
+) -> None:
+    """Import legacy SQL agent rows into the active NATS AgentStore."""
+    from omnigent.stores.agent_store.import_sql import import_sql_agents
+    from omnigent.stores.factory import _create_agent_store
+
+    cfg = _load_config(config_path)
+    db_uri = database_uri or cfg.get("database_uri", _default_db_uri())
+    art_loc = artifact_location or cfg.get("artifact_location", _default_artifact_location())
+
+    if config_path and artifact_location is None and _is_relative_artifact_location(art_loc):
+        art_loc = str(Path(config_path).parent / art_loc)
+
+    _ensure_sqlite_parent_dir(db_uri)
+    agent_store = _create_agent_store(art_loc)
+    report = import_sql_agents(db_uri, agent_store)
+    if report.conflicts:
+        conflicts = ", ".join(report.conflicts)
+        raise click.ClickException(
+            "Agent import found existing NATS records with different material fields: "
+            f"{conflicts}"
+        )
+    click.echo(
+        "Imported legacy SQL agents: "
+        f"{report.imported} imported, {report.skipped} skipped, 0 conflicts."
+    )
 
 
 @debug.command("migrate-accounts-to-oidc")

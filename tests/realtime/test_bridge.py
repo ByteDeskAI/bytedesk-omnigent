@@ -1,4 +1,4 @@
-"""BDP-2301 — agent roster bridge: emit gating + store-method wrappers + install."""
+"""BDP-2301 — agent roster bridge: emit gating + AgentStore event subscription."""
 
 from __future__ import annotations
 
@@ -196,15 +196,20 @@ def test_emit_goal_planning_noop_when_tenant_unset(monkeypatch):
     assert calls == []
 
 
-def test_wrap_create_calls_orig_then_emits(monkeypatch):
+def test_install_subscribes_to_agent_store_events(monkeypatch):
+    from omnigent.stores.agent_store import events as agent_events
+
     monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
+    monkeypatch.setattr(bridge, "_INSTALLED", False, raising=False)
     calls = _capture(monkeypatch)
+    agent_events.reset_for_test()
+    try:
+        assert bridge.install() is True
+        agent_events.emit("created", "ag_9")
+    finally:
+        agent_events.reset_for_test()
+        bridge._INSTALLED = False
 
-    def orig(self, agent_id, name, bundle_location, description=None):
-        return ("created", agent_id)
-
-    result = bridge.wrap_create(orig)(object(), "ag_9", "name", "loc")
-    assert result == ("created", "ag_9")
     assert calls == [
         (
             "office:agents:t",
@@ -213,84 +218,24 @@ def test_wrap_create_calls_orig_then_emits(monkeypatch):
     ]
 
 
-def test_wrap_update_skips_emit_when_no_row(monkeypatch):
+def test_install_is_idempotent(monkeypatch):
+    from omnigent.stores.agent_store import events as agent_events
+
     monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
-    calls = _capture(monkeypatch)
-    assert (
-        bridge.wrap_update(lambda self, agent_id, bundle_location: None)(object(), "ag_x", "loc")
-        is None
-    )
-    assert calls == []
-
-
-def test_wrap_update_emits_when_row_updated(monkeypatch):
-    monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
-    calls = _capture(monkeypatch)
-    bridge.wrap_update(lambda self, agent_id, bundle_location: "agent")(object(), "ag_u", "loc")
-    assert calls == [
-        (
-            "office:agents:t",
-            {"type": "roster.changed", "action": "updated", "agentId": "ag_u"},
-        )
-    ]
-
-
-def test_wrap_update_passes_expected_version(monkeypatch):
-    monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
-    calls = _capture(monkeypatch)
-    seen = {}
-
-    def orig(self, agent_id, bundle_location, *, expected_version=None):
-        seen["expected_version"] = expected_version
-        return "agent"
-
-    result = bridge.wrap_update(orig)(
-        object(),
-        "ag_u",
-        "loc",
-        expected_version=7,
-    )
-
-    assert result == "agent"
-    assert seen == {"expected_version": 7}
-    assert calls == [
-        (
-            "office:agents:t",
-            {"type": "roster.changed", "action": "updated", "agentId": "ag_u"},
-        )
-    ]
-
-
-def test_wrap_delete_emits_only_when_existed(monkeypatch):
-    monkeypatch.setenv("BYTEDESK_REALTIME_TENANT_ID", "t")
-    calls = _capture(monkeypatch)
-    assert bridge.wrap_delete(lambda self, agent_id: True)(object(), "ag_d") is True
-    assert bridge.wrap_delete(lambda self, agent_id: False)(object(), "ag_e") is False
-    assert calls == [
-        (
-            "office:agents:t",
-            {"type": "roster.changed", "action": "deleted", "agentId": "ag_d"},
-        )
-    ]
-
-
-def test_install_wraps_store_and_is_idempotent(monkeypatch):
-    from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
-
-    saved = (
-        SqlAlchemyAgentStore.create,
-        SqlAlchemyAgentStore.update,
-        SqlAlchemyAgentStore.delete,
-    )
     monkeypatch.setattr(bridge, "_INSTALLED", False, raising=False)
+    calls = _capture(monkeypatch)
+    agent_events.reset_for_test()
     try:
         assert bridge.install() is True
-        assert SqlAlchemyAgentStore.create is not saved[0]  # wrapped
-        assert bridge.install() is False  # idempotent — second call no-ops
+        assert bridge.install() is False
+        agent_events.emit("updated", "ag_u")
     finally:
-        (
-            SqlAlchemyAgentStore.create,
-            SqlAlchemyAgentStore.update,
-            SqlAlchemyAgentStore.delete,
-        ) = saved
+        agent_events.reset_for_test()
         bridge._INSTALLED = False
+
+    assert calls == [
+        (
+            "office:agents:t",
+            {"type": "roster.changed", "action": "updated", "agentId": "ag_u"},
+        )
+    ]

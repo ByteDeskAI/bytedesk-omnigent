@@ -114,14 +114,18 @@ def test_bootstrapped_stores_run_lifecycle_noop_default(
     store set.
     """
     monkeypatch.delenv(LIFECYCLE_HOOKS_ENV_VAR, raising=False)
+    monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://omnigent-nats:4222")
     stores = StoreBootstrapper.create(db_uri, str(tmp_path / "artifacts"))
 
     assert asyncio.run(stores.run_lifecycle("startup")) == {}
     assert asyncio.run(stores.run_lifecycle("health_check")) == {}
 
 
-def test_all_stores_returns_full_bundle(db_uri: str, tmp_path: Path) -> None:
+def test_all_stores_returns_full_bundle(
+    db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """all_stores() exposes every wired store for uniform iteration."""
+    monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://omnigent-nats:4222")
     stores = StoreBootstrapper.create(db_uri, str(tmp_path / "artifacts"))
     bundle = stores.all_stores()
 
