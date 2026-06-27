@@ -68,6 +68,33 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Get Integration Cutover Checklist
+
+```
+GET /v1/integration-capabilities/{slug}/cutover-checklist
+
+200 OK
+{
+  "object": "integration_cutover_checklist",
+  "capability_slug": "slack-command-center",
+  "risk_tier": "external_write",
+  "required_approvals": ["tenant_admin", "security_owner", "integration_owner"],
+  "verification_gate_ids": ["catalog-contract", "auth-boundary", "..."],
+  "minimum_required_evidence_count": 24,
+  "phases": [
+    {
+      "id": "catalog-freeze",
+      "title": "Freeze catalog contract and activation scope",
+      "owner": "product operator",
+      "entry_criteria": ["..."],
+      "exit_evidence": ["..."]
+    }
+  ]
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management
