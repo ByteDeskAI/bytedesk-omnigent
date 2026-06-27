@@ -57,8 +57,22 @@ DEPENDENCY_KINDS = (
     "jira_issue",
 )
 DEPENDENCY_STATUSES = ("pending", "satisfied", "waived")
+# BDP-2585 economics.
+TIERS = ("org", "department", "agent")
+RISK_TIERS = ("low", "medium", "high")
+# tier derives from target_kind unless explicitly set.
+_TIER_FOR_TARGET = {"organization": "org", "department": "department", "agent": "agent"}
 
 _UNSET = object()
+
+
+def roi(goal: Goal, *, remaining_budget_cents: int) -> float:
+    """Derived ROI (never stored): ``(expected_value_cents * confidence) / budget``.
+
+    ``remaining_budget_cents`` is floored at 1 so a zero/over-spent budget yields a
+    large-but-finite ROI rather than dividing by zero (ADR goal-engine §roi).
+    """
+    return (goal.expected_value_cents * goal.confidence) / max(remaining_budget_cents, 1)
 
 
 @dataclass(frozen=True)
@@ -99,6 +113,25 @@ class Goal:
     cadence_expr: str | None = None
     cadence_tz: str | None = None
     dependencies: tuple[GoalDependency, ...] = ()
+    # BDP-2585 economics (Phase 3): the goal as an economic unit. realized_value_cents
+    # is written ONLY by ``book_outcome``.
+    tier: str = "org"
+    parent_goal_id: str | None = None
+    expected_value_cents: int = 0
+    realized_value_cents: int = 0
+    confidence: float = 0.5
+    risk_tier: str = "low"
+    success_condition: dict[str, Any] | None = None
+
+    @property
+    def attributes(self) -> dict[str, Any]:
+        """Typed accessor for ``payload["attributes"]`` (paper-trading, approval state).
+
+        No DB column — economic flags ride in the existing JSON payload next to the
+        delivery/hierarchy state (mirrors the resolver's condition-in-payload choice).
+        """
+        attrs = (self.payload or {}).get("attributes")
+        return attrs if isinstance(attrs, dict) else {}
 
 
 def _loads(value: str | None) -> dict[str, Any] | None:
@@ -183,6 +216,13 @@ def _to_goal(
         cadence_expr=getattr(row, "cadence_expr", None),
         cadence_tz=getattr(row, "cadence_tz", None),
         dependencies=dep_snapshot,
+        tier=getattr(row, "tier", None) or "org",
+        parent_goal_id=getattr(row, "parent_goal_id", None),
+        expected_value_cents=getattr(row, "expected_value_cents", None) or 0,
+        realized_value_cents=getattr(row, "realized_value_cents", None) or 0,
+        confidence=row.confidence if getattr(row, "confidence", None) is not None else 0.5,
+        risk_tier=getattr(row, "risk_tier", None) or "low",
+        success_condition=_loads(getattr(row, "success_condition", None)),
     )
 
 
@@ -269,6 +309,12 @@ class SqlAlchemyGoalStore:
         cadence_expr: str | None = None,
         cadence_tz: str | None = None,
         dependencies: Sequence[dict[str, Any]] | None = None,
+        tier: str | None = None,
+        parent_goal_id: str | None = None,
+        expected_value_cents: int = 0,
+        confidence: float = 0.5,
+        risk_tier: str = "low",
+        success_condition: dict[str, Any] | None = None,
         scheduler: Any | None = None,
         now: int | None = None,
     ) -> Goal:
@@ -303,6 +349,8 @@ class SqlAlchemyGoalStore:
             for spec in dependency_specs
         ]
         activation_state = _activation_for(readiness_kind, dep_statuses)
+        tier = _validate("tier", tier or _TIER_FOR_TARGET[target_kind], TIERS)
+        risk_tier = _validate("risk_tier", risk_tier, RISK_TIERS)
 
         goal: Goal
         with self._write_session() as session:
@@ -322,6 +370,14 @@ class SqlAlchemyGoalStore:
                 cadence_kind=cadence_kind,
                 cadence_expr=cadence_expr,
                 cadence_tz=cadence_tz,
+                tier=tier,
+                parent_goal_id=parent_goal_id,
+                expected_value_cents=expected_value_cents,
+                confidence=confidence,
+                risk_tier=risk_tier,
+                success_condition=(
+                    json.dumps(success_condition) if success_condition is not None else None
+                ),
                 created_at=now,
                 updated_at=now,
             )
@@ -448,6 +504,12 @@ class SqlAlchemyGoalStore:
             "target_label",
             "readiness_kind",
             "activation_state",
+            "tier",
+            "parent_goal_id",
+            "expected_value_cents",
+            "confidence",
+            "risk_tier",
+            "success_condition",
         }
         unknown = set(updates) - allowed
         if unknown:
@@ -492,6 +554,22 @@ class SqlAlchemyGoalStore:
             if "readiness_kind" in updates:
                 row.readiness_kind = _validate(
                     "readiness_kind", str(updates["readiness_kind"]), READINESS_KINDS
+                )
+            if "tier" in updates:
+                row.tier = _validate("tier", str(updates["tier"]), TIERS)
+            if "parent_goal_id" in updates:
+                row.parent_goal_id = updates["parent_goal_id"]
+            if "expected_value_cents" in updates:
+                row.expected_value_cents = int(updates["expected_value_cents"])
+            if "confidence" in updates:
+                row.confidence = float(updates["confidence"])
+            if "risk_tier" in updates:
+                row.risk_tier = _validate("risk_tier", str(updates["risk_tier"]), RISK_TIERS)
+            if "success_condition" in updates:
+                row.success_condition = (
+                    json.dumps(updates["success_condition"])
+                    if updates["success_condition"] is not None
+                    else None
                 )
             if "activation_state" in updates:
                 row.activation_state = _validate(
