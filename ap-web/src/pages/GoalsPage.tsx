@@ -9,16 +9,27 @@ import {
   CircleDashedIcon,
   CircleDotIcon,
   FlagIcon,
+  LayersIcon,
   ListChecksIcon,
   NetworkIcon,
   PauseCircleIcon,
   PlusIcon,
   SparklesIcon,
   TargetIcon,
+  Trash2Icon,
   XIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -32,9 +43,12 @@ import { tierForAgent } from "@/lib/agentTiers";
 import {
   useActivateGoal,
   useAddGoalDependency,
+  useDeleteGoal,
   useGoalEvents,
   useGoalPlannerSources,
   useGoals,
+  useGoalTemplates,
+  useInstantiateGoalTemplate,
   useStartGoalPlanningSession,
   useUpdateGoal,
   useUpdateGoalDependency,
@@ -48,6 +62,7 @@ import type {
   GoalStatus,
   GoalTargetKind,
   GoalPlannerSource,
+  GoalTemplate,
 } from "@/lib/goalsApi";
 
 type ScopeKind = GoalTargetKind;
@@ -177,6 +192,9 @@ export function GoalsPage() {
   const activateGoal = useActivateGoal();
   const addDependency = useAddGoalDependency();
   const updateDependency = useUpdateGoalDependency();
+  const deleteGoal = useDeleteGoal();
+  const templates = useGoalTemplates();
+  const instantiateTemplate = useInstantiateGoalTemplate();
   useGoalEvents(true);
 
   const agentRows = useMemo(() => agents.data ?? [], [agents.data]);
@@ -216,6 +234,7 @@ export function GoalsPage() {
   const [sectionsOpen, setSectionsOpen] = useState({ department: true, employees: true });
   const [newDependency, setNewDependency] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<GoalRecord | null>(null);
 
   const selectedScope =
     scopeOptions.find((scope) => scope.key === selectedScopeKey) ?? organizationScope;
@@ -272,12 +291,45 @@ export function GoalsPage() {
     }
   }
 
+  async function confirmDeleteGoal() {
+    if (!pendingDelete) return;
+    setError(null);
+    try {
+      await deleteGoal.mutateAsync(pendingDelete.id);
+      if (selectedGoalId === pendingDelete.id) setSelectedGoalId(null);
+      setPendingDelete(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to delete goal.");
+    }
+  }
+
+  async function instantiate(template: GoalTemplate) {
+    setError(null);
+    try {
+      const goal = await instantiateTemplate.mutateAsync({
+        templateId: template.id,
+        payload: {
+          overrides: {
+            target_kind: selectedScope.kind,
+            target_id: selectedScope.id,
+            target_label: selectedScope.label,
+          },
+        },
+      });
+      setSelectedGoalId(goal.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unable to instantiate template.");
+    }
+  }
+
   const busy =
     startPlanningSession.isPending ||
     updateGoal.isPending ||
     activateGoal.isPending ||
     addDependency.isPending ||
-    updateDependency.isPending;
+    updateDependency.isPending ||
+    deleteGoal.isPending ||
+    instantiateTemplate.isPending;
 
   return (
     <div className="fixed inset-3 z-50 flex min-h-0 flex-col overflow-hidden rounded-lg border border-border bg-background shadow-2xl">
@@ -430,6 +482,15 @@ export function GoalsPage() {
               }}
             />
 
+            <TemplatesPanel
+              templates={templates.data ?? []}
+              isLoading={templates.isLoading}
+              isError={templates.isError}
+              busy={instantiateTemplate.isPending}
+              scopeLabel={selectedScope.label}
+              onInstantiate={(template) => void instantiate(template)}
+            />
+
             {selectedGoal ? (
               <GoalDetail
                 goal={selectedGoal}
@@ -448,6 +509,7 @@ export function GoalsPage() {
                     payload: { status },
                   })
                 }
+                onDelete={() => setPendingDelete(selectedGoal)}
               />
             ) : (
               <div className="rounded-md border border-border p-4 text-sm text-muted-foreground">
@@ -457,6 +519,35 @@ export function GoalsPage() {
           </div>
         </section>
       </div>
+
+      <Dialog
+        open={pendingDelete !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingDelete(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Delete goal</DialogTitle>
+            <DialogDescription>
+              Permanently delete “{pendingDelete?.title}” and its dependencies. This cannot be
+              undone.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <DialogClose asChild>
+              <Button variant="outline">Cancel</Button>
+            </DialogClose>
+            <Button
+              variant="destructive"
+              disabled={deleteGoal.isPending}
+              onClick={() => void confirmDeleteGoal()}
+            >
+              <Trash2Icon /> Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -660,6 +751,72 @@ function PlannerPanel({
   );
 }
 
+function TemplatesPanel({
+  templates,
+  isLoading,
+  isError,
+  busy,
+  scopeLabel,
+  onInstantiate,
+}: {
+  templates: GoalTemplate[];
+  isLoading: boolean;
+  isError: boolean;
+  busy: boolean;
+  scopeLabel: string;
+  onInstantiate: (template: GoalTemplate) => void;
+}) {
+  return (
+    <div className="rounded-md border border-border">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-2">
+        <LayersIcon className="size-4 text-muted-foreground" />
+        <h2 className="text-sm font-semibold">Templates</h2>
+      </div>
+      <div className="space-y-2 p-3">
+        {isLoading ? (
+          <div className="rounded-md border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+            Loading templates…
+          </div>
+        ) : isError ? (
+          <div
+            role="alert"
+            className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            Unable to load templates.
+          </div>
+        ) : templates.length === 0 ? (
+          <div className="rounded-md border border-dashed border-border px-3 py-3 text-sm text-muted-foreground">
+            No templates yet.
+          </div>
+        ) : (
+          templates.map((template) => (
+            <div
+              key={template.id}
+              className="flex items-center justify-between gap-2 rounded-md border border-border p-2"
+            >
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{template.name}</p>
+                {template.description && (
+                  <p className="truncate text-xs text-muted-foreground">{template.description}</p>
+                )}
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                title={`Instantiate into ${scopeLabel}`}
+                onClick={() => onInstantiate(template)}
+              >
+                <PlusIcon /> Use
+              </Button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block space-y-1.5">
@@ -814,6 +971,7 @@ function GoalDetail({
   onStatus,
   onAddDependency,
   onDependencyStatus,
+  onDelete,
 }: {
   goal: GoalRecord;
   busy: boolean;
@@ -823,6 +981,7 @@ function GoalDetail({
   onStatus: (status: GoalStatus) => void;
   onAddDependency: () => void;
   onDependencyStatus: (dependencyId: string, status: "satisfied" | "waived") => void;
+  onDelete: () => void;
 }) {
   return (
     <div className="rounded-md border border-border">
@@ -832,9 +991,20 @@ function GoalDetail({
             <h2 className="truncate text-sm font-semibold">{goal.title}</h2>
             <p className="truncate text-xs text-muted-foreground">{displayTarget(goal)}</p>
           </div>
-          <Badge variant={goal.activation_state === "ready" ? "secondary" : "outline"}>
-            {activationLabel(goal.activation_state)}
-          </Badge>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Badge variant={goal.activation_state === "ready" ? "secondary" : "outline"}>
+              {activationLabel(goal.activation_state)}
+            </Badge>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Delete goal"
+              disabled={busy}
+              onClick={onDelete}
+            >
+              <Trash2Icon />
+            </Button>
+          </div>
         </div>
       </div>
       <div className="space-y-3 p-3">
