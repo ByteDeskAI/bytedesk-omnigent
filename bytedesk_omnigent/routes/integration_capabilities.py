@@ -11,6 +11,9 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_ownership_matrix import (
+    compile_integration_ownership_matrix,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -70,6 +73,21 @@ def create_integration_capabilities_router(
 
         require_user(request, auth_provider)
         matrix = compile_integration_verification_matrix(slug)
+        if matrix is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(matrix)
+
+    @router.get("/integration-capabilities/{slug}/ownership-matrix")
+    async def get_capability_ownership_matrix(
+        request: Request, slug: str
+    ) -> JSONResponse:
+        """Compile launch owners and approvers for one integration blueprint."""
+
+        require_user(request, auth_provider)
+        matrix = compile_integration_ownership_matrix(slug)
         if matrix is None:
             return JSONResponse(
                 {"error": "not_found", "detail": f"unknown integration capability: {slug}"},
