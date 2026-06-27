@@ -990,6 +990,102 @@ class _RelayHandle:
 _runner_relay_tasks: dict[str, _RelayHandle] = {}
 
 
+# How often a viewer-stream keepalive pings the runner. Must sit well below
+# the runner idle-reap window (``runner.idle_timeout_s``, default 3600s) so a
+# conversation a user is actively viewing keeps its runner warm.
+_RUNNER_KEEPALIVE_INTERVAL_S = 300.0
+
+
+@dataclass
+class _KeepaliveHandle:
+    """A per-session runner keepalive task plus its viewer refcount.
+
+    :param refcount: Number of live user-facing SSE streams currently
+        attached to the session. The keepalive runs while it is > 0.
+    :param task: The keepalive ping loop task.
+    """
+
+    refcount: int
+    task: asyncio.Task[None]
+
+
+# Per-session viewer-stream keepalives keyed by session_id (BDP-2601).
+#
+# While ≥1 user-facing ``GET /v1/sessions/{id}/stream`` is attached, the
+# keepalive pings the bound runner on a cadence below its idle-reap window so
+# the focused conversation's runner is not reaped out from under the viewer.
+# This is bounded to attached viewers only (refcounted on stream connect /
+# disconnect). It deliberately does NOT key on the server→runner relay, which
+# is persistent and viewer-independent (it mirrors in-progress turns even with
+# no viewer) — warming on the relay would keep every live runner warm forever.
+_runner_keepalive_tasks: dict[str, _KeepaliveHandle] = {}
+
+
+async def _runner_keepalive_loop(
+    session_id: str,
+    runner_router: RunnerRouter | None,
+    interval_s: float = _RUNNER_KEEPALIVE_INTERVAL_S,
+) -> None:
+    """Ping a session's runner on a cadence to defer its idle-reap.
+
+    Each ping is a unary control-plane request (``GET /health``) which the
+    runner's NATS dispatcher counts as activity (its ``on_activity`` callback
+    resets ``last_activity_at``), so a conversation a user is actively viewing
+    holds its runner warm. Best-effort: a missing client or a transport error
+    (the runner died anyway) is swallowed — the viewer's next message
+    self-heals via :func:`_ensure_runner_relay_ready_with_heal`.
+
+    :param session_id: Session/conversation identifier, e.g. ``"conv_abc123"``.
+    :param runner_router: Router used to resolve the current runner client, or
+        ``None`` for in-process setups (the loop then no-ops each tick).
+    :param interval_s: Seconds between pings, e.g. ``300.0``.
+    :returns: None (runs until cancelled when the last viewer leaves).
+    """
+    while True:
+        await asyncio.sleep(interval_s)
+        client = await _get_runner_client(session_id, runner_router)
+        if client is None:
+            continue
+        with contextlib.suppress(httpx.HTTPError, OSError, RuntimeError):
+            await client.get("/health", timeout=_RUNNER_CONVICTION_POLL_S)
+
+
+def _acquire_runner_keepalive(
+    session_id: str,
+    runner_router: RunnerRouter | None,
+) -> None:
+    """Register a viewer stream for *session_id*; start the keepalive on 0→1.
+
+    :param session_id: Session/conversation identifier.
+    :param runner_router: Router forwarded to the keepalive loop.
+    :returns: None.
+    """
+    existing = _runner_keepalive_tasks.get(session_id)
+    if existing is not None and not existing.task.done():
+        existing.refcount += 1
+        return
+    task = asyncio.create_task(
+        _runner_keepalive_loop(session_id, runner_router),
+        name=f"runner-keepalive-{session_id}",
+    )
+    _runner_keepalive_tasks[session_id] = _KeepaliveHandle(refcount=1, task=task)
+
+
+def _release_runner_keepalive(session_id: str) -> None:
+    """Deregister a viewer stream; cancel the keepalive on the last leave.
+
+    :param session_id: Session/conversation identifier.
+    :returns: None.
+    """
+    existing = _runner_keepalive_tasks.get(session_id)
+    if existing is None:
+        return
+    existing.refcount -= 1
+    if existing.refcount <= 0:
+        existing.task.cancel()
+        _runner_keepalive_tasks.pop(session_id, None)
+
+
 async def _poll_request_disconnect(request: Request) -> None:
     """
     Resolve once Starlette reports the client closed the connection.
@@ -9421,6 +9517,87 @@ async def _ensure_runner_relay_ready(
     return handle
 
 
+async def _ensure_runner_relay_ready_with_heal(
+    session_id: str,
+    request: Request | None,
+    conv: Conversation,
+    runner_client: httpx.AsyncClient,
+    conversation_store: ConversationStore,
+    runner_router: RunnerRouter | None,
+) -> tuple[Conversation, httpx.AsyncClient]:
+    """Start the runner SSE relay with dead-runner self-heal (BDP-2601).
+
+    The message-send / relay-ready path was the last runner-proxy surface that
+    did not self-heal: a session's stored ``runner_id`` is frequently dead by
+    the time a user posts (ephemeral runners are launched on demand and
+    idle/OOM-reaped), so ``_ensure_runner_relay_ready`` raised
+    ``RUNNER_UNAVAILABLE`` → 503 with no recovery. This mirrors
+    ``_proxy_with_runner_heal`` and the eager session-open stream heal
+    (BDP-2579): when the relay handshake fails because the runner is
+    unavailable and a FastAPI ``request`` is available to drive the relaunch,
+    heal the session's runner, re-resolve the conversation + a fresh runner
+    client for the repinned runner id, and retry the handshake ONCE. A heal
+    that still can't reach a runner surfaces a clean ``RUNNER_UNAVAILABLE``
+    (the API error layer maps it to 503; the heal already published the
+    graceful ``terminal_pending`` reconnecting state).
+
+    ``request`` is ``None`` only for internal callers that cannot heal (no
+    FastAPI request to drive the relaunch); those keep today's behavior — one
+    attempt, error propagates.
+
+    :param session_id: Session/conversation identifier, e.g. ``"conv_abc123"``.
+    :param request: The incoming FastAPI request (drives the heal), or ``None``
+        to skip healing (internal callers).
+    :param conv: Conversation row for *session_id*; supplies ``runner_id``.
+    :param runner_client: HTTP client pointed at ``conv.runner_id`` (already
+        resolved non-``None`` by the caller).
+    :param conversation_store: Store used to re-resolve the conversation after
+        a heal repins the runner.
+    :param runner_router: Router used to re-resolve the runner client after a
+        heal.
+    :returns: ``(conv, runner_client)`` — refreshed to the healed runner when
+        a heal occurred, otherwise the inputs unchanged.
+    :raises OmnigentError: ``RUNNER_UNAVAILABLE`` when there is no request to
+        heal, when the heal exhausts every rung, or when the heal cannot
+        re-resolve a runner client / the retried handshake still fails.
+    """
+    try:
+        await _ensure_runner_relay_ready(
+            session_id,
+            conv.runner_id,
+            runner_client,
+            conversation_store,
+        )
+        return conv, runner_client
+    except (OmnigentError, httpx.ConnectError) as exc:
+        if request is None or not _is_runner_unavailable_error(exc):
+            raise
+        if not await _heal_session_runner(session_id, request):
+            raise OmnigentError(
+                "runner unavailable for message relay",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            ) from exc
+        refreshed = await asyncio.to_thread(
+            conversation_store.get_conversation, session_id
+        )
+        if refreshed is not None:
+            conv = refreshed
+        healed_client = await _get_runner_client(session_id, runner_router)
+        if healed_client is None:
+            raise OmnigentError(
+                "runner unavailable for message relay",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            ) from exc
+        runner_client = healed_client
+        await _ensure_runner_relay_ready(
+            session_id,
+            conv.runner_id,
+            runner_client,
+            conversation_store,
+        )
+        return conv, runner_client
+
+
 # Per-session compaction locks so concurrent ``/compact`` POSTs
 # don't race.
 _COMPACT_LOCKS: dict[str, asyncio.Lock] = {}
@@ -10471,6 +10648,7 @@ async def _stream_live_events(
     viewer_idle: bool = False,
     presence_root_id: str | None = None,
     last_event_id: int | None = None,
+    keepalive_runner_router: RunnerRouter | None = None,
 ) -> AsyncIterator[str]:
     """
     Yield SSE-formatted events from the conversation's live stream.
@@ -10529,6 +10707,10 @@ async def _stream_live_events(
         viewers of different agents/sub-agents in one session see
         each other. Required when *viewer_user_id* is set; ignored
         otherwise.
+    :param keepalive_runner_router: When set, hold the session's runner warm
+        for this stream's lifetime by pinging it on a cadence (BDP-2601), so a
+        conversation a user is viewing is not idle-reaped. ``None`` (default,
+        and in-process setups) disables the keepalive.
     :returns: An async iterator of SSE message strings.
     :raises ValueError: If *viewer_user_id* is set without
         *presence_root_id* — a per-conversation presence scope would
@@ -10545,6 +10727,14 @@ async def _stream_live_events(
         presence_token = presence.connect(
             presence_root_id, session_id, viewer_user_id, viewer_idle
         )
+    # Hold the runner warm while this stream is attached (BDP-2601). Bounded to
+    # attached viewers (refcounted); released in ``finally`` on disconnect so an
+    # abandoned session still idle-reaps. Works regardless of presence tracking
+    # (which is skipped for the single-user ``local`` account).
+    keepalive_active = False
+    if keepalive_runner_router is not None:
+        _acquire_runner_keepalive(session_id, keepalive_runner_router)
+        keepalive_active = True
     try:
         async for seq, event in session_stream.subscribe_with_ids(
             session_id,
@@ -10572,6 +10762,8 @@ async def _stream_live_events(
                 event_type, _resilient_stream_payload(event, session_id), event_id=seq
             )
     finally:
+        if keepalive_active:
+            _release_runner_keepalive(session_id)
         # The non-None checks besides presence_token's are type
         # narrowing only: a minted token implies both were set above.
         if (
@@ -17741,11 +17933,17 @@ def create_sessions_router(
             # round-trip never mirrors back, and the optimistic bubble
             # sticks with no reply (host-restart bug).
             await _ensure_runner_session_initialized(session_id, conv, runner_client)
-        await _ensure_runner_relay_ready(
+        # Self-heal a dead/ephemeral runner on the message path: relaunch +
+        # re-resolve conv/client + retry the relay handshake once, instead of
+        # 503-ing the user's message (BDP-2601). Internal callers have no
+        # ``request`` and keep the one-shot behavior.
+        conv, runner_client = await _ensure_runner_relay_ready_with_heal(
             session_id,
-            conv.runner_id,
+            request,
+            conv,
             runner_client,
             conversation_store,
+            runner_router,
         )
         _agent = agent_store.get(conv.agent_id) if conv.agent_id else None
         # Determine whether the agent has MCP servers so the runner's
@@ -18463,6 +18661,14 @@ def create_sessions_router(
                 # Last-Event-ID resume (BDP-2391): a reconnecting EventSource
                 # resends the last id it saw; replay the buffered suffix.
                 last_event_id=_parse_last_event_id(request),
+                # Keep this conversation's runner warm while the user holds the
+                # stream open (BDP-2601). Only for host-bound runner sessions;
+                # in-process / unbound sessions have no runner to warm.
+                keepalive_runner_router=(
+                    runner_router
+                    if conv.runner_id is not None and conv.host_id is not None
+                    else None
+                ),
             ),
             media_type="text/event-stream",
             headers={
