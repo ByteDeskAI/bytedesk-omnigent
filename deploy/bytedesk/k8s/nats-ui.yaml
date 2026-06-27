@@ -1,0 +1,125 @@
+# NUI — open-source NATS management UI.
+#
+# Kept ClusterIP-only on purpose: this console can inspect and mutate streams,
+# KV buckets, and Object Store state. Operators reach it with:
+#   kubectl -n bytedesk port-forward svc/omnigent-nats-ui 31311:31311
+apiVersion: v1
+kind: Secret
+metadata:
+  name: omnigent-nats-ui-contexts
+  labels:
+    app.kubernetes.io/name: omnigent-nats-ui
+type: Opaque
+stringData:
+  omnigent.json: |
+    {
+      "description": "ByteDesk Omnigent NATS (in-cluster)",
+      "url": "nats://omnigent-nats:4222",
+      "socks_proxy": "",
+      "token": "",
+      "user": "",
+      "password": "",
+      "creds": "",
+      "nkey": "",
+      "cert": "",
+      "key": "",
+      "ca": "",
+      "nsc": "",
+      "jetstream_domain": "",
+      "jetstream_api_prefix": "",
+      "jetstream_event_prefix": "",
+      "inbox_prefix": "",
+      "user_jwt": "",
+      "user_seed": "",
+      "color_scheme": "",
+      "tls_first": false,
+      "windows_cert_store": "",
+      "windows_cert_match_by": "",
+      "windows_cert_match": "",
+      "windows_ca_certs_match": null
+    }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: omnigent-nats-ui
+  labels:
+    app.kubernetes.io/name: omnigent-nats-ui
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: omnigent-nats-ui
+  ports:
+    - name: http
+      port: 31311
+      targetPort: 31311
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: omnigent-nats-ui
+  labels:
+    app.kubernetes.io/name: omnigent-nats-ui
+spec:
+  serviceName: omnigent-nats-ui
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: omnigent-nats-ui
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: omnigent-nats-ui
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: nui
+          # nats-nui/nui latest release v0.9.3 (2026-06-03); GHCR publishes
+          # only latest/edge tags, so pin the current multi-arch latest digest.
+          image: ghcr.io/nats-nui/nui@sha256:331b3f34f8aa626f88e3aa3e35749196607a3a56d7fddc6fb642938dcd659c04
+          imagePullPolicy: IfNotPresent
+          args:
+            - --nats-cli-contexts=/cli-contexts
+          ports:
+            - name: http
+              containerPort: 31311
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: db-volume
+              mountPath: /db
+            - name: cli-contexts
+              mountPath: /cli-contexts
+              readOnly: true
+      volumes:
+        - name: cli-contexts
+          secret:
+            secretName: omnigent-nats-ui-contexts
+            items:
+              - key: omnigent.json
+                path: omnigent.json
+  volumeClaimTemplates:
+    - metadata:
+        name: db-volume
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
