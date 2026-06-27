@@ -108,8 +108,15 @@ DEFAULT_FABRIC_MANIFEST = FabricManifest(
             name="OMNIGENT_FABRIC_AUDIT",
             subjects=("omnigent.fabric.audit.>",),
         ),
+        StreamAsset(
+            name="OMNIGENT_AGENT_EVENTS",
+            subjects=("omnigent.agent_store.>",),
+        ),
     ),
     kv_buckets=(
+        KvBucketAsset("OMNIGENT_AGENT_HEADS", "AgentStore current records and history"),
+        KvBucketAsset("OMNIGENT_AGENT_NAME_INDEX", "AgentStore template name index"),
+        KvBucketAsset("OMNIGENT_AGENT_SESSION_INDEX", "AgentStore session index"),
         KvBucketAsset("omnigent-fabric-lane-config", "Fabric lane configuration"),
         KvBucketAsset("omnigent-fabric-host-state", "Host state and drain markers"),
         KvBucketAsset("omnigent-fabric-runner-registry", "Runner registry records"),
@@ -129,6 +136,7 @@ DEFAULT_FABRIC_MANIFEST = FabricManifest(
         ObjectStoreAsset("omnigent-fabric-runner-crash-bundles", "Runner crash bundles"),
         ObjectStoreAsset("omnigent-fabric-replay-packs", "DLQ replay packs"),
         ObjectStoreAsset("omnigent-fabric-integrity-manifests", "Integrity manifests"),
+        ObjectStoreAsset("omnigent-agent-revisions", "AgentStore revision snapshots"),
     ),
     required_services=(
         "omnigent.fabric.bootstrap",

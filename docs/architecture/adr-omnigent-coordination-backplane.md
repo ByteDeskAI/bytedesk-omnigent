@@ -62,8 +62,7 @@ silently falling back to legacy WebSocket forwarding.
 ## Consequences
 
 - `nats-py` dependency in omnigent
-- Omnigent k8s adds `omnigent-nats` with JetStream PVC for coordination
-- Agent artifacts use a separate `omnigent-nats-artifacts` JetStream Object Store
-  instance/PVC so bundle growth cannot exhaust coordination KV/streams
+- Omnigent k8s uses one consolidated `omnigent-nats` JetStream instance/PVC for
+  coordination, agent-bundle artifacts, and NATS-backed AgentStore assets
 - `omnigent-server` may scale past 1 replica when NATS coordination is configured
 - Platform Redis bridge (`bytedesk_omnigent/realtime/`) unchanged

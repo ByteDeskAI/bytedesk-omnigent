@@ -24,9 +24,9 @@ metadata:
     app.kubernetes.io/name: omnigent-server
 spec:
   # Multi-replica HA requires OMNIGENT_NATS_URL (coordination backplane).
-  # Artifacts (agent bundles) are stored durably in a separate NATS JetStream
-  # Object Store (BDP-2380/2385, ADR-0148) — see ARTIFACT_DIR below — so every
-  # replica shares one store without coupling bundle growth to coordination KV.
+  # Artifacts (agent bundles) are stored durably in the consolidated Omnigent
+  # NATS JetStream Object Store — see ARTIFACT_DIR below — so every replica
+  # shares one store.
   replicas: 2
   strategy:
     type: RollingUpdate

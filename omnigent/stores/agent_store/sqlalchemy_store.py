@@ -46,6 +46,9 @@ class SqlAlchemyAgentStore(AgentStore):
         name: str,
         bundle_location: str,
         description: str | None = None,
+        *,
+        session_id: str | None = None,
+        replace_session: bool = False,
     ) -> Automation:
         """
         Register a new agent in the database.
@@ -57,6 +60,11 @@ class SqlAlchemyAgentStore(AgentStore):
         :param bundle_location: Artifact store key for the bundle,
             e.g. ``"ag_abc123/a1b2c3d4e5f6..."``.
         :param description: Optional free-text description.
+        :param session_id: Optional owning conversation id for a
+            session-scoped agent. Kept for legacy verification only after
+            the NATS cutover.
+        :param replace_session: When ``True``, delete an existing
+            session-scoped row for ``session_id`` before inserting.
         :returns: The newly created :class:`Agent`.
         """
         row = SqlAgent(
@@ -66,8 +74,16 @@ class SqlAlchemyAgentStore(AgentStore):
             bundle_location=bundle_location,
             version=1,
             description=description,
+            session_id=session_id,
         )
         with self._session() as session:
+            if session_id is not None and replace_session:
+                existing = session.execute(
+                    select(SqlAgent).where(SqlAgent.session_id == session_id)
+                ).scalar_one_or_none()
+                if existing is not None:
+                    session.delete(existing)
+                    session.flush()
             session.add(row)
             return sql_agent_to_entity(row)
 
@@ -333,6 +349,16 @@ class SqlAlchemyAgentStore(AgentStore):
         with self._session() as session:
             row = session.get(SqlAgent, agent_id)
             return row.category if row else None
+
+    def bind_session(self, agent_id: str, session_id: str) -> Automation | None:
+        """Bind an existing legacy SQL agent row to a session."""
+        with self._session() as session:
+            row = session.get(SqlAgent, agent_id)
+            if row is None:
+                return None
+            row.session_id = session_id
+            row.updated_at = now_epoch()
+            return sql_agent_to_entity(row)
 
     def delete(self, agent_id: str) -> bool:
         """

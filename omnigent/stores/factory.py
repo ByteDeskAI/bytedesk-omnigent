@@ -1,25 +1,18 @@
 """Store bootstrapper — one place that wires the persistence stores.
 
-Part of the omnigent core-refactor spine (BDP-2327, Phase 1). The
-``omnigent server`` command in :mod:`omnigent.cli` instantiates the
-``SqlAlchemy*`` stores and the artifact store inline before calling
-:func:`omnigent.server.create_app`. :class:`StoreBootstrapper` lifts that
-exact construction into a single, testable factory so the composition
-root has one seam for "build all the stores from a DB URI + artifact
-location".
-
-This is a strangler-fig sidecar: it is used by ``cli.server`` only when
-``OMNIGENT_USE_STORE_BOOTSTRAPPER`` is on. With the flag off the existing
-inline instantiation in ``cli.py`` stays the default path, so behavior is
-unchanged. The factory must therefore construct **the same stores, the
-same way** — including the ``dbfs:/Volumes/...`` Databricks-vs-Local
-artifact-store branch — so flipping the flag is byte-identical wiring.
+The server composition root builds persistence through this factory. Most
+runtime data still lives in SQL stores, while AgentStore is selected through
+the pluggable registry and defaults to the consolidated NATS JetStream backend.
+The legacy SQL AgentStore remains in-tree only for verification/import tooling;
+it is not registered as a runtime provider.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, cast
+from urllib.parse import urlsplit
 
 if TYPE_CHECKING:
     from omnigent.kernel.pluggable import PluggableRegistry
@@ -104,6 +97,46 @@ def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any] 
     """
     registry = _build_artifact_store_registry(location)
     return registry.get(_artifact_scheme(location))
+
+
+def _agent_store_location(artifact_location: str) -> str:
+    """Resolve the required NATS URL for the AgentStore cutover."""
+    explicit = os.environ.get("OMNIGENT_AGENT_STORE_NATS_URL", "").strip()
+    if explicit:
+        return explicit
+    nats_url = os.environ.get("OMNIGENT_NATS_URL", "").strip()
+    if nats_url:
+        return nats_url
+    if artifact_location.startswith("nats://"):
+        split = urlsplit(artifact_location)
+        return f"{split.scheme}://{split.netloc}"
+    raise RuntimeError(
+        "NATS AgentStore requires OMNIGENT_NATS_URL, "
+        "OMNIGENT_AGENT_STORE_NATS_URL, or a nats:// artifact_location"
+    )
+
+
+def _build_agent_store_registry(
+    artifact_location: str,
+) -> PluggableRegistry[Any]:  # type: ignore[explicit-any]
+    """Build the AgentStore seam registry.
+
+    The SQLAlchemy store intentionally is not registered. Existing SQL tables
+    and the legacy class stay in-tree for verification, but runtime selection
+    is NATS-only after the cutover.
+    """
+    from omnigent.kernel.pluggable import PluggableRegistry
+    from omnigent.stores.agent_store.nats_store import NatsAgentStore
+
+    def _nats() -> Any:  # type: ignore[explicit-any]
+        return NatsAgentStore(_agent_store_location(artifact_location))
+
+    return PluggableRegistry("agent_store", default=("nats", _nats))
+
+
+def _create_agent_store(artifact_location: str) -> Any:  # type: ignore[explicit-any]
+    """Create the active AgentStore provider."""
+    return _build_agent_store_registry(artifact_location).resolve_default()
 
 
 @dataclass(frozen=True)
@@ -193,7 +226,6 @@ class StoreBootstrapper:
             ``"./artifacts"`` or ``"dbfs:/Volumes/cat/schema/vol"``.
         :returns: A :class:`BootstrappedStores` with every store wired.
         """
-        from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
         from omnigent.stores.comment_store.sqlalchemy_store import (
             SqlAlchemyCommentStore,
         )
@@ -208,7 +240,7 @@ class StoreBootstrapper:
         from omnigent.stores.policy_store.sqlalchemy_store import SqlAlchemyPolicyStore
 
         return BootstrappedStores(
-            agent_store=SqlAlchemyAgentStore(db_uri),
+            agent_store=_create_agent_store(artifact_location),
             file_store=SqlAlchemyFileStore(db_uri),
             conversation_store=SqlAlchemyConversationStore(db_uri),
             comment_store=SqlAlchemyCommentStore(db_uri),
@@ -219,4 +251,9 @@ class StoreBootstrapper:
         )
 
 
-__all__ = ["BootstrappedStores", "StoreBootstrapper"]
+__all__ = [
+    "BootstrappedStores",
+    "StoreBootstrapper",
+    "_build_agent_store_registry",
+    "_create_agent_store",
+]

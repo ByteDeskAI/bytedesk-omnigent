@@ -26,13 +26,15 @@ from omnigent.server.routes.sessions import create_sessions_router
 
 
 class _AgentStore:
-    """Agent store stub: get + list for the switch route.
+    """Agent store stub for the switch route.
 
     :param agents: Pre-populated map of agent_id → Agent.
     """
 
     def __init__(self, agents: dict[str, Agent]) -> None:
         self._agents = dict(agents)
+        self.create_calls: list[dict[str, Any]] = []
+        self.delete_calls: list[str] = []
 
     def get(self, agent_id: str) -> Agent | None:
         """:returns: The agent if present, else None."""
@@ -54,6 +56,48 @@ class _AgentStore:
         builtins = [a for a in self._agents.values() if a.session_id is None][:limit]
         return PagedList(data=builtins, first_id=None, last_id=None, has_more=False)
 
+    def create(
+        self,
+        agent_id: str,
+        name: str,
+        bundle_location: str,
+        description: str | None = None,
+        *,
+        session_id: str | None = None,
+        replace_session: bool = False,
+    ) -> Agent:
+        """:returns: The newly stored agent."""
+        self.create_calls.append(
+            {
+                "agent_id": agent_id,
+                "name": name,
+                "bundle_location": bundle_location,
+                "description": description,
+                "session_id": session_id,
+                "replace_session": replace_session,
+            }
+        )
+        if session_id is not None and replace_session:
+            for existing_id, existing in list(self._agents.items()):
+                if existing.session_id == session_id and existing_id != agent_id:
+                    del self._agents[existing_id]
+        agent = Agent(
+            id=agent_id,
+            created_at=1,
+            name=name,
+            bundle_location=bundle_location,
+            version=1,
+            description=description,
+            session_id=session_id,
+        )
+        self._agents[agent_id] = agent
+        return agent
+
+    def delete(self, agent_id: str) -> bool:
+        """Delete an agent by id."""
+        self.delete_calls.append(agent_id)
+        return self._agents.pop(agent_id, None) is not None
+
 
 class _ConversationStore:
     """Conversation store stub for the switch route.
@@ -70,6 +114,7 @@ class _ConversationStore:
         self._convs = conversations
         self._items = items_by_conv or {}
         self.switch_calls: list[dict[str, Any]] = []
+        self.deleted: list[str] = []
 
     def get_conversation(self, conversation_id: str) -> Conversation | None:
         """:returns: The conversation if present, else None."""
@@ -126,6 +171,11 @@ class _ConversationStore:
             agent_id=new_agent_id,
             title=src.title,
         )
+
+    async def delete_conversation(self, conversation_id: str) -> bool:
+        """:returns: Whether the conversation existed."""
+        self.deleted.append(conversation_id)
+        return self._convs.pop(conversation_id, None) is not None
 
     def list_items(
         self,

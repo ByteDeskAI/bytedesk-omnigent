@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
+import pytest
+
+from omnigent.stores.agent_store.nats_store import NatsAgentStore
 from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
 from omnigent.stores.conversation_store.sqlalchemy_store import (
@@ -23,13 +25,16 @@ from omnigent.stores.permission_store.sqlalchemy_store import (
 from omnigent.stores.policy_store.sqlalchemy_store import SqlAlchemyPolicyStore
 
 
-def test_create_builds_every_store(db_uri: str, tmp_path: Path) -> None:
+def test_create_builds_every_store(
+    db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """create() returns one instance of each expected concrete store type."""
     art_loc = str(tmp_path / "artifacts")
+    monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://omnigent-nats:4222")
     stores = StoreBootstrapper.create(db_uri, art_loc)
 
     assert isinstance(stores, BootstrappedStores)
-    assert isinstance(stores.agent_store, SqlAlchemyAgentStore)
+    assert isinstance(stores.agent_store, NatsAgentStore)
     assert isinstance(stores.file_store, SqlAlchemyFileStore)
     assert isinstance(stores.conversation_store, SqlAlchemyConversationStore)
     assert isinstance(stores.comment_store, SqlAlchemyCommentStore)
@@ -39,8 +44,11 @@ def test_create_builds_every_store(db_uri: str, tmp_path: Path) -> None:
     assert isinstance(stores.host_store, HostStore)
 
 
-def test_local_artifact_store_round_trips(db_uri: str, tmp_path: Path) -> None:
+def test_local_artifact_store_round_trips(
+    db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The bootstrapped local artifact store is a usable store."""
+    monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://omnigent-nats:4222")
     stores = StoreBootstrapper.create(db_uri, str(tmp_path / "artifacts"))
     stores.artifact_store.put("k", b"payload")
     assert stores.artifact_store.get("k") == b"payload"

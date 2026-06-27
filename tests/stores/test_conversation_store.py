@@ -3622,9 +3622,8 @@ def test_switch_conversation_agent_cross_family_resets_and_relabels(
     conversation_store: SqlAlchemyConversationStore,
     agent_store: SqlAlchemyAgentStore,
 ) -> None:
-    """In-place switch deletes the old agent, binds the new, and on a
-    cross-family switch resets model settings, clears the native session
-    id, and replaces the harness-presentation labels.
+    """In-place switch rebinds the conversation and on a cross-family switch
+    resets model settings, clears native state, and replaces labels.
     """
     from omnigent._wrapper_labels import (
         CODEX_NATIVE_WRAPPER_VALUE,
@@ -3692,16 +3691,11 @@ def test_switch_conversation_agent_cross_family_resets_and_relabels(
         previous_builtin_id="ag_builtin_claude",
     )
 
-    # New agent bound; old session-scoped agent deleted (unique session_id
-    # index would otherwise be violated by leaving both).
+    # ConversationStore only rebinds the conversation after the AgentStore
+    # provider creates/replaces the session-scoped agent.
     assert updated.agent_id == "ag_switch_new"
-    assert agent_store.get("ag_switch_old") is None, (
-        "old session-scoped agent must be deleted on switch"
-    )
-    new_agent = agent_store.get("ag_switch_new")
-    assert new_agent is not None and new_agent.session_id == conv_id, (
-        "new agent must be session-scoped to this conversation"
-    )
+    assert agent_store.get("ag_switch_old") is not None
+    assert agent_store.get("ag_switch_new") is None
     # Cross-family → provider-bound model id is meaningless, so both reset.
     assert updated.model_override is None
     assert updated.reasoning_effort is None

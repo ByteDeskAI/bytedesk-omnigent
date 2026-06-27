@@ -147,14 +147,15 @@ later read from (lifespan-phase wiring pulls singletons out of the registry). Do
 
 **Feature flag:** `OMNIGENT_SPINE_STORES` (default **off**). Off → CLI keeps the
 inline construction + positional pass-through. On → CLI builds a `StoreBundle` and
-passes `stores=`. Same `SqlAlchemy*Store` objects either way (dual-DB rule:
+passes `stores=`. Same store objects either way; AgentStore is provider-selected
+through the pluggable registry while the remaining SQL stores stay SQL-backed (dual-DB rule:
 `StoreBundle` holds the **already-constructed** stores; the bootstrapper performs no
 schema work — table creation stays in each store's `__init__`, soft FKs and
 `Text`-JSON columns unchanged).
 
 **Dual-path test approach:** parametrize over the flag; assert the `StoreBundle`
 fields are the same concrete store classes the inline path builds
-(`SqlAlchemyAgentStore`, `SqlAlchemyFileStore`, …) against **both** a SQLite
+(`NatsAgentStore` for AgentStore, `SqlAlchemyFileStore`, …) against **both** a SQLite
 `db_uri` and a Postgres `db_uri` (the repo's existing dual-DB store fixtures), proving
 no JSONB/native-type leak. A converter round-trip (`sql_X_to_entity`) is asserted on at
 least one store to confirm the bundle wires the same converter path.

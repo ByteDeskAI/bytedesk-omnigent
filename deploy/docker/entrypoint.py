@@ -185,38 +185,22 @@ try:
     from omnigent.runtime.agent_cache import AgentCache
     from omnigent.runtime.caps import RuntimeCaps
     from omnigent.server.managed_hosts import parse_sandbox_config
-    from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
-    from omnigent.stores.comment_store.sqlalchemy_store import (
-        SqlAlchemyCommentStore,
-    )
-    from omnigent.stores.conversation_store.sqlalchemy_store import (
-        SqlAlchemyConversationStore,
-    )
-    from omnigent.stores.file_store.sqlalchemy_store import SqlAlchemyFileStore
-    from omnigent.stores.host_store import HostStore
-    from omnigent.stores.permission_store.sqlalchemy_store import (
-        SqlAlchemyPermissionStore,
-    )
+    from omnigent.stores.factory import StoreBootstrapper
 
     telemetry.init()
 
-    agent_store = SqlAlchemyAgentStore(DATABASE_URL)
-    file_store = SqlAlchemyFileStore(DATABASE_URL)
-    conversation_store = SqlAlchemyConversationStore(DATABASE_URL)
-    comment_store = SqlAlchemyCommentStore(DATABASE_URL)
-    permission_store = SqlAlchemyPermissionStore(DATABASE_URL)
-    host_store = HostStore(DATABASE_URL)
+    stores = StoreBootstrapper.create(DATABASE_URL, ARTIFACT_LOCATION)
+    agent_store = stores.agent_store
+    file_store = stores.file_store
+    conversation_store = stores.conversation_store
+    comment_store = stores.comment_store
+    permission_store = stores.permission_store
+    host_store = stores.host_store
     # Fail startup loud on a malformed `sandbox:` section (an operator
     # typo should not surface as a runtime 502 on the first managed
     # session); the startup catch-all below logs it.
     sandbox_config = parse_sandbox_config(cfg.get("sandbox"))
-    # Route by location scheme (local path / nats:// / dbfs:) through the
-    # pluggable artifact-store factory (ADR-0145) — a nats:// URL selects the
-    # durable JetStream Object Store backend (BDP-2380); a plain path stays
-    # the local filesystem store. Lazy-connect, so safe to build here.
-    from omnigent.stores.factory import _create_artifact_store
-
-    artifact_store = _create_artifact_store(ARTIFACT_LOCATION)
+    artifact_store = stores.artifact_store
 
     agent_cache = AgentCache(
         artifact_store=artifact_store,

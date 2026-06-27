@@ -1,11 +1,8 @@
-"""Agent realtime bridge (BDP-2301): fan out roster changes to the platform
-org chart via ``office:agents``.
+"""Agent realtime bridge (BDP-2301): fan out roster changes to the platform.
 
-The "monkeypatch publish at import" choice (no omnigent core edits): we wrap
-``SqlAlchemyAgentStore.{create,update,delete}`` in place so every RUNTIME roster
-mutation — a hire, a fire, or a live config edit (``apply_bundle_update`` →
-``agent_store.update``, BDP-2287) — emits a ``roster.changed`` delta. The org
-chart reacts by refetching its cached snapshot (omnigent = SoT).
+The bridge subscribes to store-neutral AgentStore mutation events instead of
+patching a concrete store class. This keeps realtime fan-out independent from
+the active AgentStore provider (NATS in production after the cutover).
 
 Boot re-seed suppression: :func:`install` is called from the extension's
 ``background_tasks`` (lifespan), i.e. AFTER omnigent's construction-time
@@ -21,7 +18,6 @@ conversation→agent mapping at the ``session_stream.publish`` turn boundary;
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from typing import Any
 
 from bytedesk_omnigent.realtime import config
@@ -37,6 +33,7 @@ from bytedesk_omnigent.realtime.channel import (
     roster_changed,
 )
 from bytedesk_omnigent.realtime.publisher import publish
+from omnigent.stores.agent_store.events import AgentStoreEvent, subscribe
 
 logger = logging.getLogger(__name__)
 
@@ -151,49 +148,16 @@ def emit_goal_planning(event: dict[str, Any]) -> None:
     publish(office_goals_channel(tenant), payload)
 
 
-# ── store-method wrappers (factored out so they're unit-testable without a DB) ──
-
-
-def wrap_create(orig: Callable[..., Any]) -> Callable[..., Any]:
-    def create(self, agent_id, name, bundle_location, description=None):
-        result = orig(self, agent_id, name, bundle_location, description)
-        emit_roster("created", agent_id)
-        return result
-
-    return create
-
-
-def wrap_update(orig: Callable[..., Any]) -> Callable[..., Any]:
-    def update(self, agent_id, bundle_location, *args, **kwargs):
-        result = orig(self, agent_id, bundle_location, *args, **kwargs)
-        if result is not None:  # only emit when the update hit a real row
-            emit_roster("updated", agent_id)
-        return result
-
-    return update
-
-
-def wrap_delete(orig: Callable[..., Any]) -> Callable[..., Any]:
-    def delete(self, agent_id):
-        result = orig(self, agent_id)
-        if result:  # True == the agent existed and was deleted
-            emit_roster("deleted", agent_id)
-        return result
-
-    return delete
+def _emit_agent_store_event(event: AgentStoreEvent) -> None:
+    emit_roster(event.action, event.agent_id)
 
 
 def install() -> bool:
-    """Idempotently wrap the concrete agent store. Returns True if it patched,
-    False if already installed."""
+    """Idempotently subscribe to AgentStore events."""
     global _INSTALLED
     if _INSTALLED:
         return False
-    from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
-
-    SqlAlchemyAgentStore.create = wrap_create(SqlAlchemyAgentStore.create)
-    SqlAlchemyAgentStore.update = wrap_update(SqlAlchemyAgentStore.update)
-    SqlAlchemyAgentStore.delete = wrap_delete(SqlAlchemyAgentStore.delete)
+    subscribe(_emit_agent_store_event)
     _INSTALLED = True
     logger.info(
         "office:agents roster bridge installed (tenant=%s)",

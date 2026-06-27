@@ -15,6 +15,7 @@ _EXPECTED_SEAMS: dict[str, tuple[str, str | None]] = {
     # seam -> (override_env, default_impl)
     "harness": ("OMNIGENT_USE_HARNESS", "claude-sdk"),
     "artifact_store": ("OMNIGENT_USE_ARTIFACT_STORE", "local"),
+    "agent_store": ("OMNIGENT_USE_AGENT_STORE", "nats"),
     # web_search has no registered default — selection is always explicit.
     "web_search": ("OMNIGENT_USE_WEB_SEARCH", None),
     "memory_embedder": ("OMNIGENT_USE_MEMORY_EMBEDDER", "fastembed"),

@@ -63,6 +63,15 @@ def _artifact_store_registry() -> PluggableRegistry[Any]:
     )
 
 
+def _agent_store_registry() -> PluggableRegistry[Any]:
+    from omnigent.stores.factory import _build_agent_store_registry
+
+    return _cached_registry(
+        "agent_store",
+        lambda: _build_agent_store_registry("nats://omnigent-nats:4222/omnigent-artifacts"),
+    )
+
+
 def _web_search_registry() -> PluggableRegistry[Any]:
     from omnigent.tools.builtins.web_search import _build_provider_registry
 
@@ -125,6 +134,7 @@ def _authorizer_registry() -> PluggableRegistry[Any]:
 SEAMS: tuple[tuple[str, Callable[[], PluggableRegistry[Any]], str], ...] = (
     ("harness", _harness_registry, "harness_descriptors"),
     ("artifact_store", _artifact_store_registry, "artifact_store_providers"),
+    ("agent_store", _agent_store_registry, "agent_store_providers"),
     ("web_search", _web_search_registry, "web_search_providers"),
     ("memory_embedder", _memory_embedder_registry, "memory_embedder_providers"),
     ("agent_memory", _agent_memory_registry, "agent_memory_providers"),
