@@ -37,7 +37,7 @@ resources:
   - ../k8s
   # Local-only ingress: http://omnigent.bytedesk.localhost -> omnigent-server.
   - omnigent-ingress.yaml
-  # Local-only ingress: http://nats-ui.dev.bytedesk.localhost -> omnigent-nats-ui.
+  # Local-only ingress: http://nats-ui.bytedesk.localhost -> omnigent-nats-ui.
   - nats-ui-ingress.yaml
 
 patches:

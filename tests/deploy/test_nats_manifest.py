@@ -148,7 +148,7 @@ def test_local_dev_exposes_nats_ui_on_requested_localhost_host() -> None:
     assert "nats-ui-ingress.yaml" in local_dev["resources"]
     assert ingress["metadata"]["name"] == "omnigent-nats-ui"
     assert ingress["spec"]["ingressClassName"] == "public"
-    assert rule["host"] == "nats-ui.dev.bytedesk.localhost"
+    assert rule["host"] == "nats-ui.bytedesk.localhost"
     assert path["path"] == "/"
     assert path["pathType"] == "Prefix"
     assert service["name"] == "omnigent-nats-ui"
