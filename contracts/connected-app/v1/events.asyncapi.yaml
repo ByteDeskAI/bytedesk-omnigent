@@ -1,0 +1,228 @@
+asyncapi: 3.0.0
+info:
+  title: Omnigent Connected-App Events
+  version: connected-app.v1
+  description: Provider-neutral event catalog for Omnigent connected apps.
+defaultContentType: application/json
+channels:
+  goalLifecycle:
+    address: omnigent.connected-app.v1.goal.lifecycle
+    messages:
+      goalProgress:
+        $ref: "#/components/messages/GoalProgress"
+      goalCompleted:
+        $ref: "#/components/messages/GoalCompleted"
+      goalFailed:
+        $ref: "#/components/messages/GoalFailed"
+  goalApproval:
+    address: omnigent.connected-app.v1.goal.approval
+    messages:
+      approvalRequested:
+        $ref: "#/components/messages/ApprovalRequested"
+      budgetRiskRequested:
+        $ref: "#/components/messages/BudgetRiskRequested"
+operations:
+  publishGoalProgress:
+    action: send
+    channel:
+      $ref: "#/channels/goalLifecycle"
+    messages:
+      - $ref: "#/channels/goalLifecycle/messages/goalProgress"
+  publishGoalCompleted:
+    action: send
+    channel:
+      $ref: "#/channels/goalLifecycle"
+    messages:
+      - $ref: "#/channels/goalLifecycle/messages/goalCompleted"
+  publishGoalFailed:
+    action: send
+    channel:
+      $ref: "#/channels/goalLifecycle"
+    messages:
+      - $ref: "#/channels/goalLifecycle/messages/goalFailed"
+  publishApprovalRequested:
+    action: send
+    channel:
+      $ref: "#/channels/goalApproval"
+    messages:
+      - $ref: "#/channels/goalApproval/messages/approvalRequested"
+  publishBudgetRiskRequested:
+    action: send
+    channel:
+      $ref: "#/channels/goalApproval"
+    messages:
+      - $ref: "#/channels/goalApproval/messages/budgetRiskRequested"
+components:
+  messages:
+    GoalProgress:
+      name: goal.progress
+      payload:
+        $ref: "#/components/schemas/GoalProgressEvent"
+    GoalCompleted:
+      name: goal.completed
+      payload:
+        $ref: "#/components/schemas/GoalCompletedEvent"
+    GoalFailed:
+      name: goal.failed
+      payload:
+        $ref: "#/components/schemas/GoalFailedEvent"
+    ApprovalRequested:
+      name: approval.requested
+      payload:
+        $ref: "#/components/schemas/ApprovalRequestedEvent"
+    BudgetRiskRequested:
+      name: budget_risk.requested
+      payload:
+        $ref: "#/components/schemas/BudgetRiskRequestedEvent"
+  schemas:
+    EventEnvelope:
+      type: object
+      required:
+        - eventId
+        - type
+        - occurredAt
+        - source
+        - goalId
+      properties:
+        eventId:
+          type: string
+        type:
+          type: string
+        occurredAt:
+          type: integer
+          description: Epoch seconds.
+        source:
+          type: string
+        tenantId:
+          type:
+            - string
+            - "null"
+        goalId:
+          type: string
+        targetKind:
+          type: string
+          enum:
+            - organization
+            - department
+            - agent
+        targetId:
+          type:
+            - string
+            - "null"
+        departmentSlug:
+          type:
+            - string
+            - "null"
+        outcomeKind:
+          type:
+            - string
+            - "null"
+          enum:
+            - financial
+            - roadmap
+            - capability
+            - risk
+            - operational
+            - null
+        traceId:
+          type:
+            - string
+            - "null"
+        correlationId:
+          type:
+            - string
+            - "null"
+    GoalProgressEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - progress
+          properties:
+            progress:
+              type: object
+              additionalProperties: true
+            message:
+              type:
+                - string
+                - "null"
+    GoalCompletedEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - realizedValueCents
+          properties:
+            realizedValueCents:
+              type: integer
+            evidence:
+              type:
+                - object
+                - "null"
+              additionalProperties: true
+    GoalFailedEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - failureClass
+            - retryable
+          properties:
+            failureClass:
+              type: string
+              enum:
+                - agent
+                - subagent
+                - provider
+                - budget
+                - approval
+                - system
+            retryable:
+              type: boolean
+            detail:
+              type:
+                - string
+                - "null"
+    ApprovalRequestedEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - reason
+            - riskTier
+          properties:
+            reason:
+              type: string
+            riskTier:
+              type: string
+              enum:
+                - low
+                - medium
+                - high
+            approvalRef:
+              type:
+                - string
+                - "null"
+    BudgetRiskRequestedEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - requestedBudgetCents
+            - currentBudgetCents
+            - riskTier
+          properties:
+            requestedBudgetCents:
+              type: integer
+            currentBudgetCents:
+              type: integer
+            riskTier:
+              type: string
+              enum:
+                - low
+                - medium
+                - high
+            reason:
+              type:
+                - string
+                - "null"

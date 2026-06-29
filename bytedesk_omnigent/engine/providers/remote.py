@@ -37,6 +37,20 @@ def _auth_headers(manifest: ProviderManifest) -> dict[str, str]:
     return {}
 
 
+def _unwrap_api_response(body: dict) -> dict:
+    """Accept either raw contract JSON or ByteDesk's ApiResponse<T> envelope."""
+    data = body.get("data")
+    return data if isinstance(data, dict) else body
+
+
+def _pick(data: dict, camel: str, snake: str, default: Any = None) -> Any:
+    if camel in data:
+        return data[camel]
+    if snake in data:
+        return data[snake]
+    return default
+
+
 def _default_sync_post(url: str, body: dict, headers: dict) -> dict:
     import httpx
 
@@ -67,13 +81,14 @@ class RemoteSensor:
     def evaluate(self, query: dict[str, Any], ctx: SensorContext) -> SensorReading:
         url = f"{self._manifest.base_url}/goal-sensors/{self.name}/evaluate"
         body = self._post(url, {"query": query, "now": ctx.now}, _auth_headers(self._manifest))
+        body = _unwrap_api_response(body)
         # Map the app's response onto the canonical reading shape; missing fields
         # fail closed (not satisfied) so a malformed remote reply never over-fires.
         return {
             "satisfied": bool(body.get("satisfied", False)),
             "value": body.get("value"),
-            "observed_at": int(body.get("observed_at", ctx.now)),
-            "stale_after_s": body.get("stale_after_s"),
+            "observed_at": int(_pick(body, "observedAt", "observed_at", ctx.now)),
+            "stale_after_s": _pick(body, "staleAfterS", "stale_after_s"),
         }
 
 
@@ -85,7 +100,7 @@ class RemoteActuator:
         name: str,
         manifest: ProviderManifest,
         *,
-        risk_tier: int = 2,
+        risk_tier: int | str = "medium",
         post: AsyncPost | None = None,
     ) -> None:
         self.name = name
@@ -96,9 +111,10 @@ class RemoteActuator:
     async def execute(self, action: dict[str, Any]) -> ActuatorResult:
         url = f"{self._manifest.base_url}/goal-actuators/{self.name}/execute"
         body = await self._post(url, {"action": action}, _auth_headers(self._manifest))
+        body = _unwrap_api_response(body)
         return ActuatorResult(
-            ok=bool(body.get("ok", False)),
-            output=body.get("output"),
+            ok=bool(body.get("ok", body.get("success", False))),
+            output=body.get("output", body.get("resultRef")),
             detail=body.get("detail"),
         )
 

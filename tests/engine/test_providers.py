@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from bytedesk_omnigent.engine.providers import (
     ActuatorSpec,
     FakeActuator,
@@ -23,15 +25,15 @@ from bytedesk_omnigent.engine.sensors import SensorContext, build_default_regist
 
 
 def _manifest(**kw) -> ProviderManifest:
-    base = dict(
-        name="bytedesk",
-        base_url="https://platform.bytedesk.ai/api/engine/",
-        sensors=["jira_issue"],
-        actuators=[ActuatorSpec(name="send_email", risk_tier=3)],
-        outcomes=["outcome.booked"],
-        webhook_sources=["stripe"],
-        auth=ProviderAuth(header="X-Engine-Secret", secret="sssh"),
-    )
+    base = {
+        "name": "bytedesk",
+        "base_url": "https://platform.bytedesk.ai/api/engine/",
+        "sensors": ["jira_issue"],
+        "actuators": [ActuatorSpec(name="send_email", risk_tier=3)],
+        "outcomes": ["outcome.booked"],
+        "webhook_sources": ["stripe"],
+        "auth": ProviderAuth(header="X-Engine-Secret", secret="sssh"),
+    }
     base.update(kw)
     return ProviderManifest(**base)
 
@@ -51,19 +53,64 @@ def test_manifest_from_dict_and_to_dict_hides_secret() -> None:
     m = ProviderManifest.from_dict(
         {
             "name": "p",
-            "base_url": "https://x.test/api/",
+            "baseUrl": "https://x.test/api/",
+            "contractVersion": "connected-app.v1",
+            "schemaId": "https://omnigent.ai/contracts/connected-app/v1/provider-manifest.schema.json",
             "sensors": ["s1"],
-            "actuators": [{"name": "a1", "risk_tier": 4}],
+            "actuators": [{"name": "a1", "riskTier": 4}],
             "outcomes": ["outcome.booked"],
-            "webhook_sources": ["gh"],
+            "webhookSources": ["gh"],
             "auth": {"header": "X-Secret", "secret": "TOPSECRET"},
         }
     )
     assert m.base_url == "https://x.test/api"
+    assert m.contract_version == "connected-app.v1"
+    assert m.schema_id == "https://omnigent.ai/contracts/connected-app/v1/provider-manifest.schema.json"
     assert m.actuators[0].risk_tier == 4
     out = m.to_dict()
+    assert out["contractVersion"] == "connected-app.v1"
+    assert out["schemaId"] == "https://omnigent.ai/contracts/connected-app/v1/provider-manifest.schema.json"
     assert out["auth"] == {"header": "X-Secret"}  # secret never emitted
     assert "TOPSECRET" not in str(out)
+
+
+def test_manifest_from_dict_accepts_semantic_risk_tier() -> None:
+    m = ProviderManifest.from_dict(
+        {
+            "name": "p",
+            "baseUrl": "https://x.test/api/",
+            "actuators": [{"name": "a1", "riskTier": "high"}],
+        }
+    )
+
+    assert m.actuators[0].risk_tier == "high"
+    assert m.to_dict()["actuators"][0]["riskTier"] == "high"
+
+
+def test_manifest_from_dict_rejects_boolean_risk_tier() -> None:
+    with pytest.raises(ValueError, match="riskTier boolean"):
+        ProviderManifest.from_dict(
+            {
+                "name": "p",
+                "baseUrl": "https://x.test/api/",
+                "actuators": [{"name": "a1", "riskTier": True}],
+            }
+        )
+
+
+def test_manifest_from_dict_accepts_legacy_snake_case() -> None:
+    m = ProviderManifest.from_dict(
+        {
+            "name": "p",
+            "base_url": "https://x.test/api/",
+            "actuators": [{"name": "a1", "risk_tier": 4}],
+            "webhook_sources": ["gh"],
+        }
+    )
+
+    assert m.base_url == "https://x.test/api"
+    assert m.actuators[0].risk_tier == 4
+    assert m.webhook_sources == ["gh"]
 
 
 # -- remote adapters (mock httpx via injected post) ---------------------------
@@ -74,10 +121,12 @@ def test_remote_sensor_maps_response_and_sends_auth() -> None:
         seen["url"] = url
         seen["body"] = body
         seen["headers"] = headers
-        return {"satisfied": True, "value": "done", "stale_after_s": 30}
+        return {"data": {"satisfied": True, "value": "done", "staleAfterS": 30}}
 
     sensor = RemoteSensor("jira_issue", _manifest(), post=fake_post)
-    reading = sensor.evaluate({"issue": "BDP-1"}, SensorContext(goal=None, goal_store=None, now=99))
+    reading = sensor.evaluate(
+        {"issue": "BDP-1"}, SensorContext(goal=None, goal_store=None, now=99)
+    )
 
     assert reading["satisfied"] is True
     assert reading["value"] == "done"

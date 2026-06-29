@@ -17,13 +17,52 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+CONNECTED_APP_CONTRACT_VERSION = "connected-app.v1"
+CONNECTED_APP_PROVIDER_SCHEMA_ID = (
+    "https://omnigent.ai/contracts/connected-app/v1/provider-manifest.schema.json"
+)
+
+
+def _pick(data: dict[str, Any], camel: str, snake: str, default: Any = None) -> Any:
+    """Read the v1 camelCase contract while accepting legacy snake_case bodies."""
+    if camel in data:
+        return data[camel]
+    if snake in data:
+        return data[snake]
+    return default
+
+
+ProviderRiskTier = int | str
+_RISK_TIER_STRINGS = ("low", "medium", "high")
+
+
+def normalize_provider_risk_tier(value: Any = "medium") -> ProviderRiskTier:
+    """Normalize v1 provider actuator risk tiers.
+
+    The connected-app contract prefers the semantic string enum used by Office
+    (``low`` / ``medium`` / ``high``). Integers 0..5 remain accepted for legacy
+    manifests that pre-date the v1 schema hardening.
+    """
+    if isinstance(value, bool):
+        raise ValueError("riskTier boolean is not valid")
+    if isinstance(value, int):
+        if 0 <= value <= 5:
+            return value
+        raise ValueError("riskTier integer must be between 0 and 5")
+    text = str(value or "medium").strip().lower()
+    if text.isdigit():
+        return normalize_provider_risk_tier(int(text))
+    if text in _RISK_TIER_STRINGS:
+        return text
+    raise ValueError("riskTier must be low, medium, high, or an integer 0..5")
+
 
 @dataclass(frozen=True)
 class ActuatorSpec:
     """One actuator a provider offers, with its risk tier."""
 
     name: str
-    risk_tier: int = 2
+    risk_tier: ProviderRiskTier = "medium"
 
 
 @dataclass(frozen=True)
@@ -40,6 +79,8 @@ class ProviderManifest:
 
     name: str
     base_url: str
+    contract_version: str = CONNECTED_APP_CONTRACT_VERSION
+    schema_id: str = CONNECTED_APP_PROVIDER_SCHEMA_ID
     sensors: list[str] = field(default_factory=list)
     actuators: list[ActuatorSpec] = field(default_factory=list)
     outcomes: list[str] = field(default_factory=list)
@@ -62,14 +103,27 @@ class ProviderManifest:
         )
         return cls(
             name=data["name"],
-            base_url=str(data["base_url"]),
+            base_url=str(_pick(data, "baseUrl", "base_url")),
+            contract_version=str(
+                _pick(data, "contractVersion", "contract_version", CONNECTED_APP_CONTRACT_VERSION)
+                or CONNECTED_APP_CONTRACT_VERSION
+            ),
+            schema_id=str(
+                _pick(data, "schemaId", "schema_id", CONNECTED_APP_PROVIDER_SCHEMA_ID)
+                or CONNECTED_APP_PROVIDER_SCHEMA_ID
+            ),
             sensors=list(data.get("sensors") or []),
             actuators=[
-                ActuatorSpec(name=a["name"], risk_tier=int(a.get("risk_tier", 2)))
+                ActuatorSpec(
+                    name=a["name"],
+                    risk_tier=normalize_provider_risk_tier(
+                        _pick(a, "riskTier", "risk_tier", "medium")
+                    ),
+                )
                 for a in (data.get("actuators") or [])
             ],
             outcomes=list(data.get("outcomes") or []),
-            webhook_sources=list(data.get("webhook_sources") or []),
+            webhook_sources=list(_pick(data, "webhookSources", "webhook_sources", []) or []),
             auth=auth,
         )
 
@@ -77,11 +131,13 @@ class ProviderManifest:
         """Serialize for the list endpoint. The auth SECRET is never emitted."""
         return {
             "name": self.name,
-            "base_url": self.base_url,
+            "baseUrl": self.base_url,
+            "contractVersion": self.contract_version,
+            "schemaId": self.schema_id,
             "sensors": list(self.sensors),
-            "actuators": [{"name": a.name, "risk_tier": a.risk_tier} for a in self.actuators],
+            "actuators": [{"name": a.name, "riskTier": a.risk_tier} for a in self.actuators],
             "outcomes": list(self.outcomes),
-            "webhook_sources": list(self.webhook_sources),
+            "webhookSources": list(self.webhook_sources),
             "auth": {"header": self.auth.header} if self.auth else None,
         }
 
@@ -122,5 +178,7 @@ __all__ = [
     "ProviderAuth",
     "ProviderManifest",
     "ProviderRegistry",
+    "ProviderRiskTier",
     "get_provider_registry",
+    "normalize_provider_risk_tier",
 ]

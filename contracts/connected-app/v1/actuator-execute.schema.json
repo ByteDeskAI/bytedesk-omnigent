@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/actuator-execute.schema.json",
+  "title": "Omnigent Connected App Actuator Execute",
+  "$defs": {
+    "request": {
+      "type": "object",
+      "required": ["action"],
+      "additionalProperties": false,
+      "properties": {
+        "action": { "type": "object", "additionalProperties": true },
+        "context": { "type": "object", "additionalProperties": true }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["ok"],
+      "additionalProperties": false,
+      "properties": {
+        "ok": { "type": "boolean" },
+        "output": { "type": ["object", "null"], "additionalProperties": true },
+        "detail": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

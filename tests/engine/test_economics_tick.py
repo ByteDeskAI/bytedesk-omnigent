@@ -124,6 +124,43 @@ def test_circuit_open_skips_goal(tmp_path) -> None:
     assert convs.created == []
 
 
+def test_nonfinancial_goal_waits_for_value_rollup(tmp_path) -> None:
+    store, treasury, convs = _setup(tmp_path)
+    goal = _ready(store, title="roadmap", outcome_kind="roadmap")
+
+    spawned = run_goal_engine_tick(
+        store, convs, now=100, treasury=treasury, optimizer=RoiOptimizer()
+    )
+
+    assert spawned == 0
+    assert convs.created == []
+    decisions = treasury.decisions(goal_id=goal.id)
+    assert len(decisions) == 1
+    assert decisions[0].reason == "missing_value_rollup"
+
+
+def test_nonfinancial_child_dispatches_when_parent_rolls_to_value(tmp_path) -> None:
+    store, treasury, convs = _setup(tmp_path)
+    parent = store.create_goal(
+        title="Grow MRR",
+        outcome_kind="financial",
+        expected_value_cents=10_000,
+    )
+    child = _ready(
+        store,
+        title="Ship roadmap item",
+        outcome_kind="roadmap",
+        parent_goal_id=parent.id,
+    )
+
+    spawned = run_goal_engine_tick(
+        store, convs, now=100, treasury=treasury, optimizer=RoiOptimizer()
+    )
+
+    assert spawned == 1
+    assert convs.created[0]["external_key"] == f"goal:{child.id}"
+
+
 def test_decision_log_written_on_fund(tmp_path) -> None:
     store, treasury, convs = _setup(tmp_path)
     goal = _ready(store, title="g", expected_value_cents=1000, confidence=0.5)
@@ -133,7 +170,7 @@ def test_decision_log_written_on_fund(tmp_path) -> None:
     decisions = treasury.decisions(goal_id=goal.id)
     assert len(decisions) == 1
     assert decisions[0].reason == "funded"
-    assert decisions[0].spawned_session_id == convs.created[0]["external_key"].split(":", 1)[1] or True
+    assert decisions[0].spawned_session_id == "conv_1"
 
 
 def test_child_outcome_rolls_up_to_parent(tmp_path) -> None:

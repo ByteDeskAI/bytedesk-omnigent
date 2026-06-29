@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/inbound-event.schema.json",
+  "title": "Omnigent Connected App Canonical Inbound Event",
+  "type": "object",
+  "required": ["source", "type", "idempotencyKey", "occurredAt"],
+  "additionalProperties": false,
+  "properties": {
+    "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "type": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "idempotencyKey": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "occurredAt": { "type": "integer" },
+    "tenantId": { "type": ["string", "null"], "maxLength": 128 },
+    "eventId": { "type": ["string", "null"], "maxLength": 256 },
+    "subjectRef": { "type": ["string", "null"], "maxLength": 256 },
+    "normalized": { "type": "object", "additionalProperties": true, "default": {} },
+    "rawPayload": { "type": "object", "additionalProperties": true, "default": {} }
+  }
+}

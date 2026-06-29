@@ -392,6 +392,27 @@ def _apply_arbitration(ranked, *, goal_store, config, configs, now):
     return [g for g in ranked if g.id not in loser_ids or g.id in winner_ids]
 
 
+def _has_value_rollup(goal, *, goal_store) -> bool:
+    """True when a goal has direct value or rolls up to a value-bearing ancestor."""
+    if getattr(goal, "outcome_kind", "financial") == "financial":
+        return True
+    if getattr(goal, "expected_value_cents", 0) > 0:
+        return True
+    parent_id = getattr(goal, "parent_goal_id", None)
+    seen = {goal.id}
+    while parent_id and parent_id not in seen:
+        seen.add(parent_id)
+        parent = goal_store.get_goal(goal_id=parent_id, include_dependencies=False)
+        if parent is None:
+            return False
+        if getattr(parent, "outcome_kind", "financial") == "financial":
+            return True
+        if getattr(parent, "expected_value_cents", 0) > 0:
+            return True
+        parent_id = getattr(parent, "parent_goal_id", None)
+    return False
+
+
 def _run_portfolio_tick(
     candidates,
     *,
@@ -429,6 +450,15 @@ def _run_portfolio_tick(
         # (auto-seed a default cap / anomaly threshold). No-op when unset/0.
         _ensure_scope_budget(treasury, goal, cfg)
 
+        if not _has_value_rollup(goal, goal_store=goal_store):
+            treasury.record_decision(
+                tick_id=tick_id,
+                goal_id=goal.id,
+                roi_at_decision=goal_roi,
+                reason="missing_value_rollup",
+                now=now,
+            )
+            continue
         if treasury.circuit_open(scope):
             treasury.record_decision(
                 tick_id=tick_id, goal_id=goal.id, roi_at_decision=goal_roi,
