@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/provider-manifest.schema.json",
+  "title": "Omnigent Connected App Provider Manifest",
+  "type": "object",
+  "required": ["name", "baseUrl"],
+  "additionalProperties": false,
+  "properties": {
+    "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "baseUrl": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "contractVersion": { "type": "string", "const": "connected-app.v1" },
+    "schemaId": {
+      "type": "string",
+      "const": "https://omnigent.ai/contracts/connected-app/v1/provider-manifest.schema.json"
+    },
+    "sensors": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "default": []
+    },
+    "actuators": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 128 },
+          "riskTier": {
+            "oneOf": [
+              { "type": "string", "enum": ["low", "medium", "high"] },
+              { "type": "integer", "minimum": 0, "maximum": 5 }
+            ],
+            "default": "medium"
+          }
+        }
+      },
+      "default": []
+    },
+    "outcomes": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "default": []
+    },
+    "webhookSources": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1, "maxLength": 128 },
+      "default": []
+    },
+    "auth": {
+      "type": ["object", "null"],
+      "required": ["header"],
+      "additionalProperties": false,
+      "properties": {
+        "header": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "secret": { "type": ["string", "null"], "maxLength": 2048 }
+      }
+    }
+  }
+}

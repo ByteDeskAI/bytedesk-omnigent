@@ -129,12 +129,14 @@ def test_list_returns_backlog_in_single_user_mode(monkeypatch) -> None:
             "status": "open",
             "owner": None,
             "target_kind": "department",
-            "target_id": "Operations",
-            "readiness_kind": None,
-            "activation_state": None,
-            "ready_only": False,
-            "include_dependencies": True,
-        }
+                "target_id": "Operations",
+                "readiness_kind": None,
+                "activation_state": None,
+                "department_slug": None,
+                "outcome_kind": None,
+                "ready_only": False,
+                "include_dependencies": True,
+            }
     ]
 
 

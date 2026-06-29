@@ -9,12 +9,24 @@
             "title": "Name",
             "type": "string"
           },
-          "risk_tier": {
-            "default": 2,
-            "maximum": 5.0,
-            "minimum": 0.0,
-            "title": "Risk Tier",
-            "type": "integer"
+          "riskTier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "maximum": 5.0,
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            ],
+            "default": "medium",
+            "title": "Risktier"
           }
         },
         "required": [
@@ -861,7 +873,7 @@
       "CanonicalEventBody": {
         "description": "An already-canonical inbound event posted by a connected app.",
         "properties": {
-          "event_id": {
+          "eventId": {
             "anyOf": [
               {
                 "maxLength": 256,
@@ -871,9 +883,9 @@
                 "type": "null"
               }
             ],
-            "title": "Event Id"
+            "title": "Eventid"
           },
-          "idempotency_key": {
+          "idempotencyKey": {
             "anyOf": [
               {
                 "maxLength": 512,
@@ -883,14 +895,14 @@
                 "type": "null"
               }
             ],
-            "title": "Idempotency Key"
+            "title": "Idempotencykey"
           },
           "normalized": {
             "additionalProperties": true,
             "title": "Normalized",
             "type": "object"
           },
-          "occurred_at": {
+          "occurredAt": {
             "anyOf": [
               {
                 "type": "integer"
@@ -899,11 +911,11 @@
                 "type": "null"
               }
             ],
-            "title": "Occurred At"
+            "title": "Occurredat"
           },
-          "raw_payload": {
+          "rawPayload": {
             "additionalProperties": true,
-            "title": "Raw Payload",
+            "title": "Rawpayload",
             "type": "object"
           },
           "source": {
@@ -912,7 +924,19 @@
             "title": "Source",
             "type": "string"
           },
-          "tenant_id": {
+          "subjectRef": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subjectref"
+          },
+          "tenantId": {
             "anyOf": [
               {
                 "maxLength": 128,
@@ -922,7 +946,7 @@
                 "type": "null"
               }
             ],
-            "title": "Tenant Id"
+            "title": "Tenantid"
           },
           "type": {
             "maxLength": 128,
@@ -1290,12 +1314,30 @@
       "CreateGoalBody": {
         "description": "Admin create body for a scoped goal.",
         "properties": {
+          "department_slug": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Slug"
+          },
           "dependencies": {
             "items": {
               "$ref": "#/components/schemas/GoalDependencyBody"
             },
             "title": "Dependencies",
             "type": "array"
+          },
+          "outcome_kind": {
+            "default": "financial",
+            "maxLength": 32,
+            "title": "Outcome Kind",
+            "type": "string"
           },
           "payload": {
             "anyOf": [
@@ -2086,6 +2128,18 @@
             "title": "Assumptions",
             "type": "array"
           },
+          "department_slug": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Slug"
+          },
           "dependencies": {
             "items": {
               "$ref": "#/components/schemas/GoalDependencyBody"
@@ -2104,6 +2158,12 @@
               }
             ],
             "title": "Outcome"
+          },
+          "outcome_kind": {
+            "default": "financial",
+            "maxLength": 32,
+            "title": "Outcome Kind",
+            "type": "string"
           },
           "payload": {
             "anyOf": [
@@ -3266,11 +3326,23 @@
               }
             ]
           },
-          "base_url": {
+          "baseUrl": {
             "maxLength": 512,
             "minLength": 1,
-            "title": "Base Url",
+            "title": "Baseurl",
             "type": "string"
+          },
+          "contractVersion": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contractversion"
           },
           "name": {
             "maxLength": 128,
@@ -3285,6 +3357,18 @@
             "title": "Outcomes",
             "type": "array"
           },
+          "schemaId": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schemaid"
+          },
           "sensors": {
             "items": {
               "type": "string"
@@ -3292,17 +3376,17 @@
             "title": "Sensors",
             "type": "array"
           },
-          "webhook_sources": {
+          "webhookSources": {
             "items": {
               "type": "string"
             },
-            "title": "Webhook Sources",
+            "title": "Webhooksources",
             "type": "array"
           }
         },
         "required": [
           "name",
-          "base_url"
+          "baseUrl"
         ],
         "title": "RegisterProviderBody",
         "type": "object"
@@ -6214,6 +6298,30 @@
             ],
             "title": "Activation State"
           },
+          "department_slug": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Slug"
+          },
+          "outcome_kind": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Kind"
+          },
           "payload": {
             "anyOf": [
               {
@@ -8344,6 +8452,38 @@
           },
           {
             "in": "query",
+            "name": "department_slug",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Department Slug"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcome_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome Kind"
+            }
+          },
+          {
+            "in": "query",
             "name": "ready_only",
             "required": false,
             "schema": {
@@ -8499,6 +8639,67 @@
         "summary": "Subscribe Goal Events"
       }
     },
+    "/v1/goals/frontier": {
+      "get": {
+        "description": "The actionable+ranked ROI frontier (ROI + waiting_reasons) for the cockpit.",
+        "operationId": "get_frontier_v1_goals_frontier_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "target_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Frontier"
+      }
+    },
     "/v1/goals/outcomes": {
       "get": {
         "description": "Read the realized-value ledger (optionally filtered to one goal).",
@@ -8644,6 +8845,51 @@
           }
         },
         "summary": "List Planner Sources"
+      }
+    },
+    "/v1/goals/posture": {
+      "get": {
+        "description": "Read back the resolved autonomy posture for a scope (Autonomy strip, BDP-2599).\n\n``armed`` is the Wave-5 gate readback: full_auto posture AND\n``BYTEDESK_GOALS_ARMING_ENABLED`` both hold. ``target_id`` resolves a\nper-tenant override; absent \u2192 the global default.",
+        "operationId": "get_posture_v1_goals_posture_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Posture"
       }
     },
     "/v1/goals/{goal_id}": {

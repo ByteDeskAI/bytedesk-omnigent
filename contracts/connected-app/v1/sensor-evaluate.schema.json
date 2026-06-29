@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/sensor-evaluate.schema.json",
+  "title": "Omnigent Connected App Sensor Evaluate",
+  "$defs": {
+    "context": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "goalId": { "type": "string" },
+        "targetKind": { "type": "string", "enum": ["organization", "department", "agent"] },
+        "targetId": { "type": "string" },
+        "departmentSlug": { "type": ["string", "null"] },
+        "outcomeKind": {
+          "type": "string",
+          "enum": ["financial", "roadmap", "capability", "risk", "operational"]
+        }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["query"],
+      "additionalProperties": false,
+      "properties": {
+        "query": { "type": "object", "additionalProperties": true },
+        "now": { "type": "integer" },
+        "context": { "$ref": "#/$defs/context" }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["satisfied"],
+      "additionalProperties": false,
+      "properties": {
+        "satisfied": { "type": "boolean" },
+        "value": {},
+        "observedAt": { "type": "integer" },
+        "staleAfterS": { "type": ["integer", "null"], "minimum": 0 },
+        "detail": { "type": ["string", "null"] }
+      }
+    }
+  }
+}

@@ -48,7 +48,7 @@ class Actuator(Protocol):
     """Performs one side-effecting action for the engine (ADR-0008 Strategy)."""
 
     name: str
-    risk_tier: int
+    risk_tier: int | str
 
     async def execute(self, action: dict[str, Any]) -> ActuatorResult: ...
 

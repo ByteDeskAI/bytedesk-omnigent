@@ -63,6 +63,8 @@ class CreateGoalBody(BaseModel):
     target_kind: str = Field(default="organization", max_length=16)
     target_id: str | None = Field(default=None, max_length=128)
     target_label: str | None = Field(default=None, max_length=256)
+    department_slug: str | None = Field(default=None, max_length=128)
+    outcome_kind: str = Field(default="financial", max_length=32)
     readiness_kind: str = Field(default="immediate", max_length=16)
     dependencies: list[GoalDependencyBody] = Field(default_factory=list)
 
@@ -77,6 +79,8 @@ class UpdateGoalBody(BaseModel):
     target_kind: str | None = Field(default=None, max_length=16)
     target_id: str | None = Field(default=None, max_length=128)
     target_label: str | None = Field(default=None, max_length=256)
+    department_slug: str | None = Field(default=None, max_length=128)
+    outcome_kind: str | None = Field(default=None, max_length=32)
     readiness_kind: str | None = Field(default=None, max_length=16)
     activation_state: str | None = Field(default=None, max_length=16)
 
@@ -155,6 +159,8 @@ class GoalDraftBody(BaseModel):
     target_kind: str = Field(default="organization", max_length=16)
     target_id: str | None = Field(default=None, max_length=128)
     target_label: str | None = Field(default=None, max_length=256)
+    department_slug: str | None = Field(default=None, max_length=128)
+    outcome_kind: str = Field(default="financial", max_length=32)
     readiness_kind: str = Field(default="immediate", max_length=16)
     dependencies: list[GoalDependencyBody] = Field(default_factory=list)
     outcome: str | None = Field(default=None, max_length=2000)
@@ -331,6 +337,8 @@ def create_goals_router(
         target_id: str | None = None,
         readiness_kind: str | None = None,
         activation_state: str | None = None,
+        department_slug: str | None = None,
+        outcome_kind: str | None = None,
         ready_only: bool = False,
         include_dependencies: bool = False,
     ) -> JSONResponse:
@@ -345,6 +353,8 @@ def create_goals_router(
             target_id=target_id,
             readiness_kind=readiness_kind,
             activation_state=activation_state,
+            department_slug=department_slug,
+            outcome_kind=outcome_kind,
             ready_only=ready_only,
             include_dependencies=include_dependencies,
         )
@@ -365,6 +375,8 @@ def create_goals_router(
                 target_kind=body.target_kind,
                 target_id=body.target_id,
                 target_label=body.target_label,
+                department_slug=body.department_slug,
+                outcome_kind=body.outcome_kind,
                 readiness_kind=body.readiness_kind,
                 dependencies=[d.model_dump() for d in body.dependencies],
             )
@@ -460,7 +472,6 @@ def create_goals_router(
         """Commit an approved planner draft into the durable goal backlog."""
         await _require_admin(request, auth_provider, permission_store)
         from bytedesk_omnigent.goals import get_goal_store
-
         from bytedesk_omnigent.goals_delivery import normalize_delivery_contract
 
         draft = body.draft
@@ -489,6 +500,8 @@ def create_goals_router(
                 target_kind=draft.target_kind,
                 target_id=draft.target_id,
                 target_label=draft.target_label,
+                department_slug=draft.department_slug,
+                outcome_kind=draft.outcome_kind,
                 readiness_kind=draft.readiness_kind,
                 dependencies=[dependency.model_dump() for dependency in draft.dependencies],
             )
@@ -852,7 +865,7 @@ def create_goal_templates_router(
                 template_id=template_id,
                 name=fields.get("name"),
                 definition=fields.get("definition"),
-                description=fields["description"] if "description" in fields else _UNSET,
+                description=fields.get("description", _UNSET),
             )
         except ValueError as exc:
             raise _invalid_input(exc) from exc

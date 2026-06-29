@@ -33,10 +33,24 @@ class OutcomeProcessor:
 
         n = event.normalized
         goal_id = n.get("goalId")
+        subject_ref = n.get("subjectRef") or n.get("subject_ref")
         cents = n.get("realizedValueCents")
+        if not goal_id and subject_ref:
+            goal_id = get_goal_store().resolve_goal_correlation(
+                source=event.source, subject_ref=str(subject_ref)
+            )
+            if not goal_id:
+                return ProcessorOutcome(
+                    status="failed",
+                    http_status=409,
+                    detail="unresolved goal correlation",
+                    retryable=True,
+                )
         if not goal_id or cents is None:
             return ProcessorOutcome(
-                status="skipped", http_status=400, detail="missing goalId/realizedValueCents"
+                status="skipped",
+                http_status=400,
+                detail="missing goalId or subjectRef/realizedValueCents",
             )
         outcome = get_treasury().book_outcome(
             goal_store=get_goal_store(),

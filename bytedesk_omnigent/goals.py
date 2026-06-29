@@ -25,6 +25,7 @@ from sqlalchemy import select, update
 
 from bytedesk_omnigent.db_models import (
     SqlGoal,
+    SqlGoalCorrelation,
     SqlGoalDependency,
     SqlGoalTemplate,
     SqlScoreboardEntry,
@@ -65,6 +66,7 @@ DEPENDENCY_STATUSES = ("pending", "satisfied", "waived")
 # BDP-2585 economics.
 TIERS = ("org", "department", "agent")
 RISK_TIERS = ("low", "medium", "high")
+OUTCOME_KINDS = ("financial", "roadmap", "capability", "risk", "operational")
 # tier derives from target_kind unless explicitly set.
 _TIER_FOR_TARGET = {"organization": "org", "department": "department", "agent": "agent"}
 
@@ -127,6 +129,8 @@ class Goal:
     confidence: float = 0.5
     risk_tier: str = "low"
     success_condition: dict[str, Any] | None = None
+    department_slug: str | None = None
+    outcome_kind: str = "financial"
 
     @property
     def attributes(self) -> dict[str, Any]:
@@ -163,6 +167,17 @@ def _normalize_target(
     if not target_id:
         raise ValueError(f"target_id is required for {target_kind!r} goals")
     return target_kind, target_id, target_label
+
+
+def _normalize_department_slug(
+    *, target_kind: str, target_id: str, department_slug: str | None
+) -> str | None:
+    if department_slug is not None:
+        value = department_slug.strip().lower()
+        return value or None
+    if target_kind == "department":
+        return target_id.strip().lower()
+    return None
 
 
 def _dependency_statuses(rows: Iterable[SqlGoalDependency | GoalDependency]) -> list[str]:
@@ -228,6 +243,8 @@ def _to_goal(
         confidence=row.confidence if getattr(row, "confidence", None) is not None else 0.5,
         risk_tier=getattr(row, "risk_tier", None) or "low",
         success_condition=_loads(getattr(row, "success_condition", None)),
+        department_slug=getattr(row, "department_slug", None),
+        outcome_kind=getattr(row, "outcome_kind", None) or "financial",
     )
 
 
@@ -250,6 +267,8 @@ def _goal_event_payload(
         "targetLabel": goal.target_label,
         "ownerAgentId": goal.owner_agent_id,
         "priority": goal.priority,
+        "departmentSlug": goal.department_slug,
+        "outcomeKind": goal.outcome_kind,
         "updatedAt": goal.updated_at,
         "occurredAt": occurred_at if occurred_at is not None else now_epoch(),
     }
@@ -368,6 +387,8 @@ class SqlAlchemyGoalStore:
         confidence: float = 0.5,
         risk_tier: str = "low",
         success_condition: dict[str, Any] | None = None,
+        department_slug: str | None = None,
+        outcome_kind: str = "financial",
         scheduler: Any | None = None,
         now: int | None = None,
     ) -> Goal:
@@ -389,6 +410,9 @@ class SqlAlchemyGoalStore:
         target_kind, target_id, target_label = _normalize_target(
             target_kind, target_id, target_label
         )
+        department_slug = _normalize_department_slug(
+            target_kind=target_kind, target_id=target_id, department_slug=department_slug
+        )
         self._validate_attributes(target_id, payload)
         dependency_specs = list(dependencies or ())
         if dependency_specs and readiness_kind == "immediate":
@@ -405,6 +429,7 @@ class SqlAlchemyGoalStore:
         activation_state = _activation_for(readiness_kind, dep_statuses)
         tier = _validate("tier", tier or _TIER_FOR_TARGET[target_kind], TIERS)
         risk_tier = _validate("risk_tier", risk_tier, RISK_TIERS)
+        outcome_kind = _validate("outcome_kind", outcome_kind, OUTCOME_KINDS)
 
         goal: Goal
         with self._write_session() as session:
@@ -432,6 +457,8 @@ class SqlAlchemyGoalStore:
                 success_condition=(
                     json.dumps(success_condition) if success_condition is not None else None
                 ),
+                department_slug=department_slug,
+                outcome_kind=outcome_kind,
                 created_at=now,
                 updated_at=now,
             )
@@ -517,6 +544,8 @@ class SqlAlchemyGoalStore:
         target_id: str | None = None,
         readiness_kind: str | None = None,
         activation_state: str | None = None,
+        department_slug: str | None = None,
+        outcome_kind: str | None = None,
         ready_only: bool = False,
         include_dependencies: bool = False,
     ) -> list[Goal]:
@@ -534,6 +563,10 @@ class SqlAlchemyGoalStore:
             stmt = stmt.where(SqlGoal.readiness_kind == readiness_kind)
         if activation_state is not None:
             stmt = stmt.where(SqlGoal.activation_state == activation_state)
+        if department_slug is not None:
+            stmt = stmt.where(SqlGoal.department_slug == department_slug.strip().lower())
+        if outcome_kind is not None:
+            stmt = stmt.where(SqlGoal.outcome_kind == outcome_kind)
         if ready_only:
             stmt = stmt.where(SqlGoal.activation_state == "ready")
         stmt = stmt.order_by(SqlGoal.priority, SqlGoal.created_at)
@@ -564,6 +597,8 @@ class SqlAlchemyGoalStore:
             "confidence",
             "risk_tier",
             "success_condition",
+            "department_slug",
+            "outcome_kind",
         }
         unknown = set(updates) - allowed
         if unknown:
@@ -608,6 +643,12 @@ class SqlAlchemyGoalStore:
                 row.target_kind = target_kind
                 row.target_id = target_id
                 row.target_label = target_label
+                if "department_slug" not in updates:
+                    row.department_slug = _normalize_department_slug(
+                        target_kind=target_kind,
+                        target_id=target_id,
+                        department_slug=None,
+                    )
             if "readiness_kind" in updates:
                 row.readiness_kind = _validate(
                     "readiness_kind", str(updates["readiness_kind"]), READINESS_KINDS
@@ -627,6 +668,16 @@ class SqlAlchemyGoalStore:
                     json.dumps(updates["success_condition"])
                     if updates["success_condition"] is not None
                     else None
+                )
+            if "department_slug" in updates:
+                row.department_slug = _normalize_department_slug(
+                    target_kind=row.target_kind,
+                    target_id=row.target_id,
+                    department_slug=updates["department_slug"],
+                )
+            if "outcome_kind" in updates:
+                row.outcome_kind = _validate(
+                    "outcome_kind", str(updates["outcome_kind"]), OUTCOME_KINDS
                 )
             if "activation_state" in updates:
                 row.activation_state = _validate(
@@ -678,6 +729,57 @@ class SqlAlchemyGoalStore:
         if goal is not None:
             _publish_goal_event("updated", goal, occurred_at=now)
         return goal
+
+    def record_goal_correlation(
+        self,
+        *,
+        source: str,
+        subject_ref: str,
+        goal_id: str,
+        kind: str | None = None,
+        tenant_id: str | None = None,
+        now: int | None = None,
+    ) -> None:
+        """Upsert a provider subject → goal mapping for outcome booking.
+
+        Connected apps can book outcomes by their own durable subject id
+        (opportunity, invoice, project) without embedding Omnigent ids in every
+        downstream rail. The composite key makes re-registration idempotent.
+        """
+        source = source.strip()
+        subject_ref = subject_ref.strip()
+        if not source:
+            raise ValueError("source is required")
+        if not subject_ref:
+            raise ValueError("subject_ref is required")
+        if self.get_goal(goal_id=goal_id, include_dependencies=False) is None:
+            raise ValueError("goal_id is unknown")
+        now = now_epoch() if now is None else now
+        with self._write_session() as session:
+            row = session.get(SqlGoalCorrelation, (source, subject_ref))
+            if row is None:
+                session.add(
+                    SqlGoalCorrelation(
+                        source=source,
+                        subject_ref=subject_ref,
+                        goal_id=goal_id,
+                        kind=kind,
+                        tenant_id=tenant_id,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            else:
+                row.goal_id = goal_id
+                row.kind = kind
+                row.tenant_id = tenant_id
+                row.updated_at = now
+
+    def resolve_goal_correlation(self, *, source: str, subject_ref: str) -> str | None:
+        """Return the goal mapped to a provider subject, if one is known."""
+        with self._session() as session:
+            row = session.get(SqlGoalCorrelation, (source.strip(), subject_ref.strip()))
+            return row.goal_id if row is not None else None
 
     def activate_goal(self, *, goal_id: str, now: int | None = None) -> Goal | None:
         """Manually make a goal claimable, overriding deferred/dependent framing."""
@@ -1097,6 +1199,8 @@ _TEMPLATE_CREATE_KEYS = (
     "target_kind",
     "target_id",
     "target_label",
+    "department_slug",
+    "outcome_kind",
     "readiness_kind",
     "cadence_kind",
     "cadence_expr",

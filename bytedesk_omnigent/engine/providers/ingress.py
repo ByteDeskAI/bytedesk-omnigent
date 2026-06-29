@@ -16,6 +16,14 @@ from bytedesk_omnigent.inbound.event import InboundEvent, body_fingerprint
 CHANNEL_PROVIDER = "provider"
 
 
+def _pick(raw_payload: dict, camel: str, snake: str, default=None):
+    if camel in raw_payload:
+        return raw_payload[camel]
+    if snake in raw_payload:
+        return raw_payload[snake]
+    return default
+
+
 class CanonicalTranslator:
     """Identity translator: a posted canonical body → :class:`InboundEvent`.
 
@@ -35,22 +43,25 @@ class CanonicalTranslator:
         event_type = raw_payload.get("type")
         if not event_type:
             return None
-        normalized = raw_payload.get("normalized") or {}
-        body = raw_payload.get("raw_payload") or raw_payload
-        key = raw_payload.get("idempotency_key") or (
+        normalized = dict(raw_payload.get("normalized") or {})
+        subject_ref = _pick(raw_payload, "subjectRef", "subject_ref")
+        if subject_ref is not None and "subjectRef" not in normalized:
+            normalized["subjectRef"] = subject_ref
+        body = _pick(raw_payload, "rawPayload", "raw_payload") or raw_payload
+        key = _pick(raw_payload, "idempotencyKey", "idempotency_key") or (
             f"provider:{source}:{event_type}:{body_fingerprint(body)}"
         )
         return InboundEvent(
             idempotency_key=str(key),
             source=source,
             type=str(event_type),
-            occurred_at=int(raw_payload.get("occurred_at", now)),
+            occurred_at=int(_pick(raw_payload, "occurredAt", "occurred_at", now)),
             received_at=now,
             raw_payload=body,
             normalized=normalized,
             headers={},
-            tenant_id=raw_payload.get("tenant_id"),
-            event_id=raw_payload.get("event_id"),
+            tenant_id=_pick(raw_payload, "tenantId", "tenant_id"),
+            event_id=_pick(raw_payload, "eventId", "event_id"),
         )
 
 

@@ -15,20 +15,33 @@ Two surfaces:
 """
 from __future__ import annotations
 
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, field_validator
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import AuthProvider
 from omnigent.stores.permission_store import PermissionStore
 
+RiskTierBody = Literal["low", "medium", "high"] | Annotated[StrictInt, Field(ge=0, le=5)]
+
 
 class ActuatorSpecBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str = Field(min_length=1, max_length=128)
-    risk_tier: int = Field(default=2, ge=0, le=5)
+    risk_tier: RiskTierBody = Field(
+        default="medium", validation_alias=AliasChoices("riskTier", "risk_tier")
+    )
+
+    @field_validator("risk_tier", mode="before")
+    @classmethod
+    def _validate_risk_tier(cls, value: int | str) -> int | str:
+        from bytedesk_omnigent.engine.providers.registry import normalize_provider_risk_tier
+
+        return normalize_provider_risk_tier(value)
 
 
 class ProviderAuthBody(BaseModel):
@@ -37,26 +50,57 @@ class ProviderAuthBody(BaseModel):
 
 
 class RegisterProviderBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     name: str = Field(min_length=1, max_length=128)
-    base_url: str = Field(min_length=1, max_length=512)
+    base_url: str = Field(
+        min_length=1, max_length=512, validation_alias=AliasChoices("baseUrl", "base_url")
+    )
+    contract_version: str | None = Field(
+        default=None,
+        max_length=64,
+        validation_alias=AliasChoices("contractVersion", "contract_version"),
+    )
+    schema_id: str | None = Field(
+        default=None, max_length=512, validation_alias=AliasChoices("schemaId", "schema_id")
+    )
     sensors: list[str] = Field(default_factory=list)
     actuators: list[ActuatorSpecBody] = Field(default_factory=list)
     outcomes: list[str] = Field(default_factory=list)
-    webhook_sources: list[str] = Field(default_factory=list)
+    webhook_sources: list[str] = Field(
+        default_factory=list, validation_alias=AliasChoices("webhookSources", "webhook_sources")
+    )
     auth: ProviderAuthBody | None = None
 
 
 class CanonicalEventBody(BaseModel):
     """An already-canonical inbound event posted by a connected app."""
 
+    model_config = ConfigDict(populate_by_name=True)
+
     type: str = Field(min_length=1, max_length=128)
     source: str = Field(default="provider", max_length=128)
-    idempotency_key: str | None = Field(default=None, max_length=512)
-    occurred_at: int | None = None
-    tenant_id: str | None = Field(default=None, max_length=128)
-    event_id: str | None = Field(default=None, max_length=256)
+    idempotency_key: str | None = Field(
+        default=None,
+        max_length=512,
+        validation_alias=AliasChoices("idempotencyKey", "idempotency_key"),
+    )
+    occurred_at: int | None = Field(
+        default=None, validation_alias=AliasChoices("occurredAt", "occurred_at")
+    )
+    tenant_id: str | None = Field(
+        default=None, max_length=128, validation_alias=AliasChoices("tenantId", "tenant_id")
+    )
+    event_id: str | None = Field(
+        default=None, max_length=256, validation_alias=AliasChoices("eventId", "event_id")
+    )
+    subject_ref: str | None = Field(
+        default=None, max_length=256, validation_alias=AliasChoices("subjectRef", "subject_ref")
+    )
     normalized: dict[str, Any] = Field(default_factory=dict)
-    raw_payload: dict[str, Any] = Field(default_factory=dict)
+    raw_payload: dict[str, Any] = Field(
+        default_factory=dict, validation_alias=AliasChoices("rawPayload", "raw_payload")
+    )
 
 
 def create_providers_router(

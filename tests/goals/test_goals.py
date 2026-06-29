@@ -62,6 +62,53 @@ def test_dependent_goal_waits_until_dependencies_resolve(tmp_path) -> None:
     assert store.claim_goal(goal_id=goal.id, owner_agent_id="maya", now=103) is True
 
 
+def test_goal_taxonomy_fields_round_trip_and_filter(tmp_path) -> None:
+    store = _store(tmp_path)
+
+    roadmap = store.create_goal(
+        title="Ship Office roadmap item",
+        target_kind="department",
+        target_id="development",
+        department_slug="development",
+        outcome_kind="roadmap",
+        now=100,
+    )
+    store.create_goal(
+        title="Book new revenue",
+        target_kind="organization",
+        outcome_kind="financial",
+        now=100,
+    )
+
+    stored = store.get_goal(goal_id=roadmap.id)
+    assert stored is not None
+    assert stored.department_slug == "development"
+    assert stored.outcome_kind == "roadmap"
+
+    by_department = store.list_goals(department_slug="development")
+    assert [g.id for g in by_department] == [roadmap.id]
+
+    by_kind = store.list_goals(outcome_kind="financial")
+    assert [g.title for g in by_kind] == ["Book new revenue"]
+
+
+def test_outcome_correlation_resolves_goal_from_external_subject(tmp_path) -> None:
+    store = _store(tmp_path)
+    goal = store.create_goal(title="Close opportunity", now=100)
+
+    store.record_goal_correlation(
+        source="sales",
+        subject_ref="opp-123",
+        goal_id=goal.id,
+        kind="opportunity",
+        tenant_id="tenant-1",
+        now=101,
+    )
+
+    assert store.resolve_goal_correlation(source="sales", subject_ref="opp-123") == goal.id
+    assert store.resolve_goal_correlation(source="sales", subject_ref="missing") is None
+
+
 def test_scoreboard_upsert_and_ranking(tmp_path) -> None:
     store = _store(tmp_path)
     now = int(time.time())

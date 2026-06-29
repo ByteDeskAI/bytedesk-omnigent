@@ -446,6 +446,12 @@ class SqlGoal(Base):
         String(16), nullable=False, server_default="low", default="low"
     )
     success_condition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # BDP-2606: queryable taxonomy for portfolio/roadmap rollups. target_kind remains
+    # canonical; department_slug and outcome_kind are additive classification columns.
+    department_slug: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    outcome_kind: Mapped[str] = mapped_column(
+        String(32), nullable=False, server_default="financial", default="financial"
+    )
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
     # BDP-2283 (C4 escalation dedup): set when the accountability loop escalates a
@@ -461,6 +467,8 @@ class SqlGoal(Base):
         Index("ix_goals_target_status", "target_kind", "target_id", "status"),
         Index("ix_goals_activation_status", "activation_state", "status"),
         Index("ix_goals_parent", "parent_goal_id"),
+        Index("ix_goals_department_status", "department_slug", "status"),
+        Index("ix_goals_outcome_kind_status", "outcome_kind", "status"),
         CheckConstraint(
             "status in ('open', 'assigned', 'in_progress', 'blocked', 'done')",
             name="ck_goals_status",
@@ -480,6 +488,10 @@ class SqlGoal(Base):
         CheckConstraint(
             "cadence_kind in ('immediate', 'recurring', 'until_done')",
             name="ck_goals_cadence_kind",
+        ),
+        CheckConstraint(
+            "outcome_kind in ('financial', 'roadmap', 'capability', 'risk', 'operational')",
+            name="ck_goals_outcome_kind",
         ),
     )
 
@@ -595,6 +607,31 @@ class SqlGoalDecision(Base):
     __table_args__ = (
         Index("ix_goal_decisions_goal", "goal_id"),
         Index("ix_goal_decisions_tick", "tick_id"),
+    )
+
+
+class SqlGoalCorrelation(Base):
+    """External-provider subject correlation for outcome booking (BDP-2607).
+
+    Revenue rails frequently know their own subject id (opportunity, invoice,
+    project) rather than an Omnigent goal id. This table resolves
+    ``(source, subject_ref)`` to the goal before the realized-value ledger is
+    written, keeping outcome booking idempotent and provider-language agnostic.
+    """
+
+    __tablename__ = "goal_correlations"
+
+    source: Mapped[str] = mapped_column(String(64), primary_key=True)
+    subject_ref: Mapped[str] = mapped_column(String(256), primary_key=True)
+    goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kind: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    tenant_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        Index("ix_goal_correlations_goal", "goal_id"),
+        Index("ix_goal_correlations_tenant", "tenant_id"),
     )
 
 
