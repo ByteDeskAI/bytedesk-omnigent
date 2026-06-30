@@ -231,6 +231,22 @@ class OmnigentExtensionLifecycle(Protocol):
         """
         ...
 
+    def instruction_fragments(
+        self,
+        *,
+        agent_id: str | None,
+        spec: object,
+    ) -> list[str]:
+        """Additional system-instruction fragments for a resolved agent spec.
+
+        Core asks extensions for fragments after it has loaded the agent spec
+        and before it dispatches a turn. Extensions can compose runtime-owned
+        policy/inheritance text without mutating the durable bundle or requiring
+        core to name the extension package. Defaults to ``[]`` via ``hasattr``
+        probing.
+        """
+        ...
+
 
 def _disabled_from_env() -> set[str]:
     """Extension names disabled via ``OMNIGENT_DISABLED_EXTENSIONS`` (comma-separated).
@@ -531,3 +547,19 @@ def extension_tool_interceptors() -> dict:
                     "extension %r tool_interceptors() failed — skipped", ext.name
                 )
     return interceptors
+
+
+def extension_instruction_fragments(*, agent_id: str | None, spec: object) -> list[str]:
+    """Instruction fragments contributed by extensions (``instruction_fragments()``)."""
+    fragments: list[str] = []
+    for ext in discover_extensions():
+        if hasattr(ext, "instruction_fragments"):
+            try:
+                contributed = ext.instruction_fragments(agent_id=agent_id, spec=spec)
+            except Exception:  # one bad extension must not break the turn
+                logger.exception(
+                    "extension %r instruction_fragments() failed — skipped", ext.name
+                )
+                continue
+            fragments.extend(fragment for fragment in contributed if fragment)
+    return fragments

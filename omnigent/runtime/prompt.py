@@ -18,6 +18,7 @@ def build_instructions(
     spec: AgentSpec,
     per_request_instructions: str | None,
     tool_schemas: list[dict[str, Any]],
+    instruction_fragments: list[str] | None = None,
 ) -> str:
     """
     Build the system instructions string from the agent's
@@ -42,6 +43,9 @@ def build_instructions(
 
     if per_request_instructions:
         parts.append(per_request_instructions)
+
+    if instruction_fragments:
+        parts.extend(fragment for fragment in instruction_fragments if fragment)
 
     # Only mention skills in the system prompt when load_skill is
     # available as a tool. Executors that handle skills natively

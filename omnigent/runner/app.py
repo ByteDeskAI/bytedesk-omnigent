@@ -8504,14 +8504,18 @@ def create_runner_app(
                 # readout). Forwarded by the Omnigent server in the message body.
                 model_override=msg_body.get("model_override"),
             )
-            from omnigent.runtime.prompt import (
-                build_instructions,
-            )
+            from omnigent.kernel.extensions import extension_instruction_fragments
+            from omnigent.runtime.prompt import build_instructions
 
+            agent_id = msg_body.get("agent_id")
             instructions = build_instructions(
                 cached_spec,
                 None,
                 [],
+                extension_instruction_fragments(
+                    agent_id=agent_id if isinstance(agent_id, str) else None,
+                    spec=cached_spec,
+                ),
             )
 
         ctx = TurnDispatch(
