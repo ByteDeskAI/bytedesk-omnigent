@@ -130,7 +130,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_index("ix_connector_oauth_states_provider_expires", table_name="connector_oauth_states")
+    op.drop_index(
+        "ix_connector_oauth_states_provider_expires",
+        table_name="connector_oauth_states",
+    )
     op.drop_table("connector_oauth_states")
     op.drop_index("ix_connector_agent_grants_connection", table_name="connector_agent_grants")
     op.drop_index("ix_connector_agent_grants_agent_enabled", table_name="connector_agent_grants")

@@ -75,6 +75,60 @@
         "title": "AddCommentRequest",
         "type": "object"
       },
+      "AgentGrantBody": {
+        "properties": {
+          "agentId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Agentid",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "materialize": {
+            "default": true,
+            "title": "Materialize",
+            "type": "boolean"
+          },
+          "replace": {
+            "default": true,
+            "title": "Replace",
+            "type": "boolean"
+          },
+          "serviceTools": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Servicetools",
+            "type": "object"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "title": "AgentGrantBody",
+        "type": "object"
+      },
       "AgentImage": {
         "description": "The editable surface of a template agent's image (GET response).",
         "properties": {
@@ -1259,6 +1313,81 @@
           }
         },
         "title": "ConditionBody",
+        "type": "object"
+      },
+      "ConnectorConnectionBody": {
+        "properties": {
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Displayname",
+            "type": "string"
+          },
+          "enabledServices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabledservices"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "secretPayload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secretpayload"
+          },
+          "secretRef": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secretref"
+          }
+        },
+        "required": [
+          "displayName"
+        ],
+        "title": "ConnectorConnectionBody",
+        "type": "object"
+      },
+      "ConnectorOAuthStartBody": {
+        "properties": {
+          "redirectUri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirecturi"
+          }
+        },
+        "title": "ConnectorOAuthStartBody",
         "type": "object"
       },
       "ConversationRef": {
@@ -3906,6 +4035,19 @@
             "$ref": "#/components/schemas/TurnCancelledEvent"
           }
         ]
+      },
+      "ServiceToggleBody": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ServiceToggleBody",
+        "type": "object"
       },
       "SessionAgentChangedEvent": {
         "description": "Bound-agent change on a live session.\n\nEmitted by the switch-agent route after the session's agent binding\nis rewritten in place. Connected clients re-derive their cached\nsession state (harness presentation labels, bound agent id/name)\nfrom a fresh snapshot \u2014 the chat UI's native-vs-SDK message\nlifecycle depends on those labels, so a stale cache drops the first\npost-switch message (it reappears only when the transcript\nround-trip lands).\n\n:param type: Always ``\"session.agent_changed\"``.\n:param conversation_id: Session identifier, e.g. ``\"conv_abc123\"``.\n:param agent_id: The session-scoped clone now bound to the session,\n    e.g. ``\"ag_abc123\"``.\n:param agent_name: Display name of the agent the session now runs,\n    e.g. ``\"claude-native-ui\"``. Deliberately the clean target-agent\n    name \u2014 not the clone row's ``\"\u2026 (switch ag_\u2026)\"`` disambiguation\n    name \u2014 because clients render it verbatim.\n\nCategory: **transient** (SSE-only). The switch is persisted on the\nconversation row, so on reconnect clients read the new binding from\nthe session snapshot rather than from a replayed event.",
@@ -7509,6 +7651,481 @@
           }
         },
         "summary": "Put Value"
+      }
+    },
+    "/v1/connectors/agent-grants": {
+      "get": {
+        "operationId": "list_grants_v1_connectors_agent_grants_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "connectionId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connectionid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agentId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agentid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Grants"
+      }
+    },
+    "/v1/connectors/catalog": {
+      "get": {
+        "operationId": "catalog_v1_connectors_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Catalog"
+      }
+    },
+    "/v1/connectors/connections": {
+      "get": {
+        "operationId": "list_connections_v1_connectors_connections_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connections"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}": {
+      "get": {
+        "operationId": "get_connection_v1_connectors_connections__connection_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Connection"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}/agent-grants": {
+      "post": {
+        "operationId": "upsert_grant_v1_connectors_connections__connection_id__agent_grants_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentGrantBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Grant"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}/health-check": {
+      "post": {
+        "operationId": "health_check_v1_connectors_connections__connection_id__health_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Live",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Health Check"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}/services/{service_key}": {
+      "patch": {
+        "operationId": "toggle_service_v1_connectors_connections__connection_id__services__service_key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceToggleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Toggle Service"
+      }
+    },
+    "/v1/connectors/{provider}/connections": {
+      "post": {
+        "operationId": "create_connection_v1_connectors__provider__connections_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectorConnectionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Connection"
+      }
+    },
+    "/v1/connectors/{provider}/oauth/callback": {
+      "get": {
+        "operationId": "oauth_callback_v1_connectors__provider__oauth_callback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "redirect",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Redirect",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Oauth Callback"
+      }
+    },
+    "/v1/connectors/{provider}/oauth/start": {
+      "post": {
+        "operationId": "oauth_start_v1_connectors__provider__oauth_start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ConnectorOAuthStartBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Oauth Start"
       }
     },
     "/v1/elicitations/pending": {

@@ -1,6 +1,40 @@
 {
   "components": {
     "schemas": {
+      "ActuatorSpecBody": {
+        "properties": {
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "riskTier": {
+            "anyOf": [
+              {
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "type": "string"
+              },
+              {
+                "maximum": 5.0,
+                "minimum": 0.0,
+                "type": "integer"
+              }
+            ],
+            "default": "medium",
+            "title": "Risktier"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "ActuatorSpecBody",
+        "type": "object"
+      },
       "AddCommentRequest": {
         "description": "Request body for ``POST /sessions/{id}/comments``.\n\n:param path: File path relative to workspace root,\n    e.g. ``\"src/App.tsx\"``.\n:param body: The comment text.\n:param start_index: 0-based absolute character offset (inclusive)\n    within the file where the anchor range begins.\n:param end_index: 0-based absolute character offset (exclusive)\n    within the file where the anchor range ends.\n:param anchor_content: Plain-text snapshot of the selected range, used\n    to re-anchor the comment after file edits. ``None`` if not provided.",
         "properties": {
@@ -39,6 +73,60 @@
           "end_index"
         ],
         "title": "AddCommentRequest",
+        "type": "object"
+      },
+      "AgentGrantBody": {
+        "properties": {
+          "agentId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Agentid",
+            "type": "string"
+          },
+          "enabled": {
+            "default": true,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "materialize": {
+            "default": true,
+            "title": "Materialize",
+            "type": "boolean"
+          },
+          "replace": {
+            "default": true,
+            "title": "Replace",
+            "type": "boolean"
+          },
+          "serviceTools": {
+            "additionalProperties": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "title": "Servicetools",
+            "type": "object"
+          },
+          "services": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Services",
+            "type": "array"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tools",
+            "type": "array"
+          }
+        },
+        "required": [
+          "agentId"
+        ],
+        "title": "AgentGrantBody",
         "type": "object"
       },
       "AgentImage": {
@@ -734,6 +822,61 @@
         "title": "Body_upload_session_file_v1_sessions__session_id__resources_files_post",
         "type": "object"
       },
+      "BudgetBody": {
+        "description": "PATCH body for a scope budget (treasury). Omitted fields are unchanged.",
+        "properties": {
+          "anomaly_threshold_cents": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Anomaly Threshold Cents"
+          },
+          "cap_cents": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap Cents"
+          },
+          "cap_tokens": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cap Tokens"
+          },
+          "max_spawns": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Spawns"
+          }
+        },
+        "title": "BudgetBody",
+        "type": "object"
+      },
       "CadenceDraftBody": {
         "description": "Natural-language cadence text to convert into a schedule expression.",
         "properties": {
@@ -779,6 +922,97 @@
           "response"
         ],
         "title": "CancelledEvent",
+        "type": "object"
+      },
+      "CanonicalEventBody": {
+        "description": "An already-canonical inbound event posted by a connected app.",
+        "properties": {
+          "eventId": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eventid"
+          },
+          "idempotencyKey": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Idempotencykey"
+          },
+          "normalized": {
+            "additionalProperties": true,
+            "title": "Normalized",
+            "type": "object"
+          },
+          "occurredAt": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurredat"
+          },
+          "rawPayload": {
+            "additionalProperties": true,
+            "title": "Rawpayload",
+            "type": "object"
+          },
+          "source": {
+            "default": "provider",
+            "maxLength": 128,
+            "title": "Source",
+            "type": "string"
+          },
+          "subjectRef": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subjectref"
+          },
+          "tenantId": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tenantid"
+          },
+          "type": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "title": "CanonicalEventBody",
         "type": "object"
       },
       "ClientTaskCancelEvent": {
@@ -1062,6 +1296,100 @@
         "title": "ConciergeSessionResponse",
         "type": "object"
       },
+      "ConditionBody": {
+        "description": "PUT body for a goal's success-condition AST (``None`` clears it).",
+        "properties": {
+          "condition": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Condition"
+          }
+        },
+        "title": "ConditionBody",
+        "type": "object"
+      },
+      "ConnectorConnectionBody": {
+        "properties": {
+          "displayName": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Displayname",
+            "type": "string"
+          },
+          "enabledServices": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enabledservices"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "title": "Metadata",
+            "type": "object"
+          },
+          "secretPayload": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secretpayload"
+          },
+          "secretRef": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secretref"
+          }
+        },
+        "required": [
+          "displayName"
+        ],
+        "title": "ConnectorConnectionBody",
+        "type": "object"
+      },
+      "ConnectorOAuthStartBody": {
+        "properties": {
+          "redirectUri": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Redirecturi"
+          }
+        },
+        "title": "ConnectorOAuthStartBody",
+        "type": "object"
+      },
       "ConversationRef": {
         "description": "Lightweight reference to a conversation, used in request and\nresponse bodies where only the conversation ID is needed.\n\n:param id: Conversation identifier, e.g. ``\"conv_abc123\"``.",
         "properties": {
@@ -1115,12 +1443,30 @@
       "CreateGoalBody": {
         "description": "Admin create body for a scoped goal.",
         "properties": {
+          "department_slug": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Slug"
+          },
           "dependencies": {
             "items": {
               "$ref": "#/components/schemas/GoalDependencyBody"
             },
             "title": "Dependencies",
             "type": "array"
+          },
+          "outcome_kind": {
+            "default": "financial",
+            "maxLength": 32,
+            "title": "Outcome Kind",
+            "type": "string"
           },
           "payload": {
             "anyOf": [
@@ -1911,6 +2257,18 @@
             "title": "Assumptions",
             "type": "array"
           },
+          "department_slug": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Slug"
+          },
           "dependencies": {
             "items": {
               "$ref": "#/components/schemas/GoalDependencyBody"
@@ -1929,6 +2287,12 @@
               }
             ],
             "title": "Outcome"
+          },
+          "outcome_kind": {
+            "default": "financial",
+            "maxLength": 32,
+            "title": "Outcome Kind",
+            "type": "string"
           },
           "payload": {
             "anyOf": [
@@ -2005,6 +2369,39 @@
           "title"
         ],
         "title": "GoalDraftBody",
+        "type": "object"
+      },
+      "GoalTemplateBody": {
+        "description": "Create body for a reusable goal template.",
+        "properties": {
+          "definition": {
+            "additionalProperties": true,
+            "title": "Definition",
+            "type": "object"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "GoalTemplateBody",
         "type": "object"
       },
       "GrantPermissionRequest": {
@@ -2236,6 +2633,18 @@
           "data"
         ],
         "title": "InstalledSkillsResponse",
+        "type": "object"
+      },
+      "InstantiateTemplateBody": {
+        "description": "POST body to create a goal from a template with overrides.",
+        "properties": {
+          "overrides": {
+            "additionalProperties": true,
+            "title": "Overrides",
+            "type": "object"
+          }
+        },
+        "title": "InstantiateTemplateBody",
         "type": "object"
       },
       "LaunchRunnerRequest": {
@@ -2830,6 +3239,33 @@
         "title": "PresenceViewer",
         "type": "object"
       },
+      "ProviderAuthBody": {
+        "properties": {
+          "header": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Header",
+            "type": "string"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "maxLength": 2048,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret"
+          }
+        },
+        "required": [
+          "header"
+        ],
+        "title": "ProviderAuthBody",
+        "type": "object"
+      },
       "PushSubscriptionCreate": {
         "properties": {
           "endpoint": {
@@ -2998,6 +3434,90 @@
           "delta"
         ],
         "title": "ReasoningTextDeltaEvent",
+        "type": "object"
+      },
+      "RegisterProviderBody": {
+        "properties": {
+          "actuators": {
+            "items": {
+              "$ref": "#/components/schemas/ActuatorSpecBody"
+            },
+            "title": "Actuators",
+            "type": "array"
+          },
+          "auth": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ProviderAuthBody"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baseUrl": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Baseurl",
+            "type": "string"
+          },
+          "contractVersion": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Contractversion"
+          },
+          "name": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Name",
+            "type": "string"
+          },
+          "outcomes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Outcomes",
+            "type": "array"
+          },
+          "schemaId": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Schemaid"
+          },
+          "sensors": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Sensors",
+            "type": "array"
+          },
+          "webhookSources": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Webhooksources",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "baseUrl"
+        ],
+        "title": "RegisterProviderBody",
         "type": "object"
       },
       "ResponseObject": {
@@ -3515,6 +4035,19 @@
             "$ref": "#/components/schemas/TurnCancelledEvent"
           }
         ]
+      },
+      "ServiceToggleBody": {
+        "properties": {
+          "enabled": {
+            "title": "Enabled",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "enabled"
+        ],
+        "title": "ServiceToggleBody",
+        "type": "object"
       },
       "SessionAgentChangedEvent": {
         "description": "Bound-agent change on a live session.\n\nEmitted by the switch-agent route after the session's agent binding\nis rewritten in place. Connected clients re-derive their cached\nsession state (harness presentation labels, bound agent id/name)\nfrom a fresh snapshot \u2014 the chat UI's native-vs-SDK message\nlifecycle depends on those labels, so a stale cache drops the first\npost-switch message (it reappears only when the transcript\nround-trip lands).\n\n:param type: Always ``\"session.agent_changed\"``.\n:param conversation_id: Session identifier, e.g. ``\"conv_abc123\"``.\n:param agent_id: The session-scoped clone now bound to the session,\n    e.g. ``\"ag_abc123\"``.\n:param agent_name: Display name of the agent the session now runs,\n    e.g. ``\"claude-native-ui\"``. Deliberately the clean target-agent\n    name \u2014 not the clone row's ``\"\u2026 (switch ag_\u2026)\"`` disambiguation\n    name \u2014 because clients render it verbatim.\n\nCategory: **transient** (SSE-only). The switch is persisted on the\nconversation row, so on reconnect clients read the new binding from\nthe session snapshot rather than from a replayed event.",
@@ -5907,6 +6440,30 @@
             ],
             "title": "Activation State"
           },
+          "department_slug": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Department Slug"
+          },
+          "outcome_kind": {
+            "anyOf": [
+              {
+                "maxLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outcome Kind"
+          },
           "payload": {
             "anyOf": [
               {
@@ -6007,6 +6564,50 @@
           }
         },
         "title": "UpdateGoalBody",
+        "type": "object"
+      },
+      "UpdateGoalTemplateBody": {
+        "description": "PUT body for a goal template (omitted fields unchanged).",
+        "properties": {
+          "definition": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Definition"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          }
+        },
+        "title": "UpdateGoalTemplateBody",
         "type": "object"
       },
       "UpdateSessionPolicyRequest": {
@@ -7052,6 +7653,481 @@
         "summary": "Put Value"
       }
     },
+    "/v1/connectors/agent-grants": {
+      "get": {
+        "operationId": "list_grants_v1_connectors_agent_grants_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "connectionId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Connectionid"
+            }
+          },
+          {
+            "in": "query",
+            "name": "agentId",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Agentid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Grants"
+      }
+    },
+    "/v1/connectors/catalog": {
+      "get": {
+        "operationId": "catalog_v1_connectors_catalog_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Catalog"
+      }
+    },
+    "/v1/connectors/connections": {
+      "get": {
+        "operationId": "list_connections_v1_connectors_connections_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "provider",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provider"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Connections"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}": {
+      "get": {
+        "operationId": "get_connection_v1_connectors_connections__connection_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Connection"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}/agent-grants": {
+      "post": {
+        "operationId": "upsert_grant_v1_connectors_connections__connection_id__agent_grants_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AgentGrantBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Upsert Grant"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}/health-check": {
+      "post": {
+        "operationId": "health_check_v1_connectors_connections__connection_id__health_check_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Live",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Health Check"
+      }
+    },
+    "/v1/connectors/connections/{connection_id}/services/{service_key}": {
+      "patch": {
+        "operationId": "toggle_service_v1_connectors_connections__connection_id__services__service_key__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "connection_id",
+            "required": true,
+            "schema": {
+              "title": "Connection Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "service_key",
+            "required": true,
+            "schema": {
+              "title": "Service Key",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ServiceToggleBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Toggle Service"
+      }
+    },
+    "/v1/connectors/{provider}/connections": {
+      "post": {
+        "operationId": "create_connection_v1_connectors__provider__connections_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConnectorConnectionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Connection"
+      }
+    },
+    "/v1/connectors/{provider}/oauth/callback": {
+      "get": {
+        "operationId": "oauth_callback_v1_connectors__provider__oauth_callback_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "code",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "Code",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "state",
+            "required": true,
+            "schema": {
+              "minLength": 1,
+              "title": "State",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "redirect",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Redirect",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Oauth Callback"
+      }
+    },
+    "/v1/connectors/{provider}/oauth/start": {
+      "post": {
+        "operationId": "oauth_start_v1_connectors__provider__oauth_start_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "provider",
+            "required": true,
+            "schema": {
+              "title": "Provider",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "anyOf": [
+                  {
+                    "$ref": "#/components/schemas/ConnectorOAuthStartBody"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Body"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Oauth Start"
+      }
+    },
     "/v1/elicitations/pending": {
       "get": {
         "description": "Summarize outstanding elicitation prompts across accessible sessions.\n\nReads the in-memory pending-elicitations index, scoped to sessions the\ncaller can READ \u2014 a caller never sees another owner's pending prompts.\n\n:param session_ids: Optional comma-separated allow-list to restrict the\n    summary to specific sessions (each still access-checked).",
@@ -7616,6 +8692,280 @@
         "summary": "Receive"
       }
     },
+    "/v1/goal-providers": {
+      "get": {
+        "description": "List registered provider manifests (admin; auth secrets omitted).",
+        "operationId": "list_providers_v1_goal_providers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Providers"
+      }
+    },
+    "/v1/goal-providers/register": {
+      "post": {
+        "description": "Register/replace a connected-app provider manifest (admin).",
+        "operationId": "register_provider_v1_goal_providers_register_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterProviderBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Register Provider"
+      }
+    },
+    "/v1/goal-templates": {
+      "get": {
+        "description": "List reusable goal templates.",
+        "operationId": "list_templates_v1_goal_templates_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Templates"
+      },
+      "post": {
+        "description": "Create a reusable goal template.",
+        "operationId": "create_template_v1_goal_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GoalTemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Template"
+      }
+    },
+    "/v1/goal-templates/{template_id}": {
+      "delete": {
+        "description": "Delete a goal template.",
+        "operationId": "delete_template_v1_goal_templates__template_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Template"
+      },
+      "get": {
+        "description": "Return one goal template.",
+        "operationId": "get_template_v1_goal_templates__template_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Template"
+      },
+      "put": {
+        "description": "Update a goal template (omitted fields unchanged).",
+        "operationId": "update_template_v1_goal_templates__template_id__put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateGoalTemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Template"
+      }
+    },
+    "/v1/goal-templates/{template_id}/instantiate": {
+      "post": {
+        "description": "Create a goal from a template merged with overrides.",
+        "operationId": "instantiate_template_v1_goal_templates__template_id__instantiate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "template_id",
+            "required": true,
+            "schema": {
+              "title": "Template Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstantiateTemplateBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Instantiate Template"
+      }
+    },
     "/v1/goals": {
       "get": {
         "description": "List the ops backlog (by priority then age), optionally filtered.",
@@ -7719,6 +9069,38 @@
           },
           {
             "in": "query",
+            "name": "department_slug",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Department Slug"
+            }
+          },
+          {
+            "in": "query",
+            "name": "outcome_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Outcome Kind"
+            }
+          },
+          {
+            "in": "query",
             "name": "ready_only",
             "required": false,
             "schema": {
@@ -7796,6 +9178,67 @@
         "summary": "Create Goal"
       }
     },
+    "/v1/goals/decisions": {
+      "get": {
+        "description": "Read the fund/skip decision replay log (optionally filtered).",
+        "operationId": "list_decisions_v1_goals_decisions_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "goal_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Goal Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "tick_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Tick Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Decisions"
+      }
+    },
     "/v1/goals/events": {
       "get": {
         "description": "Subscribe to goal events for live Omnigent admin refresh.",
@@ -7811,6 +9254,112 @@
           }
         },
         "summary": "Subscribe Goal Events"
+      }
+    },
+    "/v1/goals/frontier": {
+      "get": {
+        "description": "The actionable+ranked ROI frontier (ROI + waiting_reasons) for the cockpit.",
+        "operationId": "get_frontier_v1_goals_frontier_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "target_kind",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Kind"
+            }
+          },
+          {
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Frontier"
+      }
+    },
+    "/v1/goals/outcomes": {
+      "get": {
+        "description": "Read the realized-value ledger (optionally filtered to one goal).",
+        "operationId": "list_all_outcomes_v1_goals_outcomes_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "goal_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Goal Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List All Outcomes"
       }
     },
     "/v1/goals/planner/sessions": {
@@ -7915,7 +9464,88 @@
         "summary": "List Planner Sources"
       }
     },
+    "/v1/goals/posture": {
+      "get": {
+        "description": "Read back the resolved autonomy posture for a scope (Autonomy strip, BDP-2599).\n\n``armed`` is the Wave-5 gate readback: full_auto posture AND\n``BYTEDESK_GOALS_ARMING_ENABLED`` both hold. ``target_id`` resolves a\nper-tenant override; absent \u2192 the global default.",
+        "operationId": "get_posture_v1_goals_posture_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "target_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Target Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Posture"
+      }
+    },
     "/v1/goals/{goal_id}": {
+      "delete": {
+        "description": "Hard-delete a goal and its dependencies.",
+        "operationId": "delete_goal_v1_goals__goal_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Goal"
+      },
       "get": {
         "description": "Return one scoped goal with dependencies.",
         "operationId": "get_goal_v1_goals__goal_id__get",
@@ -8037,6 +9667,174 @@
         "summary": "Activate Goal"
       }
     },
+    "/v1/goals/{goal_id}/budget": {
+      "get": {
+        "description": "Return the treasury budget for the goal's (tier, target) scope.",
+        "operationId": "get_budget_v1_goals__goal_id__budget_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Budget"
+      },
+      "patch": {
+        "description": "Set the treasury cap/limits for the goal's scope.",
+        "operationId": "patch_budget_v1_goals__goal_id__budget_patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Patch Budget"
+      }
+    },
+    "/v1/goals/{goal_id}/conditions": {
+      "get": {
+        "description": "Return the goal's success-condition AST (or null).",
+        "operationId": "get_conditions_v1_goals__goal_id__conditions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Conditions"
+      },
+      "put": {
+        "description": "Set or clear the goal's success-condition AST (validated).",
+        "operationId": "put_conditions_v1_goals__goal_id__conditions_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConditionBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Put Conditions"
+      }
+    },
     "/v1/goals/{goal_id}/dependencies": {
       "post": {
         "description": "Attach a dependency to a goal.",
@@ -8086,6 +9884,51 @@
       }
     },
     "/v1/goals/{goal_id}/dependencies/{dependency_id}": {
+      "delete": {
+        "description": "Detach a dependency from a goal.",
+        "operationId": "remove_dependency_v1_goals__goal_id__dependencies__dependency_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "dependency_id",
+            "required": true,
+            "schema": {
+              "title": "Dependency Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Dependency"
+      },
       "patch": {
         "description": "Update or resolve a dependency.",
         "operationId": "update_dependency_v1_goals__goal_id__dependencies__dependency_id__patch",
@@ -8140,6 +9983,44 @@
           }
         },
         "summary": "Update Dependency"
+      }
+    },
+    "/v1/goals/{goal_id}/outcomes": {
+      "get": {
+        "description": "Read the realized-value ledger for one goal.",
+        "operationId": "get_goal_outcomes_v1_goals__goal_id__outcomes_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "goal_id",
+            "required": true,
+            "schema": {
+              "title": "Goal Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Goal Outcomes"
       }
     },
     "/v1/governance/leaderboard": {
@@ -8563,6 +10444,41 @@
           }
         },
         "summary": "Subscribe Inbound Events"
+      },
+      "post": {
+        "description": "Canonical inbound ingress \u2014 the first live caller of pipeline.ingest.",
+        "operationId": "ingest_canonical_event_v1_inbound_events_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CanonicalEventBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Ingest Canonical Event"
       }
     },
     "/v1/inbound/recent": {
