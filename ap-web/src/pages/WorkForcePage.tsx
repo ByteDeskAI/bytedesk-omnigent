@@ -428,19 +428,41 @@ function RosterPanel({
           <div className="mt-3 flex flex-wrap gap-1.5">
             {(
               [
-                { tier: "employee" as const, count: employeeCount, accent: "text-accent-blue" },
-                { tier: "system" as const, count: systemAgents.length, accent: "text-accent-purple" },
-                { tier: "harness" as const, count: harnessAgents.length, accent: "text-accent-cyan" },
-                { tier: "workflow" as const, count: workflowAgents.length, accent: "text-accent-amber" },
+                {
+                  tier: "employee" as const,
+                  count: employeeCount,
+                  accent: "text-accent-blue",
+                  icon: <UsersIcon className="size-3.5" />,
+                },
+                {
+                  tier: "system" as const,
+                  count: systemAgents.length,
+                  accent: "text-accent-purple",
+                  icon: <ShieldAlertIcon className="size-3.5" />,
+                },
+                {
+                  tier: "harness" as const,
+                  count: harnessAgents.length,
+                  accent: "text-accent-cyan",
+                  icon: <TerminalIcon className="size-3.5" />,
+                },
+                {
+                  tier: "workflow" as const,
+                  count: workflowAgents.length,
+                  accent: "text-accent-amber",
+                  icon: <WorkflowIcon className="size-3.5" />,
+                },
               ]
             ).map((chip) => (
               <button
                 key={chip.tier}
                 type="button"
                 onClick={() => jumpTo(chip.tier)}
-                className="mc-label flex items-center gap-1 rounded-full border border-border-dimmer bg-bg-subtle px-2 py-1 transition-colors hover:border-border-stronger hover:bg-muted/50"
+                aria-label={`${tierLabel(chip.tier)} — ${chip.count}`}
+                title={tierLabel(chip.tier)}
+                className="flex items-center gap-1 rounded-full border border-border-dimmer bg-bg-subtle px-2 py-1 transition-colors hover:border-border-stronger hover:bg-muted/50"
               >
-                <span className={chip.accent}>{tierLabel(chip.tier)}</span>
+                <span className={chip.accent}>{chip.icon}</span>
                 <span className="mc-value text-2xs">{chip.count}</span>
               </button>
             ))}
