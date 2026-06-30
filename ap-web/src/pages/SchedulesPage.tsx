@@ -312,8 +312,8 @@ function AgentRow({
   selected: boolean;
   onSelect: () => void;
 }) {
-  // Employees carry no badge (matching the prior bare-workflow rule); only
-  // the System and Workflow tiers get a tier label.
+  // Employees carry no badge (matching the prior bare-workflow rule); managed
+  // and workflow tiers get a tier label.
   const tier = tierForAgent(agent);
   return (
     <button

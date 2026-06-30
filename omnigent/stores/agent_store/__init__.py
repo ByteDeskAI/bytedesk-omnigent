@@ -117,7 +117,8 @@ class AgentStore(ABC):
             *before* this agent in the sort order.
         :param order: Sort direction, ``"desc"`` or ``"asc"``.
         :param category: When set, restrict to one tier (``"system"`` |
-            ``"employee"`` | ``"workflow"``); ``None`` returns all tiers.
+            ``"harness"`` | ``"employee"`` | ``"workflow"``); ``None`` returns
+            all tiers.
         :returns: A :class:`PagedList` of :class:`Automation` objects.
         """
         ...
@@ -203,9 +204,7 @@ class AgentStore(ABC):
         """
         return None
 
-    def set_capabilities(
-        self, agent_id: str, capabilities: Sequence[str] | None
-    ) -> bool:
+    def set_capabilities(self, agent_id: str, capabilities: Sequence[str] | None) -> bool:
         """
         Persist the agent's declared capability slugs (BDP-2334, ADR-0142).
 
@@ -239,9 +238,10 @@ class AgentStore(ABC):
         """
         Persist the agent's tier classification (agent-tiering step 1).
 
-        ``"system"`` | ``"employee"`` | ``"workflow"``, or ``None`` to clear.
-        Written by the post-seed backfill so the column is authoritative for
-        ``/v1/agents?category=``. Privilege axis, orthogonal to ``sot_tier``.
+        ``"system"`` | ``"harness"`` | ``"employee"`` | ``"workflow"``, or
+        ``None`` to clear. Written by the post-seed backfill so the column is
+        authoritative for ``/v1/agents?category=``. Privilege axis, orthogonal
+        to ``sot_tier``.
 
         Backends that don't persist it stay a no-op (it reads back as ``None``,
         and the converter falls back to name-only inference); the SQLAlchemy

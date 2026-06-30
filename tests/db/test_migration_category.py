@@ -2,8 +2,9 @@
 
 Adds the agent-tier classification column (agent-tiering step 1). The deterministic
 backfill must set allowlisted system-agent ids to ``"system"`` and every other
-existing row to ``"employee"``; ``workflow`` is resolved later by the startup seed
-(SQL can't read the bundle params). Downgrade must drop the column + index.
+existing native launcher id to ``"harness"``; remaining rows become
+``"employee"``. ``workflow`` is resolved later by the startup seed (SQL can't
+read the bundle params). Downgrade must drop the column + index.
 """
 
 from __future__ import annotations
@@ -51,14 +52,16 @@ def _insert_agent(engine: sa.Engine, *, agent_id: str, name: str) -> None:
         )
 
 
-def test_category_backfill_system_and_employee(tmp_path: Path) -> None:
-    """Allowlisted ids → 'system'; all other existing rows → 'employee'."""
+def test_category_backfill_system_harness_and_employee(tmp_path: Path) -> None:
+    """Allowlisted ids get their deterministic categories; others become employee."""
     uri = f"sqlite:///{tmp_path / 'agent-category.db'}"
     engine = _new_engine(uri)
     try:
         _upgrade(engine, uri, _PRIOR_HEAD)
         sys_id = builtin_agent_id("polly")
+        harness_id = builtin_agent_id("claude-native-ui")
         _insert_agent(engine, agent_id=sys_id, name="polly")
+        _insert_agent(engine, agent_id=harness_id, name="claude-native-ui")
         _insert_agent(engine, agent_id="ag_employee", name="vivian")
 
         _upgrade(engine, uri, _THIS_REVISION)
@@ -66,11 +69,10 @@ def test_category_backfill_system_and_employee(tmp_path: Path) -> None:
         with engine.connect() as conn:
             rows = {
                 str(r["id"]): r["category"]
-                for r in conn.execute(
-                    sa.text("SELECT id, category FROM agents")
-                ).mappings()
+                for r in conn.execute(sa.text("SELECT id, category FROM agents")).mappings()
             }
         assert rows[sys_id] == "system"
+        assert rows[harness_id] == "harness"
         assert rows["ag_employee"] == "employee"
     finally:
         engine.dispose()

@@ -9,10 +9,12 @@ from __future__ import annotations
 import pytest
 
 from omnigent.entities import (
+    HARNESS_AGENT_NAMES,
     SYSTEM_AGENT_NAMES,
     Agent,  # employee concrete lives in entities.agent
     AgentRole,
     Automation,
+    HarnessAgent,
     SystemAgent,
     Workflow,
     WorkflowRole,
@@ -35,7 +37,6 @@ class TestInferCategory:
 
     def test_allowlist_name_is_system(self) -> None:
         assert infer_category("polly", None) == "system"
-        assert infer_category("claude-native-ui", {"workflow": True}) == "system"  # name wins
 
     def test_workflow_param_is_workflow(self) -> None:
         assert infer_category("some-orchestrator", {"workflow": True}) == "workflow"
@@ -45,7 +46,7 @@ class TestInferCategory:
         assert infer_category("vivian", {}) == "employee"
 
     def test_params_none_never_workflow(self) -> None:
-        """Row-only context (no spec) can resolve system/employee but never workflow."""
+        """Row-only context resolves name allowlists but never workflow."""
         assert infer_category("anything", None) == "employee"
 
     def test_allowlist_membership(self) -> None:
@@ -62,6 +63,14 @@ class TestInferCategory:
         assert "goal-commander" in SYSTEM_AGENT_NAMES
         assert infer_category("goal-commander", {"department": "Operations"}) == "system"
 
+    def test_native_launchers_are_harnesses(self) -> None:
+        """Native UI launchers are harness templates, not admin system agents."""
+        assert "claude-native-ui" in HARNESS_AGENT_NAMES
+        assert "codex-native-ui" in HARNESS_AGENT_NAMES
+        assert "pi-native-ui" in HARNESS_AGENT_NAMES
+        assert "grok-native-ui" in HARNESS_AGENT_NAMES
+        assert infer_category("claude-native-ui", {"workflow": True}) == "harness"
+
 
 class TestIsSystem:
     """``is_system`` reads the role Protocol's category (the seam's first use)."""
@@ -72,6 +81,7 @@ class TestIsSystem:
     def test_false_for_employee_and_workflow(self) -> None:
         assert is_system(_mk(Agent)) is False
         assert is_system(_mk(Workflow)) is False
+        assert is_system(_mk(HarnessAgent)) is False
 
 
 class TestConcretes:
@@ -79,11 +89,12 @@ class TestConcretes:
 
     def test_categories(self) -> None:
         assert _mk(SystemAgent).category == "system"
+        assert _mk(HarnessAgent).category == "harness"
         assert _mk(Agent).category == "employee"
         assert _mk(Workflow).category == "workflow"
 
     def test_all_are_automations(self) -> None:
-        for cls in (SystemAgent, Agent, Workflow):
+        for cls in (SystemAgent, HarnessAgent, Agent, Workflow):
             assert isinstance(_mk(cls), Automation)
 
     def test_automation_is_abstract(self) -> None:

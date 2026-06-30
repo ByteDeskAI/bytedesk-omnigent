@@ -135,7 +135,8 @@ class SqlAlchemyAgentStore(AgentStore):
             before this agent in sort order.
         :param order: Sort direction, ``"desc"`` or ``"asc"``.
         :param category: When set, restrict to one tier (``"system"`` |
-            ``"employee"`` | ``"workflow"``); ``None`` returns all tiers.
+            ``"harness"`` | ``"employee"`` | ``"workflow"``); ``None`` returns
+            all tiers.
         :returns: A :class:`PagedList` of :class:`Automation` objects.
         """
         with self._session() as session:
@@ -288,9 +289,7 @@ class SqlAlchemyAgentStore(AgentStore):
             row = session.get(SqlAgent, agent_id)
             return row.sot_tier if row else None
 
-    def set_capabilities(
-        self, agent_id: str, capabilities: Sequence[str] | None
-    ) -> bool:
+    def set_capabilities(self, agent_id: str, capabilities: Sequence[str] | None) -> bool:
         """Persist the agent's declared capability slugs (BDP-2334, ADR-0142).
 
         Serialized as JSON-in-Text (dual-DB SQLite + Postgres, never JSONB),
@@ -330,7 +329,8 @@ class SqlAlchemyAgentStore(AgentStore):
     def set_category(self, agent_id: str, category: str | None) -> bool:
         """Persist the agent's tier (agent-tiering step 1). Mirrors set_sot_tier.
 
-        ``"system"`` | ``"employee"`` | ``"workflow"``, or ``None`` to clear.
+        ``"system"`` | ``"harness"`` | ``"employee"`` | ``"workflow"``, or
+        ``None`` to clear.
 
         :param agent_id: The registered agent id.
         :param category: The tier, or ``None`` to clear it.

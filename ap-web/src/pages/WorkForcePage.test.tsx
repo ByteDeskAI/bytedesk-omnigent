@@ -67,6 +67,18 @@ const agents = [
     category: "system",
   },
   {
+    id: "ag_harness",
+    name: "claude-native-ui",
+    display_name: "Claude Code",
+    description: "Native Claude launcher.",
+    harness: "claude-native",
+    skills: [],
+    department: null,
+    title: null,
+    workflow: false,
+    category: "harness",
+  },
+  {
     id: "ag_workflow",
     name: "weekly-business-review",
     display_name: "Weekly Business Review",
@@ -205,16 +217,18 @@ afterEach(() => {
 });
 
 describe("WorkForcePage", () => {
-  it("groups employees, system agents, and workflows separately", async () => {
+  it("groups employees, system agents, harnesses, and workflows separately", async () => {
     renderPage();
 
     expect(vi.mocked(useAvailableAgents)).toHaveBeenCalledWith({ includeSessionAgents: false });
     expect(await screen.findByRole("heading", { name: "Work Force" })).toBeInTheDocument();
     expect(screen.getAllByText("Employees").length).toBeGreaterThan(0);
     expect(screen.getAllByText("System Agents").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Harnesses").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Workflows").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Platform Developer").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Polly").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Weekly Business Review").length).toBeGreaterThan(0);
     expect(within(screen.getByLabelText("Agent roster")).queryByText("Inbox Demo")).toBeNull();
   });
@@ -282,6 +296,18 @@ describe("WorkForcePage", () => {
           workflow: false,
           category: "system",
         },
+        {
+          id: "ag_claude",
+          name: "claude-native-ui",
+          display_name: "Claude Code",
+          description: null,
+          harness: "claude-native",
+          skills: [],
+          department: null,
+          title: null,
+          workflow: false,
+          category: "harness",
+        },
       ],
       isLoading: false,
       refetch: vi.fn(),
@@ -303,6 +329,7 @@ describe("WorkForcePage", () => {
     );
     expect(within(roster).queryByText("Hello World")).toBeNull();
     expect(within(roster).getByText("Goal Commander")).toBeInTheDocument();
+    expect(within(roster).getByText("Claude Code")).toBeInTheDocument();
   });
 
   it("keeps workflow agents read-only", async () => {
@@ -335,6 +362,30 @@ describe("WorkForcePage", () => {
     await waitFor(() => expect(mutateImage).toHaveBeenCalled());
     expect(mutateImage.mock.calls[0][0]).toMatchObject({
       agentId: "ag_system",
+      etag: '"3"',
+    });
+  });
+
+  it("requires confirmation before saving a harness image", async () => {
+    renderPage();
+
+    fireEvent.click(await screen.findByText("Claude Code"));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Claude Code" })).toBeInTheDocument(),
+    );
+    const configTab = screen.getByRole("tab", { name: /Config/ });
+    await waitFor(() => expect(configTab).not.toBeDisabled());
+    await activateTab(/Config/);
+    fireEvent.click(await screen.findByRole("button", { name: /Save image/ }));
+
+    expect(
+      await screen.findByRole("heading", { name: "Confirm harness edit" }),
+    ).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Save harness" }));
+
+    await waitFor(() => expect(mutateImage).toHaveBeenCalled());
+    expect(mutateImage.mock.calls[0][0]).toMatchObject({
+      agentId: "ag_harness",
       etag: '"3"',
     });
   });

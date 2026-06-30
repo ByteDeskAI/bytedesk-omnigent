@@ -3,10 +3,12 @@
 from omnigent.entities.account import Account, AccountToken
 from omnigent.entities.agent import Agent, LoadedAgent
 from omnigent.entities.automation import (
+    HARNESS_AGENT_NAMES,
     SYSTEM_AGENT_NAMES,
     AgentCategory,
     AgentRole,
     Automation,
+    HarnessAgent,
     SystemAgent,
     Workflow,
     WorkflowRole,
@@ -48,6 +50,7 @@ from omnigent.entities.session_resources import (
 
 __all__ = [
     "DEFAULT_ENVIRONMENT_ID",
+    "HARNESS_AGENT_NAMES",
     "NON_CONTENT_ITEM_TYPES",
     "SYSTEM_AGENT_NAMES",
     "Account",
@@ -65,6 +68,7 @@ __all__ = [
     "ErrorData",
     "FunctionCallData",
     "FunctionCallOutputData",
+    "HarnessAgent",
     "ItemData",
     "LoadedAgent",
     "MessageData",

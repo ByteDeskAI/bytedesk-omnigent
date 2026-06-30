@@ -210,10 +210,11 @@ class AgentObject(BaseModel):
     # them in omnigent's own picker (BDP-2187). Defaults False (employees).
     # Kept for back-compat; now derived from ``category`` (== "workflow").
     workflow: bool = False
-    # Agent tier (agent-tiering step 1): "system" | "employee" | "workflow".
-    # First-class, queryable classification from the persisted entity. ``system``
-    # = platform-shipped, tightly-controlled (e.g. the Skill Manager); the UI
-    # groups by this. Defaults "employee".
+    # Agent tier (agent-tiering step 1): "system" | "harness" | "employee" |
+    # "workflow". First-class, queryable classification from the persisted
+    # entity. ``system`` = administrative system operators; ``harness`` =
+    # platform launcher templates such as Claude/Codex/Pi/Grok. Defaults
+    # "employee".
     category: str = "employee"
 
 

@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 from omnigent.db.db_models import SqlAgent
-from omnigent.entities import Agent, Automation, SystemAgent, Workflow, infer_category
+from omnigent.entities import (
+    Agent,
+    Automation,
+    HarnessAgent,
+    SystemAgent,
+    Workflow,
+    infer_category,
+)
 
 # Tier (category string) → concrete entity class. The class IS the discriminator
 # (house idiom: spec/types.py PolicySpec subclasses).
 _BY_CATEGORY: dict[str, type[Automation]] = {
     "system": SystemAgent,
+    "harness": HarnessAgent,
     "employee": Agent,
     "workflow": Workflow,
 }
@@ -21,11 +29,11 @@ def sql_agent_to_entity(row: SqlAgent) -> Automation:
     Dispatches on the persisted ``category`` column; for rows written before the
     column was populated it falls back to name-only inference
     (:func:`~omnigent.entities.infer_category` with ``params=None``), which
-    resolves ``system``/``employee`` but defaults ``workflow`` rows to ``Agent``
-    until the post-seed backfill persists their column.
+    resolves ``harness``/``system``/``employee`` but defaults ``workflow`` rows
+    to ``Agent`` until the post-seed backfill persists their column.
 
     :param row: The SQLAlchemy ORM row to convert.
-    :returns: A :class:`SystemAgent`, :class:`Agent`, or :class:`Workflow`.
+    :returns: The concrete entity matching the persisted category.
     """
     category = row.category or infer_category(row.name, None)
     cls = _BY_CATEGORY.get(category, Agent)

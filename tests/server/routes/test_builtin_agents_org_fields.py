@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from omnigent.entities import Agent, LoadedAgent, SystemAgent, Workflow
+from omnigent.entities import Agent, HarnessAgent, LoadedAgent, SystemAgent, Workflow
 from omnigent.server.routes.builtin_agents import _to_agent_object
 from omnigent.spec import parse
 
@@ -72,6 +72,14 @@ def test_system_entity_carries_system_category() -> None:
     agent = SystemAgent(id="ag_sys", created_at=0, name="skill-manager", bundle_location="x")
     obj = _to_agent_object(agent, _FakeCache(spec))
     assert obj.category == "system"
+    assert obj.workflow is False
+
+
+def test_harness_entity_carries_harness_category() -> None:
+    spec = parse(_AGENTS / "platform-developer", expand_env=False)
+    agent = HarnessAgent(id="ag_h", created_at=0, name="claude-native-ui", bundle_location="x")
+    obj = _to_agent_object(agent, _FakeCache(spec))
+    assert obj.category == "harness"
     assert obj.workflow is False
 
 

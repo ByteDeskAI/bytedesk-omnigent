@@ -10,7 +10,15 @@ from collections.abc import Awaitable, Callable, Coroutine, Sequence
 from typing import Any, TypeVar
 from urllib.parse import urlsplit
 
-from omnigent.entities import Agent, Automation, PagedList, SystemAgent, Workflow, infer_category
+from omnigent.entities import (
+    Agent,
+    Automation,
+    HarnessAgent,
+    PagedList,
+    SystemAgent,
+    Workflow,
+    infer_category,
+)
 from omnigent.errors import StaleWriteError
 from omnigent.stores.agent_store import AgentRevision, AgentStore
 from omnigent.stores.agent_store import events as agent_events
@@ -572,6 +580,8 @@ def _entity_from_record(record: dict[str, Any]) -> Automation:
     cls: type[Automation]
     if category == "system":
         cls = SystemAgent
+    elif category == "harness":
+        cls = HarnessAgent
     elif category == "workflow":
         cls = Workflow
     else:

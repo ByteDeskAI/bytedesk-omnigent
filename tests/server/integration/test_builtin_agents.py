@@ -128,6 +128,24 @@ async def test_list_builtin_agents_returns_registered_templates(
     assert all(a["skills"] == [] for a in body["data"])
 
 
+async def test_list_builtin_agents_filters_harness_category(
+    agent_store: SqlAlchemyAgentStore,
+    agents_client: httpx.AsyncClient,
+) -> None:
+    """``category=harness`` is a first-class API filter for native launchers."""
+    agent_store.create("ag_harness", "claude-native-ui", "ag_harness/bundle")
+    agent_store.create("ag_system", "skills-concierge", "ag_system/bundle")
+    agent_store.set_category("ag_harness", "harness")
+    agent_store.set_category("ag_system", "system")
+
+    resp = await agents_client.get("/v1/agents?category=harness")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert [a["id"] for a in body["data"]] == ["ag_harness"]
+    assert body["data"][0]["category"] == "harness"
+
+
 @pytest.mark.parametrize(
     "harness",
     ["codex", "claude-sdk"],

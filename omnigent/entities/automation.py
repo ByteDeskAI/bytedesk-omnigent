@@ -1,10 +1,13 @@
 """Automation entity hierarchy — agent tiering, step 1.
 
-Every persisted agent row becomes one of three concrete entities so the three
-tiers are a real type hierarchy, not a loose string:
+Every persisted agent row becomes one of four concrete entities so tiers are a
+real type hierarchy, not a loose string:
 
-- :class:`SystemAgent` — platform-shipped, tightly-controlled (e.g. the Skill
-  Manager). Classified by the :data:`SYSTEM_AGENT_NAMES` allowlist.
+- :class:`SystemAgent` — tightly-controlled administrative operators (e.g. the
+  Skill Manager). Classified by the :data:`SYSTEM_AGENT_NAMES` allowlist.
+- :class:`HarnessAgent` — platform-shipped native launcher templates
+  (Claude/Codex/Pi/Grok). Classified by the :data:`HARNESS_AGENT_NAMES`
+  allowlist.
 - :class:`Agent` — a regular employee agent (the default). Lives in
   ``omnigent/entities/agent.py`` to keep the widely-imported name where callers
   expect it.
@@ -26,20 +29,15 @@ import abc
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
-AgentCategory = Literal["system", "employee", "workflow"]
+AgentCategory = Literal["system", "harness", "employee", "workflow"]
 
-# Bootstrap "system" allowlist — privilege classification, NOT SoT ownership
+# Bootstrap "system" allowlist — administrative privilege classification, NOT
+# "platform-shipped built-in" and NOT SoT ownership.
 # (do not infer from ``sot_tier``: that means omnigent-is-source-of-truth, a
-# different axis). Names mirror the seeded built-ins in omnigent/server/app.py
-# (the four NativeCodingAgent.agent_name values + debby + polly) plus the Skill
-# Manager (skills-concierge), promoted to a system agent in step 2 (BDP-2577) so
-# its ``system.skills.manage`` privilege gates cross-agent skill installs.
+# different axis). Keep this narrow: Work Force renders these as "System
+# Agents". Native coding launchers live in HARNESS_AGENT_NAMES instead.
 SYSTEM_AGENT_NAMES: frozenset[str] = frozenset(
     {
-        "claude-native-ui",
-        "codex-native-ui",
-        "pi-native-ui",
-        "grok-native-ui",
         "debby",
         "polly",
         "skills-concierge",
@@ -47,20 +45,34 @@ SYSTEM_AGENT_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Platform launcher templates. They are built-ins, but not Work Force system
+# agents; they are selectable harness endpoints for creating/resuming sessions.
+HARNESS_AGENT_NAMES: frozenset[str] = frozenset(
+    {
+        "claude-native-ui",
+        "codex-native-ui",
+        "pi-native-ui",
+        "grok-native-ui",
+    }
+)
+
 
 def infer_category(name: str, params: dict | None) -> AgentCategory:
     """Classify an agent from its name + (optional) bundle params.
 
-    ``system`` if the name is on the allowlist; ``workflow`` if
-    ``params.workflow`` is truthy; ``employee`` otherwise. ``params=None`` is the
-    row-only context (the converter has no spec): it can resolve system/employee
-    but never ``workflow`` (that needs the spec), which is why the post-seed
-    backfill persists the column for workflow rows.
+    ``harness`` for native launcher names; ``system`` for administrative system
+    names; ``workflow`` if ``params.workflow`` is truthy; ``employee``
+    otherwise. ``params=None`` is the row-only context (the converter has no
+    spec): it can resolve harness/system/employee but never ``workflow`` (that
+    needs the spec), which is why the post-seed backfill persists the column for
+    workflow rows.
 
     :param name: The agent's unique name, e.g. ``"polly"``.
     :param params: The bundle's ``params`` dict, or ``None`` when unavailable.
     :returns: The inferred :data:`AgentCategory`.
     """
+    if name in HARNESS_AGENT_NAMES:
+        return "harness"
     if name in SYSTEM_AGENT_NAMES:
         return "system"
     if params and params.get("workflow"):
@@ -153,6 +165,15 @@ class SystemAgent(Automation):
     @property
     def category(self) -> AgentCategory:
         return "system"
+
+
+@dataclass
+class HarnessAgent(Automation):
+    """A platform-shipped native launcher template (Claude/Codex/Pi/Grok)."""
+
+    @property
+    def category(self) -> AgentCategory:
+        return "harness"
 
 
 @dataclass

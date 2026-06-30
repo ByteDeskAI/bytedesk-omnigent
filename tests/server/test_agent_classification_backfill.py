@@ -58,6 +58,7 @@ def test_backfill_classifies_and_syncs_capabilities(tmp_path: Path) -> None:
         name="skills-concierge",
         extra="capabilities:\n  - system.skills.manage\n",
     )
+    native_launcher = _seed(db_uri, tmp_path, name="claude-native-ui")
     goal_commander = _seed(
         db_uri,
         tmp_path,
@@ -70,8 +71,9 @@ def test_backfill_classifies_and_syncs_capabilities(tmp_path: Path) -> None:
     store, cache = _stores(db_uri, tmp_path)
     _backfill_agent_classification(store, cache)
 
-    # Category column written for all three tiers.
+    # Category column written for all tiers.
     assert store.get_category(concierge) == "system"
+    assert store.get_category(native_launcher) == "harness"
     assert store.get_category(goal_commander) == "system"
     assert store.get_category(workflow) == "workflow"
     assert store.get_category(employee) == "employee"

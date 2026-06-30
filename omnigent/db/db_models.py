@@ -74,12 +74,12 @@ class SqlAgent(Base):
     # = no capabilities declared / not yet materialized. Queryable so the
     # resolver / admin surfaces can filter agents by declared capability.
     capabilities: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # Agent tier classification (agent-tiering step 1): "system" | "employee" |
-    # "workflow". Queryable so /v1/agents?category= and admin surfaces can filter
-    # without loading every spec. NULL = not yet classified → the converter
-    # falls back to name-only inference (system/employee) and the post-seed
-    # backfill writes the authoritative value (incl. workflow). Privilege axis,
-    # orthogonal to ``sot_tier`` (SoT ownership).
+    # Agent tier classification (agent-tiering step 1): "system" | "harness" |
+    # "employee" | "workflow". Queryable so /v1/agents?category= and admin
+    # surfaces can filter without loading every spec. NULL = not yet classified
+    # → the converter falls back to name-only inference (harness/system/employee)
+    # and the post-seed backfill writes the authoritative value (incl.
+    # workflow). Privilege axis, orthogonal to ``sot_tier`` (SoT ownership).
     category: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     __table_args__ = (
@@ -264,9 +264,7 @@ class SqlSessionPermission(Base):
     )
     level: Mapped[int] = mapped_column(Integer, nullable=False)
     # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1", default=1
-    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
 
     __table_args__ = (
         CheckConstraint("level IN (1, 2, 3, 4)", name="ck_session_permissions_level"),
@@ -356,9 +354,7 @@ class SqlConversation(Base):
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
     # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1", default=1
-    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
     kind: Mapped[str] = mapped_column(String(32), default="default")
     parent_conversation_id: Mapped[str | None] = mapped_column(
@@ -761,9 +757,7 @@ class SqlPolicy(Base):
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     # Monotonic optimistic-concurrency ETag (BDP-2412 / ADR-0150).
-    version: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="1", default=1
-    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
     type: Mapped[str] = mapped_column(String(16))
     # Dotted import path (type="python") or HTTPS URL
     # (type="url") for the policy handler.
@@ -926,9 +920,7 @@ class SqlMemoryCompartment(Base):
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
 
     __table_args__ = (
-        UniqueConstraint(
-            "scope", "owner", "name", name="uq_memory_compartments_scope_owner_name"
-        ),
+        UniqueConstraint("scope", "owner", "name", name="uq_memory_compartments_scope_owner_name"),
         CheckConstraint(
             "scope in ('agent', 'team', 'topic')", name="ck_memory_compartments_scope"
         ),
