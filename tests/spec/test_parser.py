@@ -38,6 +38,27 @@ def test_parse_minimal(agent_dir: Path) -> None:
     assert spec.sub_agents == []
 
 
+def test_parse_mcp_file_preserves_tool_allowlist(agent_dir: Path) -> None:
+    mcp_dir = agent_dir / "tools" / "mcp"
+    mcp_dir.mkdir(parents=True)
+    (mcp_dir / "google.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "name": "google",
+                "transport": "stdio",
+                "command": "python",
+                "args": ["-m", "bytedesk_omnigent.connectors.google_workspace_mcp"],
+                "tool_allowlist": ["drive_search", "gmail_search"],
+            }
+        )
+    )
+
+    spec = parse(agent_dir)
+
+    assert len(spec.mcp_servers) == 1
+    assert spec.mcp_servers[0].tool_allowlist == ["drive_search", "gmail_search"]
+
+
 def test_parse_missing_config_yaml(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match=r"config.yaml not found"):
         parse(tmp_path)

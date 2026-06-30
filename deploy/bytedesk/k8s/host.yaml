@@ -14,6 +14,49 @@
 # OMNIGENT_HOST_AUTH_TOKEN from omnigent-host-credentials; when auth is disabled,
 # it registers anonymously as the local user. Model creds are added only when we
 # run a real turn (envFrom omnigent-host-credentials).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: omnigent-host
+  labels:
+    app.kubernetes.io/name: omnigent-host
+    app.kubernetes.io/part-of: bytedesk-omnigent
+---
+# Generic extension credential capability. Connector-specific identities,
+# audiences, and scopes are stored in Omnigent connector configuration; this
+# Role only lets first-party Omnigent runtime processes request a bounded token
+# for the host's own Kubernetes ServiceAccount when an extension chooses that
+# source.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: omnigent-host-token-request
+  labels:
+    app.kubernetes.io/name: omnigent-host
+    app.kubernetes.io/part-of: bytedesk-omnigent
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["omnigent-host"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: omnigent-host-token-request
+  labels:
+    app.kubernetes.io/name: omnigent-host
+    app.kubernetes.io/part-of: bytedesk-omnigent
+subjects:
+  - kind: ServiceAccount
+    name: omnigent-host
+  - kind: ServiceAccount
+    name: omnigent-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: omnigent-host-token-request
+---
 # Headless Service backing the StatefulSet (required for stable pod identity).
 # The host dials OUT to the server over the WS tunnel and is never addressed
 # inbound, so this Service exists only to satisfy the StatefulSet contract.
@@ -69,6 +112,7 @@ spec:
         app.kubernetes.io/name: omnigent-host
         app.kubernetes.io/part-of: bytedesk-omnigent
     spec:
+      serviceAccountName: omnigent-host
       containers:
         - name: host
           # HOST-target image (public): bakes the claude/codex/pi CLIs + git/tmux/bwrap

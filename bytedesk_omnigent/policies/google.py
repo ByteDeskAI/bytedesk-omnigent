@@ -151,7 +151,12 @@ _DRIVE_CREATE_TOOLS: frozenset[str] = frozenset(
     {
         "docs_document_create",
         "docs_document_create_from_markdown",
+        "docs_create",
+        "docs_template_seed",
         "drive_file_create",
+        "drive_replicate_template",
+        "sheets_create",
+        "slides_create",
         "sheets_spreadsheet_create",
         "slides_presentation_create",
     }
@@ -163,9 +168,12 @@ _DRIVE_WRITE_TOOLS: frozenset[str] = frozenset(
     {
         "docs_document_batch_update",
         "docs_document_apply_template_styles",
+        "docs_batch_update",
+        "docs_template_merge",
         "drive_file_update",
         "drive_file_delete",
         "drive_file_copy",
+        "drive_share_internal",
         "sheets_values_update",
         "sheets_values_append",
         "sheets_spreadsheet_batch_update",
@@ -189,6 +197,7 @@ _GMAIL_READ_TOOLS: frozenset[str] = frozenset(
         "gmail_message_get",
         "gmail_thread_list",
         "gmail_thread_get",
+        "gmail_thread_read",
         "gmail_profile_get",
     }
 )
@@ -206,11 +215,12 @@ _CAL_READ_TOOLS: frozenset[str] = frozenset(
         "calendar_event_list",
         "calendar_event_get",
         "calendar_calendar_list",
+        "calendar_freebusy",
         "calendar_freebusy_query",
     }
 )
 _CAL_CREATE_TOOLS: frozenset[str] = frozenset(
-    {"calendar_event_create", "calendar_calendar_create"}
+    {"calendar_event_create", "calendar_calendar_create", "meeting_schedule"}
 )
 _CAL_MODIFY_TOOLS: frozenset[str] = frozenset({"calendar_event_update", "calendar_event_delete"})
 _CAL_OWNED_PREFIXES: tuple[str, ...] = ("calendar_",)

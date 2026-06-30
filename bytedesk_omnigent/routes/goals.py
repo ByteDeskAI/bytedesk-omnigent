@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Any
@@ -20,6 +19,7 @@ from typing import Any
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import SQLAlchemyError
 
 from bytedesk_omnigent.engine.config import load_goal_engine_config
 from bytedesk_omnigent.tools.goal_tools import _arming_enabled
@@ -202,22 +202,52 @@ def _format_sse(event: dict[str, Any]) -> str:
     return f"event: {event_type}\ndata: {data}\n\n"
 
 
+def _connector_service_available(provider: str, service_key: str) -> bool:
+    """Return connector readiness from Omnigent's connector store."""
+
+    try:
+        from bytedesk_omnigent.connectors.store import get_connector_store
+
+        store = get_connector_store()
+        connections = store.list_connections(provider=provider)
+        for connection in connections:
+            if connection.status not in {"connected", "healthy", "ready"}:
+                continue
+            services = store.list_services(connection.id)
+            if any(
+                service.service_key == service_key
+                and service.enabled
+                and service.status != "disabled"
+                for service in services
+            ):
+                return True
+    except (RuntimeError, OSError, ValueError, KeyError, AttributeError, SQLAlchemyError):
+        logger.debug(
+            "failed to inspect connector availability",
+            extra={"provider": provider, "service": service_key},
+            exc_info=True,
+        )
+    return False
+
+
 def _planner_sources() -> list[GoalPlannerSource]:
-    google_available = bool(
-        os.getenv("GOOGLE_WORKSPACE_MCP_URL") or os.getenv("BYTEDESK_GOOGLE_WORKSPACE_MCP_URL")
-    )
+    jira_available = _connector_service_available("atlassian", "jira")
+    confluence_available = _connector_service_available("atlassian", "confluence")
+    google_available = _connector_service_available("google_workspace", "drive")
     return [
         GoalPlannerSource(
             id="jira",
             label="Jira",
             tools=["bytedesk_jira"],
-            available=True,
+            available=jira_available,
+            reason=None if jira_available else "not_configured",
         ),
         GoalPlannerSource(
             id="confluence",
             label="Confluence",
             tools=["bytedesk_confluence"],
-            available=True,
+            available=confluence_available,
+            reason=None if confluence_available else "not_configured",
         ),
         GoalPlannerSource(
             id="google_workspace",

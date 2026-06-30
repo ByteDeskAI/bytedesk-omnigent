@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
+from bytedesk_omnigent.connectors.store import ConnectorConnection
 from bytedesk_omnigent.tools.confluence_tools import (
     BytedeskConfluenceTool,
     _ConfluenceClient,
@@ -81,6 +82,115 @@ def test_search_sends_basic_auth_header():
 
     assert captured[0].headers["Authorization"] == _expected_basic()
     assert captured[0].headers["Accept"] == "application/json"
+
+
+def test_connection_backed_search_uses_atlassian_cloud_prefix(monkeypatch):
+    conn = ConnectorConnection(
+        id="conn_1",
+        provider="atlassian",
+        display_name="Acme",
+        auth_type="oauth_3lo",
+        status="connected",
+        scopes=[],
+        metadata={"cloud_id": "cloud-1"},
+        secret_ref="secret-ref",
+        last_health_status=None,
+        last_health_at=None,
+        last_error=None,
+        created_at=1,
+        updated_at=1,
+        version=1,
+    )
+
+    class _Store:
+        def get_connection(self, connection_id: str):
+            return conn
+
+    monkeypatch.setattr(
+        "bytedesk_omnigent.connectors.credentials.get_connector_store",
+        lambda: _Store(),
+    )
+    monkeypatch.setattr(
+        "bytedesk_omnigent.connectors.credentials.load_connector_secret",
+        lambda ref: {"access_token": "oauth-token", "cloud_id": "cloud-1"},
+    )
+    captured: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    client = httpx.Client(
+        base_url="https://api.atlassian.com",
+        transport=httpx.MockTransport(_handler),
+    )
+    tool = BytedeskConfluenceTool(
+        client=_ConfluenceClient(connection_id="conn_1", client=client)
+    )
+
+    result = _call(tool, op="search", cql="type=page")
+
+    assert result["ok"] is True
+    assert captured[0].headers["Authorization"] == "Bearer oauth-token"
+    assert captured[0].url.path == "/ex/confluence/cloud-1/wiki/rest/api/content/search"
+
+
+def test_connection_backed_search_can_use_connector_secret_references(monkeypatch):
+    conn = ConnectorConnection(
+        id="conn_1",
+        provider="atlassian",
+        display_name="Acme",
+        auth_type="oauth_3lo",
+        status="connected",
+        scopes=[],
+        metadata={
+            "auth_mode": "api_token",
+            "base_url_secret": "ATLASSIAN_BASE_URL",
+            "email_secret": "ATLASSIAN_EMAIL",
+            "api_token_secret": "ATLASSIAN_API_TOKEN",
+        },
+        secret_ref=None,
+        last_health_status=None,
+        last_health_at=None,
+        last_error=None,
+        created_at=1,
+        updated_at=1,
+        version=1,
+    )
+
+    class _Store:
+        def get_connection(self, connection_id: str):
+            return conn
+
+    secrets = {
+        "ATLASSIAN_BASE_URL": f"{_BASE}/wiki",
+        "ATLASSIAN_EMAIL": _EMAIL,
+        "ATLASSIAN_API_TOKEN": _TOKEN,
+    }
+    monkeypatch.setattr(
+        "bytedesk_omnigent.connectors.credentials.get_connector_store",
+        lambda: _Store(),
+    )
+    monkeypatch.setattr(
+        "omnigent.onboarding.secrets.load_secret",
+        lambda name: secrets.get(name),
+    )
+    captured: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(200, json={"results": []})
+
+    client = httpx.Client(base_url=_BASE, transport=httpx.MockTransport(_handler))
+    tool = BytedeskConfluenceTool(
+        client=_ConfluenceClient(connection_id="conn_1", client=client)
+    )
+
+    result = _call(tool, op="search", cql="type=page")
+
+    assert result["ok"] is True
+    assert captured[0].headers["Authorization"] == _expected_basic()
+    assert captured[0].url.path == "/wiki/rest/api/content/search"
 
 
 # ── search ──────────────────────────────────────────────────────────────────────

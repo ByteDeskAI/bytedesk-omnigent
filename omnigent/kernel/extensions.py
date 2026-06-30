@@ -116,6 +116,26 @@ class OmnigentExtension(Protocol):
         """
         ...
 
+    def connector_manifests(self) -> list[object]:
+        """External service connector manifests contributed by extensions.
+
+        Connectors are the Omnigent-owned external-tool provider seam: an
+        extension declares provider/service/auth metadata, while the concrete
+        connection lifecycle and tool materialization live out-of-core. Defaults
+        to ``[]`` via ``hasattr`` probing.
+        """
+        ...
+
+    def connector_providers(self) -> dict[str, Callable[[], object]]:
+        """External service connector provider strategies contributed by extensions.
+
+        A provider strategy owns only provider-specific behavior: authorization,
+        direct credential registration, health validation, and agent tool
+        materialization. The shared admin API, persistence, service toggles, and
+        grants depend on this generic seam instead of naming individual services.
+        """
+        ...
+
     def principal_resolvers(self) -> list[object]:
         """Identity resolvers contributed to the request principal chain.
 
@@ -471,6 +491,24 @@ def extension_config_descriptors() -> list:
         if hasattr(ext, "config_descriptors"):
             descriptors.extend(ext.config_descriptors())
     return descriptors
+
+
+def extension_connector_manifests() -> list:
+    """Connector manifests contributed by extensions (``connector_manifests()``)."""
+    manifests: list = []
+    for ext in discover_extensions():
+        if hasattr(ext, "connector_manifests"):
+            manifests.extend(ext.connector_manifests())
+    return manifests
+
+
+def extension_connector_providers() -> dict:
+    """Connector provider strategies contributed by extensions (``connector_providers()``)."""
+    providers: dict = {}
+    for ext in discover_extensions():
+        if hasattr(ext, "connector_providers"):
+            providers.update(ext.connector_providers())
+    return providers
 
 
 def extension_tool_interceptors() -> dict:

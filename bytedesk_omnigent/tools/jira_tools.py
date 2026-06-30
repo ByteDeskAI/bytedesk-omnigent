@@ -84,16 +84,31 @@ class _JiraClient(HttpToolClient):
         base_url: str | None = None,
         email: str | None = None,
         api_token: str | None = None,
+        connection_id: str | None = None,
+        headers: dict[str, str] | None = None,
+        path_prefix: str = "",
         client: httpx.Client | None = None,
     ) -> None:
         self._base_url = base_url
         self._email = email
         self._api_token = api_token
+        self._connection_id = connection_id
+        self._headers_override = headers
+        self._path_prefix = path_prefix.rstrip("/")
         self._client = client  # injectable for tests; built lazily otherwise
         self._resolved = base_url is not None  # creds passed in directly (tests)
 
     def _resolve_credentials(self) -> None:
         if self._resolved:
+            return
+        if self._connection_id:
+            from bytedesk_omnigent.connectors.credentials import resolve_atlassian_credentials
+
+            creds = resolve_atlassian_credentials(self._connection_id, service="jira")
+            self._base_url = creds.base_url
+            self._path_prefix = creds.path_prefix.rstrip("/")
+            self._headers_override = creds.headers
+            self._resolved = True
             return
         from omnigent.onboarding.secrets import load_secret
 
@@ -104,6 +119,10 @@ class _JiraClient(HttpToolClient):
 
     def _require_configured(self) -> None:
         self._resolve_credentials()
+        if self._headers_override:
+            if not self._base_url:
+                raise JiraNotConfiguredError(_SECRET_BASE_URL)
+            return
         if not self._base_url or not self._email or not self._api_token:
             raise JiraNotConfiguredError(_SECRET_API_TOKEN)
 
@@ -112,11 +131,19 @@ class _JiraClient(HttpToolClient):
         return f"Basic {token}"
 
     def _headers(self) -> dict[str, str]:
+        if self._headers_override is not None:
+            return dict(self._headers_override)
         return {
             "Authorization": self._auth_header(),
             "Accept": "application/json",
             "Content-Type": "application/json",
         }
+
+    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
+        self._require_configured()
+        if self._path_prefix:
+            path = f"{self._path_prefix}{path}"
+        return super()._request(method, path, **kwargs)
 
     # ── operations ────────────────────────────────────────────────────────────
 
@@ -224,6 +251,12 @@ class BytedeskJiraTool(Tool):
 
     def __init__(self, client: _JiraClient | None = None) -> None:
         self._jira = client or _JiraClient()
+
+    @classmethod
+    def from_config(cls, config: dict[str, str] | None = None) -> BytedeskJiraTool:
+        config = config if isinstance(config, dict) else {}
+        connection_id = config.get("connection_id") or None
+        return cls(client=_JiraClient(connection_id=connection_id))
 
     @classmethod
     def name(cls) -> str:

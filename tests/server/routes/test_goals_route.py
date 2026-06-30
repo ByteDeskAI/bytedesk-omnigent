@@ -140,9 +140,12 @@ def test_list_returns_backlog_in_single_user_mode(monkeypatch) -> None:
     ]
 
 
-def test_planner_sources_report_atlassian_and_google_availability(monkeypatch) -> None:
-    monkeypatch.delenv("GOOGLE_WORKSPACE_MCP_URL", raising=False)
-    monkeypatch.delenv("BYTEDESK_GOOGLE_WORKSPACE_MCP_URL", raising=False)
+def test_planner_sources_report_connector_availability(monkeypatch) -> None:
+    available = {("atlassian", "jira"), ("atlassian", "confluence")}
+    monkeypatch.setattr(
+        "bytedesk_omnigent.routes.goals._connector_service_available",
+        lambda provider, service: (provider, service) in available,
+    )
     client = TestClient(_app(None))
 
     resp = client.get("/v1/goals/planner/sources")
@@ -151,6 +154,7 @@ def test_planner_sources_report_atlassian_and_google_availability(monkeypatch) -
     sources = {source["id"]: source for source in resp.json()["sources"]}
     assert sources["jira"]["available"] is True
     assert sources["confluence"]["tools"] == ["bytedesk_confluence"]
+    assert sources["confluence"]["available"] is True
     assert sources["google_workspace"]["available"] is False
     assert sources["google_workspace"]["reason"] == "not_configured"
 
@@ -163,6 +167,10 @@ def test_start_planning_session_uses_planner_agent_and_seeds_prompt(monkeypatch)
     monkeypatch.setattr(
         "bytedesk_omnigent.routes.goals._publish_planning_event",
         lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        "bytedesk_omnigent.routes.goals._connector_service_available",
+        lambda provider, service: provider == "atlassian" and service in {"jira", "confluence"},
     )
     client = TestClient(_app(None))
 

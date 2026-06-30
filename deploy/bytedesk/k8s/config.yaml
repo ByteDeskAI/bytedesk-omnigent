@@ -30,8 +30,8 @@ data:
         default_repos:
           - ByteDeskAI/bytedesk-marketplace
         default_ref: main
-    # When auth is turned on (OIDC against Google Workspace fits ByteDesk), list
-    # operator identities here; a listed identity is promoted to admin on login.
+    # When auth is turned on, list operator identities here; a listed identity
+    # is promoted to admin on login.
     # admins:
     #   - ryan@helms.ai
     # allowed_domains:
