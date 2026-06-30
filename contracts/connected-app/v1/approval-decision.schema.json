@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/approval-decision.schema.json",
+  "title": "Omnigent Connected App Approval Decision",
+  "$defs": {
+    "decision": {
+      "type": "object",
+      "required": ["approvalRef", "decision"],
+      "additionalProperties": false,
+      "properties": {
+        "approvalRef": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "decision": { "type": "string", "enum": ["approved", "rejected"] },
+        "decidedBy": { "type": ["string", "null"], "maxLength": 256 },
+        "decidedAt": {
+          "type": ["integer", "null"],
+          "description": "Epoch seconds."
+        },
+        "reason": { "type": ["string", "null"], "maxLength": 2000 },
+        "metadata": { "type": ["object", "null"], "additionalProperties": true }
+      }
+    }
+  }
+}

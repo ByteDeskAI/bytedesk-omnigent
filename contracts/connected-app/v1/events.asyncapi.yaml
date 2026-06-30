@@ -14,6 +14,10 @@ channels:
         $ref: "#/components/messages/GoalCompleted"
       goalFailed:
         $ref: "#/components/messages/GoalFailed"
+      goalCanceled:
+        $ref: "#/components/messages/GoalCanceled"
+      goalRetryScheduled:
+        $ref: "#/components/messages/GoalRetryScheduled"
   goalApproval:
     address: omnigent.connected-app.v1.goal.approval
     messages:
@@ -21,6 +25,17 @@ channels:
         $ref: "#/components/messages/ApprovalRequested"
       budgetRiskRequested:
         $ref: "#/components/messages/BudgetRiskRequested"
+      approvalDecision:
+        $ref: "#/components/messages/ApprovalDecision"
+  goalTools:
+    address: omnigent.connected-app.v1.goal.tools
+    messages:
+      toolStarted:
+        $ref: "#/components/messages/ToolStarted"
+      toolCompleted:
+        $ref: "#/components/messages/ToolCompleted"
+      toolFailed:
+        $ref: "#/components/messages/ToolFailed"
 operations:
   publishGoalProgress:
     action: send
@@ -40,6 +55,18 @@ operations:
       $ref: "#/channels/goalLifecycle"
     messages:
       - $ref: "#/channels/goalLifecycle/messages/goalFailed"
+  publishGoalCanceled:
+    action: send
+    channel:
+      $ref: "#/channels/goalLifecycle"
+    messages:
+      - $ref: "#/channels/goalLifecycle/messages/goalCanceled"
+  publishGoalRetryScheduled:
+    action: send
+    channel:
+      $ref: "#/channels/goalLifecycle"
+    messages:
+      - $ref: "#/channels/goalLifecycle/messages/goalRetryScheduled"
   publishApprovalRequested:
     action: send
     channel:
@@ -52,6 +79,30 @@ operations:
       $ref: "#/channels/goalApproval"
     messages:
       - $ref: "#/channels/goalApproval/messages/budgetRiskRequested"
+  receiveApprovalDecision:
+    action: receive
+    channel:
+      $ref: "#/channels/goalApproval"
+    messages:
+      - $ref: "#/channels/goalApproval/messages/approvalDecision"
+  publishToolStarted:
+    action: send
+    channel:
+      $ref: "#/channels/goalTools"
+    messages:
+      - $ref: "#/channels/goalTools/messages/toolStarted"
+  publishToolCompleted:
+    action: send
+    channel:
+      $ref: "#/channels/goalTools"
+    messages:
+      - $ref: "#/channels/goalTools/messages/toolCompleted"
+  publishToolFailed:
+    action: send
+    channel:
+      $ref: "#/channels/goalTools"
+    messages:
+      - $ref: "#/channels/goalTools/messages/toolFailed"
 components:
   messages:
     GoalProgress:
@@ -66,6 +117,14 @@ components:
       name: goal.failed
       payload:
         $ref: "#/components/schemas/GoalFailedEvent"
+    GoalCanceled:
+      name: goal.canceled
+      payload:
+        $ref: "#/components/schemas/GoalCanceledEvent"
+    GoalRetryScheduled:
+      name: goal.retry_scheduled
+      payload:
+        $ref: "#/components/schemas/GoalRetryScheduledEvent"
     ApprovalRequested:
       name: approval.requested
       payload:
@@ -74,6 +133,22 @@ components:
       name: budget_risk.requested
       payload:
         $ref: "#/components/schemas/BudgetRiskRequestedEvent"
+    ApprovalDecision:
+      name: approval.decision
+      payload:
+        $ref: "#/components/schemas/ApprovalDecisionEvent"
+    ToolStarted:
+      name: tool.started
+      payload:
+        $ref: "#/components/schemas/ToolEvent"
+    ToolCompleted:
+      name: tool.completed
+      payload:
+        $ref: "#/components/schemas/ToolEvent"
+    ToolFailed:
+      name: tool.failed
+      payload:
+        $ref: "#/components/schemas/ToolEvent"
   schemas:
     EventEnvelope:
       type: object
@@ -132,6 +207,10 @@ components:
           type:
             - string
             - "null"
+        idempotencyKey:
+          type:
+            - string
+            - "null"
     GoalProgressEvent:
       allOf:
         - $ref: "#/components/schemas/EventEnvelope"
@@ -183,6 +262,37 @@ components:
               type:
                 - string
                 - "null"
+    GoalCanceledEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          properties:
+            reason:
+              type:
+                - string
+                - "null"
+            canceledBy:
+              type:
+                - string
+                - "null"
+    GoalRetryScheduledEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - retryAt
+            - attempt
+          properties:
+            retryAt:
+              type: integer
+              description: Epoch seconds.
+            attempt:
+              type: integer
+              minimum: 1
+            reason:
+              type:
+                - string
+                - "null"
     ApprovalRequestedEvent:
       allOf:
         - $ref: "#/components/schemas/EventEnvelope"
@@ -223,6 +333,72 @@ components:
                 - medium
                 - high
             reason:
+              type:
+                - string
+                - "null"
+    ApprovalDecisionEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - approvalRef
+            - decision
+          properties:
+            approvalRef:
+              type: string
+            decision:
+              type: string
+              enum:
+                - approved
+                - rejected
+            decidedBy:
+              type:
+                - string
+                - "null"
+            reason:
+              type:
+                - string
+                - "null"
+    ToolEvent:
+      allOf:
+        - $ref: "#/components/schemas/EventEnvelope"
+        - type: object
+          required:
+            - toolName
+          properties:
+            toolName:
+              type: string
+            toolCallId:
+              type:
+                - string
+                - "null"
+            arguments:
+              type:
+                - object
+                - "null"
+              additionalProperties: true
+            output:
+              type:
+                - object
+                - "null"
+              additionalProperties: true
+            failureClass:
+              type:
+                - string
+                - "null"
+              enum:
+                - agent
+                - subagent
+                - provider
+                - budget
+                - approval
+                - system
+                - null
+            retryable:
+              type:
+                - boolean
+                - "null"
+            detail:
               type:
                 - string
                 - "null"

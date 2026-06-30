@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/tool-event.schema.json",
+  "title": "Omnigent Connected App Tool Event",
+  "$defs": {
+    "event": {
+      "type": "object",
+      "required": ["eventId", "type", "occurredAt", "source", "goalId", "toolName"],
+      "additionalProperties": false,
+      "properties": {
+        "eventId": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "type": {
+          "type": "string",
+          "enum": ["tool.started", "tool.completed", "tool.failed"]
+        },
+        "occurredAt": {
+          "type": "integer",
+          "description": "Epoch seconds."
+        },
+        "source": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "tenantId": { "type": ["string", "null"], "maxLength": 128 },
+        "goalId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "targetKind": {
+          "type": ["string", "null"],
+          "enum": ["organization", "department", "agent", null]
+        },
+        "targetId": { "type": ["string", "null"], "maxLength": 128 },
+        "toolName": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "toolCallId": { "type": ["string", "null"], "maxLength": 256 },
+        "arguments": { "type": ["object", "null"], "additionalProperties": true },
+        "output": { "type": ["object", "null"], "additionalProperties": true },
+        "failureClass": {
+          "type": ["string", "null"],
+          "enum": ["agent", "subagent", "provider", "budget", "approval", "system", null]
+        },
+        "retryable": { "type": ["boolean", "null"] },
+        "detail": { "type": ["string", "null"], "maxLength": 2000 },
+        "traceId": { "type": ["string", "null"], "maxLength": 256 },
+        "correlationId": { "type": ["string", "null"], "maxLength": 256 }
+      }
+    }
+  }
+}

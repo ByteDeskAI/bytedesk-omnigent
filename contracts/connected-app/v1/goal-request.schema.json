@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://omnigent.ai/contracts/connected-app/v1/goal-request.schema.json",
+  "title": "Omnigent Connected App Goal Request",
+  "$defs": {
+    "dependency": {
+      "type": "object",
+      "required": ["label"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "goal",
+            "system_state",
+            "milestone",
+            "epic",
+            "github_pr",
+            "jira_issue"
+          ],
+          "default": "manual"
+        },
+        "ref": { "type": ["string", "null"], "maxLength": 256 },
+        "label": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "satisfied", "waived"],
+          "default": "pending"
+        },
+        "metadata": { "type": ["object", "null"], "additionalProperties": true }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["title"],
+      "additionalProperties": false,
+      "properties": {
+        "title": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "priority": { "type": "integer", "minimum": 1, "maximum": 10, "default": 3 },
+        "source": {
+          "type": ["string", "null"],
+          "maxLength": 64,
+          "default": "connected-app"
+        },
+        "payload": { "type": ["object", "null"], "additionalProperties": true },
+        "targetKind": {
+          "type": "string",
+          "enum": ["organization", "department", "agent"],
+          "default": "organization"
+        },
+        "targetId": { "type": ["string", "null"], "maxLength": 128 },
+        "targetLabel": { "type": ["string", "null"], "maxLength": 256 },
+        "departmentSlug": { "type": ["string", "null"], "maxLength": 128 },
+        "outcomeKind": {
+          "type": "string",
+          "enum": ["financial", "roadmap", "capability", "risk", "operational"],
+          "default": "financial"
+        },
+        "readinessKind": {
+          "type": "string",
+          "enum": ["immediate", "dependent", "deferred"],
+          "default": "immediate"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/dependency" },
+          "default": []
+        }
+      }
+    },
+    "response": {
+      "type": "object",
+      "required": ["goal"],
+      "additionalProperties": false,
+      "properties": {
+        "goal": { "type": "object", "additionalProperties": true }
+      }
+    }
+  }
+}
