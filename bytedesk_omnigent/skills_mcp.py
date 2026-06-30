@@ -221,13 +221,16 @@ def stage_preview(
     source_ref: str,
     target_agent_ids: list[str],
     install_mode: str = "skip_existing",
+    selected_skill_names: list[str] | None = None,
 ) -> dict:
     """Stage (but do NOT apply) an install: fetch + validate the skill files and
     compute the per-agent actions, returning a preview to confirm before apply.
 
     ``install_mode`` defaults to ``skip_existing`` so a re-run on an
     already-installed target is an idempotent no-op; use ``replace`` only for an
-    explicit reinstall. Returns ``{"preview_id", "skills", "target_actions"}``.
+    explicit reinstall. ``selected_skill_names`` can stage many skills from a
+    multi-skill source in one preview. Returns
+    ``{"preview_id", "skills", "target_actions"}``.
     """
     body = {
         "operation": "install",
@@ -236,6 +239,8 @@ def stage_preview(
         "source": source,
         "source_ref": source_ref,
     }
+    if selected_skill_names:
+        body["selected_skill_names"] = selected_skill_names
     out = _request("POST", "/v1/skills/previews", body)
     return {
         "preview_id": out.get("id"),

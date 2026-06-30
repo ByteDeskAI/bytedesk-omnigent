@@ -3275,6 +3275,9 @@ async def _execute_skill_acq_tool(
                 "source": args.get("source"),
                 "source_ref": args.get("source_ref"),
             }
+            selected_skill_names = args.get("selected_skill_names")
+            if selected_skill_names:
+                preview_body["selected_skill_names"] = selected_skill_names
             out = _skill_body(
                 await server_client.post("/v1/skills/previews", json=preview_body, timeout=60.0)
             )

@@ -15,6 +15,7 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.bundles import bundle_location
 from omnigent.stores import AgentStore
+from omnigent.stores.agent_definition_store import AgentDefinitionStore
 from omnigent.stores.artifact_store import ArtifactStore
 
 
@@ -27,6 +28,7 @@ def apply_bundle_update(
     agent_cache: AgentCache | None,
     expand_env: bool,
     expected_version: int | None = None,
+    definition_store: AgentDefinitionStore | None = None,
 ) -> Agent:
     """
     Persist a new bundle for *agent* and warm-swap the cache.
@@ -48,6 +50,10 @@ def apply_bundle_update(
     :param agent_store: Metadata store; ``update`` repoints the row.
     :param agent_cache: Two-tier cache to warm-swap; ``None`` skips the
         swap (the next ``load`` re-fetches from the store).
+    :param definition_store: Optional definition-manifest store. When
+        omitted, one is built over *artifact_store*, so production
+        ``nats://`` artifact storage also stores the normalized agent
+        definition manifest and file blobs.
     :param expand_env: Whether the cache should expand ``${VAR}`` in the
         spec against the server env. MUST be ``agent.session_id is None``
         — only operator-authored template agents expand server-side; a
@@ -78,6 +84,11 @@ def apply_bundle_update(
             code=ErrorCode.INTERNAL_ERROR,
         )
     artifact_store.put(new_loc, bundle_bytes)
+    (definition_store or AgentDefinitionStore(artifact_store)).put_bundle(
+        agent_id=agent.id,
+        bundle_location=new_loc,
+        bundle_bytes=bundle_bytes,
+    )
     updated = agent_store.update(agent.id, new_loc, expected_version=expected_version)
     if updated is None:
         raise OmnigentError(

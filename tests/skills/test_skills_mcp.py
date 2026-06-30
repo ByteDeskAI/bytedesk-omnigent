@@ -85,6 +85,36 @@ def test_stage_preview_posts_install_preview(monkeypatch: pytest.MonkeyPatch) ->
     assert out["preview_id"] == "skprev_1"
 
 
+def test_stage_preview_can_select_many_skills(monkeypatch: pytest.MonkeyPatch) -> None:
+    rec = _Recorder(
+        {"id": "skprev_many", "operation": "install", "skills": [], "target_actions": []}
+    )
+    monkeypatch.setattr(skills_mcp, "_request", rec)
+
+    out = skills_mcp.stage_preview(
+        source="skills",
+        source_ref="coreyhaines31/marketingskills",
+        target_agent_ids=["a1", "a2"],
+        selected_skill_names=["pricing", "launch", "seo-audit"],
+    )
+
+    assert rec.calls == [
+        (
+            "POST",
+            "/v1/skills/previews",
+            {
+                "operation": "install",
+                "target_agent_ids": ["a1", "a2"],
+                "install_mode": "skip_existing",
+                "source": "skills",
+                "source_ref": "coreyhaines31/marketingskills",
+                "selected_skill_names": ["pricing", "launch", "seo-audit"],
+            },
+        )
+    ]
+    assert out["preview_id"] == "skprev_many"
+
+
 def test_apply_preview_posts_to_apply_route(monkeypatch: pytest.MonkeyPatch) -> None:
     applied = [{"agent_id": "a1", "status": "applied"}]
     rec = _Recorder({"object": "skill_apply.result", "data": applied})
@@ -191,9 +221,13 @@ def test_request_authenticates_on_401_when_creds_present(
             return 200, {"token": "TKN"}
         seen_bearers.append(headers.get("Authorization"))
         # Anonymous (no bearer) 401s; after login the bearer call succeeds.
-        return (401, {"detail": "unauthorized"}) if headers.get("Authorization") is None else (
-            200,
-            {"ok": True},
+        return (
+            (401, {"detail": "unauthorized"})
+            if headers.get("Authorization") is None
+            else (
+                200,
+                {"ok": True},
+            )
         )
 
     monkeypatch.setattr(skills_mcp, "_raw", fake_raw)
