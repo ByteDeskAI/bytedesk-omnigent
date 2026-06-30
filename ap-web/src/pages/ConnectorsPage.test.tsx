@@ -1,13 +1,17 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
 import * as connectorHooks from "@/hooks/useConnectors";
 import * as accountsApi from "@/lib/accountsApi";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
-import type { ConnectorManifest } from "@/lib/connectorsApi";
+import type {
+  ConnectorConnection,
+  ConnectorManifest,
+  ConnectorServiceState,
+} from "@/lib/connectorsApi";
 import type { ServerInfo } from "@/lib/capabilities";
-import { ConnectorsPage } from "./ConnectorsPage";
+import { ConnectorDetailPage, ConnectorsPage } from "./ConnectorsPage";
 
 vi.mock("@/hooks/useAvailableAgents", () => ({ useAvailableAgents: vi.fn() }));
 vi.mock("@/hooks/useConnectors", () => ({
@@ -44,7 +48,7 @@ const googleProvider: ConnectorManifest = {
   auth: {
     type: "google_domain_wide_delegation",
     scopes: [],
-    docsUrl: null,
+    docsUrl: "https://developers.google.com/workspace",
     setupFields: [
       {
         key: "delegated_subject",
@@ -123,6 +127,22 @@ const googleProvider: ConnectorManifest = {
         },
       ],
     },
+    {
+      key: "calendar",
+      name: "Calendar",
+      description: "",
+      scopes: [],
+      toolMounts: [],
+      tools: [
+        {
+          key: "event_create",
+          name: "Create event",
+          description: "",
+          mcpTool: "calendar_event_create",
+          scopes: [],
+        },
+      ],
+    },
   ],
   connections: [],
 };
@@ -156,6 +176,44 @@ const atlassianProvider: ConnectorManifest = {
 const createConnector = vi.fn();
 const grantConnector = vi.fn();
 const healthConnector = vi.fn();
+const toggleConnector = vi.fn();
+const startOAuth = vi.fn();
+
+function googleServiceState(serviceKey: string): ConnectorServiceState {
+  return {
+    id: `svc_${serviceKey}`,
+    connectionId: "conn_google",
+    serviceKey,
+    enabled: true,
+    status: "ready",
+    scopes: [],
+    metadata: {},
+    updatedAt: 1,
+    version: 1,
+  };
+}
+
+function googleConnection(overrides: Partial<ConnectorConnection> = {}): ConnectorConnection {
+  return {
+    id: "conn_google",
+    provider: "google_workspace",
+    displayName: "ByteDesk Workspace",
+    authType: "google_domain_wide_delegation",
+    status: "connected",
+    scopes: [],
+    metadata: {},
+    secretPresent: true,
+    lastHealthStatus: null,
+    lastHealthAt: null,
+    lastError: null,
+    createdAt: 1,
+    updatedAt: 1,
+    version: 1,
+    services: ["drive", "gmail", "calendar"].map(googleServiceState),
+    grants: [],
+    ...overrides,
+  };
+}
 
 function mockCatalog(providers: ConnectorManifest[]) {
   vi.mocked(connectorHooks.useConnectorsCatalog).mockReturnValue({
@@ -167,10 +225,21 @@ function mockCatalog(providers: ConnectorManifest[]) {
   } as never);
 }
 
-function renderPage() {
+function renderCatalog() {
   return render(
-    <MemoryRouter>
+    <MemoryRouter initialEntries={["/connectors"]}>
       <ConnectorsPage />
+    </MemoryRouter>,
+  );
+}
+
+function renderDetail(provider = "google_workspace") {
+  return render(
+    <MemoryRouter initialEntries={[`/connectors/${provider}`]}>
+      <Routes>
+        <Route path="/connectors" element={<ConnectorsPage />} />
+        <Route path="/connectors/:provider" element={<ConnectorDetailPage />} />
+      </Routes>
     </MemoryRouter>,
   );
 }
@@ -188,7 +257,7 @@ beforeEach(() => {
   } as never);
   mockCatalog([atlassianProvider, googleProvider]);
   vi.mocked(connectorHooks.useStartConnectorOAuth).mockReturnValue({
-    mutate: vi.fn(),
+    mutate: startOAuth,
     isPending: false,
     isError: false,
     error: null,
@@ -201,7 +270,7 @@ beforeEach(() => {
     error: null,
   } as never);
   vi.mocked(connectorHooks.useSetConnectorServiceEnabled).mockReturnValue({
-    mutate: vi.fn(),
+    mutate: toggleConnector,
     isPending: false,
   } as never);
   vi.mocked(connectorHooks.useCheckConnectorHealth).mockReturnValue({
@@ -223,18 +292,15 @@ afterEach(() => {
 });
 
 describe("ConnectorsPage", () => {
-  it("renders registered providers and manifest setup fields in local mode", async () => {
-    renderPage();
+  it("renders a scannable provider catalog without setup fields or service pills", async () => {
+    renderCatalog();
 
     expect(await screen.findByRole("heading", { name: "Connectors" })).toBeInTheDocument();
     expect(screen.getByText("Atlassian")).toBeInTheDocument();
     expect(screen.getByText("Google Workspace")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Delegated subject")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Service account email")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Workload identity token source")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Workload identity token file")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Workload identity audience")).toBeInTheDocument();
-    expect(screen.getByPlaceholderText("Service account JSON")).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText("Delegated subject")).not.toBeInTheDocument();
+    expect(screen.queryByText("Search Gmail")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Configure" })).toHaveLength(2);
   });
 
   it("blocks non-admin accounts", async () => {
@@ -246,16 +312,65 @@ describe("ConnectorsPage", () => {
       last_login_at: null,
     });
 
-    renderPage();
+    renderCatalog();
 
     expect(
       await screen.findByText("You don't have permission to manage connectors."),
     ).toBeInTheDocument();
   });
 
+  it("hides OAuth connect once a provider already has a connection", async () => {
+    mockCatalog([
+      { ...atlassianProvider, connections: [googleConnection({ provider: "atlassian" })] },
+      googleProvider,
+    ]);
+    renderCatalog();
+
+    await screen.findByText("Atlassian");
+
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+  });
+
+  it("keeps OAuth connect visible for disconnected OAuth providers", async () => {
+    renderCatalog();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Connect" }));
+
+    expect(startOAuth).toHaveBeenCalledWith("atlassian");
+  });
+
+  it("links provider cards to the routed drilldown", async () => {
+    renderCatalog();
+
+    const links = await screen.findAllByRole("link", { name: "Configure" });
+    expect(links.map((link) => link.getAttribute("href"))).toContain(
+      "/connectors/google_workspace",
+    );
+  });
+});
+
+describe("ConnectorDetailPage", () => {
+  it("renders breadcrumbs and grouped provider configuration", async () => {
+    mockCatalog([{ ...googleProvider, connections: [googleConnection()] }, atlassianProvider]);
+
+    renderDetail();
+
+    expect(await screen.findByRole("link", { name: "Connectors" })).toHaveAttribute(
+      "href",
+      "/connectors",
+    );
+    expect(screen.getByRole("link", { name: /Back/ })).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Connector provider" })).toHaveValue(
+      "google_workspace",
+    );
+    expect(screen.getAllByText("Drive & Content").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Gmail").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("Calendar & Meet").length).toBeGreaterThan(0);
+  });
+
   it("submits direct credential providers through the generic create mutation", async () => {
     mockCatalog([googleProvider]);
-    renderPage();
+    renderDetail();
 
     fireEvent.change(await screen.findByPlaceholderText("Delegated subject"), {
       target: { value: "admin@acme.test" },
@@ -273,61 +388,27 @@ describe("ConnectorsPage", () => {
         secretPayload: {
           service_account_json: { client_email: "svc@acme.test" },
         },
-        enabledServices: ["drive", "gmail"],
+        enabledServices: ["drive", "gmail", "calendar"],
       }),
     );
   });
 
-  it("grants selected connector actions to Maya", async () => {
-    mockCatalog([
-      {
-        ...googleProvider,
-        connections: [
-          {
-            id: "conn_google",
-            provider: "google_workspace",
-            displayName: "ByteDesk Workspace",
-            authType: "google_domain_wide_delegation",
-            status: "connected",
-            scopes: [],
-            metadata: {},
-            secretPresent: true,
-            lastHealthStatus: null,
-            lastHealthAt: null,
-            lastError: null,
-            createdAt: 1,
-            updatedAt: 1,
-            version: 1,
-            services: [
-              {
-                id: "svc_drive",
-                connectionId: "conn_google",
-                serviceKey: "drive",
-                enabled: true,
-                status: "ready",
-                scopes: [],
-                metadata: {},
-                updatedAt: 1,
-                version: 1,
-              },
-              {
-                id: "svc_gmail",
-                connectionId: "conn_google",
-                serviceKey: "gmail",
-                enabled: true,
-                status: "ready",
-                scopes: [],
-                metadata: {},
-                updatedAt: 1,
-                version: 1,
-              },
-            ],
-            grants: [],
-          },
-        ],
-      },
-    ]);
-    renderPage();
+  it("toggles grouped services through the existing mutation", async () => {
+    mockCatalog([{ ...googleProvider, connections: [googleConnection()] }]);
+    renderDetail();
+
+    fireEvent.click(await screen.findByRole("switch", { name: "Toggle Drive" }));
+
+    expect(toggleConnector).toHaveBeenCalledWith({
+      connectionId: "conn_google",
+      serviceKey: "drive",
+      enabled: false,
+    });
+  });
+
+  it("grants selected connector actions to Maya from grouped actions", async () => {
+    mockCatalog([{ ...googleProvider, connections: [googleConnection()] }]);
+    renderDetail();
 
     fireEvent.click(await screen.findByRole("checkbox", { name: /Search Gmail/ }));
     fireEvent.change(screen.getByLabelText("Agent"), {
@@ -338,7 +419,7 @@ describe("ConnectorsPage", () => {
     expect(grantConnector).toHaveBeenCalledWith({
       connectionId: "conn_google",
       agentId: "ag_maya",
-      tools: ["drive:search"],
+      tools: ["drive:search", "calendar:event_create"],
     });
   });
 
@@ -348,24 +429,12 @@ describe("ConnectorsPage", () => {
       isPending: false,
       data: {
         ok: false,
-        connection: {
-          id: "conn_google",
-          provider: "google_workspace",
-          displayName: "ByteDesk Workspace",
-          authType: "google_domain_wide_delegation",
-          status: "connected",
-          scopes: [],
-          metadata: {},
+        connection: googleConnection({
           secretPresent: false,
           lastHealthStatus: "error",
-          lastHealthAt: 1,
           lastError: "domain_wide_delegation_unauthorized",
-          createdAt: 1,
-          updatedAt: 1,
-          version: 1,
           services: [],
-          grants: [],
-        },
+        }),
         metadata: {
           clientId: "113703816904945094427",
           requiredScopes: ["https://www.googleapis.com/auth/drive"],
@@ -376,29 +445,17 @@ describe("ConnectorsPage", () => {
       {
         ...googleProvider,
         connections: [
-          {
-            id: "conn_google",
-            provider: "google_workspace",
-            displayName: "ByteDesk Workspace",
-            authType: "google_domain_wide_delegation",
-            status: "connected",
-            scopes: [],
-            metadata: {},
+          googleConnection({
             secretPresent: false,
             lastHealthStatus: "error",
-            lastHealthAt: 1,
             lastError: "domain_wide_delegation_unauthorized",
-            createdAt: 1,
-            updatedAt: 1,
-            version: 1,
             services: [],
-            grants: [],
-          },
+          }),
         ],
       },
     ]);
 
-    renderPage();
+    renderDetail();
 
     fireEvent.click(await screen.findByRole("button", { name: /Test/ }));
 
@@ -409,5 +466,34 @@ describe("ConnectorsPage", () => {
     expect(screen.getByText("domain_wide_delegation_unauthorized")).toBeInTheDocument();
     expect(screen.getByText(/113703816904945094427/)).toBeInTheDocument();
     expect(screen.getByText(/https:\/\/www.googleapis.com\/auth\/drive/)).toBeInTheDocument();
+  });
+
+  it("shows a not-found state for unknown providers", async () => {
+    renderDetail("missing_provider");
+
+    expect(await screen.findByRole("heading", { name: "Connector not found" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Back to connectors" })).toHaveAttribute(
+      "href",
+      "/connectors",
+    );
+  });
+
+  it("renders a connection selector for providers with multiple connections", async () => {
+    mockCatalog([
+      {
+        ...googleProvider,
+        connections: [
+          googleConnection(),
+          googleConnection({ id: "conn_google_two", displayName: "Second Workspace" }),
+        ],
+      },
+    ]);
+    renderDetail();
+
+    const selector = await screen.findByLabelText("Connection");
+    expect(selector).toHaveValue("conn_google");
+    fireEvent.change(selector, { target: { value: "conn_google_two" } });
+
+    expect(screen.getByRole("heading", { name: "Second Workspace" })).toBeInTheDocument();
   });
 });
