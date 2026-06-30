@@ -5,16 +5,15 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import FastAPI
 
 from omnigent import claude_native_bridge, codex_native_bridge
 from omnigent.claude_native_bridge import bridge_dir_for_conversation_id
-from omnigent.runner import create_runner_app, pending_approvals
 from omnigent.runner import app as runner_app
+from omnigent.runner import create_runner_app, pending_approvals
 from omnigent.runner.app import _session_event_queues_ref, _session_histories_ref
 from omnigent.runtime.compaction import CompactionResult, SummaryMetadata
 from omnigent.spec.types import AgentSpec, CompactionConfig, ExecutorSpec
@@ -153,7 +152,11 @@ async def test_proactive_compaction_publishes_lifecycle_and_persists_summary(
 
     _session_histories_ref[conv] = [
         {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "one"}]},
-        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "two"}]},
+        {
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "two"}],
+        },
     ] * 50
 
     # Default context window is 128k; threshold 0.5 → budget 64k — exceed it.
@@ -568,6 +571,67 @@ async def test_events_cost_approval_popup_claude_native_returns_503_on_failure(
 
 
 @pytest.mark.asyncio
+async def test_message_event_forwards_server_instruction_fragments_to_harness(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    spec = AgentSpec(
+        spec_version=1,
+        name="fragment-agent",
+        instructions="Base instructions.",
+        executor=ExecutorSpec(type="omnigent", config={"harness": "openai-agents"}),
+    )
+    harness_client = _ScriptedHarnessClient(
+        [
+            _sse({"type": "response.created", "response": {"id": "resp_frag"}}),
+            _sse({"type": "response.completed", "response": {"id": "resp_frag"}}),
+        ]
+    )
+    pm = _FakeProcessManager(harness_client)
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return spec
+
+    monkeypatch.setattr("omnigent.kernel.extensions.discover_extensions", list)
+    app = create_runner_app(
+        process_manager=pm,  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+        assert (
+            await client.post("/v1/sessions", json={"session_id": "conv_frag", "agent_id": "ag_1"})
+        ).status_code == 201
+        assert (
+            await client.post(
+                "/v1/sessions/conv_frag/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "model": "test",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                    "instruction_fragments": [
+                        "Organization instructions:\nUse Google Drive.",
+                        "Agent instructions:\nShow verification.",
+                    ],
+                },
+            )
+        ).status_code == 202
+        for _ in range(200):
+            if harness_client.posted_bodies:
+                break
+            await asyncio.sleep(0.01)
+
+    assert harness_client.posted_bodies
+    instructions = harness_client.posted_bodies[0]["instructions"]
+    assert "Base instructions." in instructions
+    assert "Organization instructions:\nUse Google Drive." in instructions
+    assert "Agent instructions:\nShow verification." in instructions
+
+
+@pytest.mark.asyncio
 async def test_events_cost_approval_popup_codex_native_launches_popup(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
@@ -639,7 +703,10 @@ async def test_events_cost_approval_popup_codex_native_launches_popup(
     )
     assert socket_path == str(instance.socket_path)
     assert tmux_target == "main"
-    assert config_file == codex_native_bridge.bridge_dir_for_bridge_id(conv_id) / codex_native_bridge._POLICY_HOOK_FILE
+    assert config_file == (
+        codex_native_bridge.bridge_dir_for_bridge_id(conv_id)
+        / codex_native_bridge._POLICY_HOOK_FILE
+    )
     assert session_id == conv_id
     assert elicitation_id == "elicit_codex"
     assert message == "Continue?"
