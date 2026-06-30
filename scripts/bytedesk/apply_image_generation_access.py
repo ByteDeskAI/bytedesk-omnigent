@@ -32,6 +32,8 @@ IMAGEGEN_MARKER = "CODEX IMAGE GENERATION"
 IMAGEGEN_BUILTIN = "bytedesk_generate_image"
 IMAGEGEN_SKILL = "imagegen"
 IMAGEGEN_SKILL_PATH = f"skills/{IMAGEGEN_SKILL}/SKILL.md"
+CODEX_HARNESS = "codex"
+CODEX_MODEL = "gpt-5.5"
 WEB_PERSONA_NAMES = {
     "web-design-director",
     "web-development-lead",
@@ -42,6 +44,7 @@ WEB_PERSONA_NAMES = {
 class TargetSelection:
     selected: list[dict[str, Any]]
     skipped_workflows: list[str]
+    skipped_non_personas: list[str]
 
 
 def _agents_from_response(payload: Any) -> list[dict[str, Any]]:
@@ -88,6 +91,11 @@ def _is_workflow(agent: dict[str, Any]) -> bool:
     return isinstance(params.get("orchestrator"), str)
 
 
+def _is_persona(agent: dict[str, Any]) -> bool:
+    display_name = agent.get("display_name")
+    return isinstance(display_name, str) and bool(display_name.strip())
+
+
 def _matches_default_target(agent: dict[str, Any]) -> bool:
     name = _normal(_field(agent, "name"))
     title = _normal(_field(agent, "title"))
@@ -114,6 +122,7 @@ def select_target_agents(
     explicit_ids = explicit_ids or set()
     selected: list[dict[str, Any]] = []
     skipped_workflows: list[str] = []
+    skipped_non_personas: list[str] = []
 
     for agent in agents:
         agent_id = agent.get("id")
@@ -127,14 +136,24 @@ def select_target_agents(
         if _is_workflow(agent) and not explicit:
             skipped_workflows.append(agent_id)
             continue
+        if not _is_persona(agent) and not explicit:
+            skipped_non_personas.append(agent_id)
+            continue
         selected.append(agent)
 
-    return TargetSelection(selected=selected, skipped_workflows=skipped_workflows)
+    return TargetSelection(
+        selected=selected,
+        skipped_workflows=skipped_workflows,
+        skipped_non_personas=skipped_non_personas,
+    )
 
 
 def image_generation_note() -> str:
     return (
         f"{IMAGEGEN_MARKER}\n"
+        f"- This saved agent image is configured to run on the {CODEX_HARNESS} "
+        f"harness with {CODEX_MODEL} so Codex-native image generation is "
+        "available when the host Codex OAuth login is valid.\n"
         "- When a user asks for a concrete visual asset, design reference, "
         "campaign graphic, illustration, product mockup, or web/marketing "
         "imagery, use the bundled imagegen skill.\n"
@@ -207,9 +226,44 @@ def _ensure_imagegen_skill_filter(config: dict[str, Any]) -> bool:
     raise ValueError("config.skills must be 'all', 'none', or a list when present")
 
 
+def _ensure_codex_harness(config: dict[str, Any]) -> bool:
+    executor = config.get("executor")
+    if executor is None:
+        executor = {}
+    if not isinstance(executor, dict):
+        raise ValueError("config.executor must be a mapping when present")
+
+    executor_config = executor.get("config")
+    if executor_config is None:
+        executor_config = {}
+    if not isinstance(executor_config, dict):
+        raise ValueError("config.executor.config must be a mapping when present")
+
+    changed = False
+    if executor.get("type") != "omnigent":
+        executor["type"] = "omnigent"
+        changed = True
+    if executor.get("model") != CODEX_MODEL:
+        executor["model"] = CODEX_MODEL
+        changed = True
+    if executor_config.get("harness") != CODEX_HARNESS:
+        executor_config["harness"] = CODEX_HARNESS
+        changed = True
+    if executor.get("config") != executor_config:
+        executor["config"] = executor_config
+        changed = True
+    if config.get("executor") != executor:
+        config["executor"] = executor
+        changed = True
+    return changed
+
+
 def ensure_image_generation_config(config: dict[str, Any]) -> tuple[dict[str, Any], bool]:
     updated = copy.deepcopy(config)
     changed = False
+
+    if _ensure_codex_harness(updated):
+        changed = True
 
     if _ensure_imagegen_skill_filter(updated):
         changed = True
@@ -366,6 +420,7 @@ def main() -> int:
                 "unchanged": unchanged_count,
                 "skipped": skipped_count,
                 "skipped_workflows": selection.skipped_workflows,
+                "skipped_non_personas": selection.skipped_non_personas,
                 "missing": missing,
                 "selected": [
                     {
