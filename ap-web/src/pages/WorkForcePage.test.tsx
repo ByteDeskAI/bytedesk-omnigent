@@ -140,6 +140,7 @@ async function activateTab(name: RegExp) {
 }
 
 beforeEach(() => {
+  localStorage.clear();
   vi.mocked(useServerInfo).mockReturnValue(ACCOUNTS_OFF);
   vi.mocked(accountsApi.getMe).mockResolvedValue({
     id: "root",
@@ -380,11 +381,40 @@ describe("WorkForcePage", () => {
     expect(screen.getAllByText("System Agents").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Harnesses").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Workflows").length).toBeGreaterThan(0);
+
+    // Roster sections start collapsed — expand each before asserting on members.
+    fireEvent.click(screen.getByRole("button", { name: /Department Engineering/ }));
+    fireEvent.click(screen.getByRole("button", { name: "System Agents" }));
+    fireEvent.click(screen.getByRole("button", { name: "Harnesses" }));
+    fireEvent.click(screen.getByRole("button", { name: "Workflows" }));
+
     expect(screen.getAllByText("Platform Developer").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Polly").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Claude Code").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Weekly Business Review").length).toBeGreaterThan(0);
     expect(within(screen.getByLabelText("Agent roster")).queryByText("Inbox Demo")).toBeNull();
+  });
+
+  it("starts every roster section collapsed and persists expand/collapse to localStorage", async () => {
+    renderPage();
+
+    const roster = await screen.findByLabelText("Agent roster");
+    expect(within(roster).queryByText("Polly")).toBeNull();
+    expect(within(roster).queryByText("Claude Code")).toBeNull();
+    expect(within(roster).queryByText("Weekly Business Review")).toBeNull();
+
+    const systemTrigger = within(roster).getByRole("button", { name: "System Agents" });
+    fireEvent.click(systemTrigger);
+    expect(within(roster).getByText("Polly")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem("workforce-roster-open-sections") ?? "[]")).toContain(
+      "tier:system",
+    );
+
+    cleanup();
+    renderPage();
+    const remountedRoster = await screen.findByLabelText("Agent roster");
+    expect(within(remountedRoster).getByText("Polly")).toBeInTheDocument();
+    expect(within(remountedRoster).queryByText("Claude Code")).toBeNull();
   });
 
   it("groups workforce employees by sorted department and employee name", async () => {
@@ -476,12 +506,18 @@ describe("WorkForcePage", () => {
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
 
+    // Roster sections start collapsed — expand each before asserting on members.
+    fireEvent.click(engineering);
+    fireEvent.click(marketing);
     const backend = within(roster).getAllByText("Backend Lead")[0];
     const platform = within(roster).getByText("Platform Developer");
     expect(backend.compareDocumentPosition(platform) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
       Node.DOCUMENT_POSITION_FOLLOWING,
     );
     expect(within(roster).queryByText("Hello World")).toBeNull();
+
+    fireEvent.click(within(roster).getByRole("button", { name: "System Agents" }));
+    fireEvent.click(within(roster).getByRole("button", { name: "Harnesses" }));
     expect(within(roster).getByText("Goal Commander")).toBeInTheDocument();
     expect(within(roster).getByText("Claude Code")).toBeInTheDocument();
   });
@@ -489,6 +525,7 @@ describe("WorkForcePage", () => {
   it("keeps workflow agents read-only", async () => {
     renderPage();
 
+    fireEvent.click(await screen.findByRole("button", { name: "Workflows" }));
     fireEvent.click(await screen.findByText("Weekly Business Review"));
 
     await waitFor(() =>
@@ -501,6 +538,7 @@ describe("WorkForcePage", () => {
   it("requires confirmation before saving a system agent image", async () => {
     renderPage();
 
+    fireEvent.click(await screen.findByRole("button", { name: "System Agents" }));
     fireEvent.click(await screen.findByText("Polly"));
     await waitFor(() => expect(screen.getByRole("heading", { name: "Polly" })).toBeInTheDocument());
     const configTab = screen.getByRole("tab", { name: /Config/ });
@@ -523,6 +561,7 @@ describe("WorkForcePage", () => {
   it("requires confirmation before saving a harness image", async () => {
     renderPage();
 
+    fireEvent.click(await screen.findByRole("button", { name: "Harnesses" }));
     fireEvent.click(await screen.findByText("Claude Code"));
     await waitFor(() =>
       expect(screen.getByRole("heading", { name: "Claude Code" })).toBeInTheDocument(),
