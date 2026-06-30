@@ -241,6 +241,8 @@ class SysSkillStagePreviewTool(Tool):
             "files and compute per-agent actions, returning a preview to "
             "confirm before applying. install_mode defaults to skip_existing "
             "(idempotent); use 'replace' only for an explicit reinstall. "
+            "Pass selected_skill_names to stage many skills from one package "
+            "in one preview. "
             "Returns {preview_id, skills, target_actions}."
         )
 
@@ -273,6 +275,14 @@ class SysSkillStagePreviewTool(Tool):
                         "install_mode": {
                             "type": "string",
                             "description": "'skip_existing' (default) or 'replace'.",
+                        },
+                        "selected_skill_names": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": (
+                                "Optional skill names to select from a multi-skill "
+                                "package/source. Omit to use the source default."
+                            ),
                         },
                     },
                     "required": ["source", "source_ref", "target_agent_ids"],

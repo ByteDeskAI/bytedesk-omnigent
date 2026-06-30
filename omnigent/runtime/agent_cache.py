@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import os
+import re
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 from omnigent.entities import LoadedAgent
@@ -18,7 +19,8 @@ class AgentCache:
     Two-tier cache for loaded agents.
 
     Tier 1 (in-memory): parsed AgentSpec objects keyed by agent_id.
-    Tier 2 (disk): extracted agent directories under cache_dir/<agent_id>/.
+    Tier 2 (disk): extracted immutable bundle generations under
+    cache_dir/<agent_id>/<bundle-generation>/.
     Source of truth: ArtifactStore (tarball bytes).
 
     On cache miss the bundle is downloaded from the ArtifactStore,
@@ -32,13 +34,15 @@ class AgentCache:
         :param artifact_store: The ArtifactStore holding agent
             bundle tarballs (source of truth).
         :param cache_dir: Root directory for the disk cache.
-            Each agent is extracted to
-            ``<cache_dir>/<agent_id>/``.
+            Each bundle generation is extracted to
+            ``<cache_dir>/<agent_id>/<bundle-generation>/``.
         """
         self._artifact_store = artifact_store
         self._cache_dir = cache_dir
         self._specs: dict[tuple[str, str, bool], AgentSpec] = {}
-        self._bundle_locations: dict[str, str] = {}
+        self._workdirs: dict[tuple[str, str, bool], Path] = {}
+        self._locks: dict[str, threading.RLock] = {}
+        self._locks_guard = threading.Lock()
 
     def load(
         self,
@@ -71,34 +75,52 @@ class AgentCache:
         :returns: A LoadedAgent with the parsed spec and the
             on-disk working directory.
         """
-        workdir = self._cache_dir / agent_id
         cache_key = (agent_id, bundle_location, expand_env)
+        with self._agent_lock(agent_id):
+            return self._load_locked(agent_id, bundle_location, cache_key, expand_env=expand_env)
 
-        # Tier 1: in-memory spec. The cached spec was parsed with the
-        # *expand_env* value of whichever caller populated it first.
-        # That is consistent across callers because *expand_env* is
-        # derived from the agent's immutable ``session_id`` provenance,
-        # which never changes for a given ``agent_id``.
+    def _load_locked(
+        self,
+        agent_id: str,
+        bundle_location: str,
+        cache_key: tuple[str, str, bool],
+        *,
+        expand_env: bool,
+    ) -> LoadedAgent:
+        """Load an agent while the per-agent cache lock is held."""
         if cache_key in self._specs:
-            return LoadedAgent(spec=self._specs[cache_key], workdir=workdir)
+            return LoadedAgent(
+                spec=self._specs[cache_key],
+                workdir=self._workdirs[cache_key],
+            )
 
-        # Tier 2: disk cache (directory already extracted)
-        cached_bundle = self._bundle_locations.get(agent_id) or _read_bundle_marker(workdir)
-        if workdir.is_dir() and cached_bundle == bundle_location:
-            spec = load_spec(workdir, expand_env=expand_env)
-            self._specs[cache_key] = spec
-            self._bundle_locations[agent_id] = bundle_location
-            return LoadedAgent(spec=spec, workdir=workdir)
+        generation_workdir = self._workdir_for(agent_id, bundle_location)
+        loaded = self._try_load_disk_cache(
+            cache_key,
+            generation_workdir,
+            bundle_location,
+            expand_env=expand_env,
+        )
+        if loaded is not None:
+            return loaded
+
+        legacy_workdir = self._legacy_workdir(agent_id)
+        if legacy_workdir != generation_workdir:
+            loaded = self._try_load_disk_cache(
+                cache_key,
+                legacy_workdir,
+                bundle_location,
+                expand_env=expand_env,
+            )
+            if loaded is not None:
+                return loaded
 
         # Cache miss — download bundle, write to temp file, extract
-        if workdir.is_dir():
-            shutil.rmtree(workdir)
         bundle_bytes = self._artifact_store.get(bundle_location)
         return self._extract_and_cache(
             agent_id,
             bundle_location,
             bundle_bytes,
-            workdir,
             expand_env=expand_env,
         )
 
@@ -133,33 +155,13 @@ class AgentCache:
         :returns: A LoadedAgent with the new spec and working
             directory.
         """
-        workdir = self._cache_dir / agent_id
-        staging_dir = self._cache_dir / f"{agent_id}_staging"
-
-        # Extract new bundle to staging directory
-        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".tar.gz")
-        os.close(tmp_fd)
-        tmp_path = Path(tmp_name)
-        try:
-            tmp_path.write_bytes(bundle_bytes)
-            spec = load_spec(tmp_path, dest=staging_dir, expand_env=expand_env)
-        finally:
-            tmp_path.unlink()
-
-        # Swap in-memory entry (atomic dict assignment)
-        self._specs = {
-            key: value for key, value in self._specs.items() if key[0] != agent_id
-        }
-        self._specs[(agent_id, bundle_location, expand_env)] = spec
-        self._bundle_locations[agent_id] = bundle_location
-
-        # Replace disk directory: remove old, rename staging into place
-        if workdir.is_dir():
-            shutil.rmtree(workdir)
-        staging_dir.rename(workdir)
-        _write_bundle_marker(workdir, bundle_location)
-
-        return LoadedAgent(spec=spec, workdir=workdir)
+        with self._agent_lock(agent_id):
+            return self._extract_and_cache(
+                agent_id,
+                bundle_location,
+                bundle_bytes,
+                expand_env=expand_env,
+            )
 
     def evict(self, agent_id: str) -> None:
         """
@@ -169,20 +171,20 @@ class AgentCache:
         :param agent_id: Unique agent identifier,
             e.g. ``"ag_abc123"``.
         """
-        self._specs = {
-            key: value for key, value in self._specs.items() if key[0] != agent_id
-        }
-        self._bundle_locations.pop(agent_id, None)
-        workdir = self._cache_dir / agent_id
-        if workdir.is_dir():
-            shutil.rmtree(workdir)
+        with self._agent_lock(agent_id):
+            self._specs = {key: value for key, value in self._specs.items() if key[0] != agent_id}
+            self._workdirs = {
+                key: value for key, value in self._workdirs.items() if key[0] != agent_id
+            }
+            workdir = self._legacy_workdir(agent_id)
+            if workdir.is_dir():
+                shutil.rmtree(workdir)
 
     def _extract_and_cache(
         self,
         agent_id: str,
         bundle_location: str,
         bundle_bytes: bytes,
-        workdir: Path,
         *,
         expand_env: bool = False,
     ) -> LoadedAgent:
@@ -192,29 +194,84 @@ class AgentCache:
         :param agent_id: Unique agent identifier.
         :param bundle_location: Artifact store key for the bundle.
         :param bundle_bytes: Raw bytes of the ``.tar.gz`` bundle.
-        :param workdir: Target directory for extraction.
         :param expand_env: Whether to expand ``${VAR}`` references
             against the server process environment. Forwarded from
             :meth:`load`; defaults to ``False`` (fail-safe). See
             :meth:`load` for the rationale.
         :returns: A LoadedAgent with the parsed spec and workdir.
         """
-        tmp_fd, tmp_name = tempfile.mkstemp(suffix=".tar.gz")
-        os.close(tmp_fd)
-        tmp_path = Path(tmp_name)
+        workdir = self._workdir_for(agent_id, bundle_location)
+        agent_root = self._legacy_workdir(agent_id)
+        agent_root.mkdir(parents=True, exist_ok=True)
+        staging_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{_bundle_generation(bundle_location)}.",
+                suffix=".staging",
+                dir=agent_root,
+            )
+        )
         try:
-            tmp_path.write_bytes(bundle_bytes)
-            spec = load_spec(tmp_path, dest=workdir, expand_env=expand_env)
+            spec = load_spec(bundle_bytes, dest=staging_dir, expand_env=expand_env)
+            _write_bundle_marker(staging_dir, bundle_location)
+            if workdir.is_dir():
+                shutil.rmtree(workdir)
+            staging_dir.rename(workdir)
         finally:
-            tmp_path.unlink()
+            if staging_dir.exists():
+                shutil.rmtree(staging_dir, ignore_errors=True)
 
+        self._specs = {key: value for key, value in self._specs.items() if key[0] != agent_id}
+        self._workdirs = {
+            key: value for key, value in self._workdirs.items() if key[0] != agent_id
+        }
         self._specs[(agent_id, bundle_location, expand_env)] = spec
-        self._bundle_locations[agent_id] = bundle_location
-        _write_bundle_marker(workdir, bundle_location)
+        self._workdirs[(agent_id, bundle_location, expand_env)] = workdir
         return LoadedAgent(spec=spec, workdir=workdir)
+
+    def _try_load_disk_cache(
+        self,
+        cache_key: tuple[str, str, bool],
+        workdir: Path,
+        bundle_location: str,
+        *,
+        expand_env: bool,
+    ) -> LoadedAgent | None:
+        if not workdir.is_dir() or _read_bundle_marker(workdir) != bundle_location:
+            return None
+        try:
+            spec = load_spec(workdir, expand_env=expand_env)
+        except FileNotFoundError:
+            return None
+        self._specs[cache_key] = spec
+        self._workdirs[cache_key] = workdir
+        return LoadedAgent(spec=spec, workdir=workdir)
+
+    def _agent_lock(self, agent_id: str) -> threading.RLock:
+        with self._locks_guard:
+            lock = self._locks.get(agent_id)
+            if lock is None:
+                lock = threading.RLock()
+                self._locks[agent_id] = lock
+            return lock
+
+    def _legacy_workdir(self, agent_id: str) -> Path:
+        return self._cache_dir / agent_id
+
+    def _workdir_for(self, agent_id: str, bundle_location: str) -> Path:
+        return self._legacy_workdir(agent_id) / _bundle_generation(bundle_location)
 
 
 _BUNDLE_MARKER = ".omnigent-bundle-location"
+_SAFE_GENERATION_RE = re.compile(r"^[A-Za-z0-9._=-]+$")
+
+
+def _bundle_generation(bundle_location: str) -> str:
+    candidate = bundle_location.rstrip("/").rsplit("/", 1)[-1]
+    if candidate and candidate not in {".", ".."} and _SAFE_GENERATION_RE.fullmatch(candidate):
+        return candidate
+    import hashlib
+
+    return hashlib.sha256(bundle_location.encode()).hexdigest()
 
 
 def _read_bundle_marker(workdir: Path) -> str | None:

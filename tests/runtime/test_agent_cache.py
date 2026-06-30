@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import tarfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -86,7 +87,7 @@ def test_load_cache_miss_downloads_and_extracts(
 
     assert loaded.spec.name == "test-agent"
     assert loaded.spec.spec_version == 1
-    assert loaded.workdir == cache_dir / "agent-1"
+    assert loaded.workdir == cache_dir / "agent-1" / "abc123"
     assert loaded.workdir.is_dir()
     assert (loaded.workdir / "config.yaml").exists()
 
@@ -353,9 +354,111 @@ def test_replace_swaps_spec(
 
     # New spec is returned and cached
     assert loaded_v2.spec.description == "updated agent"
-    assert loaded_v2.workdir == cache_dir / "agent-5"
+    assert loaded_v2.workdir == cache_dir / "agent-5" / "v2hash"
     assert loaded_v2.workdir.is_dir()
 
     # Subsequent load() returns the new spec from memory cache
     loaded_again = agent_cache.load("agent-5", loc_v2)
     assert loaded_again.spec is loaded_v2.spec
+
+
+def test_load_self_heals_corrupt_matching_disk_cache(
+    agent_cache: AgentCache,
+    artifact_store: LocalArtifactStore,
+    cache_dir: Path,
+) -> None:
+    """
+    A matching bundle marker is not enough: the extracted cache can be
+    partially removed by a failed warm-swap. load() must repair it from the
+    artifact store instead of surfacing a missing config.yaml error.
+    """
+    loc = "agent-corrupt/abc123"
+    _store_bundle(artifact_store, loc)
+    workdir = cache_dir / "agent-corrupt"
+    workdir.mkdir(parents=True)
+    (workdir / ".omnigent-bundle-location").write_text(loc)
+
+    loaded = agent_cache.load("agent-corrupt", loc)
+
+    assert loaded.spec.name == "test-agent"
+    assert (loaded.workdir / "config.yaml").exists()
+
+
+def test_replace_uses_generation_directory_without_destroying_active_workdir(
+    agent_cache: AgentCache,
+    artifact_store: LocalArtifactStore,
+    cache_dir: Path,
+) -> None:
+    """
+    Replacement materializes into a bundle generation directory. The previous
+    generation remains readable for in-flight users instead of being deleted
+    from under them.
+    """
+    loc_v1 = "agent-generation/v1hash"
+    _store_bundle(artifact_store, loc_v1)
+    loaded_v1 = agent_cache.load("agent-generation", loc_v1)
+    old_config = loaded_v1.workdir / "config.yaml"
+
+    new_config = yaml.dump(
+        {
+            "spec_version": 1,
+            "name": "test-agent",
+            "description": "updated generation",
+            "executor": {"type": "omnigent", "config": {"harness": "claude-sdk"}},
+        }
+    )
+    new_bytes = _make_bundle_bytes({"config.yaml": new_config})
+    loaded_v2 = agent_cache.replace("agent-generation", "agent-generation/v2hash", new_bytes)
+
+    assert loaded_v2.spec.description == "updated generation"
+    assert loaded_v2.workdir != loaded_v1.workdir
+    assert old_config.read_text()
+    assert loaded_v2.workdir == cache_dir / "agent-generation" / "v2hash"
+
+
+def test_concurrent_replace_and_load_do_not_expose_partial_cache(
+    agent_cache: AgentCache,
+    artifact_store: LocalArtifactStore,
+) -> None:
+    """
+    A reader racing a warm-swap should observe either a valid previous
+    generation or the valid new generation, never a half-deleted cache.
+    """
+    loc_v1 = "agent-race/v1hash"
+    _store_bundle(artifact_store, loc_v1)
+    agent_cache.load("agent-race", loc_v1)
+
+    new_config = yaml.dump(
+        {
+            "spec_version": 1,
+            "name": "test-agent",
+            "description": "race update",
+            "executor": {"type": "omnigent", "config": {"harness": "claude-sdk"}},
+        }
+    )
+    loc_v2 = "agent-race/v2hash"
+    new_bytes = _make_bundle_bytes({"config.yaml": new_config})
+    artifact_store.put(loc_v2, new_bytes)
+    errors: list[BaseException] = []
+
+    def _replace() -> None:
+        try:
+            agent_cache.replace("agent-race", loc_v2, new_bytes)
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    def _load() -> None:
+        try:
+            for _ in range(20):
+                loaded = agent_cache.load("agent-race", loc_v1)
+                assert (loaded.workdir / "config.yaml").is_file()
+        except BaseException as exc:  # pragma: no cover - asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_replace), threading.Thread(target=_load)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []

@@ -69,6 +69,18 @@ def _skill_generator_script() -> str:
     )
 
 
+def _multi_skill_generator_script() -> str:
+    return (
+        "from pathlib import Path\n"
+        "for name in ('pricing-tools', 'launch-tools'):\n"
+        "    p = Path('skills') / name\n"
+        "    p.mkdir(parents=True)\n"
+        "    (p / 'SKILL.md').write_text("
+        "'---\\nname: ' + name + '\\ndescription: Bulk install.\\n---\\nUse this skill.\\n'"
+        ")\n"
+    )
+
+
 async def test_marketplaces_route_lists_registry_entries(client: httpx.AsyncClient) -> None:
     resp = await client.get("/v1/skills/marketplaces")
 
@@ -138,6 +150,55 @@ async def test_preview_and_apply_installs_full_skill_directory(
     assert (loaded.workdir / "skills" / "image-tools" / "assets" / "icon.bin").read_bytes() == (
         b"\x00\x01binary"
     )
+
+
+async def test_preview_and_apply_many_skills_to_many_agents(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    tmp_path: Path,
+) -> None:
+    first_id = _seed_template_agent(db_uri, tmp_path, name="first")
+    second_id = _seed_template_agent(db_uri, tmp_path, name="second")
+
+    preview = await client.post(
+        "/v1/skills/previews",
+        json={
+            "target_agent_ids": [first_id, second_id],
+            "source": "freeform",
+            "command": {
+                "argv": [sys.executable, "-c", _multi_skill_generator_script()],
+                "timeout_seconds": 30,
+            },
+            "selected_skill_names": ["pricing-tools", "launch-tools"],
+        },
+    )
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert sorted(skill["name"] for skill in body["skills"]) == [
+        "launch-tools",
+        "pricing-tools",
+    ]
+    assert len(body["target_actions"]) == 4
+
+    caller_id = _seed_template_agent(db_uri, tmp_path, name="skills-concierge")
+    SqlAlchemyAgentStore(db_uri).set_capabilities(caller_id, ["system.skills.manage"])
+    applied = await client.post(
+        f"/v1/skills/previews/{body['id']}/apply",
+        json={},
+        headers=_runner_headers(db_uri, caller_id),
+    )
+    assert applied.status_code == 200, applied.text
+    results = {row["agent_id"]: row for row in applied.json()["data"]}
+    assert set(results) == {first_id, second_id}
+    assert all(row["status"] == "applied" for row in results.values())
+    assert all(row["action_count"] == 2 for row in results.values())
+    assert all(row["version"] == 2 for row in results.values())
+
+    first_image = await client.get(f"/v1/agents/{first_id}/image")
+    second_image = await client.get(f"/v1/agents/{second_id}/image")
+    expected_skills = ["deep-search", "launch-tools", "pricing-tools"]
+    assert sorted(first_image.json()["skills"]) == expected_skills
+    assert sorted(second_image.json()["skills"]) == expected_skills
 
 
 async def test_preview_marks_existing_skill_conflict_when_fail_on_existing(

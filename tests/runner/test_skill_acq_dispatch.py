@@ -110,7 +110,9 @@ async def test_resolve_targets_filters_by_scope() -> None:
     client = _FakeClient([_FakeResponse(agents)])
     out = json.loads(
         await _execute_skill_acq_tool(
-            "sys_skill_resolve_targets", {"scope": "department:operations"}, client  # type: ignore[arg-type]
+            "sys_skill_resolve_targets",
+            {"scope": "department:operations"},
+            client,  # type: ignore[arg-type]
         )
     )
     method, url, params, _ = client.calls[0]
@@ -156,7 +158,9 @@ async def test_resolve_targets_organization_excludes_workflow() -> None:
     }
     client = _FakeClient([_FakeResponse(agents)])
     raw = await _execute_skill_acq_tool(
-        "sys_skill_resolve_targets", {"scope": "organization"}, client  # type: ignore[arg-type]
+        "sys_skill_resolve_targets",
+        {"scope": "organization"},
+        client,  # type: ignore[arg-type]
     )
     out = json.loads(raw)
     assert [t["id"] for t in out["targets"]] == ["a1"]
@@ -200,11 +204,38 @@ async def test_stage_preview_install_body_and_unwrap() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stage_preview_forwards_selected_skill_names() -> None:
+    client = _FakeClient([_FakeResponse({"id": "pv-many", "skills": [], "target_actions": []})])
+
+    await _execute_skill_acq_tool(
+        "sys_skill_stage_preview",
+        {
+            "source": "skills",
+            "source_ref": "coreyhaines31/marketingskills",
+            "target_agent_ids": ["a1", "a2"],
+            "selected_skill_names": ["pricing", "launch"],
+        },
+        client,  # type: ignore[arg-type]
+    )
+
+    assert client.calls[0][3] == {
+        "operation": "install",
+        "target_agent_ids": ["a1", "a2"],
+        "install_mode": "skip_existing",
+        "source": "skills",
+        "source_ref": "coreyhaines31/marketingskills",
+        "selected_skill_names": ["pricing", "launch"],
+    }
+
+
+@pytest.mark.asyncio
 async def test_apply_posts_to_preview_apply() -> None:
     client = _FakeClient([_FakeResponse({"data": [{"agent_id": "a1", "status": "ok"}]})])
     out = json.loads(
         await _execute_skill_acq_tool(
-            "sys_skill_apply", {"preview_id": "pv1", "agent_ids": ["a1"]}, client  # type: ignore[arg-type]
+            "sys_skill_apply",
+            {"preview_id": "pv1", "agent_ids": ["a1"]},
+            client,  # type: ignore[arg-type]
         )
     )
     method, url, _, body = client.calls[0]
@@ -234,7 +265,9 @@ async def test_remove_stages_remove_preview_then_applies() -> None:
     )
     out = json.loads(
         await _execute_skill_acq_tool(
-            "sys_skill_remove", {"skill_name": "geo", "target_agent_ids": ["a1"]}, client  # type: ignore[arg-type]
+            "sys_skill_remove",
+            {"skill_name": "geo", "target_agent_ids": ["a1"]},
+            client,  # type: ignore[arg-type]
         )
     )
     # First call stages a remove preview.
