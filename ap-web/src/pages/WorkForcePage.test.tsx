@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkForcePage } from "./WorkForcePage";
@@ -77,6 +77,18 @@ const agents = [
     title: "Workflow",
     workflow: true,
     category: "workflow",
+  },
+  {
+    id: "ag_demo",
+    name: "inbox-demo",
+    display_name: "Inbox Demo",
+    description: "Reference workflow sample.",
+    harness: "claude-sdk",
+    skills: [],
+    department: null,
+    title: null,
+    workflow: false,
+    category: "employee",
   },
 ];
 
@@ -196,6 +208,7 @@ describe("WorkForcePage", () => {
   it("groups employees, system agents, and workflows separately", async () => {
     renderPage();
 
+    expect(vi.mocked(useAvailableAgents)).toHaveBeenCalledWith({ includeSessionAgents: false });
     expect(await screen.findByRole("heading", { name: "Work Force" })).toBeInTheDocument();
     expect(screen.getAllByText("Employees").length).toBeGreaterThan(0);
     expect(screen.getAllByText("System Agents").length).toBeGreaterThan(0);
@@ -203,6 +216,93 @@ describe("WorkForcePage", () => {
     expect(screen.getAllByText("Platform Developer").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Polly").length).toBeGreaterThan(0);
     expect(screen.getAllByText("Weekly Business Review").length).toBeGreaterThan(0);
+    expect(within(screen.getByLabelText("Agent roster")).queryByText("Inbox Demo")).toBeNull();
+  });
+
+  it("groups workforce employees by sorted department and employee name", async () => {
+    vi.mocked(useAvailableAgents).mockReturnValue({
+      data: [
+        {
+          id: "ag_marketing",
+          name: "brand-lead",
+          display_name: "Brand Lead",
+          description: null,
+          harness: "claude-sdk",
+          skills: [],
+          department: "Marketing",
+          title: "Brand Lead",
+          workflow: false,
+          category: "employee",
+        },
+        {
+          id: "ag_platform",
+          name: "platform-developer",
+          display_name: "Platform Developer",
+          description: null,
+          harness: "codex",
+          skills: [],
+          department: "Engineering",
+          title: "Platform Engineer",
+          workflow: false,
+          category: "employee",
+        },
+        {
+          id: "ag_backend",
+          name: "backend-lead",
+          display_name: "Backend Lead",
+          description: null,
+          harness: "codex",
+          skills: [],
+          department: "Engineering",
+          title: "Backend Lead",
+          workflow: false,
+          category: "employee",
+        },
+        {
+          id: "ag_hello",
+          name: "hello_world",
+          display_name: "Hello World",
+          description: null,
+          harness: "openai-agents",
+          skills: [],
+          department: null,
+          title: null,
+          workflow: false,
+          category: "employee",
+        },
+        {
+          id: "ag_goal",
+          name: "goal-commander",
+          display_name: "Goal Commander",
+          description: null,
+          harness: "claude-sdk",
+          skills: [],
+          department: "Operations",
+          title: "Goals Command Center Operator",
+          workflow: false,
+          category: "system",
+        },
+      ],
+      isLoading: false,
+      refetch: vi.fn(),
+    } as never);
+
+    renderPage();
+
+    const roster = await screen.findByLabelText("Agent roster");
+    const engineering = within(roster).getByRole("button", { name: /Department Engineering/ });
+    const marketing = within(roster).getByRole("button", { name: /Department Marketing/ });
+    expect(engineering.compareDocumentPosition(marketing) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+
+    const backend = within(roster).getAllByText("Backend Lead")[0];
+    const platform = within(roster).getByText("Platform Developer");
+    expect(backend.compareDocumentPosition(platform) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+    expect(within(roster).queryByText("Hello World")).toBeNull();
+    expect(within(roster).getByText("Goal Commander")).toBeInTheDocument();
   });
 
   it("keeps workflow agents read-only", async () => {

@@ -97,6 +97,25 @@ describe("useAvailableAgents", () => {
     expect(urls).toContain(SCAN_URL);
   });
 
+  it("can fetch only built-ins without scanning sessions", async () => {
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        object: "list",
+        data: [{ id: "ag_native", name: "claude-native-ui", harness: "claude-native" }],
+        has_more: false,
+      }),
+    });
+
+    const { result } = renderHook(() => useAvailableAgents({ includeSessionAgents: false }), {
+      wrapper,
+    });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    const urls = fetchMock.mock.calls.map((c) => c[0] as string);
+    expect(urls).toEqual([BUILTINS_URL]);
+    expect(result.current.data?.map((agent) => agent.id)).toEqual(["ag_native"]);
+  });
+
   it("maps rows into AvailableAgent and applies native, nessie, and debby display names", async () => {
     routeFetch({
       [BUILTINS_URL]: mockResponse({

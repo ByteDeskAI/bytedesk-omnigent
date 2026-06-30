@@ -58,6 +58,12 @@ def test_backfill_classifies_and_syncs_capabilities(tmp_path: Path) -> None:
         name="skills-concierge",
         extra="capabilities:\n  - system.skills.manage\n",
     )
+    goal_commander = _seed(
+        db_uri,
+        tmp_path,
+        name="goal-commander",
+        extra="params:\n  department: Operations\n",
+    )
     workflow = _seed(db_uri, tmp_path, name="weekly-report", extra="params:\n  workflow: true\n")
     employee = _seed(db_uri, tmp_path, name="vivian")
 
@@ -66,6 +72,7 @@ def test_backfill_classifies_and_syncs_capabilities(tmp_path: Path) -> None:
 
     # Category column written for all three tiers.
     assert store.get_category(concierge) == "system"
+    assert store.get_category(goal_commander) == "system"
     assert store.get_category(workflow) == "workflow"
     assert store.get_category(employee) == "employee"
 

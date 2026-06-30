@@ -33,6 +33,10 @@ executor:
 async: true
 cancellable: true
 
+params:
+  workflow: true
+  department: "Internal Demo"
+
 prompt: |
   You are the Inbox Demo orchestrator. You do NOT answer the question yourself —
   you delegate to two sub-agents and combine their work. You have exactly two:

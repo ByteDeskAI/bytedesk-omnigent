@@ -57,6 +57,11 @@ class TestInferCategory:
         assert "skills-concierge" in SYSTEM_AGENT_NAMES
         assert infer_category("skills-concierge", None) == "system"
 
+    def test_goal_commander_is_system(self) -> None:
+        """The command-center operator is internal infrastructure, not an employee."""
+        assert "goal-commander" in SYSTEM_AGENT_NAMES
+        assert infer_category("goal-commander", {"department": "Operations"}) == "system"
+
 
 class TestIsSystem:
     """``is_system`` reads the role Protocol's category (the seam's first use)."""
