@@ -240,7 +240,7 @@ class AgentWorkforceContext:
 
     @property
     def inheritable(self) -> bool:
-        return self.category == "employee"
+        return self.category == "employee" and self.department_slug is not None
 
 
 def _instruction(row: SqlWorkforceInstruction) -> WorkforceInstruction:
