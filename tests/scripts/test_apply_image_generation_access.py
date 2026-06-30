@@ -63,6 +63,12 @@ def test_target_agents_selects_design_web_dev_and_marketing_personas() -> None:
             "workflow": True,
             "params": {"department": "Marketing"},
         },
+        {
+            "id": "ag_program",
+            "name": "demo-video-and-launch-asset-factory",
+            "display_name": None,
+            "params": {"department": "Marketing"},
+        },
     ]
 
     selection = module.select_target_agents(agents)
@@ -73,6 +79,7 @@ def test_target_agents_selects_design_web_dev_and_marketing_personas() -> None:
         "ag_webdev",
     ]
     assert selection.skipped_workflows == ["ag_workflow"]
+    assert selection.skipped_non_personas == ["ag_program"]
 
 
 def test_target_agents_allows_explicit_workflow_override() -> None:
@@ -90,6 +97,24 @@ def test_target_agents_allows_explicit_workflow_override() -> None:
 
     assert [agent["id"] for agent in selection.selected] == ["ag_workflow"]
     assert selection.skipped_workflows == []
+    assert selection.skipped_non_personas == []
+
+
+def test_target_agents_allows_explicit_non_persona_override() -> None:
+    agents = [
+        {
+            "id": "ag_program",
+            "name": "demo-video-and-launch-asset-factory",
+            "display_name": None,
+            "params": {"department": "Marketing"},
+        },
+    ]
+
+    selection = module.select_target_agents(agents, explicit_ids={"ag_program"})
+
+    assert [agent["id"] for agent in selection.selected] == ["ag_program"]
+    assert selection.skipped_workflows == []
+    assert selection.skipped_non_personas == []
 
 
 def test_ensure_image_generation_config_merges_builtin_and_prompt() -> None:
@@ -97,6 +122,14 @@ def test_ensure_image_generation_config_merges_builtin_and_prompt() -> None:
         {
             "name": "web-design-director",
             "prompt": "You are Avery.",
+            "executor": {
+                "type": "omnigent",
+                "model": "gpt-5.4-mini",
+                "config": {
+                    "harness": "claude-sdk",
+                    "keep": True,
+                },
+            },
             "tools": {
                 "builtins": ["web_search"],
                 "agentic-inbox": {
@@ -108,6 +141,14 @@ def test_ensure_image_generation_config_merges_builtin_and_prompt() -> None:
     )
 
     assert changed is True
+    assert updated["executor"] == {
+        "type": "omnigent",
+        "model": "gpt-5.5",
+        "config": {
+            "harness": "codex",
+            "keep": True,
+        },
+    }
     assert updated["tools"]["builtins"] == [
         "web_search",
         {"name": "bytedesk_generate_image"},
@@ -115,8 +156,21 @@ def test_ensure_image_generation_config_merges_builtin_and_prompt() -> None:
     assert "agentic-inbox" in updated["tools"]
     assert updated["skills"] == ["imagegen"]
     assert "CODEX IMAGE GENERATION" in updated["prompt"]
+    assert "codex harness" in updated["prompt"]
+    assert "gpt-5.5" in updated["prompt"]
     assert "bytedesk_generate_image" in updated["prompt"]
     assert "file_id" in updated["prompt"]
+
+
+def test_ensure_image_generation_config_creates_codex_harness_executor() -> None:
+    updated, changed = module.ensure_image_generation_config({"prompt": "You are Avery."})
+
+    assert changed is True
+    assert updated["executor"] == {
+        "type": "omnigent",
+        "model": "gpt-5.5",
+        "config": {"harness": "codex"},
+    }
 
 
 def test_ensure_image_generation_config_accepts_existing_dict_builtin() -> None:
