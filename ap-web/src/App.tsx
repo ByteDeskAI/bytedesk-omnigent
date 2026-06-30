@@ -28,6 +28,9 @@ const ConfigPage = lazy(() =>
 const ConnectorsPage = lazy(() =>
   import("@/pages/ConnectorsPage").then((m) => ({ default: m.ConnectorsPage })),
 );
+const ConnectorDetailPage = lazy(() =>
+  import("@/pages/ConnectorsPage").then((m) => ({ default: m.ConnectorDetailPage })),
+);
 const SkillsPage = lazy(() =>
   import("@/pages/SkillsPage").then((m) => ({ default: m.SkillsPage })),
 );
@@ -149,6 +152,7 @@ function App({ basename }: AppProps = {}) {
           <Route path={`${prefix}/inbox`} element={<InboxPage />} />
           <Route path={`${prefix}/skills`} element={<SkillsPage />} />
           <Route path={`${prefix}/connectors`} element={<ConnectorsPage />} />
+          <Route path={`${prefix}/connectors/:provider`} element={<ConnectorDetailPage />} />
           <Route path={`${prefix}/goals`} element={<GoalsPage />} />
           <Route path={`${prefix}/command-center`} element={<CommandCenterPage />} />
           <Route path={`${prefix}/inbound`} element={<InboundPage />} />
