@@ -420,6 +420,126 @@ async def test_list_sessions_rolls_up_busy_child_status(
         sessions_module._session_status_cache.pop(child.id, None)
 
 
+async def test_create_child_session_duplicate_title_reuses_existing_and_delivers_initial_items(
+    client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    """
+    Retrying a parented create with the same title adopts the existing
+    child row and still delivers the initial task.
+
+    This pins the production wedge where the first create minted the child
+    session, then timed out before forwarding ``initial_items``. The retry
+    must not 500 on the ``(parent, title)`` unique index; it should resume
+    the same child and continue the normal create path.
+    """
+    agent = await create_test_agent(client)
+    parent = await _create_session(client, agent["id"], title="parent")
+    child_title = "Design Marketing Images for ByteDesk Product Promo Emails"
+
+    seeded = await client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": agent["id"],
+            "parent_session_id": parent["id"],
+            "title": child_title,
+        },
+    )
+    assert seeded.status_code == 201, seeded.text
+    child_id = seeded.json()["id"]
+
+    retry = await client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": agent["id"],
+            "parent_session_id": parent["id"],
+            "title": child_title,
+            "labels": {"retry": "true"},
+            "initial_items": [
+                {
+                    "type": "message",
+                    "data": {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Create the images"}],
+                    },
+                }
+            ],
+        },
+    )
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["id"] == child_id
+
+    store = SqlAlchemyConversationStore(db_uri)
+    items = await asyncio.to_thread(store.list_items, child_id)
+    assert len(items.data) == 1
+    assert items.data[0].type == "message"
+
+    duplicate_retry = await client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": agent["id"],
+            "parent_session_id": parent["id"],
+            "title": child_title,
+            "initial_items": [
+                {
+                    "type": "message",
+                    "data": {
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "Create the images"}],
+                    },
+                }
+            ],
+        },
+    )
+    assert duplicate_retry.status_code == 201, duplicate_retry.text
+    assert duplicate_retry.json()["id"] == child_id
+    items = await asyncio.to_thread(store.list_items, child_id)
+    assert len(items.data) == 1
+
+    child_resp = await client.get(f"/v1/sessions/{child_id}", params={"include_items": False})
+    assert child_resp.status_code == 200
+    assert child_resp.json()["labels"]["retry"] == "true"
+
+    children = (await client.get(f"/v1/sessions/{parent['id']}/child_sessions")).json()["data"]
+    assert [child["id"] for child in children].count(child_id) == 1
+
+
+async def test_create_child_session_duplicate_title_repairs_missing_runner_binding(
+    client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    """
+    Duplicate-title adoption also heals an orphaned child that missed
+    parent runner inheritance during a failed first create.
+    """
+    agent = await create_test_agent(client)
+    parent = await _create_session(client, agent["id"], title="runner-parent")
+    store = SqlAlchemyConversationStore(db_uri)
+    store.replace_runner_id(parent["id"], "runner_parent")
+    orphan = store.create_conversation(
+        kind="sub_agent",
+        title="Design Marketing Images for ByteDesk Product Promo Emails",
+        parent_conversation_id=parent["id"],
+        agent_id=agent["id"],
+    )
+
+    retry = await client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": agent["id"],
+            "parent_session_id": parent["id"],
+            "title": orphan.title,
+        },
+    )
+
+    assert retry.status_code == 201, retry.text
+    assert retry.json()["id"] == orphan.id
+    assert retry.json()["runner_id"] == "runner_parent"
+    stored = store.get_conversation(orphan.id)
+    assert stored is not None
+    assert stored.runner_id == "runner_parent"
+
+
 async def test_session_snapshot_defaults_terminal_pending_false(
     client: httpx.AsyncClient,
 ) -> None:

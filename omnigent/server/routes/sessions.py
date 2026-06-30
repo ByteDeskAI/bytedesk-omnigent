@@ -11536,6 +11536,7 @@ async def _create_session_from_existing_agent(
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
 
+    adopted_existing_child = False
     try:
         conv = conversation_store.create_conversation(
             agent_id=agent.id,
@@ -11551,6 +11552,44 @@ async def _create_session_from_existing_agent(
             tenant_id=tenant_id,
             external_key=external_key,
         )
+    except NameAlreadyExistsError:
+        # A retry can arrive after the first create minted the child row
+        # but timed out before delivering initial_items. Adopt the matching
+        # child so the normal post-create path below can finish the work.
+        if git_branch is not None and canonical_workspace is not None and body.host_id is not None:
+            await _remove_session_worktree_best_effort(
+                host_id=body.host_id,
+                worktree_path=canonical_workspace,
+                branch=git_branch,
+                delete_branch=True,
+                request=request,
+                reason="create-rollback",
+            )
+        if body.parent_session_id is None or body.title is None:
+            raise
+        existing = await asyncio.to_thread(
+            _find_subagent_child_by_title,
+            conversation_store,
+            body.parent_session_id,
+            body.title,
+        )
+        if (
+            existing is None
+            or existing.agent_id != agent.id
+            or existing.sub_agent_name != body.sub_agent_name
+        ):
+            raise
+        if existing.runner_id is None and inherited_runner_id is not None:
+            await asyncio.to_thread(
+                conversation_store.set_runner_id,
+                existing.id,
+                inherited_runner_id,
+            )
+            existing = await asyncio.to_thread(conversation_store.get_conversation, existing.id)
+            if existing is None:
+                raise
+        conv = existing
+        adopted_existing_child = True
     except Exception:
         # Broad catch is intentional: ANY create_conversation failure
         # (integrity error, name clash, ...) must trigger orphan-worktree
@@ -11614,7 +11653,16 @@ async def _create_session_from_existing_agent(
         conv = await asyncio.to_thread(conversation_store.get_conversation, conv.id)
     elif body.labels:
         await asyncio.to_thread(conversation_store.set_labels, conv.id, body.labels)
-    if body.initial_items:
+    initial_items = body.initial_items
+    if initial_items and adopted_existing_child:
+        existing_items = await asyncio.to_thread(
+            conversation_store.list_items,
+            conv.id,
+            limit=1,
+        )
+        if existing_items.data:
+            initial_items = []
+    if initial_items:
         runner_client = await _get_runner_client(conv.id, runner_router)
         if runner_client is None:
             # No runner bound — persist initial items as history-only
@@ -11632,7 +11680,7 @@ async def _create_session_from_existing_agent(
                     data=item.data,
                     created_by=_attribution_user(user_id),
                 )
-                for item in body.initial_items
+                for item in initial_items
             ]
             await asyncio.to_thread(conversation_store.append, conv.id, new_items)
         else:
@@ -11642,7 +11690,7 @@ async def _create_session_from_existing_agent(
                 runner_client,
                 conversation_store,
             )
-            for item in body.initial_items:
+            for item in initial_items:
                 await _forward_event_to_runner(
                     conv.id,
                     conv,
