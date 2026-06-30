@@ -43,6 +43,7 @@ SYSTEM_AGENT_NAMES: frozenset[str] = frozenset(
         "debby",
         "polly",
         "skills-concierge",
+        "goal-commander",
     }
 )
 

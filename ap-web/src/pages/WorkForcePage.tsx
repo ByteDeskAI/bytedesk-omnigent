@@ -16,6 +16,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Accordion,
+  AccordionContent,
+  AccordionItem,
+  AccordionTrigger,
+} from "@/components/ui/accordion";
+import {
   Dialog,
   DialogContent,
   DialogDescription,
@@ -68,8 +74,49 @@ interface AvailableConnectorTool extends ConnectorTool {
   token: string;
 }
 
+interface DepartmentGroup {
+  department: string;
+  agents: AvailableAgent[];
+}
+
 function agentDisplayName(agent: AvailableAgent): string {
   return agent.display_name || agent.name;
+}
+
+function compareText(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: "base" });
+}
+
+function compareAgentsByName(a: AvailableAgent, b: AvailableAgent): number {
+  return compareText(agentDisplayName(a), agentDisplayName(b)) || compareText(a.name, b.name);
+}
+
+function departmentId(agent: AvailableAgent): string {
+  return agent.department?.trim() || "Unassigned";
+}
+
+function isWorkForceEmployee(agent: AvailableAgent): boolean {
+  return tierForAgent(agent) === "employee" && Boolean(agent.department?.trim());
+}
+
+function workForceRosterAgents(agents: readonly AvailableAgent[]): AvailableAgent[] {
+  return agents.filter((agent) => {
+    const tier = tierForAgent(agent);
+    return tier === "system" || tier === "workflow" || isWorkForceEmployee(agent);
+  });
+}
+
+function groupEmployeesByDepartment(agents: readonly AvailableAgent[]): DepartmentGroup[] {
+  const groups = new Map<string, AvailableAgent[]>();
+  for (const agent of agents) {
+    if (!isWorkForceEmployee(agent)) continue;
+    const department = departmentId(agent);
+    groups.set(department, [...(groups.get(department) ?? []), agent]);
+  }
+  return Array.from(groups, ([department, departmentAgents]) => ({
+    department,
+    agents: [...departmentAgents].sort(compareAgentsByName),
+  })).sort((a, b) => compareText(a.department, b.department));
 }
 
 function tierLabel(tier: AgentTier): string {
@@ -198,14 +245,23 @@ function RosterPanel({
   setQuery: (query: string) => void;
 }) {
   const groups = useMemo(() => groupAgentsByTier(agents), [agents]);
-  const sections: { tier: AgentTier; agents: AvailableAgent[] }[] = [
-    { tier: "employee", agents: groups.employee },
-    { tier: "system", agents: groups.system },
-    { tier: "workflow", agents: groups.workflow },
-  ];
+  const departmentGroups = useMemo(() => groupEmployeesByDepartment(agents), [agents]);
+  const employeeCount = departmentGroups.reduce((count, group) => count + group.agents.length, 0);
+  const systemAgents = useMemo(() => [...groups.system].sort(compareAgentsByName), [groups.system]);
+  const workflowAgents = useMemo(
+    () => [...groups.workflow].sort(compareAgentsByName),
+    [groups.workflow],
+  );
+  const openDepartments = useMemo(
+    () => departmentGroups.map((group) => `department:${group.department}`),
+    [departmentGroups],
+  );
 
   return (
-    <aside className="min-h-0 border-b border-border bg-background lg:border-r lg:border-b-0">
+    <aside
+      aria-label="Agent roster"
+      className="min-h-0 border-b border-border bg-background lg:border-r lg:border-b-0"
+    >
       <div className="flex h-full min-h-0 flex-col">
         <header className="shrink-0 border-b border-border px-4 py-4">
           <div className="flex items-center gap-2">
@@ -229,7 +285,50 @@ function RosterPanel({
           </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {sections.map((section) => (
+          <section className="mb-3">
+            <div className="mb-1 flex items-center justify-between px-2 text-xs font-medium text-muted-foreground">
+              <span>Employees</span>
+              <span>{employeeCount}</span>
+            </div>
+            {departmentGroups.length > 0 ? (
+              <Accordion type="multiple" defaultValue={openDepartments} className="gap-1">
+                {departmentGroups.map((group) => (
+                  <AccordionItem
+                    key={group.department}
+                    value={`department:${group.department}`}
+                    className="border-0"
+                  >
+                    <AccordionTrigger
+                      aria-label={`Department ${group.department}`}
+                      className="rounded-md px-2 py-2 text-xs text-muted-foreground hover:bg-muted/40 hover:no-underline"
+                    >
+                      <span>{group.department}</span>
+                      <Badge variant="secondary">{group.agents.length}</Badge>
+                    </AccordionTrigger>
+                    <AccordionContent className="space-y-1 pb-1">
+                      {group.agents.map((agent) => (
+                        <RosterButton
+                          key={agent.id}
+                          agent={agent}
+                          selected={selectedAgentId === agent.id}
+                          onSelect={() => setSelectedAgentId(agent.id)}
+                        />
+                      ))}
+                    </AccordionContent>
+                  </AccordionItem>
+                ))}
+              </Accordion>
+            ) : (
+              <div className="px-2 py-3 text-xs text-muted-foreground">No employees.</div>
+            )}
+          </section>
+
+          {(
+            [
+              { tier: "system" as const, agents: systemAgents },
+              { tier: "workflow" as const, agents: workflowAgents },
+            ] satisfies { tier: AgentTier; agents: AvailableAgent[] }[]
+          ).map((section) => (
             <section key={section.tier} className="mb-3">
               <div className="mb-1 flex items-center justify-between px-2 text-xs font-medium text-muted-foreground">
                 <span>{tierLabel(section.tier)}</span>
@@ -801,7 +900,7 @@ function FilesTab({
 
 export function WorkForcePage() {
   const allowed = useWorkForceAdminAccess();
-  const agentsQuery = useAvailableAgents();
+  const agentsQuery = useAvailableAgents({ includeSessionAgents: false });
   const updateImage = useUpdateAgentImage();
   const [query, setQuery] = useState("");
   const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
@@ -814,7 +913,7 @@ export function WorkForcePage() {
 
   const filteredAgents = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    const rows = agentsQuery.data ?? [];
+    const rows = workForceRosterAgents(agentsQuery.data ?? []);
     if (!needle) return rows;
     return rows.filter((agent) =>
       [agent.name, agentDisplayName(agent), agent.department, agent.title]
@@ -830,14 +929,17 @@ export function WorkForcePage() {
     }
     if (!selectedAgentId || !filteredAgents.some((agent) => agent.id === selectedAgentId)) {
       const grouped = groupAgentsByTier(filteredAgents);
+      const employeeGroups = groupEmployeesByDepartment(filteredAgents);
       setSelectedAgentId(
-        grouped.employee[0]?.id ?? grouped.system[0]?.id ?? grouped.workflow[0]?.id ?? null,
+        employeeGroups[0]?.agents[0]?.id ??
+          [...grouped.system].sort(compareAgentsByName)[0]?.id ??
+          [...grouped.workflow].sort(compareAgentsByName)[0]?.id ??
+          null,
       );
     }
   }, [filteredAgents, selectedAgentId]);
 
-  const selectedAgent =
-    (agentsQuery.data ?? []).find((agent) => agent.id === selectedAgentId) ?? null;
+  const selectedAgent = filteredAgents.find((agent) => agent.id === selectedAgentId) ?? null;
   const selectedTier = selectedAgent ? tierForAgent(selectedAgent) : "employee";
   const imageEnabled = Boolean(selectedAgent && selectedTier !== "workflow");
   const image = useAgentImage(selectedAgent?.id, imageEnabled);

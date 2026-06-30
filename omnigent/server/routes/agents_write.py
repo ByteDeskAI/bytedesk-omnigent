@@ -211,6 +211,17 @@ def _read_image_text_file(root: Path, relpath: str) -> tuple[str, str, int]:
     return _image_relpath(root, target), content, size
 
 
+def _load_template_image(agent_cache: AgentCache, agent: Any):
+    """Load a template image, mapping missing blob storage to 404."""
+    try:
+        return agent_cache.load(agent.id, agent.bundle_location, expand_env=False)
+    except KeyError as exc:
+        raise OmnigentError(
+            f"Agent image bundle not found for {agent.id!r}",
+            code=ErrorCode.NOT_FOUND,
+        ) from exc
+
+
 def _names_in(directory: Path, *, dirs: bool) -> list[str]:
     """List sorted child names of *directory* (dirs or files), or []."""
     if not directory.is_dir():
@@ -318,9 +329,7 @@ def create_agents_write_router(
         # expand_env=False: we read the raw config.yaml / AGENTS.md files
         # off the extracted workdir, so ${VAR} references come back
         # verbatim (never resolved server secrets) for the editor.
-        loaded = await asyncio.to_thread(
-            agent_cache.load, agent.id, agent.bundle_location, expand_env=False
-        )
+        loaded = await asyncio.to_thread(_load_template_image, agent_cache, agent)
         surface = await asyncio.to_thread(_read_image, loaded.workdir)
         sot_tier = await asyncio.to_thread(agent_store.get_sot_tier, agent.id)
         return AgentImage(
@@ -343,9 +352,7 @@ def create_agents_write_router(
         agent = await asyncio.to_thread(agent_store.get, agent_id)
         _require_template(agent, agent_id)
         response.headers["ETag"] = f'"{agent.version}"'
-        loaded = await asyncio.to_thread(
-            agent_cache.load, agent.id, agent.bundle_location, expand_env=False
-        )
+        loaded = await asyncio.to_thread(_load_template_image, agent_cache, agent)
         relpath, entries = await asyncio.to_thread(_list_image_tree, loaded.workdir, path)
         return AgentImageTree(
             id=agent.id,
@@ -367,9 +374,7 @@ def create_agents_write_router(
         agent = await asyncio.to_thread(agent_store.get, agent_id)
         _require_template(agent, agent_id)
         response.headers["ETag"] = f'"{agent.version}"'
-        loaded = await asyncio.to_thread(
-            agent_cache.load, agent.id, agent.bundle_location, expand_env=False
-        )
+        loaded = await asyncio.to_thread(_load_template_image, agent_cache, agent)
         relpath, content, size = await asyncio.to_thread(
             _read_image_text_file, loaded.workdir, path
         )
@@ -413,9 +418,7 @@ def create_agents_write_router(
         # so two concurrent edits can't silently clobber each other.
         expected_version = parse_if_match(request.headers.get("if-match"))
 
-        loaded = await asyncio.to_thread(
-            agent_cache.load, agent.id, agent.bundle_location, expand_env=False
-        )
+        loaded = await asyncio.to_thread(_load_template_image, agent_cache, agent)
 
         def _rebuild(src_workdir: Path) -> bytes:
             # Copy the whole current image forward so unedited

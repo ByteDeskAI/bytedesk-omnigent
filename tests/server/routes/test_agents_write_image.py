@@ -73,6 +73,17 @@ def _seed_template_agent(db_uri: str, tmp_path: Path) -> str:
     return _seed_agent(db_uri, tmp_path)
 
 
+def _seed_agent_missing_bundle(db_uri: str) -> str:
+    """Seed a template agent whose metadata points at a missing artifact blob."""
+    agent_id = generate_agent_id()
+    SqlAlchemyAgentStore(db_uri).create(
+        agent_id,
+        name="missing-bundle",
+        bundle_location=f"{agent_id}/missing",
+    )
+    return agent_id
+
+
 # ── unit: guards ──────────────────────────────────────────────────────
 
 
@@ -114,6 +125,16 @@ async def test_get_image_returns_editable_surface(
     assert body["config"]["executor"]["config"]["harness"] == "claude-sdk"
     assert body["instructions"] == "You are demo.\n"
     assert "deep-search" in body["skills"]
+
+
+async def test_get_image_returns_404_when_bundle_missing(
+    client: httpx.AsyncClient, db_uri: str
+) -> None:
+    agent_id = _seed_agent_missing_bundle(db_uri)
+    resp = await client.get(f"/v1/agents/{agent_id}/image")
+
+    assert resp.status_code == 404, resp.text
+    assert "image bundle not found" in resp.text.lower()
 
 
 async def test_get_image_tree_lists_root_entries(

@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 from playwright.sync_api import Page, expect
 
@@ -46,8 +46,9 @@ def _serve_static_spa() -> Iterator[str]:
         thread.join(timeout=5)
 
 
-def _register_api_routes(page: Page) -> None:
+def _register_api_routes(page: Page) -> list[str]:
     """Stub the server API calls the Work Force route needs for hydration."""
+    custom_agent_scan_requests: list[str] = []
 
     def fulfill_json(route, body: dict[str, object]) -> None:
         route.fulfill(status=200, content_type="application/json", body=json.dumps(body))
@@ -80,6 +81,15 @@ def _register_api_routes(page: Page) -> None:
             fulfill_json(route, {"data": []})
             return
         if path == "/v1/sessions":
+            query = parse_qs(urlparse(request.url).query)
+            if query.get("kind") == ["any"]:
+                custom_agent_scan_requests.append(request.url)
+                route.fulfill(
+                    status=500,
+                    content_type="application/json",
+                    body=json.dumps({"detail": "Work Force must not scan custom sessions"}),
+                )
+                return
             fulfill_json(route, {"data": []})
             return
         if path == "/v1/agents":
@@ -87,6 +97,18 @@ def _register_api_routes(page: Page) -> None:
                 route,
                 {
                     "data": [
+                        {
+                            "id": "ag_backend",
+                            "name": "backend-development-lead",
+                            "display_name": "Backend Development Lead",
+                            "description": "Builds platform code.",
+                            "harness": "codex",
+                            "skills": [],
+                            "department": "Engineering",
+                            "title": "Backend Development Lead",
+                            "workflow": False,
+                            "category": "employee",
+                        },
                         {
                             "id": "ag_employee",
                             "name": "platform-developer",
@@ -96,6 +118,30 @@ def _register_api_routes(page: Page) -> None:
                             "skills": [],
                             "department": "Engineering",
                             "title": "Platform Engineer",
+                            "workflow": False,
+                            "category": "employee",
+                        },
+                        {
+                            "id": "ag_marketing",
+                            "name": "brand-and-creative-director",
+                            "display_name": "Brand & Creative Director",
+                            "description": "Runs brand and creative.",
+                            "harness": "claude-sdk",
+                            "skills": [],
+                            "department": "Marketing",
+                            "title": "Brand & Creative Lead",
+                            "workflow": False,
+                            "category": "employee",
+                        },
+                        {
+                            "id": "ag_hello",
+                            "name": "hello_world",
+                            "display_name": "Hello World",
+                            "description": "Ad-hoc test agent.",
+                            "harness": "openai-agents",
+                            "skills": [],
+                            "department": None,
+                            "title": None,
                             "workflow": False,
                             "category": "employee",
                         },
@@ -155,22 +201,30 @@ def _register_api_routes(page: Page) -> None:
         route.continue_()
 
     page.route("**/*", handle)
+    return custom_agent_scan_requests
 
 
 def test_work_force_page_renders_agent_admin_shell(page: Page, built_spa: None) -> None:
     """The Work Force route shows agent sections and editor tabs."""
     del built_spa
 
-    _register_api_routes(page)
+    custom_agent_scan_requests = _register_api_routes(page)
     with _serve_static_spa() as base_url:
         page.goto(f"{base_url}/work-force")
 
         expect(page.get_by_role("heading", name="Work Force")).to_be_visible(timeout=30_000)
         expect(page.get_by_text("Employees").first).to_be_visible()
+        expect(
+            page.get_by_role("button", name=re.compile("Department Engineering"))
+        ).to_be_visible()
+        expect(page.get_by_role("button", name=re.compile("Department Marketing"))).to_be_visible()
+        expect(page.get_by_text("Backend Development Lead").first).to_be_visible()
         expect(page.get_by_text("System Agents").first).to_be_visible()
         expect(page.get_by_text("Workflows").first).to_be_visible()
         expect(page.get_by_text("Platform Developer").first).to_be_visible()
+        expect(page.get_by_text("Hello World")).to_have_count(0)
         expect(page.get_by_text("Polly").first).to_be_visible()
         expect(page.get_by_text("Weekly Business Review").first).to_be_visible()
         expect(page.get_by_role("tab", name=re.compile("Overview"))).to_be_visible()
         expect(page.get_by_role("tab", name=re.compile("Config"))).to_be_visible()
+        assert custom_agent_scan_requests == []

@@ -226,11 +226,11 @@ async function enrichSessionAgent(scanned: ScannedSessionAgent): Promise<Availab
  * built-in list rather than blanking the picker — built-in
  * availability must not be hostage to the discovery extension.
  */
-async function fetchAvailableAgents(): Promise<AvailableAgent[]> {
-  const [builtins, scanned] = await Promise.all([
-    fetchBuiltinAgents(),
-    scanSessionAgents().catch(() => [] as ScannedSessionAgent[]),
-  ]);
+async function fetchAvailableAgents(includeSessionAgents: boolean): Promise<AvailableAgent[]> {
+  const builtins = await fetchBuiltinAgents();
+  if (!includeSessionAgents) return builtins;
+
+  const scanned = await scanSessionAgents().catch(() => [] as ScannedSessionAgent[]);
   const builtinIds = new Set(builtins.map((a) => a.id));
   const builtinNames = new Set(builtins.map((a) => a.name));
   // One row per custom base name, newest session first (scan order):
@@ -255,12 +255,14 @@ async function fetchAvailableAgents(): Promise<AvailableAgent[]> {
 
 interface UseAvailableAgentsOptions {
   enabled?: boolean;
+  includeSessionAgents?: boolean;
 }
 
 export function useAvailableAgents(options: UseAvailableAgentsOptions = {}) {
+  const includeSessionAgents = options.includeSessionAgents ?? true;
   return useQuery({
-    queryKey: ["available-agents"],
-    queryFn: fetchAvailableAgents,
+    queryKey: ["available-agents", { includeSessionAgents }],
+    queryFn: () => fetchAvailableAgents(includeSessionAgents),
     enabled: options.enabled ?? true,
     staleTime: 30_000,
   });
