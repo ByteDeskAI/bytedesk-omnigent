@@ -6,6 +6,7 @@ import * as imageHooks from "@/hooks/useAgentImages";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
 import * as connectorHooks from "@/hooks/useConnectors";
 import * as skillsHooks from "@/hooks/useSkills";
+import * as workforceHooks from "@/hooks/useWorkforce";
 import * as accountsApi from "@/lib/accountsApi";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import type { ServerInfo } from "@/lib/capabilities";
@@ -27,6 +28,16 @@ vi.mock("@/hooks/useSkills", () => ({
   useSearchSkills: vi.fn(),
   useCreateSkillPreview: vi.fn(),
   useApplySkillPreview: vi.fn(),
+}));
+vi.mock("@/hooks/useWorkforce", () => ({
+  useWorkforceScopes: vi.fn(),
+  useWorkforceScope: vi.fn(),
+  useWorkforceAgentEffective: vi.fn(),
+  useUpdateWorkforceInstructions: vi.fn(),
+  useUpdateWorkforceAgentInstructions: vi.fn(),
+  useUpsertWorkforceConnector: vi.fn(),
+  useUpsertWorkforceSkill: vi.fn(),
+  useUpsertWorkforceAgentOverride: vi.fn(),
 }));
 vi.mock("@/lib/accountsApi", () => ({ getMe: vi.fn() }));
 vi.mock("@/lib/CapabilitiesContext", () => ({ useServerInfo: vi.fn() }));
@@ -105,6 +116,11 @@ const agents = [
 ];
 
 const mutateImage = vi.fn();
+const updateWorkforceInstructions = vi.fn();
+const updateWorkforceAgentInstructions = vi.fn();
+const upsertWorkforceConnector = vi.fn();
+const upsertWorkforceSkill = vi.fn();
+const upsertWorkforceOverride = vi.fn();
 
 function renderPage() {
   return render(
@@ -207,6 +223,144 @@ beforeEach(() => {
   } as never);
   vi.mocked(skillsHooks.useApplySkillPreview).mockReturnValue({
     mutateAsync: vi.fn(),
+    isPending: false,
+  } as never);
+  updateWorkforceInstructions.mockResolvedValue({});
+  updateWorkforceAgentInstructions.mockResolvedValue({});
+  upsertWorkforceConnector.mockResolvedValue({});
+  upsertWorkforceSkill.mockResolvedValue({});
+  upsertWorkforceOverride.mockResolvedValue({});
+  vi.mocked(workforceHooks.useWorkforceScopes).mockReturnValue({
+    data: {
+      scopes: [
+        {
+          scopeKind: "organization",
+          scopeId: "organization",
+          label: "Organization",
+          agentIds: ["ag_employee"],
+        },
+        {
+          scopeKind: "department",
+          scopeId: "engineering",
+          label: "Engineering",
+          agentIds: ["ag_employee"],
+        },
+      ],
+      revision: 7,
+    },
+    isLoading: false,
+  } as never);
+  vi.mocked(workforceHooks.useWorkforceScope).mockImplementation(
+    (scopeKind, scopeId) =>
+      ({
+        data: {
+          scopeKind,
+          scopeId: scopeKind === "organization" ? "organization" : scopeId,
+          instruction: {
+            id: `wf_${scopeKind}`,
+            scopeKind,
+            scopeId: scopeKind === "organization" ? "organization" : String(scopeId),
+            body: scopeKind === "organization" ? "Org instructions" : "Engineering instructions",
+            enabled: true,
+            createdAt: 1,
+            updatedAt: 2,
+            version: 1,
+            metadata: {},
+          },
+          connectors: [],
+          skills: [
+            {
+              id: "wfskill_department",
+              scopeKind: "department",
+              scopeId: "engineering",
+              skillName: "customer-research",
+              source: "github_marketplace",
+              sourceRef: "github:bytedesk/customer-research",
+              itemKey: "customer-research",
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              version: 1,
+              metadata: {},
+            },
+          ],
+          revision: 7,
+        },
+        isLoading: false,
+      }) as never,
+  );
+  vi.mocked(workforceHooks.useWorkforceAgentEffective).mockReturnValue({
+    data: {
+      agentId: "ag_employee",
+      found: true,
+      category: "employee",
+      department: "Engineering",
+      departmentSlug: "engineering",
+      revision: 7,
+      instructions: [
+        {
+          id: "wfinst_agent",
+          scopeKind: "agent",
+          scopeId: "ag_employee",
+          body: "Agent-specific operating guidance",
+          enabled: true,
+          createdAt: 1,
+          updatedAt: 2,
+          version: 1,
+          metadata: {},
+        },
+      ],
+      connectors: [],
+      skills: [
+        {
+          itemKey: "customer-research",
+          skillName: "customer-research",
+          source: "github_marketplace",
+          sourceRef: "github:bytedesk/customer-research",
+          enabled: true,
+          inherited: true,
+          inheritedFrom: [
+            {
+              id: "wfskill_department",
+              scopeKind: "department",
+              scopeId: "engineering",
+              skillName: "customer-research",
+              source: "github_marketplace",
+              sourceRef: "github:bytedesk/customer-research",
+              itemKey: "customer-research",
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              version: 1,
+              metadata: {},
+            },
+          ],
+          override: null,
+        },
+      ],
+      overrides: [],
+      materializations: [],
+    },
+    isLoading: false,
+  } as never);
+  vi.mocked(workforceHooks.useUpdateWorkforceInstructions).mockReturnValue({
+    mutateAsync: updateWorkforceInstructions,
+    isPending: false,
+  } as never);
+  vi.mocked(workforceHooks.useUpdateWorkforceAgentInstructions).mockReturnValue({
+    mutateAsync: updateWorkforceAgentInstructions,
+    isPending: false,
+  } as never);
+  vi.mocked(workforceHooks.useUpsertWorkforceConnector).mockReturnValue({
+    mutateAsync: upsertWorkforceConnector,
+    isPending: false,
+  } as never);
+  vi.mocked(workforceHooks.useUpsertWorkforceSkill).mockReturnValue({
+    mutateAsync: upsertWorkforceSkill,
+    isPending: false,
+  } as never);
+  vi.mocked(workforceHooks.useUpsertWorkforceAgentOverride).mockReturnValue({
+    mutateAsync: upsertWorkforceOverride,
     isPending: false,
   } as never);
 });
@@ -403,6 +557,52 @@ describe("WorkForcePage", () => {
       expect(vi.mocked(connectorHooks.useConnectorAgentGrants).mock.calls).toContainEqual([
         "ag_employee",
       ]),
+    );
+  });
+
+  it("edits department inheritance and agent overrides", async () => {
+    renderPage();
+
+    await activateTab(/Inheritance/);
+
+    const instructions = await screen.findByLabelText("Engineering instructions");
+    fireEvent.change(instructions, { target: { value: "Follow department policy." } });
+    const scopeSection = screen.getByText("Engineering Instructions").closest("section");
+    expect(scopeSection).not.toBeNull();
+    fireEvent.click(within(scopeSection as HTMLElement).getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() =>
+      expect(updateWorkforceInstructions).toHaveBeenCalledWith({
+        scopeKind: "department",
+        scopeId: "engineering",
+        body: "Follow department policy.",
+      }),
+    );
+
+    const agentInstructions = screen.getByLabelText("Agent instructions");
+    fireEvent.change(agentInstructions, { target: { value: "Prefer ByteDesk ADRs first." } });
+    const agentSection = screen.getByText("Agent Instructions").closest("section");
+    expect(agentSection).not.toBeNull();
+    fireEvent.click(within(agentSection as HTMLElement).getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() =>
+      expect(updateWorkforceAgentInstructions).toHaveBeenCalledWith({
+        agentId: "ag_employee",
+        body: "Prefer ByteDesk ADRs first.",
+      }),
+    );
+
+    expect(screen.getAllByText("customer-research").length).toBeGreaterThan(0);
+    fireEvent.click(screen.getByRole("button", { name: "Disable for agent" }));
+
+    await waitFor(() =>
+      expect(upsertWorkforceOverride).toHaveBeenCalledWith({
+        agentId: "ag_employee",
+        itemKind: "skill",
+        itemKey: "customer-research",
+        enabled: false,
+        reconcile: true,
+      }),
     );
   });
 });

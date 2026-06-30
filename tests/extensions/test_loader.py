@@ -16,6 +16,7 @@ from omnigent.kernel.extensions import (
     _load_env_extensions,
     discover_extensions,
     extension_background_factories,
+    extension_instruction_fragments,
     extension_policy_modules,
     extension_secret_backends,
     extension_tool_factories,
@@ -145,3 +146,31 @@ def test_aggregators_skip_extension_missing_optional_methods(monkeypatch) -> Non
     assert extension_policy_modules() == []
     assert extension_secret_backends() == []
     assert extension_background_factories() == []
+    assert extension_instruction_fragments(agent_id="ag_1", spec=object()) == []
+
+
+def test_instruction_fragment_aggregator_is_error_isolated(monkeypatch) -> None:
+    class _GoodExt:
+        name = "good"
+
+        def routers(self, auth_provider=None):
+            return []
+
+        def instruction_fragments(self, *, agent_id, spec):
+            return [f"fragment for {agent_id}"]
+
+    class _BadExt:
+        name = "bad"
+
+        def routers(self, auth_provider=None):
+            return []
+
+        def instruction_fragments(self, *, agent_id, spec):
+            raise RuntimeError("nope")
+
+    monkeypatch.setattr(
+        "omnigent.kernel.extensions.discover_extensions",
+        lambda: [_BadExt(), _GoodExt()],
+    )
+
+    assert extension_instruction_fragments(agent_id="ag_1", spec=object()) == ["fragment for ag_1"]

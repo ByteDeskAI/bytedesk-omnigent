@@ -618,6 +618,201 @@ class SqlConnectorOAuthState(Base):
     )
 
 
+class SqlWorkforceInstruction(Base):
+    """Inherited Work Force instruction fragment.
+
+    The agent bundle remains the source of the agent's own base prompt; these
+    rows add organization/department/agent-scoped overlays that are composed at
+    runtime through the extension instruction hook.
+    """
+
+    __tablename__ = "workforce_instructions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False, server_default="")
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("scope_kind", "scope_id", name="uq_workforce_instructions_scope"),
+        Index("ix_workforce_instructions_scope", "scope_kind", "scope_id"),
+        CheckConstraint(
+            "scope_kind in ('organization', 'department', 'agent')",
+            name="ck_workforce_instructions_scope_kind",
+        ),
+    )
+
+
+class SqlWorkforceConnectorAssignment(Base):
+    """Organization/department connector desired state.
+
+    These rows are the editable inheritance source. A reconciliation pass derives
+    concrete ``connector_agent_grants`` rows for matching agents so the existing
+    connector runtime path stays unchanged.
+    """
+
+    __tablename__ = "workforce_connector_assignments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    connection_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    service_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_kind",
+            "scope_id",
+            "connection_id",
+            "service_key",
+            "tool_key",
+            name="uq_workforce_connector_assignment_tool",
+        ),
+        Index(
+            "ix_workforce_connector_assignments_scope",
+            "scope_kind",
+            "scope_id",
+            "enabled",
+        ),
+        Index(
+            "ix_workforce_connector_assignments_connection",
+            "connection_id",
+            "service_key",
+            "tool_key",
+        ),
+        CheckConstraint(
+            "scope_kind in ('organization', 'department')",
+            name="ck_workforce_connector_assignments_scope_kind",
+        ),
+    )
+
+
+class SqlWorkforceSkillAssignment(Base):
+    """Organization/department skill desired state.
+
+    ``source`` + ``source_ref`` are retained so reconciliation can replay the
+    existing SkillAcquisitionService for newly matching agents.
+    """
+
+    __tablename__ = "workforce_skill_assignments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    skill_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    source: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_kind",
+            "scope_id",
+            "skill_name",
+            name="uq_workforce_skill_assignment_skill",
+        ),
+        Index(
+            "ix_workforce_skill_assignments_scope",
+            "scope_kind",
+            "scope_id",
+            "enabled",
+        ),
+        CheckConstraint(
+            "scope_kind in ('organization', 'department')",
+            name="ck_workforce_skill_assignments_scope_kind",
+        ),
+    )
+
+
+class SqlWorkforceAgentOverride(Base):
+    """Per-agent override for inherited Work Force items."""
+
+    __tablename__ = "workforce_agent_overrides"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    item_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "item_kind",
+            "item_key",
+            name="uq_workforce_agent_override_item",
+        ),
+        Index("ix_workforce_agent_overrides_agent", "agent_id", "item_kind"),
+        CheckConstraint(
+            "item_kind in ('connector', 'skill')",
+            name="ck_workforce_agent_overrides_item_kind",
+        ),
+    )
+
+
+class SqlWorkforceAgentMaterialization(Base):
+    """Per-agent ledger for Work Force-derived materialized items.
+
+    Skills need this because the bundle does not record whether a skill was
+    installed directly or inherited; disable only removes entries Work Force
+    knows it installed.
+    """
+
+    __tablename__ = "workforce_agent_materializations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    item_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    item_key: Mapped[str] = mapped_column(String(512), nullable=False)
+    active: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "agent_id",
+            "item_kind",
+            "item_key",
+            name="uq_workforce_agent_materialization_item",
+        ),
+        Index("ix_workforce_agent_materializations_agent", "agent_id", "item_kind", "active"),
+        CheckConstraint(
+            "item_kind in ('connector', 'skill')",
+            name="ck_workforce_agent_materializations_item_kind",
+        ),
+    )
+
+
+class SqlWorkforceRevision(Base):
+    """Monotonic revision used for effective Work Force cache invalidation."""
+
+    __tablename__ = "workforce_revisions"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
 class SqlGoalDependency(Base):
     """A condition that frames when a dependent goal is ready to be claimed.
 

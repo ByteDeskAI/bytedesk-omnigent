@@ -134,6 +134,7 @@ class BytedeskExtension:
         )
         from bytedesk_omnigent.routes.providers import create_providers_router
         from bytedesk_omnigent.routes.skills_concierge import create_skills_concierge_router
+        from bytedesk_omnigent.routes.workforce import create_workforce_router
         from bytedesk_omnigent.scheduler.router import create_schedules_router
         from bytedesk_omnigent.tasks.router import create_tasks_router
 
@@ -165,6 +166,10 @@ class BytedeskExtension:
             create_schedules_router(auth_provider=auth_provider),
             create_config_router(auth_provider=auth_provider),
             create_connectors_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
+            create_workforce_router(
                 auth_provider=auth_provider,
                 permission_store=permission_store,
             ),
@@ -443,6 +448,12 @@ class BytedeskExtension:
         interceptors.update(dict.fromkeys(_CONNECTOR_TOOL_PREFIXES, _connector_tool_interceptor))
         return interceptors
 
+    def instruction_fragments(self, *, agent_id: str | None, spec: object) -> list[str]:
+        """Contribute runtime-composed Work Force inherited instructions."""
+        from bytedesk_omnigent.workforce import instruction_fragments
+
+        return instruction_fragments(agent_id=agent_id, spec=spec)
+
     # ── config-control-plane descriptors (Settings Registry, ADR-0150) ─
     def config_descriptors(self) -> list:
         """ByteDesk's configurable properties for the ``/v1/config`` surface (BDP-2413)."""
@@ -468,7 +479,14 @@ class BytedeskExtension:
             self._seed_workflow_tasks,
             self._seed_scout_goal,
             self._realtime_bridge,
+            self._workforce_agent_bridge,
         ]
+
+    async def _workforce_agent_bridge(self) -> None:
+        """One-shot: subscribe to agent-store changes for Work Force reconciliation."""
+        from bytedesk_omnigent.workforce import install_workforce_agent_bridge
+
+        install_workforce_agent_bridge()
 
     async def _inbound_retry_reaper(self) -> None:
         from bytedesk_omnigent.inbound.reaper import inbound_retry_reaper_loop

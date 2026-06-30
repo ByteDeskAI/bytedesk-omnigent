@@ -53,6 +53,16 @@ import {
   type SkillPreview,
   type SkillSearchResult,
 } from "@/hooks/useSkills";
+import {
+  useUpdateWorkforceAgentInstructions,
+  useUpdateWorkforceInstructions,
+  useUpsertWorkforceAgentOverride,
+  useUpsertWorkforceConnector,
+  useUpsertWorkforceSkill,
+  useWorkforceAgentEffective,
+  useWorkforceScope,
+  useWorkforceScopes,
+} from "@/hooks/useWorkforce";
 import { getMe } from "@/lib/accountsApi";
 import { groupAgentsByTier, tierForAgent, type AgentTier } from "@/lib/agentTiers";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
@@ -60,8 +70,13 @@ import type { AgentImageUpdate } from "@/lib/agentImagesApi";
 import type { ConnectorConnection, ConnectorManifest, ConnectorTool } from "@/lib/connectorsApi";
 import { useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import type {
+  WorkforceEffectiveConnector,
+  WorkforceEffectiveSkill,
+  WorkforceScopeKind,
+} from "@/lib/workforceApi";
 
-type WorkForceTab = "overview" | "config" | "skills" | "connectors" | "files";
+type WorkForceTab = "overview" | "config" | "inheritance" | "skills" | "connectors" | "files";
 
 interface PendingSave {
   body: AgentImageUpdate;
@@ -95,6 +110,15 @@ function compareAgentsByName(a: AvailableAgent, b: AvailableAgent): number {
 
 function departmentId(agent: AvailableAgent): string {
   return agent.department?.trim() || "Unassigned";
+}
+
+function workforceScopeSlug(value: string | null | undefined): string | null {
+  const cleaned = value
+    ?.trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return cleaned || null;
 }
 
 function isWorkForceEmployee(agent: AvailableAgent): boolean {
@@ -807,6 +831,574 @@ function ConnectorsTab({ agentId, editable }: { agentId: string; editable: boole
   );
 }
 
+function scopeDisplayName(scopeKind: WorkforceScopeKind, department: string | null): string {
+  return scopeKind === "organization" ? "Organization" : department || "Department";
+}
+
+function inheritedSourceLabel(item: WorkforceEffectiveConnector | WorkforceEffectiveSkill): string {
+  return item.inheritedFrom
+    .map((source) => (source.scopeKind === "organization" ? "Organization" : "Department"))
+    .join(", ");
+}
+
+function sameConnectionSelection(
+  a: Record<string, string[]>,
+  b: Record<string, string[]>,
+): boolean {
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  return aKeys.every((key) => {
+    const aValues = a[key] ?? [];
+    const bValues = b[key] ?? [];
+    return (
+      aValues.length === bValues.length && aValues.every((value, index) => value === bValues[index])
+    );
+  });
+}
+
+function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: boolean }) {
+  const department = agent.department?.trim() || null;
+  const departmentScopeId = workforceScopeSlug(department);
+  const [scopeKind, setScopeKind] = useState<WorkforceScopeKind>(
+    departmentScopeId ? "department" : "organization",
+  );
+  const scopeId = scopeKind === "department" ? departmentScopeId : null;
+  const scopes = useWorkforceScopes();
+  const scope = useWorkforceScope(scopeKind, scopeId, editable);
+  const effective = useWorkforceAgentEffective(agent.id, editable);
+  const catalog = useConnectorsCatalog();
+  const updateInstructions = useUpdateWorkforceInstructions();
+  const updateAgentInstructions = useUpdateWorkforceAgentInstructions();
+  const upsertConnector = useUpsertWorkforceConnector();
+  const upsertSkill = useUpsertWorkforceSkill();
+  const upsertOverride = useUpsertWorkforceAgentOverride();
+  const skillSearch = useSearchSkills();
+  const [instructionDraft, setInstructionDraft] = useState("");
+  const [agentInstructionDraft, setAgentInstructionDraft] = useState("");
+  const [selectedByConnection, setSelectedByConnection] = useState<Record<string, string[]>>({});
+  const [skillQuery, setSkillQuery] = useState("");
+  const [skillResults, setSkillResults] = useState<SkillSearchResult[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const rows = useMemo(
+    () =>
+      (catalog.data ?? []).flatMap((provider) =>
+        provider.connections.map((connection) => ({
+          provider,
+          connection,
+          tools: toolsForConnection(provider, connection),
+        })),
+      ),
+    [catalog.data],
+  );
+
+  useEffect(() => {
+    setScopeKind(departmentScopeId ? "department" : "organization");
+  }, [agent.id, departmentScopeId]);
+
+  useEffect(() => {
+    setInstructionDraft(scope.data?.instruction?.body ?? "");
+    setNotice(null);
+    setError(null);
+  }, [scope.data?.instruction?.body, scopeKind, scopeId]);
+
+  useEffect(() => {
+    const agentInstruction = (effective.data?.instructions ?? []).find(
+      (item) => item.scopeKind === "agent",
+    );
+    setAgentInstructionDraft(agentInstruction?.body ?? "");
+  }, [agent.id, effective.data?.instructions]);
+
+  useEffect(() => {
+    const next: Record<string, string[]> = {};
+    for (const row of rows) {
+      next[row.connection.id] = (scope.data?.connectors ?? [])
+        .filter((item) => item.connectionId === row.connection.id && item.enabled)
+        .map((item) => `${item.serviceKey}:${item.toolKey}`);
+    }
+    setSelectedByConnection((prev) => (sameConnectionSelection(prev, next) ? prev : next));
+  }, [rows, scope.data?.connectors]);
+
+  const scopeSummary = (scopes.data?.scopes ?? []).find(
+    (item) => item.scopeKind === scopeKind && item.scopeId === (scopeId ?? "organization"),
+  );
+  const scopeLabel = scopeDisplayName(scopeKind, department);
+  const effectiveSkills = [...(effective.data?.skills ?? [])].sort((a, b) =>
+    compareText(a.skillName, b.skillName),
+  );
+  const effectiveConnectors = [...(effective.data?.connectors ?? [])].sort((a, b) =>
+    compareText(a.itemKey, b.itemKey),
+  );
+  const scopeSkills = [...(scope.data?.skills ?? [])].sort((a, b) =>
+    compareText(a.skillName, b.skillName),
+  );
+
+  function setTool(connectionId: string, token: string, checked: boolean) {
+    setSelectedByConnection((prev) => {
+      const current = new Set(prev[connectionId] ?? []);
+      if (checked) current.add(token);
+      else current.delete(token);
+      return { ...prev, [connectionId]: Array.from(current) };
+    });
+  }
+
+  function connectorLabel(item: WorkforceEffectiveConnector): string {
+    const row = rows.find((candidate) => candidate.connection.id === item.connectionId);
+    const token = `${item.serviceKey}:${item.toolKey}`;
+    const tool = row?.tools.find((candidate) => candidate.token === token);
+    if (!row || !tool) return item.itemKey;
+    return `${row.connection.displayName} · ${tool.name}`;
+  }
+
+  async function saveInstructions() {
+    setNotice(null);
+    setError(null);
+    try {
+      await updateInstructions.mutateAsync({ scopeKind, scopeId, body: instructionDraft });
+      setNotice(`${scopeLabel} instructions saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    }
+  }
+
+  async function saveAgentInstructions() {
+    setNotice(null);
+    setError(null);
+    try {
+      await updateAgentInstructions.mutateAsync({
+        agentId: agent.id,
+        body: agentInstructionDraft,
+      });
+      setNotice("Agent instructions saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Save failed");
+    }
+  }
+
+  async function saveConnector(connectionId: string, tools: string[], enabled: boolean) {
+    setNotice(null);
+    setError(null);
+    try {
+      await upsertConnector.mutateAsync({
+        scopeKind,
+        scopeId,
+        connectionId,
+        tools,
+        enabled,
+        replace: true,
+        reconcile: true,
+        materialize: true,
+      });
+      setNotice(`${scopeLabel} connector actions saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Connector save failed");
+    }
+  }
+
+  async function searchSkills() {
+    setNotice(null);
+    setError(null);
+    try {
+      const response = await skillSearch.mutateAsync({
+        query: skillQuery,
+        sources: ["github_marketplace"],
+        limit: 8,
+      });
+      setSkillResults(response.data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Search failed");
+    }
+  }
+
+  async function saveSkill(hit: SkillSearchResult, enabled = true) {
+    if (!hit.source_ref) return;
+    setNotice(null);
+    setError(null);
+    try {
+      await upsertSkill.mutateAsync({
+        scopeKind,
+        scopeId,
+        skillName: hit.name,
+        source: hit.source,
+        sourceRef: hit.source_ref,
+        enabled,
+        reconcile: true,
+      });
+      setNotice(`${scopeLabel} skill saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Skill save failed");
+    }
+  }
+
+  async function toggleScopeSkill(skillName: string, enabled: boolean) {
+    const current = scopeSkills.find((item) => item.skillName === skillName);
+    if (!current) return;
+    setNotice(null);
+    setError(null);
+    try {
+      await upsertSkill.mutateAsync({
+        scopeKind,
+        scopeId,
+        skillName,
+        source: current.source,
+        sourceRef: current.sourceRef,
+        enabled,
+        reconcile: true,
+      });
+      setNotice(`${scopeLabel} skill saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Skill save failed");
+    }
+  }
+
+  async function toggleOverride(
+    itemKind: "connector" | "skill",
+    itemKey: string,
+    enabled: boolean,
+  ) {
+    setNotice(null);
+    setError(null);
+    try {
+      await upsertOverride.mutateAsync({
+        agentId: agent.id,
+        itemKind,
+        itemKey,
+        enabled,
+        reconcile: true,
+      });
+      setNotice("Agent override saved.");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Override save failed");
+    }
+  }
+
+  return (
+    <div className="space-y-4 p-4">
+      <section className="rounded-md border border-border bg-background p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              variant={scopeKind === "organization" ? "secondary" : "outline"}
+              onClick={() => setScopeKind("organization")}
+              disabled={!editable}
+            >
+              Organization
+            </Button>
+            {departmentScopeId && (
+              <Button
+                type="button"
+                variant={scopeKind === "department" ? "secondary" : "outline"}
+                onClick={() => setScopeKind("department")}
+                disabled={!editable}
+              >
+                {department}
+              </Button>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="outline">{scopeSummary?.agentIds.length ?? 0} agents</Badge>
+            <Badge variant="outline">
+              rev {scope.data?.revision ?? scopes.data?.revision ?? "-"}
+            </Badge>
+          </div>
+        </div>
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
+        <section className="rounded-md border border-border bg-background">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="text-sm font-medium">{scopeLabel} Instructions</div>
+            <Button
+              size="sm"
+              disabled={!editable || updateInstructions.isPending}
+              onClick={() => void saveInstructions()}
+            >
+              <SaveIcon /> Save
+            </Button>
+          </div>
+          <Textarea
+            className="min-h-52 resize-y rounded-none border-0 font-mono text-xs focus-visible:ring-0"
+            value={instructionDraft}
+            onChange={(event) => setInstructionDraft(event.target.value)}
+            disabled={!editable}
+            aria-label={`${scopeLabel} instructions`}
+          />
+        </section>
+
+        <section className="rounded-md border border-border bg-background">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="text-sm font-medium">Inherited Instructions</div>
+            <Badge variant="secondary">{effective.data?.instructions?.length ?? 0}</Badge>
+          </div>
+          <div className="max-h-64 divide-y divide-border overflow-y-auto">
+            {(effective.data?.instructions ?? []).map((item) => (
+              <div key={item.id} className="p-3">
+                <div className="text-xs font-medium text-muted-foreground">
+                  {item.scopeKind === "organization" ? "Organization" : item.scopeId}
+                </div>
+                <div className="mt-1 line-clamp-3 text-xs">{item.body}</div>
+              </div>
+            ))}
+            {!effective.isLoading && (effective.data?.instructions ?? []).length === 0 && (
+              <div className="p-4 text-sm text-muted-foreground">No inherited instructions.</div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <section className="rounded-md border border-border bg-background">
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div>
+            <div className="text-sm font-medium">Agent Instructions</div>
+            <div className="text-xs text-muted-foreground">{agentDisplayName(agent)}</div>
+          </div>
+          <Button
+            size="sm"
+            disabled={!editable || updateAgentInstructions.isPending}
+            onClick={() => void saveAgentInstructions()}
+          >
+            <SaveIcon /> Save
+          </Button>
+        </div>
+        <Textarea
+          className="min-h-40 resize-y rounded-none border-0 font-mono text-xs focus-visible:ring-0"
+          value={agentInstructionDraft}
+          onChange={(event) => setAgentInstructionDraft(event.target.value)}
+          disabled={!editable}
+          aria-label="Agent instructions"
+        />
+      </section>
+
+      <section className="rounded-md border border-border bg-background">
+        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+          <div>
+            <div className="text-sm font-medium">{scopeLabel} Connector Actions</div>
+            <div className="text-xs text-muted-foreground">
+              {(scope.data?.connectors ?? []).filter((item) => item.enabled).length} active
+            </div>
+          </div>
+        </div>
+        <div className="space-y-3 p-3">
+          {rows.map(({ provider, connection, tools }) => {
+            const selected = selectedByConnection[connection.id] ?? [];
+            return (
+              <div key={connection.id} className="rounded-md border border-border/70">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
+                  <div>
+                    <div className="text-sm font-medium">{connection.displayName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {provider.name} · {selected.length}/{tools.length} actions
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={!editable || tools.length === 0 || upsertConnector.isPending}
+                      onClick={() => void saveConnector(connection.id, [], false)}
+                    >
+                      Disable all
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!editable || selected.length === 0 || upsertConnector.isPending}
+                      onClick={() => void saveConnector(connection.id, selected, true)}
+                    >
+                      <PlugIcon /> Save actions
+                    </Button>
+                  </div>
+                </div>
+                <div className="grid gap-2 p-3 md:grid-cols-2 xl:grid-cols-3">
+                  {tools.map((tool) => (
+                    <label
+                      key={tool.token}
+                      className="flex items-start gap-2 rounded-md border border-border/70 px-3 py-2 text-sm"
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1 size-3.5"
+                        checked={selected.includes(tool.token)}
+                        disabled={!editable}
+                        onChange={(event) =>
+                          setTool(connection.id, tool.token, event.target.checked)
+                        }
+                        aria-label={`${scopeLabel} ${connection.displayName} ${tool.name}`}
+                      />
+                      <span className="min-w-0">
+                        <span className="block truncate font-medium">{tool.name}</span>
+                        <span className="block truncate text-xs text-muted-foreground">
+                          {tool.serviceName} · {tool.mcpTool}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                  {tools.length === 0 && (
+                    <div className="text-sm text-muted-foreground">No enabled actions.</div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {!catalog.isLoading && rows.length === 0 && (
+            <div className="text-sm text-muted-foreground">No connector connections.</div>
+          )}
+        </div>
+      </section>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
+        <section className="rounded-md border border-border bg-background">
+          <div className="border-b border-border px-3 py-2 text-sm font-medium">
+            {scopeLabel} Skills
+          </div>
+          <div className="space-y-3 p-3">
+            <form
+              className="flex gap-2"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void searchSkills();
+              }}
+            >
+              <Input
+                value={skillQuery}
+                onChange={(event) => setSkillQuery(event.target.value)}
+                placeholder="Search skills"
+                aria-label="Search inherited skills"
+              />
+              <Button
+                type="submit"
+                disabled={!editable || !skillQuery.trim() || skillSearch.isPending}
+              >
+                <SearchIcon /> Search
+              </Button>
+            </form>
+            <div className="grid gap-2 md:grid-cols-2">
+              {skillResults.map((hit) => (
+                <button
+                  key={`${hit.source}:${hit.source_ref ?? hit.name}`}
+                  type="button"
+                  className="rounded-md border border-border px-3 py-2 text-left hover:bg-muted/40 disabled:opacity-50"
+                  disabled={!editable || !hit.source_ref || upsertSkill.isPending}
+                  onClick={() => void saveSkill(hit, true)}
+                >
+                  <div className="truncate text-sm font-medium">{hit.name}</div>
+                  <div className="line-clamp-2 text-xs text-muted-foreground">
+                    {hit.description || hit.source_ref}
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        <section className="rounded-md border border-border bg-background">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="text-sm font-medium">Scope Skills</div>
+            <Badge variant="secondary">{scopeSkills.filter((item) => item.enabled).length}</Badge>
+          </div>
+          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+            {scopeSkills.map((item) => (
+              <div key={item.skillName} className="p-3">
+                <div className="truncate text-sm font-medium">{item.skillName}</div>
+                <div className="truncate text-xs text-muted-foreground">
+                  {item.sourceRef || item.source}
+                </div>
+                <Button
+                  className="mt-2"
+                  size="xs"
+                  variant="outline"
+                  disabled={!editable || upsertSkill.isPending}
+                  onClick={() => void toggleScopeSkill(item.skillName, !item.enabled)}
+                >
+                  {item.enabled ? "Disable" : "Enable"}
+                </Button>
+              </div>
+            ))}
+            {!scope.isLoading && scopeSkills.length === 0 && (
+              <div className="p-4 text-sm text-muted-foreground">No scope skills.</div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        <section className="rounded-md border border-border bg-background">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="text-sm font-medium">Effective Skills</div>
+            <Badge variant="secondary">
+              {effectiveSkills.filter((item) => item.enabled).length}
+            </Badge>
+          </div>
+          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+            {effectiveSkills.map((item) => (
+              <div key={item.itemKey} className="flex items-start justify-between gap-3 p-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{item.skillName}</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {inheritedSourceLabel(item)}
+                  </div>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!editable || upsertOverride.isPending}
+                  onClick={() => void toggleOverride("skill", item.itemKey, !item.enabled)}
+                >
+                  {item.enabled ? "Disable for agent" : "Enable for agent"}
+                </Button>
+              </div>
+            ))}
+            {!effective.isLoading && effectiveSkills.length === 0 && (
+              <div className="p-4 text-sm text-muted-foreground">No inherited skills.</div>
+            )}
+          </div>
+        </section>
+
+        <section className="rounded-md border border-border bg-background">
+          <div className="flex items-center justify-between border-b border-border px-3 py-2">
+            <div className="text-sm font-medium">Effective Connector Actions</div>
+            <Badge variant="secondary">
+              {effectiveConnectors.filter((item) => item.enabled).length}
+            </Badge>
+          </div>
+          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+            {effectiveConnectors.map((item) => (
+              <div key={item.itemKey} className="flex items-start justify-between gap-3 p-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-medium">{connectorLabel(item)}</div>
+                  <div className="truncate text-xs text-muted-foreground">
+                    {inheritedSourceLabel(item)}
+                  </div>
+                </div>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  disabled={!editable || upsertOverride.isPending}
+                  onClick={() => void toggleOverride("connector", item.itemKey, !item.enabled)}
+                >
+                  {item.enabled ? "Disable for agent" : "Enable for agent"}
+                </Button>
+              </div>
+            ))}
+            {!effective.isLoading && effectiveConnectors.length === 0 && (
+              <div className="p-4 text-sm text-muted-foreground">
+                No inherited connector actions.
+              </div>
+            )}
+          </div>
+        </section>
+      </div>
+
+      <div className="min-h-5 text-sm">
+        {error && <span className="text-destructive">{error}</span>}
+        {!error && notice && <span className="text-muted-foreground">{notice}</span>}
+      </div>
+    </div>
+  );
+}
+
 function FilesTab({
   agentId,
   editable,
@@ -974,6 +1566,7 @@ export function WorkForcePage() {
   const image = useAgentImage(selectedAgent?.id, imageEnabled);
   const imageSnapshot = image.data;
   const editable = Boolean(selectedAgent && selectedTier !== "workflow" && imageSnapshot);
+  const workforceEditable = Boolean(selectedAgent && selectedTier !== "workflow");
 
   useEffect(() => {
     if (!imageSnapshot) {
@@ -1054,12 +1647,15 @@ export function WorkForcePage() {
                 onValueChange={(value) => setTab(value as WorkForceTab)}
                 className="min-h-0 flex-1 overflow-hidden"
               >
-                <TabsList variant="line" className="mx-5 mt-3">
+                <TabsList variant="line" className="mx-5 mt-3 flex-wrap">
                   <TabsTrigger value="overview">
                     <BotIcon /> Overview
                   </TabsTrigger>
                   <TabsTrigger value="config" disabled={!editable}>
                     <SlidersHorizontalIcon /> Config
+                  </TabsTrigger>
+                  <TabsTrigger value="inheritance" disabled={!workforceEditable}>
+                    <UsersIcon /> Inheritance
                   </TabsTrigger>
                   <TabsTrigger value="skills" disabled={!editable}>
                     <PuzzleIcon /> Skills
@@ -1093,6 +1689,11 @@ export function WorkForcePage() {
                       error={saveError}
                       notice={saveNotice}
                     />
+                  </TabsContent>
+                  <TabsContent value="inheritance">
+                    {selectedAgent && (
+                      <InheritanceTab agent={selectedAgent} editable={workforceEditable} />
+                    )}
                   </TabsContent>
                   <TabsContent value="skills">
                     {selectedAgentId && <SkillsTab agentId={selectedAgentId} editable={editable} />}
