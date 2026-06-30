@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from omnigent.db.utils import generate_agent_id
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import _backfill_agent_classification
@@ -99,3 +101,21 @@ def test_backfill_is_idempotent(tmp_path: Path) -> None:
 
     assert store.get_category(concierge) == "system"
     assert store.get_capabilities(concierge) == ("system.skills.manage",)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["claude-native-ui", "codex-native-ui", "pi-native-ui", "grok-native-ui"],
+)
+def test_backfill_corrects_stale_system_category_for_native_launcher(
+    tmp_path: Path, name: str
+) -> None:
+    db_uri = f"sqlite:///{tmp_path / 'a.db'}"
+    native_launcher = _seed(db_uri, tmp_path, name=name)
+
+    store, cache = _stores(db_uri, tmp_path)
+    store.set_category(native_launcher, "system")
+
+    _backfill_agent_classification(store, cache)
+
+    assert store.get_category(native_launcher) == "harness"
