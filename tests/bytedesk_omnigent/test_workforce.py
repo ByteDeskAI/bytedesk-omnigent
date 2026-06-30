@@ -147,6 +147,26 @@ def test_instruction_fragments_apply_to_employees_not_harnesses(
     assert harness_fragments == []
 
 
+def test_instruction_fragments_skip_no_department_employee_artifacts(
+    monkeypatch,
+    db_uri: str,
+) -> None:
+    store = SqlAlchemyWorkforceStore(db_uri)
+    store.set_instruction(scope_kind="organization", scope_id=None, body="Org guidance.")
+    agent_store = _AgentStore([_employee("ag_hello_world")])
+    agent_cache = _AgentCache({"ag_hello_world": None})
+    monkeypatch.setattr("bytedesk_omnigent.workforce.get_workforce_store", lambda: store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_store", lambda: agent_store)
+    monkeypatch.setattr("omnigent.runtime.get_agent_cache", lambda: agent_cache)
+
+    fragments = instruction_fragments(
+        agent_id="ag_hello_world",
+        spec=SimpleNamespace(name="hello_world"),
+    )
+
+    assert fragments == []
+
+
 def test_connector_reconcile_materializes_inherited_grants_and_disable_override(
     monkeypatch,
     db_uri: str,
