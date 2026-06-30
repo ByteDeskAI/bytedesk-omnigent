@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import {
   BotIcon,
+  ChevronRightIcon,
   FileTextIcon,
   FolderIcon,
   PlugIcon,
@@ -14,6 +15,7 @@ import {
   UsersIcon,
   WorkflowIcon,
 } from "lucide-react";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -161,6 +163,38 @@ function iconForTier(tier: AgentTier) {
   return <BotIcon className="size-4" />;
 }
 
+// Tier accent — fast visual scanning across the roster and detail hero.
+// system=purple (AI/governance), harness=cyan (tooling), workflow=amber
+// (automation), employee=blue (the default interactive accent).
+function tierAccentTextClass(tier: AgentTier): string {
+  if (tier === "system") return "text-accent-purple";
+  if (tier === "harness") return "text-accent-cyan";
+  if (tier === "workflow") return "text-accent-amber";
+  return "text-accent-blue";
+}
+
+function tierAccentRingClass(tier: AgentTier): string {
+  if (tier === "system") return "ring-accent-purple/40";
+  if (tier === "harness") return "ring-accent-cyan/40";
+  if (tier === "workflow") return "ring-accent-amber/40";
+  return "ring-accent-blue/40";
+}
+
+function tierAccentBorderClass(tier: AgentTier): string {
+  if (tier === "system") return "border-accent-purple/40";
+  if (tier === "harness") return "border-accent-cyan/40";
+  if (tier === "workflow") return "border-accent-amber/40";
+  return "border-accent-blue/40";
+}
+
+function tierInitials(agent: AvailableAgent): string {
+  const name = agentDisplayName(agent).trim();
+  if (!name) return "?";
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return parts[0]!.slice(0, 2).toUpperCase();
+  return `${parts[0]![0]}${parts[parts.length - 1]![0]}`.toUpperCase();
+}
+
 function tierRequiresEditConfirmation(tier: AgentTier): boolean {
   return tier === "system" || tier === "harness";
 }
@@ -230,11 +264,18 @@ function AccessGate({ allowed, children }: { allowed: boolean | null; children: 
   if (!allowed) {
     return (
       <div className="flex min-h-0 flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-5xl px-6 pt-14">
-          <h1 className="text-2xl font-semibold">Work Force</h1>
-          <p className="mt-2 text-sm text-muted-foreground">
-            You don't have permission to manage agents.
-          </p>
+        <div className="mx-auto mt-14 w-full max-w-5xl px-6">
+          <div className="mc-fade-up mc-surface flex items-start gap-3 p-5">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-accent-red/40 bg-accent-red/10 text-accent-red">
+              <ShieldAlertIcon className="size-4" />
+            </span>
+            <div>
+              <h1 className="text-2xl font-semibold">Work Force</h1>
+              <p className="mt-2 text-sm text-muted-foreground">
+                You don't have permission to manage agents.
+              </p>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -258,15 +299,23 @@ function RosterButton({
       onClick={onSelect}
       aria-pressed={selected}
       className={cn(
-        "flex min-h-14 w-full items-center gap-2 rounded-md border px-2.5 py-2 text-left transition-colors",
+        "group/roster flex min-h-14 w-full items-center gap-2.5 rounded-md border px-2.5 py-2 text-left transition-all duration-150",
         selected
-          ? "border-border bg-muted text-foreground"
-          : "border-transparent text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+          ? cn("bg-muted text-foreground", tierAccentBorderClass(tier))
+          : "border-transparent text-muted-foreground hover:translate-x-0.5 hover:bg-muted/50 hover:text-foreground",
       )}
     >
-      <span className="flex size-8 shrink-0 items-center justify-center rounded-md border border-border bg-background">
-        {iconForTier(tier)}
-      </span>
+      <Avatar
+        size="sm"
+        className={cn(
+          "ring-2 transition-all",
+          selected ? tierAccentRingClass(tier) : "ring-transparent group-hover/roster:ring-border",
+        )}
+      >
+        <AvatarFallback className={cn("bg-background", tierAccentTextClass(tier))}>
+          {tier === "employee" ? tierInitials(agent) : iconForTier(tier)}
+        </AvatarFallback>
+      </Avatar>
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm font-medium">{agentDisplayName(agent)}</span>
         <span className="block truncate text-xs text-muted-foreground">
@@ -276,6 +325,28 @@ function RosterButton({
       {tier === "workflow" && <Badge variant="outline">Read-only</Badge>}
     </button>
   );
+}
+
+// Department/tier accordion open-state survives reloads — sections start
+// collapsed (empty set) the very first time, then remember whatever the
+// admin last expanded.
+const ROSTER_SECTIONS_STORAGE_KEY = "workforce-roster-open-sections";
+
+function loadOpenRosterSections(): string[] {
+  try {
+    const raw = localStorage.getItem(ROSTER_SECTIONS_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveOpenRosterSections(sections: string[]) {
+  try {
+    localStorage.setItem(ROSTER_SECTIONS_STORAGE_KEY, JSON.stringify(sections));
+  } catch {
+    // quota / private-mode — state still updates in memory, just won't persist
+  }
 }
 
 function RosterPanel({
@@ -303,10 +374,30 @@ function RosterPanel({
     () => [...groups.workflow].sort(compareAgentsByName),
     [groups.workflow],
   );
-  const openDepartments = useMemo(
-    () => departmentGroups.map((group) => `department:${group.department}`),
-    [departmentGroups],
-  );
+
+  const [openSections, setOpenSections] = useState<string[]>(() => loadOpenRosterSections());
+  function handleOpenSectionsChange(next: string[]) {
+    setOpenSections(next);
+    saveOpenRosterSections(next);
+  }
+
+  const employeesRef = useRef<HTMLElement>(null);
+  const systemRef = useRef<HTMLElement>(null);
+  const harnessRef = useRef<HTMLElement>(null);
+  const workflowRef = useRef<HTMLElement>(null);
+  const jumpTargets: Record<AgentTier, RefObject<HTMLElement | null>> = {
+    employee: employeesRef,
+    system: systemRef,
+    harness: harnessRef,
+    workflow: workflowRef,
+  };
+  function jumpTo(tier: AgentTier) {
+    jumpTargets[tier].current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    const sectionId = `tier:${tier}`;
+    if (tier !== "employee" && !openSections.includes(sectionId)) {
+      handleOpenSectionsChange([...openSections, sectionId]);
+    }
+  }
 
   return (
     <aside
@@ -314,14 +405,14 @@ function RosterPanel({
       className="min-h-0 border-b border-border bg-background lg:border-r lg:border-b-0"
     >
       <div className="flex h-full min-h-0 flex-col">
-        <header className="shrink-0 border-b border-border px-4 py-4">
-          <div className="flex items-center gap-2">
-            <span className="flex size-8 items-center justify-center rounded-md border border-border bg-muted">
+        <header className="mc-surface m-2 mb-0 shrink-0 rounded-b-none border-b-0 px-4 py-4">
+          <div className="flex items-center gap-2.5">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-md border border-accent-blue/40 bg-accent-blue/10 text-accent-blue shadow-[var(--shadow-glow-blue)]">
               <UsersIcon className="size-4" />
             </span>
             <div className="min-w-0">
               <h1 className="truncate text-base font-semibold">Work Force</h1>
-              <p className="truncate text-xs text-muted-foreground">Agent directory control</p>
+              <p className="mc-label truncate text-accent-blue/70">Agent directory control</p>
             </div>
           </div>
           <div className="relative mt-3">
@@ -334,16 +425,41 @@ function RosterPanel({
               aria-label="Search agents"
             />
           </div>
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {(
+              [
+                { tier: "employee" as const, count: employeeCount, accent: "text-accent-blue" },
+                { tier: "system" as const, count: systemAgents.length, accent: "text-accent-purple" },
+                { tier: "harness" as const, count: harnessAgents.length, accent: "text-accent-cyan" },
+                { tier: "workflow" as const, count: workflowAgents.length, accent: "text-accent-amber" },
+              ]
+            ).map((chip) => (
+              <button
+                key={chip.tier}
+                type="button"
+                onClick={() => jumpTo(chip.tier)}
+                className="mc-label flex items-center gap-1 rounded-full border border-border-dimmer bg-bg-subtle px-2 py-1 transition-colors hover:border-border-stronger hover:bg-muted/50"
+              >
+                <span className={chip.accent}>{tierLabel(chip.tier)}</span>
+                <span className="mc-value text-2xs">{chip.count}</span>
+              </button>
+            ))}
+          </div>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          <section className="mb-3">
-            <div className="mb-1 flex items-center justify-between px-2 text-xs font-medium text-muted-foreground">
-              <span>Employees</span>
-              <span>{employeeCount}</span>
-            </div>
-            {departmentGroups.length > 0 ? (
-              <Accordion type="multiple" defaultValue={openDepartments} className="gap-1">
-                {departmentGroups.map((group) => (
+          <Accordion
+            type="multiple"
+            value={openSections}
+            onValueChange={handleOpenSectionsChange}
+            className="gap-1"
+          >
+            <section ref={employeesRef} className="mb-3 scroll-mt-2">
+              <div className="mc-label mb-1 flex items-center justify-between px-2">
+                <span>Employees</span>
+                <span className="mc-value">{employeeCount}</span>
+              </div>
+              {departmentGroups.length > 0 ? (
+                departmentGroups.map((group) => (
                   <AccordionItem
                     key={group.department}
                     value={`department:${group.department}`}
@@ -353,8 +469,10 @@ function RosterPanel({
                       aria-label={`Department ${group.department}`}
                       className="rounded-md px-2 py-2 text-xs text-muted-foreground hover:bg-muted/40 hover:no-underline"
                     >
-                      <span>{group.department}</span>
-                      <Badge variant="secondary">{group.agents.length}</Badge>
+                      <span className="flex flex-1 items-center justify-between pr-2">
+                        <span>{group.department}</span>
+                        <Badge variant="secondary">{group.agents.length}</Badge>
+                      </span>
                     </AccordionTrigger>
                     <AccordionContent className="space-y-1 pb-1">
                       {group.agents.map((agent) => (
@@ -367,40 +485,50 @@ function RosterPanel({
                       ))}
                     </AccordionContent>
                   </AccordionItem>
-                ))}
-              </Accordion>
-            ) : (
-              <div className="px-2 py-3 text-xs text-muted-foreground">No employees.</div>
-            )}
-          </section>
-
-          {(
-            [
-              { tier: "system" as const, agents: systemAgents },
-              { tier: "harness" as const, agents: harnessAgents },
-              { tier: "workflow" as const, agents: workflowAgents },
-            ] satisfies { tier: AgentTier; agents: AvailableAgent[] }[]
-          ).map((section) => (
-            <section key={section.tier} className="mb-3">
-              <div className="mb-1 flex items-center justify-between px-2 text-xs font-medium text-muted-foreground">
-                <span>{tierLabel(section.tier)}</span>
-                <span>{section.agents.length}</span>
-              </div>
-              <div className="space-y-1">
-                {section.agents.map((agent) => (
-                  <RosterButton
-                    key={agent.id}
-                    agent={agent}
-                    selected={selectedAgentId === agent.id}
-                    onSelect={() => setSelectedAgentId(agent.id)}
-                  />
-                ))}
-                {section.agents.length === 0 && (
-                  <div className="px-2 py-3 text-xs text-muted-foreground">No agents.</div>
-                )}
-              </div>
+                ))
+              ) : (
+                <div className="px-2 py-3 text-xs text-muted-foreground">No employees.</div>
+              )}
             </section>
-          ))}
+
+            {(
+              [
+                { tier: "system" as const, agents: systemAgents, ref: systemRef },
+                { tier: "harness" as const, agents: harnessAgents, ref: harnessRef },
+                { tier: "workflow" as const, agents: workflowAgents, ref: workflowRef },
+              ] satisfies { tier: AgentTier; agents: AvailableAgent[]; ref: typeof systemRef }[]
+            ).map((section) => (
+              <section key={section.tier} ref={section.ref} className="mb-3 scroll-mt-2">
+                <AccordionItem value={`tier:${section.tier}`} className="border-0">
+                  <AccordionTrigger
+                    aria-label={tierLabel(section.tier)}
+                    className="rounded-md px-2 py-2 text-xs text-muted-foreground hover:bg-muted/40 hover:no-underline"
+                  >
+                    <span className="flex flex-1 items-center justify-between pr-2">
+                      <span className={cn("mc-label", tierAccentTextClass(section.tier))}>
+                        {tierLabel(section.tier)}
+                      </span>
+                      <span className="mc-value">{section.agents.length}</span>
+                    </span>
+                  </AccordionTrigger>
+                  <AccordionContent className="space-y-1 pb-1">
+                    {section.agents.length > 0 ? (
+                      section.agents.map((agent) => (
+                        <RosterButton
+                          key={agent.id}
+                          agent={agent}
+                          selected={selectedAgentId === agent.id}
+                          onSelect={() => setSelectedAgentId(agent.id)}
+                        />
+                      ))
+                    ) : (
+                      <div className="px-2 py-3 text-xs text-muted-foreground">No agents.</div>
+                    )}
+                  </AccordionContent>
+                </AccordionItem>
+              </section>
+            ))}
+          </Accordion>
         </div>
       </div>
     </aside>
@@ -409,8 +537,9 @@ function RosterPanel({
 
 function Metric({ label, value }: { label: string; value: string | number }) {
   return (
-    <span className="rounded-md border border-border bg-muted/20 px-2 py-1 text-xs text-muted-foreground">
-      <span className="font-medium text-foreground">{value}</span> {label}
+    <span className="mc-surface flex items-center gap-1.5 px-2 py-1">
+      <span className="mc-value text-xs">{value}</span>
+      <span className="mc-label text-2xs text-muted-foreground">{label}</span>
     </span>
   );
 }
@@ -427,23 +556,35 @@ function DetailHeader({
   refetch: () => void;
 }) {
   return (
-    <header className="shrink-0 border-b border-border px-5 py-4">
+    <header className="mc-fade-up shrink-0 border-b border-border-dimmer bg-bg-subtle px-5 py-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="truncate text-xl font-semibold">{agentDisplayName(agent)}</h2>
-            <Badge variant={editable ? "secondary" : "outline"}>
-              {editable ? "Editable" : "Read-only"}
-            </Badge>
-            <Badge variant="outline">{tierLabel(tier)}</Badge>
-          </div>
-          <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-            {agent.description || agent.title || agent.name}
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Metric label="id" value={agent.id} />
-            <Metric label="harness" value={agent.harness || "unknown"} />
-            <Metric label="department" value={agent.department || "Unassigned"} />
+        <div className="flex min-w-0 items-start gap-3">
+          <Avatar size="lg" className={cn("ring-2 shrink-0", tierAccentRingClass(tier))}>
+            <AvatarFallback className={cn("bg-background", tierAccentTextClass(tier))}>
+              {tier === "employee" ? tierInitials(agent) : iconForTier(tier)}
+            </AvatarFallback>
+          </Avatar>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="truncate text-xl font-semibold">{agentDisplayName(agent)}</h2>
+              <Badge variant={editable ? "secondary" : "outline"} className="gap-1.5">
+                {editable && (
+                  <span className="size-1.5 rounded-full bg-accent-green mc-live-dot" aria-hidden="true" />
+                )}
+                {editable ? "Editable" : "Read-only"}
+              </Badge>
+              <Badge variant="outline" className={tierAccentTextClass(tier)}>
+                {tierLabel(tier)}
+              </Badge>
+            </div>
+            <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
+              {agent.description || agent.title || agent.name}
+            </p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <Metric label="id" value={agent.id} />
+              <Metric label="harness" value={agent.harness || "unknown"} />
+              <Metric label="department" value={agent.department || "Unassigned"} />
+            </div>
           </div>
         </div>
         <Button variant="ghost" size="icon" onClick={refetch} aria-label="Refresh agent">
@@ -468,9 +609,9 @@ function OverviewTab({
   imageLoaded: boolean;
 }) {
   return (
-    <div className="grid gap-4 p-4 xl:grid-cols-2">
-      <section className="rounded-md border border-border bg-background p-4">
-        <h3 className="mb-3 text-sm font-medium">Identity</h3>
+    <div className="mc-fade-up grid gap-4 p-4 xl:grid-cols-2">
+      <section className="mc-surface p-4">
+        <h3 className="mc-label mb-3">Identity</h3>
         <dl className="grid gap-2 text-sm">
           <InfoRow label="Name" value={agent.name} />
           <InfoRow label="Display" value={agentDisplayName(agent)} />
@@ -479,8 +620,8 @@ function OverviewTab({
           <InfoRow label="Title" value={agent.title || "None"} />
         </dl>
       </section>
-      <section className="rounded-md border border-border bg-background p-4">
-        <h3 className="mb-3 text-sm font-medium">Image</h3>
+      <section className="mc-surface p-4">
+        <h3 className="mc-label mb-3">Image</h3>
         <dl className="grid gap-2 text-sm">
           <InfoRow label="Editable image" value={imageLoaded ? "Available" : "Unavailable"} />
           <InfoRow label="Version" value={imageVersion === null ? "Unknown" : imageVersion} />
@@ -512,6 +653,7 @@ function ConfigTab({
   busy,
   error,
   notice,
+  dirty,
 }: {
   editable: boolean;
   configText: string;
@@ -522,11 +664,12 @@ function ConfigTab({
   busy: boolean;
   error: string | null;
   notice: string | null;
+  dirty: boolean;
 }) {
   return (
-    <div className="grid min-h-0 gap-4 p-4 xl:grid-cols-2">
-      <section className="flex min-h-[34rem] flex-col rounded-md border border-border bg-background">
-        <div className="border-b border-border px-3 py-2 text-sm font-medium">Instructions</div>
+    <div className="mc-fade-up grid min-h-0 gap-4 p-4 xl:grid-cols-2">
+      <section className="mc-surface flex min-h-[34rem] flex-col">
+        <div className="mc-label border-b border-border-dimmer px-3 py-2">Instructions</div>
         <Textarea
           className="min-h-0 flex-1 resize-none rounded-none border-0 font-mono text-xs focus-visible:ring-0"
           value={instructionsText}
@@ -535,8 +678,8 @@ function ConfigTab({
           aria-label="Agent instructions"
         />
       </section>
-      <section className="flex min-h-[34rem] flex-col rounded-md border border-border bg-background">
-        <div className="border-b border-border px-3 py-2 text-sm font-medium">Config JSON</div>
+      <section className="mc-surface flex min-h-[34rem] flex-col">
+        <div className="mc-label border-b border-border-dimmer px-3 py-2">Config JSON</div>
         <Textarea
           className="min-h-0 flex-1 resize-none rounded-none border-0 font-mono text-xs focus-visible:ring-0"
           value={configText}
@@ -546,9 +689,14 @@ function ConfigTab({
         />
       </section>
       <div className="xl:col-span-2 flex flex-wrap items-center justify-between gap-2">
-        <div className="min-h-5 text-sm">
+        <div className="flex min-h-5 items-center gap-2 text-sm">
           {error && <span className="text-destructive">{error}</span>}
           {!error && notice && <span className="text-muted-foreground">{notice}</span>}
+          {!error && !notice && dirty && editable && (
+            <Badge variant="outline" className="text-accent-amber">
+              Unsaved changes
+            </Badge>
+          )}
         </div>
         <Button onClick={onSave} disabled={!editable || busy}>
           <SaveIcon /> Save image
@@ -612,9 +760,9 @@ function SkillsTab({ agentId, editable }: { agentId: string; editable: boolean }
   }
 
   return (
-    <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
-      <section className="rounded-md border border-border bg-background">
-        <div className="border-b border-border px-3 py-2 text-sm font-medium">Catalog</div>
+    <div className="mc-fade-up grid gap-4 p-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+      <section className="mc-surface">
+        <div className="mc-label border-b border-border-dimmer px-3 py-2">Catalog</div>
         <div className="space-y-3 p-3">
           <form
             className="flex gap-2"
@@ -660,7 +808,7 @@ function SkillsTab({ agentId, editable }: { agentId: string; editable: boolean }
           </div>
           {error && <div className="text-sm text-destructive">{error}</div>}
           {preview && (
-            <div className="rounded-md border border-border bg-muted/20 p-3">
+            <div className="mc-surface bg-bg-elevated p-3">
               <div className="text-sm font-medium">Preview ready</div>
               <div className="mt-1 text-xs text-muted-foreground">
                 {preview.operation} {preview.skill_names.join(", ")}
@@ -678,12 +826,12 @@ function SkillsTab({ agentId, editable }: { agentId: string; editable: boolean }
         </div>
       </section>
 
-      <section className="rounded-md border border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <div className="text-sm font-medium">Installed</div>
+      <section className="mc-surface">
+        <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+          <div className="mc-label">Installed</div>
           <Badge variant="secondary">{installed.data?.length ?? 0}</Badge>
         </div>
-        <div className="max-h-[42rem] divide-y divide-border overflow-y-auto">
+        <div className="max-h-[42rem] divide-y divide-border-dimmer overflow-y-auto">
           {(installed.data ?? []).map((skill) => (
             <div key={skill.name} className="p-3">
               <div className="truncate text-sm font-medium">{skill.name}</div>
@@ -762,12 +910,12 @@ function ConnectorsTab({ agentId, editable }: { agentId: string; editable: boole
   }
 
   return (
-    <div className="space-y-4 p-4">
+    <div className="mc-fade-up space-y-4 p-4">
       {rows.map(({ provider, connection, tools }) => {
         const selected = selectedByConnection[connection.id] ?? [];
         return (
-          <section key={connection.id} className="rounded-md border border-border bg-background">
-            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <section key={connection.id} className="mc-surface">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-dimmer px-3 py-2">
               <div>
                 <div className="text-sm font-medium">{connection.displayName}</div>
                 <div className="text-xs text-muted-foreground">
@@ -818,7 +966,7 @@ function ConnectorsTab({ agentId, editable }: { agentId: string; editable: boole
         );
       })}
       {!catalog.isLoading && rows.length === 0 && (
-        <div className="rounded-md border border-border p-4 text-sm text-muted-foreground">
+        <div className="mc-surface p-4 text-sm text-muted-foreground">
           No connector connections are configured.
         </div>
       )}
@@ -1075,42 +1223,55 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
   }
 
   return (
-    <div className="space-y-4 p-4">
-      <section className="rounded-md border border-border bg-background p-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              variant={scopeKind === "organization" ? "secondary" : "outline"}
-              onClick={() => setScopeKind("organization")}
-              disabled={!editable}
-            >
-              Organization
-            </Button>
-            {departmentScopeId && (
-              <Button
+    <div className="mc-fade-up space-y-4 p-4">
+      <section className="mc-surface flex flex-wrap items-center justify-between gap-3 p-3">
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setScopeKind("organization")}
+            disabled={!editable}
+            className={cn(
+              "mc-label rounded-full px-2.5 py-1.5 transition-colors disabled:opacity-50",
+              scopeKind === "organization"
+                ? "bg-accent-orange/15 text-accent-orange"
+                : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+            )}
+          >
+            Organization
+          </button>
+          {departmentScopeId && (
+            <>
+              <ChevronRightIcon className="size-3.5 text-muted-foreground" aria-hidden="true" />
+              <button
                 type="button"
-                variant={scopeKind === "department" ? "secondary" : "outline"}
                 onClick={() => setScopeKind("department")}
                 disabled={!editable}
+                className={cn(
+                  "mc-label rounded-full px-2.5 py-1.5 transition-colors disabled:opacity-50",
+                  scopeKind === "department"
+                    ? "bg-accent-orange/15 text-accent-orange"
+                    : "text-muted-foreground hover:bg-muted/50 hover:text-foreground",
+                )}
               >
                 {department}
-              </Button>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Badge variant="outline">{scopeSummary?.agentIds.length ?? 0} agents</Badge>
-            <Badge variant="outline">
-              rev {scope.data?.revision ?? scopes.data?.revision ?? "-"}
-            </Badge>
-          </div>
+              </button>
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge variant="outline" className="mc-value">
+            {scopeSummary?.agentIds.length ?? 0} agents
+          </Badge>
+          <Badge variant="outline" className="mc-value">
+            rev {scope.data?.revision ?? scopes.data?.revision ?? "-"}
+          </Badge>
         </div>
       </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
-        <section className="rounded-md border border-border bg-background">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <div className="text-sm font-medium">{scopeLabel} Instructions</div>
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div className="mc-label">{scopeLabel} Instructions</div>
             <Button
               size="sm"
               disabled={!editable || updateInstructions.isPending}
@@ -1128,12 +1289,12 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
           />
         </section>
 
-        <section className="rounded-md border border-border bg-background">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <div className="text-sm font-medium">Inherited Instructions</div>
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div className="mc-label text-accent-cyan">Inherited Instructions</div>
             <Badge variant="secondary">{effective.data?.instructions?.length ?? 0}</Badge>
           </div>
-          <div className="max-h-64 divide-y divide-border overflow-y-auto">
+          <div className="max-h-64 divide-y divide-border-dimmer overflow-y-auto">
             {(effective.data?.instructions ?? []).map((item) => (
               <div key={item.id} className="p-3">
                 <div className="text-xs font-medium text-muted-foreground">
@@ -1149,10 +1310,10 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
         </section>
       </div>
 
-      <section className="rounded-md border border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+      <section className="mc-surface">
+        <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
           <div>
-            <div className="text-sm font-medium">Agent Instructions</div>
+            <div className="mc-label">Agent Instructions</div>
             <div className="text-xs text-muted-foreground">{agentDisplayName(agent)}</div>
           </div>
           <Button
@@ -1172,10 +1333,10 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
         />
       </section>
 
-      <section className="rounded-md border border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
+      <section className="mc-surface">
+        <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
           <div>
-            <div className="text-sm font-medium">{scopeLabel} Connector Actions</div>
+            <div className="mc-label">{scopeLabel} Connector Actions</div>
             <div className="text-xs text-muted-foreground">
               {(scope.data?.connectors ?? []).filter((item) => item.enabled).length} active
             </div>
@@ -1185,8 +1346,8 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
           {rows.map(({ provider, connection, tools }) => {
             const selected = selectedByConnection[connection.id] ?? [];
             return (
-              <div key={connection.id} className="rounded-md border border-border/70">
-                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border/70 px-3 py-2">
+              <div key={connection.id} className="rounded-md border border-border-dimmer">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border-dimmer px-3 py-2">
                   <div>
                     <div className="text-sm font-medium">{connection.displayName}</div>
                     <div className="text-xs text-muted-foreground">
@@ -1249,10 +1410,8 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
       </section>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
-        <section className="rounded-md border border-border bg-background">
-          <div className="border-b border-border px-3 py-2 text-sm font-medium">
-            {scopeLabel} Skills
-          </div>
+        <section className="mc-surface">
+          <div className="mc-label border-b border-border-dimmer px-3 py-2">{scopeLabel} Skills</div>
           <div className="space-y-3 p-3">
             <form
               className="flex gap-2"
@@ -1293,12 +1452,12 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
           </div>
         </section>
 
-        <section className="rounded-md border border-border bg-background">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <div className="text-sm font-medium">Scope Skills</div>
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div className="mc-label">Scope Skills</div>
             <Badge variant="secondary">{scopeSkills.filter((item) => item.enabled).length}</Badge>
           </div>
-          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+          <div className="max-h-80 divide-y divide-border-dimmer overflow-y-auto">
             {scopeSkills.map((item) => (
               <div key={item.skillName} className="p-3">
                 <div className="truncate text-sm font-medium">{item.skillName}</div>
@@ -1324,14 +1483,14 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <section className="rounded-md border border-border bg-background">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <div className="text-sm font-medium">Effective Skills</div>
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div className="mc-label text-accent-cyan">Effective Skills</div>
             <Badge variant="secondary">
               {effectiveSkills.filter((item) => item.enabled).length}
             </Badge>
           </div>
-          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+          <div className="max-h-80 divide-y divide-border-dimmer overflow-y-auto">
             {effectiveSkills.map((item) => (
               <div key={item.itemKey} className="flex items-start justify-between gap-3 p-3">
                 <div className="min-w-0">
@@ -1356,14 +1515,14 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
           </div>
         </section>
 
-        <section className="rounded-md border border-border bg-background">
-          <div className="flex items-center justify-between border-b border-border px-3 py-2">
-            <div className="text-sm font-medium">Effective Connector Actions</div>
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div className="mc-label text-accent-cyan">Effective Connector Actions</div>
             <Badge variant="secondary">
               {effectiveConnectors.filter((item) => item.enabled).length}
             </Badge>
           </div>
-          <div className="max-h-80 divide-y divide-border overflow-y-auto">
+          <div className="max-h-80 divide-y divide-border-dimmer overflow-y-auto">
             {effectiveConnectors.map((item) => (
               <div key={item.itemKey} className="flex items-start justify-between gap-3 p-3">
                 <div className="min-w-0">
@@ -1431,10 +1590,10 @@ function FilesTab({
   }
 
   return (
-    <div className="grid min-h-0 gap-4 p-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
-      <section className="min-h-[34rem] rounded-md border border-border bg-background">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <div className="truncate text-sm font-medium">{tree.data?.path || "."}</div>
+    <div className="mc-fade-up grid min-h-0 gap-4 p-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
+      <section className="mc-surface min-h-[34rem]">
+        <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+          <div className="mc-value truncate text-xs">{tree.data?.path || "."}</div>
           <Button
             variant="ghost"
             size="xs"
@@ -1456,13 +1615,13 @@ function FilesTab({
               }
             >
               {entry.type === "directory" ? (
-                <FolderIcon className="size-4 shrink-0 text-muted-foreground" />
+                <FolderIcon className="size-4 shrink-0 text-accent-amber" />
               ) : (
                 <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
               )}
               <span className="min-w-0 flex-1 truncate">{entry.name}</span>
               {entry.type === "file" && (
-                <span className="text-xs text-muted-foreground">{entry.size}</span>
+                <span className="mc-value text-2xs">{entry.size}</span>
               )}
             </button>
           ))}
@@ -1473,9 +1632,9 @@ function FilesTab({
           )}
         </div>
       </section>
-      <section className="flex min-h-[34rem] flex-col rounded-md border border-border bg-background">
-        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
-          <div className="min-w-0 truncate text-sm font-medium">
+      <section className="mc-surface flex min-h-[34rem] flex-col">
+        <div className="flex items-center justify-between gap-2 border-b border-border-dimmer px-3 py-2">
+          <div className="mc-value min-w-0 truncate text-xs">
             {selectedPath || "Select file"}
           </div>
           <div className="flex gap-2">
@@ -1568,6 +1727,11 @@ export function WorkForcePage() {
   const editable = Boolean(selectedAgent && selectedTier !== "workflow" && imageSnapshot);
   const workforceEditable = Boolean(selectedAgent && selectedTier !== "workflow");
 
+  const isConfigDirty = imageSnapshot
+    ? configText !== JSON.stringify(imageSnapshot.image.config, null, 2) ||
+      instructionsText !== (imageSnapshot.image.instructions ?? "")
+    : false;
+
   useEffect(() => {
     if (!imageSnapshot) {
       setConfigText("");
@@ -1625,7 +1789,7 @@ export function WorkForcePage() {
           query={query}
           setQuery={setQuery}
         />
-        <main className="flex min-h-0 flex-col overflow-hidden bg-muted/10">
+        <main className="flex min-h-0 flex-col overflow-hidden bg-bg-base">
           {selectedAgent ? (
             <>
               <DetailHeader
@@ -1638,7 +1802,7 @@ export function WorkForcePage() {
                 }}
               />
               {selectedTier !== "workflow" && image.isError && (
-                <div className="border-b border-border bg-destructive/10 px-5 py-2 text-sm text-destructive">
+                <div className="border-b border-accent-red/30 bg-accent-red/10 px-5 py-2 text-sm text-accent-red">
                   {image.error instanceof Error ? image.error.message : "Agent image unavailable"}
                 </div>
               )}
@@ -1653,6 +1817,9 @@ export function WorkForcePage() {
                   </TabsTrigger>
                   <TabsTrigger value="config" disabled={!editable}>
                     <SlidersHorizontalIcon /> Config
+                    {isConfigDirty && editable && (
+                      <span className="size-1.5 rounded-full bg-accent-amber" aria-hidden="true" />
+                    )}
                   </TabsTrigger>
                   <TabsTrigger value="inheritance" disabled={!workforceEditable}>
                     <UsersIcon /> Inheritance
@@ -1688,6 +1855,7 @@ export function WorkForcePage() {
                       busy={updateImage.isPending}
                       error={saveError}
                       notice={saveNotice}
+                      dirty={isConfigDirty}
                     />
                   </TabsContent>
                   <TabsContent value="inheritance">
