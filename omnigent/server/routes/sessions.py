@@ -8310,6 +8310,12 @@ async def _forward_event_to_runner(
     # per-event value exists; the persisted column is the source.
     if conv.harness_override is not None:
         runner_body["harness_override"] = conv.harness_override
+    instruction_fragments = _instruction_fragments_for_runner_event(
+        agent_id=conv.agent_id,
+        agent_name=agent_name,
+    )
+    if instruction_fragments:
+        runner_body["instruction_fragments"] = instruction_fragments
 
     # The runner's sessions-native POST returns 202 immediately
     # and starts the turn as a background task. No streaming
@@ -8332,6 +8338,24 @@ async def _forward_event_to_runner(
         _publish_status(session_id, "idle")
 
     return persisted_items[0].id
+
+
+def _instruction_fragments_for_runner_event(
+    *,
+    agent_id: str | None,
+    agent_name: str | None,
+) -> list[str]:
+    """Resolve server-side extension instructions to forward into runner turns."""
+    if not agent_id:
+        return []
+    from types import SimpleNamespace
+
+    from omnigent.kernel.extensions import extension_instruction_fragments
+
+    return extension_instruction_fragments(
+        agent_id=agent_id,
+        spec=SimpleNamespace(name=agent_name or agent_id),
+    )
 
 
 @dataclass

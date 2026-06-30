@@ -191,6 +191,44 @@ async def test_forward_event_includes_client_tools_when_present(
 
 
 @pytest.mark.asyncio
+async def test_forward_event_includes_extension_instruction_fragments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conv = _conv("conv_instruction_fragments")
+    store = _ForwardEventStore(conv)
+    client = AsyncMock()
+    client.post = AsyncMock(return_value=MagicMock(status_code=202))
+
+    monkeypatch.setattr(
+        "omnigent.server.routes.sessions._seed_missing_title_from_user_message",
+        AsyncMock(),
+    )
+    monkeypatch.setattr("omnigent.server.routes.sessions._publish_input_consumed", lambda *_: None)
+    monkeypatch.setattr(
+        "omnigent.kernel.extensions.extension_instruction_fragments",
+        lambda *, agent_id, spec: [
+            f"Organization instructions for {agent_id}",
+            f"Agent name seen by extension: {spec.name}",
+        ],
+    )
+
+    await _forward_event_to_runner(
+        "conv_instruction_fragments",
+        conv,
+        _user_message_body(),
+        store,  # type: ignore[arg-type]
+        client,
+        agent_name="research-agent",
+    )
+
+    posted = client.post.await_args.kwargs["json"]
+    assert posted["instruction_fragments"] == [
+        "Organization instructions for ag_forward",
+        "Agent name seen by extension: research-agent",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_forward_event_swallows_file_resolution_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

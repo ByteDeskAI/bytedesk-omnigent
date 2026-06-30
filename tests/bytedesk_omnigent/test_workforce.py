@@ -167,6 +167,17 @@ def test_instruction_fragments_skip_no_department_employee_artifacts(
     assert fragments == []
 
 
+def test_instruction_fragments_skip_before_runtime_initialization(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "bytedesk_omnigent.workforce.get_workforce_store",
+        lambda: (_ for _ in ()).throw(
+            RuntimeError("runtime not initialized — call init() first")
+        ),
+    )
+
+    assert instruction_fragments(agent_id="ag_maya", spec=SimpleNamespace(name="maya")) == []
+
+
 def test_connector_reconcile_materializes_inherited_grants_and_disable_override(
     monkeypatch,
     db_uri: str,

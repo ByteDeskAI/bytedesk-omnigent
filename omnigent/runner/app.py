@@ -8508,14 +8508,25 @@ def create_runner_app(
             from omnigent.runtime.prompt import build_instructions
 
             agent_id = msg_body.get("agent_id")
+            forwarded_fragments_raw = msg_body.get("instruction_fragments")
+            instruction_fragments: list[str] = []
+            if isinstance(forwarded_fragments_raw, list):
+                instruction_fragments.extend(
+                    fragment
+                    for fragment in forwarded_fragments_raw
+                    if isinstance(fragment, str) and fragment
+                )
+            instruction_fragments.extend(
+                extension_instruction_fragments(
+                    agent_id=agent_id if isinstance(agent_id, str) else None,
+                    spec=cached_spec,
+                )
+            )
             instructions = build_instructions(
                 cached_spec,
                 None,
                 [],
-                extension_instruction_fragments(
-                    agent_id=agent_id if isinstance(agent_id, str) else None,
-                    spec=cached_spec,
-                ),
+                instruction_fragments,
             )
 
         ctx = TurnDispatch(

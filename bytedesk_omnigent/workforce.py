@@ -811,7 +811,13 @@ def instruction_fragments(
     """Extension hook: runtime-composed inherited Work Force instructions."""
     if not agent_id:
         return []
-    store = get_workforce_store()
+    try:
+        store = get_workforce_store()
+    except RuntimeError as exc:
+        if "runtime not initialized" in str(exc):
+            logger.debug("Work Force instructions unavailable before runtime initialization")
+            return []
+        raise
     revision = store.revision()
     spec_name = str(getattr(spec, "name", "") or "")
     cache_key = (agent_id, spec_name, revision)
