@@ -394,9 +394,9 @@ def _backfill_agent_classification(
     Category (step 1): writes the authoritative ``category`` column so
     ``/v1/agents?category=`` (which queries the column) is correct — the
     migration can only backfill harness/system/employee; ``workflow`` lives in
-    the bundle ``params`` and is resolved here. System classification reads the
-    entity's own category (:func:`is_system`), which the converter derives from
-    the allowlisted name, so it stays correct even if the bundle fails to load.
+    the bundle ``params`` and is resolved here. Classification is derived from
+    the current allowlists plus spec params on every boot, so stale stored tiers
+    from older releases are repaired.
 
     Capabilities (step 2, BDP-2577): built-in capabilities are otherwise never
     materialized onto the row at seed (only the skills/admin write paths call
@@ -411,7 +411,7 @@ def _backfill_agent_classification(
     :param agent_store: Store for agent metadata.
     :param agent_cache: Cache for loading agent specs (to read ``params`` + ``capabilities``).
     """
-    from omnigent.entities import infer_category, is_system
+    from omnigent.entities import infer_category
 
     after: str | None = None
     while True:
@@ -436,7 +436,7 @@ def _backfill_agent_classification(
                     agent.id,
                     exc_info=True,
                 )
-            inferred = "system" if is_system(agent) else infer_category(agent.name, params)
+            inferred = infer_category(agent.name, params)
             if agent_store.get_category(agent.id) != inferred:
                 agent_store.set_category(agent.id, inferred)
             # Materialize the spec's declared capabilities onto the row so the
