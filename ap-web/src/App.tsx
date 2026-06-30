@@ -31,6 +31,9 @@ const ConnectorsPage = lazy(() =>
 const ConnectorDetailPage = lazy(() =>
   import("@/pages/ConnectorsPage").then((m) => ({ default: m.ConnectorDetailPage })),
 );
+const WorkForcePage = lazy(() =>
+  import("@/pages/WorkForcePage").then((m) => ({ default: m.WorkForcePage })),
+);
 const SkillsPage = lazy(() =>
   import("@/pages/SkillsPage").then((m) => ({ default: m.SkillsPage })),
 );
@@ -151,6 +154,7 @@ function App({ basename }: AppProps = {}) {
           <Route path={`${prefix}/c/:conversationId`} element={<ChatPage />} />
           <Route path={`${prefix}/inbox`} element={<InboxPage />} />
           <Route path={`${prefix}/skills`} element={<SkillsPage />} />
+          <Route path={`${prefix}/work-force`} element={<WorkForcePage />} />
           <Route path={`${prefix}/connectors`} element={<ConnectorsPage />} />
           <Route path={`${prefix}/connectors/:provider`} element={<ConnectorDetailPage />} />
           <Route path={`${prefix}/goals`} element={<GoalsPage />} />

@@ -15,6 +15,7 @@ from omnigent.server.routes.agents_write import _require_template, _safe_join
 from omnigent.spec.tar_utils import build_bundle_bytes
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.artifact_store.local import LocalArtifactStore
+from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
 
 _CONFIG = (
     "spec_version: 1\n"
@@ -38,21 +39,38 @@ def _config(harness: str = "claude-sdk", name: str = "demo") -> dict:
     }
 
 
-def _seed_template_agent(db_uri: str, tmp_path: Path) -> str:
-    """Seed a template agent with a real bundle in the app's stores."""
-    image = tmp_path / "seed_image"
+def _seed_agent(
+    db_uri: str,
+    tmp_path: Path,
+    *,
+    name: str = "demo",
+    session_id: str | None = None,
+) -> str:
+    """Seed an agent with a real bundle in the app's stores."""
+    image = tmp_path / f"seed_image_{name}"
     (image / "skills" / "deep-search").mkdir(parents=True)
+    (image / "docs").mkdir(parents=True)
+    (image / "assets").mkdir(parents=True)
     (image / "config.yaml").write_text(_CONFIG)
     (image / "AGENTS.md").write_text("You are demo.\n")
     (image / "skills" / "deep-search" / "SKILL.md").write_text(_SKILL)
+    (image / "docs" / "guide.md").write_text("# Guide\n")
+    (image / "assets" / "pixel.bin").write_bytes(b"\x89PNG\x00binary")
 
     bundle_bytes = build_bundle_bytes(image)
     agent_id = generate_agent_id()
     loc = bundle_location(agent_id, bundle_bytes)
     # Same backend locations the `app` fixture builds (tmp_path/"artifacts", db_uri).
     LocalArtifactStore(str(tmp_path / "artifacts")).put(loc, bundle_bytes)
-    SqlAlchemyAgentStore(db_uri).create(agent_id, name="demo", bundle_location=loc)
+    SqlAlchemyAgentStore(db_uri).create(
+        agent_id, name=name, bundle_location=loc, session_id=session_id
+    )
     return agent_id
+
+
+def _seed_template_agent(db_uri: str, tmp_path: Path) -> str:
+    """Seed a template agent with a real bundle in the app's stores."""
+    return _seed_agent(db_uri, tmp_path)
 
 
 # ── unit: guards ──────────────────────────────────────────────────────
@@ -96,6 +114,101 @@ async def test_get_image_returns_editable_surface(
     assert body["config"]["executor"]["config"]["harness"] == "claude-sdk"
     assert body["instructions"] == "You are demo.\n"
     assert "deep-search" in body["skills"]
+
+
+async def test_get_image_tree_lists_root_entries(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(f"/v1/agents/{agent_id}/image/tree")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["path"] == "."
+    assert resp.headers["etag"] == '"1"'
+    entries = {entry["path"]: entry for entry in body["entries"]}
+    assert ".omnigent-bundle-location" not in entries
+    assert entries["config.yaml"]["type"] == "file"
+    assert entries["AGENTS.md"]["type"] == "file"
+    assert entries["skills"]["type"] == "directory"
+    assert entries["docs"]["type"] == "directory"
+
+
+async def test_get_image_tree_lists_nested_directory(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(f"/v1/agents/{agent_id}/image/tree", params={"path": "docs"})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["path"] == "docs"
+    assert [entry["path"] for entry in body["entries"]] == ["docs/guide.md"]
+
+
+async def test_get_image_file_reads_bounded_text_file(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(
+        f"/v1/agents/{agent_id}/image/file",
+        params={"path": "skills/deep-search/SKILL.md"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["path"] == "skills/deep-search/SKILL.md"
+    assert body["content"] == _SKILL
+    assert body["size"] == len(_SKILL.encode())
+
+
+async def test_get_image_file_rejects_traversal(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(
+        f"/v1/agents/{agent_id}/image/file",
+        params={"path": "../escape"},
+    )
+
+    assert resp.status_code == 400, resp.text
+
+
+async def test_get_image_file_rejects_binary(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(
+        f"/v1/agents/{agent_id}/image/file",
+        params={"path": "assets/pixel.bin"},
+    )
+
+    assert resp.status_code == 400, resp.text
+
+
+async def test_get_image_file_hides_cache_marker(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    resp = await client.get(
+        f"/v1/agents/{agent_id}/image/file",
+        params={"path": ".omnigent-bundle-location"},
+    )
+
+    assert resp.status_code == 404, resp.text
+
+
+async def test_get_image_file_rejects_session_scoped_agent(
+    client: httpx.AsyncClient, db_uri: str, tmp_path: Path
+) -> None:
+    conv = SqlAlchemyConversationStore(db_uri).create_conversation()
+    agent_id = _seed_agent(db_uri, tmp_path, name="demo-scoped", session_id=conv.id)
+    resp = await client.get(
+        f"/v1/agents/{agent_id}/image/file",
+        params={"path": "AGENTS.md"},
+    )
+
+    assert resp.status_code == 400, resp.text
 
 
 # ── integration: PUT ──────────────────────────────────────────────────

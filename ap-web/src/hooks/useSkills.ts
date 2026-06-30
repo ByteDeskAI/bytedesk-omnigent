@@ -167,11 +167,12 @@ export function useSkillSources() {
   });
 }
 
-export function useInstalledSkills() {
+export function useInstalledSkills(agentId?: string | null) {
   return useQuery({
-    queryKey: INSTALLED_KEY,
+    queryKey: [...INSTALLED_KEY, agentId ?? ""],
     queryFn: async () => {
-      const res = await authenticatedFetch("/v1/skills/installed");
+      const suffix = agentId ? `?agent_id=${encodeURIComponent(agentId)}` : "";
+      const res = await authenticatedFetch(`/v1/skills/installed${suffix}`);
       if (!res.ok) throw new Error(await readError(res));
       const body = (await res.json()) as { data: InstalledSkill[] };
       return body.data;

@@ -204,6 +204,7 @@ class RoutesExtension:
                 state.agent_cache,
                 state.artifact_store,
                 auth_provider=auth_provider,
+                permission_store=permission_store,
             ),
             prefix="/v1",
             tags=["agents"],
