@@ -102,6 +102,19 @@ export async function fetchConnectorCatalog(): Promise<ConnectorManifest[]> {
   return body.providers;
 }
 
+export async function fetchConnectorAgentGrants(options: {
+  agentId?: string | null;
+  connectionId?: string | null;
+}): Promise<ConnectorAgentGrant[]> {
+  const params = new URLSearchParams();
+  if (options.agentId) params.set("agentId", options.agentId);
+  if (options.connectionId) params.set("connectionId", options.connectionId);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const res = await authenticatedFetch(`/v1/connectors/agent-grants${suffix}`);
+  const body = await jsonOrThrow<{ grants: ConnectorAgentGrant[] }>(res);
+  return body.grants;
+}
+
 export async function startConnectorOAuth(provider: string): Promise<string> {
   const res = await authenticatedFetch(
     `/v1/connectors/${encodeURIComponent(provider)}/oauth/start`,

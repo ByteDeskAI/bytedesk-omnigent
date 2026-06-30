@@ -571,7 +571,7 @@ class BytedeskExtension:
         idempotent via the goal's slug so a re-run is a no-op."""
         from bytedesk_omnigent.engine.scout import ensure_scout_goal
         from bytedesk_omnigent.goals import get_goal_store
-        from omnigent.runtime import get_cron_scheduler
+        from bytedesk_omnigent.runtime import get_cron_scheduler
         from omnigent.runtime.memory_maintenance import advisory_lock
 
         try:

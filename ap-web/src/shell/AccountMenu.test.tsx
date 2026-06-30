@@ -73,6 +73,7 @@ describe("AccountMenu gating", () => {
     renderMenu();
     await openMenu(/Omnigent/);
     expect(await screen.findByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Work Force/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Connectors/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Goals/ })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Terminal/ })).not.toBeInTheDocument();
@@ -86,6 +87,7 @@ describe("AccountMenu gating", () => {
     await openMenu(/Omnigent/);
 
     expect(await screen.findByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Work Force/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Connectors/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Goals/ })).toBeInTheDocument();
     expect(await screen.findByRole("menuitem", { name: /Terminal/ })).toBeInTheDocument();
@@ -121,6 +123,7 @@ describe("AccountMenu dropdown surface", () => {
     expect(screen.getByRole("menuitem", { name: /Skills/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Goals/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Sign out/ })).toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: /Work Force/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Connectors/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Members/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Policies/ })).not.toBeInTheDocument();
@@ -132,6 +135,7 @@ describe("AccountMenu dropdown surface", () => {
     await openMenu(/root/);
 
     expect(await screen.findByRole("menuitem", { name: /Members/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /Work Force/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Connectors/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Policies/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /Configuration/ })).toBeInTheDocument();

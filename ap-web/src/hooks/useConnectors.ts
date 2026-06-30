@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   checkConnectorHealth,
   createConnectorConnection,
+  fetchConnectorAgentGrants,
   fetchConnectorCatalog,
   grantConnectorToAgent,
   setConnectorServiceEnabled,
@@ -14,6 +15,15 @@ export function useConnectorsCatalog() {
   return useQuery({
     queryKey: QUERY_KEY,
     queryFn: fetchConnectorCatalog,
+    staleTime: 10_000,
+  });
+}
+
+export function useConnectorAgentGrants(agentId?: string | null) {
+  return useQuery({
+    queryKey: ["connector-agent-grants", agentId ?? ""],
+    queryFn: () => fetchConnectorAgentGrants({ agentId }),
+    enabled: Boolean(agentId),
     staleTime: 10_000,
   });
 }
@@ -93,6 +103,9 @@ export function useGrantConnectorToAgent() {
       agentId: string;
       tools: string[];
     }) => grantConnectorToAgent(connectionId, agentId, tools),
-    onSuccess: () => qc.invalidateQueries({ queryKey: QUERY_KEY }),
+    onSuccess: (_data, variables) => {
+      void qc.invalidateQueries({ queryKey: QUERY_KEY });
+      void qc.invalidateQueries({ queryKey: ["connector-agent-grants", variables.agentId] });
+    },
   });
 }

@@ -26,7 +26,7 @@ import asyncio
 import shutil
 import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from fastapi import APIRouter, Request, Response
@@ -44,10 +44,13 @@ from omnigent.server.schemas import AgentObject
 from omnigent.spec.tar_utils import build_bundle_bytes
 from omnigent.stores import AgentStore
 from omnigent.stores.artifact_store import ArtifactStore
+from omnigent.stores.permission_store import PermissionStore
 
 # Marker written to ``sot_tier`` once an agent is edited here, so the
 # startup wheel re-seed (``_ensure_builtin_agent``) leaves it alone.
 _MIGRATED_TIER = "migrated"
+_MAX_TEXT_FILE_BYTES = 256 * 1024
+_CACHE_MARKER_FILE = ".omnigent-bundle-location"
 
 
 class AgentImage(BaseModel):
@@ -87,6 +90,36 @@ class AgentImageUpdate(BaseModel):
     remove: list[str] | None = None
 
 
+class AgentImageTreeEntry(BaseModel):
+    """One entry in an agent image directory listing."""
+
+    name: str
+    path: str
+    type: Literal["directory", "file"]
+    size: int | None = None
+
+
+class AgentImageTree(BaseModel):
+    """Directory listing for an extracted template-agent image."""
+
+    id: str
+    name: str
+    version: int
+    path: str
+    entries: list[AgentImageTreeEntry]
+
+
+class AgentImageFile(BaseModel):
+    """Text file read from an extracted template-agent image."""
+
+    id: str
+    name: str
+    version: int
+    path: str
+    content: str
+    size: int
+
+
 def _safe_join(root: Path, relpath: str) -> Path:
     """
     Resolve *relpath* under *root*, rejecting traversal/escape.
@@ -113,6 +146,69 @@ def _safe_join(root: Path, relpath: str) -> Path:
             code=ErrorCode.INVALID_INPUT,
         )
     return resolved
+
+
+def _safe_join_or_root(root: Path, relpath: str | None) -> Path:
+    """Resolve an optional image-relative path, allowing the image root."""
+    if relpath is None or relpath == "" or relpath == ".":
+        return root.resolve()
+    return _safe_join(root, relpath)
+
+
+def _image_relpath(root: Path, path: Path) -> str:
+    """Return *path* relative to image *root* as a forward-slash string."""
+    return path.resolve().relative_to(root.resolve()).as_posix()
+
+
+def _list_image_tree(root: Path, relpath: str | None) -> tuple[str, list[AgentImageTreeEntry]]:
+    """List the immediate children of an image directory."""
+    directory = _safe_join_or_root(root, relpath)
+    if not directory.exists():
+        raise OmnigentError("image directory not found", code=ErrorCode.NOT_FOUND)
+    if not directory.is_dir():
+        raise OmnigentError("image path is not a directory", code=ErrorCode.INVALID_INPUT)
+
+    entries: list[AgentImageTreeEntry] = []
+    children = sorted(directory.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))
+    for child in children:
+        if child.name == _CACHE_MARKER_FILE:
+            continue
+        child_type: Literal["directory", "file"] = "directory" if child.is_dir() else "file"
+        entries.append(
+            AgentImageTreeEntry(
+                name=child.name,
+                path=_image_relpath(root, child),
+                type=child_type,
+                size=None if child.is_dir() else child.stat().st_size,
+            )
+        )
+    return _image_relpath(root, directory), entries
+
+
+def _read_image_text_file(root: Path, relpath: str) -> tuple[str, str, int]:
+    """Read a bounded UTF-8 text file from an image."""
+    target = _safe_join(root, relpath)
+    if target.name == _CACHE_MARKER_FILE and target.parent.resolve() == root.resolve():
+        raise OmnigentError("image file not found", code=ErrorCode.NOT_FOUND)
+    if not target.exists():
+        raise OmnigentError("image file not found", code=ErrorCode.NOT_FOUND)
+    if not target.is_file():
+        raise OmnigentError("image path is not a file", code=ErrorCode.INVALID_INPUT)
+
+    size = target.stat().st_size
+    if size > _MAX_TEXT_FILE_BYTES:
+        raise OmnigentError(
+            f"image file is too large to read inline ({size} bytes)",
+            code=ErrorCode.INVALID_INPUT,
+        )
+    raw = target.read_bytes()
+    if b"\x00" in raw:
+        raise OmnigentError("image file is binary", code=ErrorCode.INVALID_INPUT)
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise OmnigentError("image file is not valid UTF-8", code=ErrorCode.INVALID_INPUT) from exc
+    return _image_relpath(root, target), content, size
 
 
 def _names_in(directory: Path, *, dirs: bool) -> list[str]:
@@ -169,6 +265,7 @@ def create_agents_write_router(
     artifact_store: ArtifactStore | None,
     *,
     auth_provider: AuthProvider | None = None,
+    permission_store: PermissionStore | None = None,
 ) -> APIRouter:
     """Build the router for template-agent image read/write.
 
@@ -184,6 +281,18 @@ def create_agents_write_router(
     :returns: A FastAPI router exposing GET/PUT ``/agents/{id}/image``.
     """
     router = APIRouter()
+
+    async def _require_admin(request: Request) -> None:
+        user_id = _require_user(request, auth_provider)
+        if permission_store is None:
+            return
+        if user_id is None:
+            raise OmnigentError("Authentication required", code=ErrorCode.UNAUTHORIZED)
+        if not await asyncio.to_thread(permission_store.is_admin, user_id):
+            raise OmnigentError(
+                "Admin privileges required to manage agent images",
+                code=ErrorCode.FORBIDDEN,
+            )
 
     @router.get("/agents/{agent_id}/image")
     async def get_agent_image(
@@ -222,6 +331,57 @@ def create_agents_write_router(
             **surface,
         )
 
+    @router.get("/agents/{agent_id}/image/tree")
+    async def get_agent_image_tree(
+        request: Request,
+        response: Response,
+        agent_id: str,
+        path: str = "",
+    ) -> AgentImageTree:
+        """Return a directory listing for a template agent image."""
+        await _require_admin(request)
+        agent = await asyncio.to_thread(agent_store.get, agent_id)
+        _require_template(agent, agent_id)
+        response.headers["ETag"] = f'"{agent.version}"'
+        loaded = await asyncio.to_thread(
+            agent_cache.load, agent.id, agent.bundle_location, expand_env=False
+        )
+        relpath, entries = await asyncio.to_thread(_list_image_tree, loaded.workdir, path)
+        return AgentImageTree(
+            id=agent.id,
+            name=agent.name,
+            version=agent.version,
+            path=relpath,
+            entries=entries,
+        )
+
+    @router.get("/agents/{agent_id}/image/file")
+    async def get_agent_image_file(
+        request: Request,
+        response: Response,
+        agent_id: str,
+        path: str,
+    ) -> AgentImageFile:
+        """Return one bounded UTF-8 text file from a template agent image."""
+        await _require_admin(request)
+        agent = await asyncio.to_thread(agent_store.get, agent_id)
+        _require_template(agent, agent_id)
+        response.headers["ETag"] = f'"{agent.version}"'
+        loaded = await asyncio.to_thread(
+            agent_cache.load, agent.id, agent.bundle_location, expand_env=False
+        )
+        relpath, content, size = await asyncio.to_thread(
+            _read_image_text_file, loaded.workdir, path
+        )
+        return AgentImageFile(
+            id=agent.id,
+            name=agent.name,
+            version=agent.version,
+            path=relpath,
+            content=content,
+            size=size,
+        )
+
     @router.put("/agents/{agent_id}/image")
     async def put_agent_image(
         request: Request,
@@ -245,7 +405,7 @@ def create_agents_write_router(
             the rebuilt bundle is invalid, or the spec name changed
             (name is immutable).
         """
-        _require_user(request, auth_provider)
+        await _require_admin(request)
         agent = await asyncio.to_thread(agent_store.get, agent_id)
         _require_template(agent, agent_id)
         # If-Match optimistic concurrency (BDP-2412): the agent version the
@@ -264,6 +424,7 @@ def create_agents_write_router(
             staging = Path(tempfile.mkdtemp(prefix=f"{agent.id}_edit_"))
             try:
                 shutil.copytree(src_workdir, staging, dirs_exist_ok=True)
+                (staging / _CACHE_MARKER_FILE).unlink(missing_ok=True)
                 if body.config is not None:
                     (staging / "config.yaml").write_text(
                         yaml.safe_dump(body.config, sort_keys=False)

@@ -24,6 +24,7 @@ import {
   GaugeIcon,
   KeyRoundIcon,
   LogOutIcon,
+  BotIcon,
   PlugIcon,
   PuzzleIcon,
   SettingsIcon,
@@ -189,6 +190,11 @@ export function AccountMenu() {
           {me.is_admin && (
             <>
               <DropdownMenuItem asChild>
+                <Link to="/work-force" className="flex items-center gap-2">
+                  <BotIcon /> Work Force
+                </Link>
+              </DropdownMenuItem>
+              <DropdownMenuItem asChild>
                 <Link to="/connectors" className="flex items-center gap-2">
                   <PlugIcon /> Connectors
                 </Link>
@@ -332,6 +338,11 @@ function LocalOperatorMenu({ terminalEnabled }: { terminalEnabled: boolean }) {
           <DropdownMenuItem asChild>
             <Link to="/skills" className="flex items-center gap-2">
               <PuzzleIcon /> Skills
+            </Link>
+          </DropdownMenuItem>
+          <DropdownMenuItem asChild>
+            <Link to="/work-force" className="flex items-center gap-2">
+              <BotIcon /> Work Force
             </Link>
           </DropdownMenuItem>
           <DropdownMenuItem asChild>
