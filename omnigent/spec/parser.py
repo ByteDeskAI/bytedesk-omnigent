@@ -716,11 +716,7 @@ def _parse_blueprint_node(raw: object, path: str) -> BlueprintNode:
     if isinstance(raw_metadata, dict):
         metadata.update(raw_metadata)
     metadata.update(
-        {
-            str(key): value
-            for key, value in raw.items()
-            if key not in _BLUEPRINT_NODE_RESERVED_KEYS
-        }
+        {str(key): value for key, value in raw.items() if key not in _BLUEPRINT_NODE_RESERVED_KEYS}
     )
     return BlueprintNode(
         id=str(raw_id),
@@ -2848,6 +2844,7 @@ def _parse_http_mcp_server(
         description=raw.get("description"),
         timeout=int(raw["timeout"]) if "timeout" in raw else None,
         retry=_parse_retry(raw["retry"]) if "retry" in raw else None,
+        tool_allowlist=_parse_tool_allowlist(raw),
     )
 
 
@@ -2940,6 +2937,7 @@ def _parse_stdio_mcp_server(
         description=raw.get("description"),
         timeout=int(raw["timeout"]) if "timeout" in raw else None,
         retry=_parse_retry(raw["retry"]) if "retry" in raw else None,
+        tool_allowlist=_parse_tool_allowlist(raw),
     )
 
 

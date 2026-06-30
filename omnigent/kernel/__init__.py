@@ -30,12 +30,14 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from omnigent.kernel.extensions import (
+    from omnigent.kernel.extensions import (  # noqa: F401, I001
         OmnigentExtension,
         OmnigentExtensionLifecycle,
         assert_extension,
         discover_extensions,
         extension_background_factories,
+        extension_connector_manifests,
+        extension_connector_providers,
         extension_config_descriptors,
         extension_default_mcp_servers,
         extension_policy_modules,
@@ -46,7 +48,7 @@ if TYPE_CHECKING:
         get_extension,
         install_extensions,
     )
-    from omnigent.kernel.lifespan_phases import (
+    from omnigent.kernel.lifespan_phases import (  # noqa: F401
         LifespanContext,
         LifespanCycleError,
         LifespanOrchestrator,
@@ -54,7 +56,7 @@ if TYPE_CHECKING:
         build_default_lifespan_phases,
         topological_order,
     )
-    from omnigent.kernel.pluggable import (
+    from omnigent.kernel.pluggable import (  # noqa: F401
         PluggableRegistry,
         ProviderError,
         ProviderNotRegistered,
@@ -62,7 +64,7 @@ if TYPE_CHECKING:
         ProviderUnconfigured,
         RegistryConflict,
     )
-    from omnigent.kernel.service_registry import ServiceRegistry
+    from omnigent.kernel.service_registry import ServiceRegistry  # noqa: F401
 
 #: Public kernel surface. ``__getattr__`` resolves each name to its owning kernel
 #: submodule on first access, so the bare package import stays cheap.
@@ -81,6 +83,8 @@ _EXPORTS: dict[str, str] = {
     "extension_principal_resolvers": "omnigent.kernel.extensions",
     "extension_background_factories": "omnigent.kernel.extensions",
     "extension_config_descriptors": "omnigent.kernel.extensions",
+    "extension_connector_manifests": "omnigent.kernel.extensions",
+    "extension_connector_providers": "omnigent.kernel.extensions",
     "extension_tool_interceptors": "omnigent.kernel.extensions",
     # pluggable-seam machinery + error taxonomy
     "PluggableRegistry": "omnigent.kernel.pluggable",

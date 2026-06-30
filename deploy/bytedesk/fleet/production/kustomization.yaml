@@ -4,7 +4,7 @@
 # GitRepo (registered in bytedesk-platform/infra/gitops/fleet/bytedesk-delivery-gitrepos.yaml).
 # This overlay is the SINGLE owner of the omnigent runtime in production — TeamCity
 # builds the image and bumps the tag below per release (fleet-update-omnigent.sh).
-# Mirrors bytedesk-openclaw/fleet/production/kustomization.yaml.
+# Follows the standalone Omnigent Fleet bundle model.
 #
 # What this overlay changes vs the base deploy/bytedesk/k8s/ manifests:
 #   - server + runner run the custom Harbor image
@@ -15,7 +15,7 @@
 #
 # Secrets (omnigent-secrets, omnigent-runner-secrets) are NOT in this bundle —
 # they are Infisical-operator / SOPS reconciled into the bytedesk namespace in
-# prod, exactly like bytedesk-openclaw-secrets. See README "Productionize".
+# prod, like the other Omnigent runtime secrets. See README "Productionize".
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 namespace: bytedesk

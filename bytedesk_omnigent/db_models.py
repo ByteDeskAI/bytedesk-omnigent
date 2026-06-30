@@ -496,6 +496,128 @@ class SqlGoal(Base):
     )
 
 
+class SqlConnectorConnection(Base):
+    """Omnigent-managed external service connection.
+
+    Stores connector metadata/status only. OAuth token bundles and service-account
+    material live in the configured secret backend and are referenced by
+    ``secret_ref`` (Claim Check, ADR-0009).
+    """
+
+    __tablename__ = "connector_connections"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    display_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    auth_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="connected")
+    scopes: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    secret_ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    last_health_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_health_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_connector_connections_provider_status", "provider", "status"),
+        CheckConstraint(
+            "status in ('connected', 'needs_reauth', 'disabled', 'error')",
+            name="ck_connector_connections_status",
+        ),
+        CheckConstraint(
+            "auth_type in ('oauth_3lo', 'google_domain_wide_delegation')",
+            name="ck_connector_connections_auth_type",
+        ),
+    )
+
+
+class SqlConnectorService(Base):
+    """Enabled/disabled service state under one connector connection."""
+
+    __tablename__ = "connector_services"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    service_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ready")
+    scopes: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("connection_id", "service_key", name="uq_connector_services_key"),
+        Index("ix_connector_services_connection_enabled", "connection_id", "enabled"),
+        CheckConstraint(
+            "status in ('ready', 'disabled', 'error')",
+            name="ck_connector_services_status",
+        ),
+    )
+
+
+class SqlConnectorAgentGrant(Base):
+    """Explicit per-agent connector grant.
+
+    The grant table is the source of truth; materialized config.yaml/tool entries
+    are derived and connector-managed.
+    """
+
+    __tablename__ = "connector_agent_grants"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    service_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    tool_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="active")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "connection_id",
+            "agent_id",
+            "service_key",
+            "tool_key",
+            name="uq_connector_agent_grants_tool",
+        ),
+        Index("ix_connector_agent_grants_agent_enabled", "agent_id", "enabled"),
+        Index("ix_connector_agent_grants_connection", "connection_id"),
+        CheckConstraint(
+            "status in ('active', 'disabled', 'error')",
+            name="ck_connector_agent_grants_status",
+        ),
+    )
+
+
+class SqlConnectorOAuthState(Base):
+    """One-time OAuth state for CSRF-safe connector callbacks."""
+
+    __tablename__ = "connector_oauth_states"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    state_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_scopes: Mapped[str] = mapped_column(Text, nullable=False, server_default="[]")
+    redirect_uri: Mapped[str] = mapped_column(String(512), nullable=False)
+    code_verifier: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    expires_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    consumed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        Index("ix_connector_oauth_states_provider_expires", "provider", "expires_at"),
+    )
+
+
 class SqlGoalDependency(Base):
     """A condition that frames when a dependent goal is ready to be claimed.
 
@@ -574,9 +696,7 @@ class SqlGoalOutcome(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
     booked_at: Mapped[int] = mapped_column(Integer, nullable=False)
-    realized_value_cents: Mapped[int] = mapped_column(
-        Integer, nullable=False, server_default="0"
-    )
+    realized_value_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     source: Mapped[str] = mapped_column(String(64), nullable=False)
     evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
 

@@ -13,6 +13,7 @@ from pathlib import Path
 
 import yaml
 
+from bytedesk_omnigent.connectors.manifests import google_workspace_connector_manifest
 from omnigent.spec import parse
 
 _AGENTS = Path(__file__).resolve().parents[2] / "deploy" / "bytedesk" / "agents"
@@ -27,31 +28,6 @@ MAYA_ALLOWED_SUBAGENTS = [
     "product-ops-director",
     "sales-enablement-lead",
 ]
-
-GOOGLE_WORKSPACE_MCP_TOOLS = [
-    "googleworkspace_docs_create",
-    "googleworkspace_docs_batch_update",
-    "googleworkspace_docs_template_merge",
-    "googleworkspace_docs_template_seed",
-    "googleworkspace_sheets_create",
-    "googleworkspace_sheets_values_update",
-    "googleworkspace_slides_create",
-    "googleworkspace_drive_share_internal",
-    "googleworkspace_drive_replicate_template",
-    "googleworkspace_drive_search",
-    "googleworkspace_drive_file_create",
-    "googleworkspace_gmail_draft_create",
-    "googleworkspace_gmail_thread_read",
-    "googleworkspace_gmail_search",
-    "googleworkspace_calendar_event_create",
-    "googleworkspace_calendar_freebusy",
-    "googleworkspace_meet_space_create",
-    "googleworkspace_meeting_schedule",
-    "googleworkspace_chat_send_internal",
-    "googleworkspace_people_search",
-    "googleworkspace_directory_user_get",
-]
-
 
 def _yaml(name: str) -> dict:
     return yaml.safe_load((_AGENTS / name / "config.yaml").read_text())
@@ -81,11 +57,17 @@ def test_maya_has_allowed_subagents_policy_scoped_to_platform_developer() -> Non
     assert pol["function"]["arguments"]["allowed_agents"] == MAYA_ALLOWED_SUBAGENTS
 
 
-def test_maya_platform_mcp_allowlist_includes_full_google_workspace_surface() -> None:
+def test_maya_platform_mcp_allowlist_leaves_google_workspace_to_connectors() -> None:
     cfg = _yaml("chief-of-staff")
     allowlist = cfg["tools"]["bytedesk-platform"]["tool_allowlist"]
+    connector_tools = {
+        tool.mcp_tool
+        for service in google_workspace_connector_manifest().services
+        for tool in service.tools
+    }
 
-    assert set(GOOGLE_WORKSPACE_MCP_TOOLS).issubset(allowlist)
+    assert not any(tool.startswith("googleworkspace_") for tool in allowlist)
+    assert "drive_search" in connector_tools
 
 
 def test_maya_no_longer_declares_a_static_child() -> None:

@@ -108,8 +108,8 @@ spec:
             - name: OMNIGENT_CONFIG
               value: /etc/omnigent/config.yaml
             # Phase 0: no login, single "local" user — fine for an internal,
-            # in-cluster / port-forwarded smoke. Flip to OIDC (Google Workspace)
-            # for a shared instance.
+            # in-cluster / port-forwarded smoke. Flip to OIDC for a shared
+            # instance.
             - name: OMNIGENT_AUTH_ENABLED
               value: "0"
             # Coordination backplane URL comes from omnigent-runtime-config-secrets

@@ -36,6 +36,12 @@ _SCOUT_GOAL_SEED_LOCK = 0x73636F75746C6F63
 #: (the three-tier keyed ``memory__*`` tools — BDP-2458 / BDP-2505).
 _MEMORY_TOOL_PREFIX = "memory__"
 
+#: Tool-name prefixes for connector-managed MCP fronts. The stdio fronts
+#: advertise schemas; calls execute server-side against the extension connector
+#: store so provider configuration never has to be materialized into Kubernetes
+#: or runner child-process environments.
+_CONNECTOR_TOOL_PREFIXES = ("atlassian__", "google__")
+
 
 def _memory_tool_interceptor(
     tool_name: str,
@@ -69,6 +75,25 @@ def _memory_tool_interceptor(
     )
 
 
+def _connector_tool_interceptor(
+    tool_name: str,
+    arguments: dict | None,
+    *,
+    caller_agent_id: str | None = None,
+    caller_department: str | None = None,
+) -> str | None:
+    """Server-side handler for connector-managed MCP tools."""
+
+    from bytedesk_omnigent.connectors.tool_intercept import execute_connector_tool
+
+    return execute_connector_tool(
+        tool_name,
+        arguments,
+        caller_agent_id=caller_agent_id,
+        caller_department=caller_department,
+    )
+
+
 def _health_router() -> APIRouter:
     router = APIRouter()
 
@@ -92,6 +117,7 @@ class BytedeskExtension:
     ) -> list[APIRouter]:
         from bytedesk_omnigent.routes.agentic_inbox import create_agentic_inbox_router
         from bytedesk_omnigent.routes.config import create_config_router
+        from bytedesk_omnigent.routes.connectors import create_connectors_router
         from bytedesk_omnigent.routes.goal_delivery import create_goal_delivery_router
         from bytedesk_omnigent.routes.goals import (
             create_goal_templates_router,
@@ -100,13 +126,13 @@ class BytedeskExtension:
         from bytedesk_omnigent.routes.governance import create_governance_router
         from bytedesk_omnigent.routes.inbound import create_inbound_router
         from bytedesk_omnigent.routes.ingress import create_ingress_router
-        from bytedesk_omnigent.routes.providers import create_providers_router
         from bytedesk_omnigent.routes.integration_capabilities import (
             create_integration_capabilities_router,
         )
         from bytedesk_omnigent.routes.omni_cli_terminal import (
             create_omni_cli_terminal_router,
         )
+        from bytedesk_omnigent.routes.providers import create_providers_router
         from bytedesk_omnigent.routes.skills_concierge import create_skills_concierge_router
         from bytedesk_omnigent.scheduler.router import create_schedules_router
         from bytedesk_omnigent.tasks.router import create_tasks_router
@@ -138,6 +164,10 @@ class BytedeskExtension:
             create_tasks_router(auth_provider=auth_provider),
             create_schedules_router(auth_provider=auth_provider),
             create_config_router(auth_provider=auth_provider),
+            create_connectors_router(
+                auth_provider=auth_provider,
+                permission_store=permission_store,
+            ),
             create_omni_cli_terminal_router(
                 auth_provider=auth_provider,
                 permission_store=permission_store,
@@ -252,8 +282,8 @@ class BytedeskExtension:
             "outcome_record": lambda _c: OutcomeRecordTool(),
             "find_specialist": lambda _c: FindSpecialistTool(),
             "resolve_assignee": lambda _c: ResolveAssigneeTool(),
-            "bytedesk_jira": lambda _c: BytedeskJiraTool(),
-            "bytedesk_confluence": lambda _c: BytedeskConfluenceTool(),
+            "bytedesk_jira": lambda c: BytedeskJiraTool.from_config(c),
+            "bytedesk_confluence": lambda c: BytedeskConfluenceTool.from_config(c),
             "bytedesk_github": lambda _c: BytedeskGitHubTool(),
             "bytedesk_slack": lambda _c: BytedeskSlackTool(),
             "bytedesk_generate_image": lambda _c: BytedeskGenerateImageTool(),
@@ -261,6 +291,17 @@ class BytedeskExtension:
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),
         }
+
+    # ── external service connectors (Omnigent admin, BDP-2607) ──────
+    def connector_manifests(self) -> list:
+        from bytedesk_omnigent.connectors import bytedesk_connector_manifests
+
+        return bytedesk_connector_manifests()
+
+    def connector_providers(self) -> dict[str, Callable[[], object]]:
+        from bytedesk_omnigent.connectors import bytedesk_connector_providers
+
+        return bytedesk_connector_providers()
 
     # ── goal-engine provider seam (Phase 4, BDP-2586) ────────────────
     def goal_sensors(self) -> dict[str, Callable[[], object]]:
@@ -398,7 +439,9 @@ class BytedeskExtension:
         op, or ``None`` to fall through to normal runner dispatch (e.g. a
         ``memory__*`` name that is not one of the recognised ops).
         """
-        return {_MEMORY_TOOL_PREFIX: _memory_tool_interceptor}
+        interceptors = {_MEMORY_TOOL_PREFIX: _memory_tool_interceptor}
+        interceptors.update(dict.fromkeys(_CONNECTOR_TOOL_PREFIXES, _connector_tool_interceptor))
+        return interceptors
 
     # ── config-control-plane descriptors (Settings Registry, ADR-0150) ─
     def config_descriptors(self) -> list:
