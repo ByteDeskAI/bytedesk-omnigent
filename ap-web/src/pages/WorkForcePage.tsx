@@ -10,6 +10,7 @@ import {
   SearchIcon,
   ShieldAlertIcon,
   SlidersHorizontalIcon,
+  TerminalIcon,
   UsersIcon,
   WorkflowIcon,
 } from "lucide-react";
@@ -65,6 +66,7 @@ type WorkForceTab = "overview" | "config" | "skills" | "connectors" | "files";
 interface PendingSave {
   body: AgentImageUpdate;
   label: string;
+  tier: AgentTier;
 }
 
 interface AvailableConnectorTool extends ConnectorTool {
@@ -102,7 +104,9 @@ function isWorkForceEmployee(agent: AvailableAgent): boolean {
 function workForceRosterAgents(agents: readonly AvailableAgent[]): AvailableAgent[] {
   return agents.filter((agent) => {
     const tier = tierForAgent(agent);
-    return tier === "system" || tier === "workflow" || isWorkForceEmployee(agent);
+    return (
+      tier === "system" || tier === "harness" || tier === "workflow" || isWorkForceEmployee(agent)
+    );
   });
 }
 
@@ -121,14 +125,33 @@ function groupEmployeesByDepartment(agents: readonly AvailableAgent[]): Departme
 
 function tierLabel(tier: AgentTier): string {
   if (tier === "system") return "System Agents";
+  if (tier === "harness") return "Harnesses";
   if (tier === "workflow") return "Workflows";
   return "Employees";
 }
 
 function iconForTier(tier: AgentTier) {
   if (tier === "system") return <ShieldAlertIcon className="size-4" />;
+  if (tier === "harness") return <TerminalIcon className="size-4" />;
   if (tier === "workflow") return <WorkflowIcon className="size-4" />;
   return <BotIcon className="size-4" />;
+}
+
+function tierRequiresEditConfirmation(tier: AgentTier): boolean {
+  return tier === "system" || tier === "harness";
+}
+
+function editConfirmationTitle(tier: AgentTier | undefined): string {
+  return tier === "harness" ? "Confirm harness edit" : "Confirm system agent edit";
+}
+
+function editConfirmationDescription(tier: AgentTier | undefined): string {
+  const label = tier === "harness" ? "harness" : "system agent";
+  return `This change updates a ${label} image and becomes live for new sessions.`;
+}
+
+function editConfirmationButtonLabel(tier: AgentTier | undefined): string {
+  return tier === "harness" ? "Save harness" : "Save system agent";
 }
 
 function parentPath(path: string): string {
@@ -248,6 +271,10 @@ function RosterPanel({
   const departmentGroups = useMemo(() => groupEmployeesByDepartment(agents), [agents]);
   const employeeCount = departmentGroups.reduce((count, group) => count + group.agents.length, 0);
   const systemAgents = useMemo(() => [...groups.system].sort(compareAgentsByName), [groups.system]);
+  const harnessAgents = useMemo(
+    () => [...groups.harness].sort(compareAgentsByName),
+    [groups.harness],
+  );
   const workflowAgents = useMemo(
     () => [...groups.workflow].sort(compareAgentsByName),
     [groups.workflow],
@@ -326,6 +353,7 @@ function RosterPanel({
           {(
             [
               { tier: "system" as const, agents: systemAgents },
+              { tier: "harness" as const, agents: harnessAgents },
               { tier: "workflow" as const, agents: workflowAgents },
             ] satisfies { tier: AgentTier; agents: AvailableAgent[] }[]
           ).map((section) => (
@@ -933,6 +961,7 @@ export function WorkForcePage() {
       setSelectedAgentId(
         employeeGroups[0]?.agents[0]?.id ??
           [...grouped.system].sort(compareAgentsByName)[0]?.id ??
+          [...grouped.harness].sort(compareAgentsByName)[0]?.id ??
           [...grouped.workflow].sort(compareAgentsByName)[0]?.id ??
           null,
       );
@@ -975,8 +1004,8 @@ export function WorkForcePage() {
   }
 
   function commitSave(body: AgentImageUpdate, label: string) {
-    if (selectedTier === "system") {
-      setPendingSave({ body, label });
+    if (tierRequiresEditConfirmation(selectedTier)) {
+      setPendingSave({ body, label, tier: selectedTier });
       return;
     }
     void doSave(body, label);
@@ -1097,10 +1126,8 @@ export function WorkForcePage() {
       <Dialog open={pendingSave !== null} onOpenChange={(open) => !open && setPendingSave(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Confirm system agent edit</DialogTitle>
-            <DialogDescription>
-              This change updates a system agent image and becomes live for new sessions.
-            </DialogDescription>
+            <DialogTitle>{editConfirmationTitle(pendingSave?.tier)}</DialogTitle>
+            <DialogDescription>{editConfirmationDescription(pendingSave?.tier)}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPendingSave(null)}>
@@ -1116,7 +1143,7 @@ export function WorkForcePage() {
                 void doSave(next.body, next.label);
               }}
             >
-              Save system agent
+              {editConfirmationButtonLabel(pendingSave?.tier)}
             </Button>
           </DialogFooter>
         </DialogContent>

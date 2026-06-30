@@ -690,10 +690,9 @@ export function NewChatLandingScreen() {
       );
   }, [agents]);
 
-  // Group the picker into the three tiers (System / Employees / Workflows),
-  // each rendered as a labelled section with a divider between. Grouping
-  // preserves agentList's order, so the native-agent sort above is kept
-  // within each tier.
+  // Group the picker into labelled tier sections with dividers between.
+  // Grouping preserves agentList's order, so the native-agent sort above is
+  // kept within each tier.
   const agentTiers = useMemo(() => groupAgentsByTier(agentList), [agentList]);
 
   const [message, setMessage] = useState<string>("");
@@ -1071,13 +1070,13 @@ export function NewChatLandingScreen() {
         <AgentRowTooltip agent={agent}>
           <div className="flex min-w-0 flex-1 items-baseline gap-2.5">
             <span className="truncate">{agent.display_name}</span>
-            {/* System agents are platform-managed (read-only): a small lock
+            {/* Managed tiers are platform-authored: a small lock
                 marks them; there is no per-agent edit/delete UI to suppress. */}
-            {tierForAgent(agent) === "system" && (
+            {["system", "harness"].includes(tierForAgent(agent)) && (
               <LockIcon
                 className="size-3 shrink-0 self-center text-muted-foreground"
                 data-testid={`new-chat-landing-agent-lock-${agent.id}`}
-                aria-label="System agent (read-only)"
+                aria-label="Managed agent (read-only)"
               />
             )}
             {blurb && (
@@ -1464,14 +1463,14 @@ export function NewChatLandingScreen() {
                       side="bottom"
                       className="max-h-[var(--radix-dropdown-menu-content-available-height)] min-w-64 max-w-[calc(100vw-2rem)] overflow-y-auto p-1"
                     >
-                      {/* Three tiers — System, Employees, Workflows — each a
+                      {/* Tiers — System, Harnesses, Employees, Workflows — each a
                           labelled section reusing renderAgentRow. Only
                           non-empty tiers render, and the separator sits between
                           rendered sections (never leading/dangling). Section
                           headers are plain divs (like the Advanced menu's
                           harness label), so the rows stay direct roving-focus
                           children of DropdownMenuContent. */}
-                      {(["system", "employee", "workflow"] as const)
+                      {(["system", "harness", "employee", "workflow"] as const)
                         .filter((tier) => agentTiers[tier].length > 0)
                         .map((tier, index) => (
                           <Fragment key={tier}>

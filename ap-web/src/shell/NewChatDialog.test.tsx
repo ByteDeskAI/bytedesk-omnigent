@@ -1055,8 +1055,8 @@ describe("NewChatLandingScreen", () => {
   });
 });
 
-// The agent picker groups agents into the three tiers (System / Employees /
-// Workflows), each a labelled section, with System rows marked read-only.
+// The agent picker groups agents into labelled tier sections, with managed
+// rows marked read-only.
 describe("NewChatLandingScreen agent tiers", () => {
   beforeEach(setupLandingMocks);
   afterEach(() => {
@@ -1064,7 +1064,9 @@ describe("NewChatLandingScreen agent tiers", () => {
     localStorage.clear();
   });
 
-  function tierAgent(overrides: Partial<AvailableAgent> & Pick<AvailableAgent, "id">): AvailableAgent {
+  function tierAgent(
+    overrides: Partial<AvailableAgent> & Pick<AvailableAgent, "id">,
+  ): AvailableAgent {
     return {
       name: overrides.id,
       display_name: overrides.id,
@@ -1075,9 +1077,10 @@ describe("NewChatLandingScreen agent tiers", () => {
     };
   }
 
-  it("renders a labelled section per non-empty tier and locks system rows", () => {
+  it("renders a labelled section per non-empty tier and locks managed rows", () => {
     mockAgents([
       tierAgent({ id: "sys1", display_name: "System Bot", category: "system" }),
+      tierAgent({ id: "harness1", display_name: "Claude Code", category: "harness" }),
       tierAgent({ id: "emp1", display_name: "Employee One", workflow: false }),
       tierAgent({ id: "wf1", display_name: "Workflow One", category: "workflow" }),
     ]);
@@ -1086,25 +1089,28 @@ describe("NewChatLandingScreen agent tiers", () => {
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
     // All three tier headers render with their labels.
     expect(screen.getByTestId("new-chat-landing-agent-tier-system").textContent).toBe("System");
+    expect(screen.getByTestId("new-chat-landing-agent-tier-harness").textContent).toBe("Harnesses");
     expect(screen.getByTestId("new-chat-landing-agent-tier-employee").textContent).toBe(
       "Employees",
     );
     expect(screen.getByTestId("new-chat-landing-agent-tier-workflow").textContent).toBe(
       "Workflows",
     );
-    // The system row carries the read-only lock; the others don't.
+    // Managed rows carry the read-only lock; regular employee/workflow rows don't.
     expect(screen.getByTestId("new-chat-landing-agent-lock-sys1")).toBeTruthy();
+    expect(screen.getByTestId("new-chat-landing-agent-lock-harness1")).toBeTruthy();
     expect(screen.queryByTestId("new-chat-landing-agent-lock-emp1")).toBeNull();
     expect(screen.queryByTestId("new-chat-landing-agent-lock-wf1")).toBeNull();
   });
 
   it("omits a tier section when no agent falls into it", () => {
-    // Only employees → no System or Workflow header.
+    // Only employees → no System, Harnesses, or Workflow header.
     mockAgents([tierAgent({ id: "emp1", display_name: "Employee One", workflow: false })]);
     renderLanding();
     fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
     expect(screen.getByTestId("new-chat-landing-agent-tier-employee")).toBeTruthy();
     expect(screen.queryByTestId("new-chat-landing-agent-tier-system")).toBeNull();
+    expect(screen.queryByTestId("new-chat-landing-agent-tier-harness")).toBeNull();
     expect(screen.queryByTestId("new-chat-landing-agent-tier-workflow")).toBeNull();
   });
 });

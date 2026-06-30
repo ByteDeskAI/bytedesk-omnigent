@@ -393,8 +393,8 @@ def _backfill_agent_classification(
 
     Category (step 1): writes the authoritative ``category`` column so
     ``/v1/agents?category=`` (which queries the column) is correct — the
-    migration can only backfill system/employee; ``workflow`` lives in the
-    bundle ``params`` and is resolved here. System classification reads the
+    migration can only backfill harness/system/employee; ``workflow`` lives in
+    the bundle ``params`` and is resolved here. System classification reads the
     entity's own category (:func:`is_system`), which the converter derives from
     the allowlisted name, so it stays correct even if the bundle fails to load.
 

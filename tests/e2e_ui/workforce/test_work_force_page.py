@@ -158,6 +158,18 @@ def _register_api_routes(page: Page) -> list[str]:
                             "category": "system",
                         },
                         {
+                            "id": "ag_harness",
+                            "name": "claude-native-ui",
+                            "display_name": "Claude Code",
+                            "description": "Native Claude launcher.",
+                            "harness": "claude-native",
+                            "skills": [],
+                            "department": None,
+                            "title": None,
+                            "workflow": False,
+                            "category": "harness",
+                        },
+                        {
                             "id": "ag_workflow",
                             "name": "weekly-business-review",
                             "display_name": "Weekly Business Review",
@@ -220,9 +232,11 @@ def test_work_force_page_renders_agent_admin_shell(page: Page, built_spa: None) 
         expect(page.get_by_role("button", name=re.compile("Department Marketing"))).to_be_visible()
         expect(page.get_by_text("Backend Development Lead").first).to_be_visible()
         expect(page.get_by_text("System Agents").first).to_be_visible()
+        expect(page.get_by_text("Harnesses").first).to_be_visible()
         expect(page.get_by_text("Workflows").first).to_be_visible()
         expect(page.get_by_text("Platform Developer").first).to_be_visible()
         expect(page.get_by_text("Hello World")).to_have_count(0)
+        expect(page.get_by_text("Claude Code").first).to_be_visible()
         expect(page.get_by_text("Polly").first).to_be_visible()
         expect(page.get_by_text("Weekly Business Review").first).to_be_visible()
         expect(page.get_by_role("tab", name=re.compile("Overview"))).to_be_visible()

@@ -197,8 +197,8 @@ export interface paths {
          *     :param after: Cursor — return agents after this id.
          *     :param before: Cursor — return agents before this id.
          *     :param order: Sort order, ``"asc"`` or ``"desc"``.
-         *     :param category: Optional tier filter (``"system"`` | ``"employee"`` |
-         *         ``"workflow"``); ``None`` returns all tiers.
+         *     :param category: Optional tier filter (``"system"`` | ``"harness"`` |
+         *         ``"employee"`` | ``"workflow"``); ``None`` returns all tiers.
          *     :returns: A :class:`PaginatedList` of built-in agents.
          */
         get: operations["list_builtin_agents_v1_agents_get"];
@@ -277,6 +277,46 @@ export interface paths {
          *         (name is immutable).
          */
         put: operations["put_agent_image_v1_agents__agent_id__image_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/image/file": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Image File
+         * @description Return one bounded UTF-8 text file from a template agent image.
+         */
+        get: operations["get_agent_image_file_v1_agents__agent_id__image_file_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/image/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Image Tree
+         * @description Return a directory listing for a template agent image.
+         */
+        get: operations["get_agent_image_tree_v1_agents__agent_id__image_tree_get"];
+        put?: never;
         post?: never;
         delete?: never;
         options?: never;
@@ -4277,6 +4317,57 @@ export interface components {
             typescript_tools: string[];
             /** Version */
             version: number;
+        };
+        /**
+         * AgentImageFile
+         * @description Text file read from an extracted template-agent image.
+         */
+        AgentImageFile: {
+            /** Content */
+            content: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Size */
+            size: number;
+            /** Version */
+            version: number;
+        };
+        /**
+         * AgentImageTree
+         * @description Directory listing for an extracted template-agent image.
+         */
+        AgentImageTree: {
+            /** Entries */
+            entries: components["schemas"]["AgentImageTreeEntry"][];
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Version */
+            version: number;
+        };
+        /**
+         * AgentImageTreeEntry
+         * @description One entry in an agent image directory listing.
+         */
+        AgentImageTreeEntry: {
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+            /** Size */
+            size?: number | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "directory" | "file";
         };
         /**
          * AgentImageUpdate
@@ -8668,6 +8759,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentObject"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_image_file_v1_agents__agent_id__image_file_get: {
+        parameters: {
+            query: {
+                path: string;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentImageFile"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_image_tree_v1_agents__agent_id__image_tree_get: {
+        parameters: {
+            query?: {
+                path?: string;
+            };
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentImageTree"];
                 };
             };
             /** @description Validation Error */

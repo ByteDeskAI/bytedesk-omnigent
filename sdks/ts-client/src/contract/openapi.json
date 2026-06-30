@@ -223,6 +223,121 @@
         "title": "AgentImage",
         "type": "object"
       },
+      "AgentImageFile": {
+        "description": "Text file read from an extracted template-agent image.",
+        "properties": {
+          "content": {
+            "title": "Content",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "size": {
+            "title": "Size",
+            "type": "integer"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "path",
+          "content",
+          "size"
+        ],
+        "title": "AgentImageFile",
+        "type": "object"
+      },
+      "AgentImageTree": {
+        "description": "Directory listing for an extracted template-agent image.",
+        "properties": {
+          "entries": {
+            "items": {
+              "$ref": "#/components/schemas/AgentImageTreeEntry"
+            },
+            "title": "Entries",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "version",
+          "path",
+          "entries"
+        ],
+        "title": "AgentImageTree",
+        "type": "object"
+      },
+      "AgentImageTreeEntry": {
+        "description": "One entry in an agent image directory listing.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          },
+          "size": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Size"
+          },
+          "type": {
+            "enum": [
+              "directory",
+              "file"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "path",
+          "type"
+        ],
+        "title": "AgentImageTreeEntry",
+        "type": "object"
+      },
       "AgentImageUpdate": {
         "description": "Partial edit to a template agent's image (PUT body).\n\nOnly the supplied parts are overwritten; everything else (skills,\ntools, sub-agents) is preserved from the current bundle. ``config``,\nwhen present, replaces ``config.yaml`` wholesale \u2014 the editor holds\nthe full document, so there is no server-side merge to disagree\nabout.",
         "properties": {
@@ -7143,7 +7258,7 @@
     },
     "/v1/agents": {
       "get": {
-        "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:param category: Optional tier filter (``\"system\"`` | ``\"employee\"`` |\n    ``\"workflow\"``); ``None`` returns all tiers.\n:returns: A :class:`PaginatedList` of built-in agents.",
+        "description": "List built-in agents with cursor-based pagination.\n\nReturns only built-in agents \u2014 ``agent_store.list()`` filters\n``session_id IS NULL`` \u2014 so session-scoped agents never appear.\n\n:param request: The incoming FastAPI request (for auth).\n:param limit: Maximum number of agents to return (1-1000).\n:param after: Cursor \u2014 return agents after this id.\n:param before: Cursor \u2014 return agents before this id.\n:param order: Sort order, ``\"asc\"`` or ``\"desc\"``.\n:param category: Optional tier filter (``\"system\"`` | ``\"harness\"`` |\n    ``\"employee\"`` | ``\"workflow\"``); ``None`` returns all tiers.\n:returns: A :class:`PaginatedList` of built-in agents.",
         "operationId": "list_builtin_agents_v1_agents_get",
         "parameters": [
           {
@@ -7208,7 +7323,7 @@
             "schema": {
               "anyOf": [
                 {
-                  "pattern": "^(system|employee|workflow)$",
+                  "pattern": "^(system|harness|employee|workflow)$",
                   "type": "string"
                 },
                 {
@@ -7379,6 +7494,111 @@
           }
         },
         "summary": "Put Agent Image",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/image/file": {
+      "get": {
+        "description": "Return one bounded UTF-8 text file from a template agent image.",
+        "operationId": "get_agent_image_file_v1_agents__agent_id__image_file_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": true,
+            "schema": {
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentImageFile"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Image File",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
+    "/v1/agents/{agent_id}/image/tree": {
+      "get": {
+        "description": "Return a directory listing for a template agent image.",
+        "operationId": "get_agent_image_tree_v1_agents__agent_id__image_tree_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "agent_id",
+            "required": true,
+            "schema": {
+              "title": "Agent Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "path",
+            "required": false,
+            "schema": {
+              "default": "",
+              "title": "Path",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentImageTree"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Agent Image Tree",
         "tags": [
           "agents"
         ]

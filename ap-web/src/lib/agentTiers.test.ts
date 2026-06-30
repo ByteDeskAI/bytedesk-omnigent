@@ -5,6 +5,7 @@ describe("tierForAgent", () => {
   it("uses an explicit valid category over the workflow flag", () => {
     // category wins even when the legacy flag would say otherwise.
     expect(tierForAgent({ category: "system", workflow: true })).toBe("system");
+    expect(tierForAgent({ category: "harness", workflow: true })).toBe("harness");
     expect(tierForAgent({ category: "workflow", workflow: false })).toBe("workflow");
     expect(tierForAgent({ category: "employee", workflow: true })).toBe("employee");
   });
@@ -32,24 +33,37 @@ describe("groupAgentsByTier", () => {
     const agents = [
       { id: "e1", workflow: false },
       { id: "s1", category: "system" },
+      { id: "h1", category: "harness" },
       { id: "w1", workflow: true },
       { id: "e2", category: "employee" },
       { id: "s2", category: "system" },
+      { id: "h2", category: "harness" },
       { id: "w2", category: "workflow" },
     ];
     const groups = groupAgentsByTier(agents);
     expect(groups.system.map((a) => a.id)).toEqual(["s1", "s2"]);
+    expect(groups.harness.map((a) => a.id)).toEqual(["h1", "h2"]);
     expect(groups.employee.map((a) => a.id)).toEqual(["e1", "e2"]);
     expect(groups.workflow.map((a) => a.id)).toEqual(["w1", "w2"]);
   });
 
   it("returns empty buckets for an empty input", () => {
-    expect(groupAgentsByTier([])).toEqual({ system: [], employee: [], workflow: [] });
+    expect(groupAgentsByTier([])).toEqual({
+      system: [],
+      harness: [],
+      employee: [],
+      workflow: [],
+    });
   });
 });
 
 describe("TIER_LABELS", () => {
   it("labels each tier", () => {
-    expect(TIER_LABELS).toEqual({ system: "System", employee: "Employees", workflow: "Workflows" });
+    expect(TIER_LABELS).toEqual({
+      system: "System",
+      harness: "Harnesses",
+      employee: "Employees",
+      workflow: "Workflows",
+    });
   });
 });

@@ -174,9 +174,7 @@ def create_builtin_agents_router(
         after: str | None = Query(default=None),
         before: str | None = Query(default=None),
         order: str = Query(default="desc", pattern="^(asc|desc)$"),
-        category: str | None = Query(
-            default=None, pattern="^(system|employee|workflow)$"
-        ),
+        category: str | None = Query(default=None, pattern="^(system|harness|employee|workflow)$"),
     ) -> PaginatedList:
         """List built-in agents with cursor-based pagination.
 
@@ -188,8 +186,8 @@ def create_builtin_agents_router(
         :param after: Cursor — return agents after this id.
         :param before: Cursor — return agents before this id.
         :param order: Sort order, ``"asc"`` or ``"desc"``.
-        :param category: Optional tier filter (``"system"`` | ``"employee"`` |
-            ``"workflow"``); ``None`` returns all tiers.
+        :param category: Optional tier filter (``"system"`` | ``"harness"`` |
+            ``"employee"`` | ``"workflow"``); ``None`` returns all tiers.
         :returns: A :class:`PaginatedList` of built-in agents.
         """
         _require_user(request, auth_provider)

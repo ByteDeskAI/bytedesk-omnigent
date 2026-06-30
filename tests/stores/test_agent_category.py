@@ -10,7 +10,7 @@ from __future__ import annotations
 import sqlalchemy as sa
 
 from omnigent.db.utils import generate_agent_id, get_or_create_engine
-from omnigent.entities import SystemAgent, Workflow
+from omnigent.entities import HarnessAgent, SystemAgent, Workflow
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 
 
@@ -45,11 +45,16 @@ def test_set_category_unknown_agent_returns_false(tmp_path) -> None:
 
 def test_list_filters_by_category(tmp_path) -> None:
     store = SqlAlchemyAgentStore(f"sqlite:///{tmp_path / 'a.db'}")
-    sys_id, wf_id, emp_id = generate_agent_id(), generate_agent_id(), generate_agent_id()
+    sys_id = generate_agent_id()
+    harness_id = generate_agent_id()
+    wf_id = generate_agent_id()
+    emp_id = generate_agent_id()
     store.create(sys_id, name="skill-manager", bundle_location="x:///s")
+    store.create(harness_id, name="claude-native-ui", bundle_location="x:///h")
     store.create(wf_id, name="weekly-report", bundle_location="x:///w")
     store.create(emp_id, name="vivian", bundle_location="x:///e")
     store.set_category(sys_id, "system")
+    store.set_category(harness_id, "harness")
     store.set_category(wf_id, "workflow")
     store.set_category(emp_id, "employee")
 
@@ -61,6 +66,10 @@ def test_list_filters_by_category(tmp_path) -> None:
     assert [a.id for a in systems.data] == [sys_id]
     assert isinstance(systems.data[0], SystemAgent)
 
-    # No filter → all three tiers.
+    harnesses = store.list(limit=100, category="harness")
+    assert [a.id for a in harnesses.data] == [harness_id]
+    assert isinstance(harnesses.data[0], HarnessAgent)
+
+    # No filter → all tiers.
     everyone = {a.id for a in store.list(limit=100).data}
-    assert everyone == {sys_id, wf_id, emp_id}
+    assert everyone == {sys_id, harness_id, wf_id, emp_id}

@@ -12,7 +12,7 @@ import time
 from omnigent.db.converters import sql_agent_to_entity
 from omnigent.db.db_models import SqlAgent
 from omnigent.db.utils import builtin_agent_id, get_or_create_engine, make_managed_session_maker
-from omnigent.entities import Agent, SystemAgent, Workflow
+from omnigent.entities import Agent, HarnessAgent, SystemAgent, Workflow
 
 
 def _now() -> int:
@@ -213,6 +213,11 @@ class TestCategoryDispatch:
         assert isinstance(entity, SystemAgent)
         assert entity.category == "system"
 
+    def test_column_harness_yields_harness_agent(self) -> None:
+        entity = sql_agent_to_entity(self._row(category="harness"))
+        assert isinstance(entity, HarnessAgent)
+        assert entity.category == "harness"
+
     def test_column_workflow_yields_workflow(self) -> None:
         entity = sql_agent_to_entity(self._row(category="workflow"))
         assert isinstance(entity, Workflow)
@@ -227,6 +232,11 @@ class TestCategoryDispatch:
         """Pre-column rows fall back to name-only inference: an allowlisted name → SystemAgent."""
         entity = sql_agent_to_entity(self._row(name="polly", category=None))
         assert isinstance(entity, SystemAgent)
+
+    def test_null_column_native_launcher_infers_harness(self) -> None:
+        """Pre-column native launcher rows fall back to the harness category."""
+        entity = sql_agent_to_entity(self._row(name="claude-native-ui", category=None))
+        assert isinstance(entity, HarnessAgent)
 
     def test_null_column_ordinary_name_defaults_agent(self) -> None:
         """Row-only inference can't see ``params.workflow``, so a non-system NULL row → Agent."""

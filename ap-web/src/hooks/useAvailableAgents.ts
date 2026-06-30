@@ -28,7 +28,7 @@ export interface AvailableAgent {
   department?: string | null;
   title?: string | null;
   workflow?: boolean;
-  // Three-tier grouping from GET /v1/agents (system / employee / workflow).
+  // Tier grouping from GET /v1/agents (system / harness / employee / workflow).
   // Absent on older servers; tierForAgent falls back to the workflow flag.
   category?: AgentTier;
 }
