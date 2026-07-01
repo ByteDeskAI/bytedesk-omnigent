@@ -50,6 +50,13 @@ class _AgentStore:
         """
         return self._agents.get(agent_id)
 
+    def get_by_name(self, name: str) -> Agent | None:
+        """Return a built-in agent by stable name."""
+        for agent in self._agents.values():
+            if agent.name == name and agent.session_id is None:
+                return agent
+        return None
+
     def create(
         self,
         agent_id: str,
@@ -720,6 +727,25 @@ async def test_fork_switch_binds_target_agent_bundle() -> None:
     # response reflects the bound (switched) agent.
     assert "codex" in clone_call["name"]
     # The fork binds the cloned agent id.
+    assert conv_store.fork_calls[0]["agent_id"] == clone_call["agent_id"]
+
+
+@pytest.mark.asyncio
+async def test_fork_switch_accepts_target_agent_name() -> None:
+    """A fork target may be addressed by stable built-in agent name."""
+    conv = _make_conversation()
+    conv_store = _ConversationStore(
+        conversations={"conv_src": conv},
+        items_by_conv={"conv_src": [_make_item("msg_1", "Hello")]},
+    )
+    agent_store = _switch_agent_store()
+    client = TestClient(_build_app(conv_store, agent_store=agent_store))
+
+    resp = client.post("/v1/sessions/conv_src/fork", json={"agent_id": "codex"})
+
+    assert resp.status_code == 201, f"Expected 201, got {resp.status_code}: {resp.text}"
+    clone_call = agent_store.create_calls[0]
+    assert clone_call["bundle_location"] == "ag_codex_native/hash"
     assert conv_store.fork_calls[0]["agent_id"] == clone_call["agent_id"]
 
 

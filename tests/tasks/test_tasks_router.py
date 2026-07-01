@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from bytedesk_omnigent.sessions import set_session_initiator
 from bytedesk_omnigent.tasks.router import create_tasks_router
 from bytedesk_omnigent.tasks.store import SqlAlchemyTaskStore
+from omnigent.entities import Agent
 
 
 @dataclass
@@ -27,12 +28,44 @@ class _Initiator:
         return "conv_1"
 
 
+class _AgentStore:
+    def __init__(self, agents: list[Agent]) -> None:
+        self._agents = {agent.id: agent for agent in agents}
+
+    def get(self, agent_id: str) -> Agent | None:
+        return self._agents.get(agent_id)
+
+    def get_by_name(self, name: str) -> Agent | None:
+        for agent in self._agents.values():
+            if agent.name == name and agent.session_id is None:
+                return agent
+        return None
+
+
 def test_create_fetch_and_run_task_route(tmp_path, monkeypatch) -> None:
     store = SqlAlchemyTaskStore(f"sqlite:///{tmp_path / 'tasks.db'}")
+    agent_store = _AgentStore(
+        [
+            Agent(
+                id="ag_planner",
+                created_at=1,
+                name="planner-agent",
+                bundle_location="ag_planner/hash",
+            ),
+            Agent(
+                id="ag_runner",
+                created_at=1,
+                name="runner-agent",
+                bundle_location="ag_runner/hash",
+            ),
+        ]
+    )
 
     import bytedesk_omnigent.tasks.store as tasks_store
+    import omnigent.runtime as omnigent_runtime
 
     monkeypatch.setattr(tasks_store, "get_task_store", lambda: store)
+    monkeypatch.setattr(omnigent_runtime, "get_agent_store", lambda: agent_store)
     app = FastAPI()
     app.include_router(create_tasks_router())
     client = TestClient(app)
@@ -42,7 +75,7 @@ def test_create_fetch_and_run_task_route(tmp_path, monkeypatch) -> None:
         json={
             "title": "Draft launch plan",
             "prompt": "Draft the launch plan.",
-            "owner_agent_id": "ag_planner",
+            "owner_agent_id": "planner-agent",
         },
     )
 
@@ -60,7 +93,7 @@ def test_create_fetch_and_run_task_route(tmp_path, monkeypatch) -> None:
         set_session_initiator(initiator)
         run = client.post(
             f"/tasks/{task['id']}/run",
-            json={"run_as_agent_id": "ag_runner", "external_key": "manual:test"},
+            json={"run_as_agent_id": "runner-agent", "external_key": "manual:test"},
         )
     finally:
         set_session_initiator(None)

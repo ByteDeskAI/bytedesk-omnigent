@@ -1137,14 +1137,16 @@ class SessionCreateRequest(BaseModel):
     JSON request body for ``POST /v1/sessions``.
 
     Creates a new session bound to an existing agent (looked up by
-    durable agent ID, NOT name) and optionally seeds its input queue.
+    durable agent ID or template-agent name) and optionally seeds its
+    input queue.
 
     The Alpha runner-state bundled create flow adds a multipart shape
     to the same endpoint; this JSON body remains the existing
     session-create contract for clients that already uploaded an agent.
 
-    :param agent_id: Durable identifier of the agent to bind,
-        e.g. ``"ag_abc123"``. Must match a registered agent.
+    :param agent_id: Durable identifier or template-agent name to
+        bind, e.g. ``"ag_abc123"`` or ``"chief-of-staff"``.
+        Must match a registered agent.
     :param initial_items: Initial queued events/inputs, typically a
         single user ``"message"``.
     :param title: Optional human-readable title for the session,
@@ -1827,11 +1829,11 @@ class SessionForkRequest(BaseModel):
 
     :param title: Title for the forked session. When ``None``, the
         server derives ``"Fork of <source_title>"``.
-    :param agent_id: Built-in agent to bind the fork to, switching it
-        away from the source's agent/harness (e.g. fork a Claude session
-        into a Codex one, or a Claude-SDK session into Claude Code). When
-        ``None``, the fork keeps the source's agent. Must be a built-in
-        agent (one listed by ``GET /v1/agents``).
+    :param agent_id: Built-in agent id or name to bind the fork to,
+        switching it away from the source's agent/harness (e.g. fork a
+        Claude session into a Codex one, or a Claude-SDK session into
+        Claude Code). When ``None``, the fork keeps the source's agent.
+        Must be a built-in agent (one listed by ``GET /v1/agents``).
     :param up_to_response_id: Truncation point for the copied history,
         e.g. ``"resp_abc123"``. When set, only items up to and including
         the last item of that response are copied — items after it are
@@ -1854,10 +1856,10 @@ class SessionSwitchAgentRequest(BaseModel):
     keeping the same session (transcript, comments, files, workspace).
     Unlike fork, no new session is created.
 
-    :param agent_id: Built-in agent to switch the session to, e.g.
-        ``"ag_builtin_codex"``. Must be a built-in agent (one listed by
-        ``GET /v1/agents``) and different from the session's current
-        agent.
+    :param agent_id: Built-in agent id or name to switch the session
+        to, e.g. ``"ag_builtin_codex"`` or ``"codex-native-ui"``.
+        Must be a built-in agent (one listed by ``GET /v1/agents``)
+        and different from the session's current agent.
     """
 
     agent_id: str

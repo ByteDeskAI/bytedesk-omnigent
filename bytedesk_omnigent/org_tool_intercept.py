@@ -9,6 +9,7 @@ from typing import Any
 
 from bytedesk_omnigent.connectors.store import get_connector_store
 from bytedesk_omnigent.workforce import effective_workforce_for_agent, get_workforce_store, slug
+from omnigent.server.agent_refs import resolve_agent_ref
 
 _logger = logging.getLogger(__name__)
 
@@ -224,8 +225,26 @@ def _limit(raw: Any) -> int:
         return _DEFAULT_LIMIT
 
 
+def _normalize_agent_ref(agent_ref: str) -> str | None:
+    ref = agent_ref.strip()
+    if not ref:
+        return None
+    try:
+        agent_store, _agent_cache = _runtime_stores()
+        agent = resolve_agent_ref(agent_store, ref, template_only=True)
+    except RuntimeError:
+        return ref if ref.startswith("ag_") else None
+    if agent is not None:
+        return agent.id
+    return ref if ref.startswith("ag_") else None
+
+
 def _get_effective_access(args: dict[str, Any], *, caller_agent_id: str | None) -> dict[str, Any]:
-    agent_id = str(args.get("agent_id") or args.get("agentId") or caller_agent_id or "").strip()
+    supplied_agent_id = args.get("agent_id") or args.get("agentId")
+    if supplied_agent_id is not None:
+        agent_id = _normalize_agent_ref(str(supplied_agent_id))
+    else:
+        agent_id = str(caller_agent_id or "").strip() or None
     if not agent_id:
         return {"ok": False, "error": "agent_identity_required"}
     workforce = effective_workforce_for_agent(agent_id, store=get_workforce_store())

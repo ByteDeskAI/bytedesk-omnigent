@@ -42,6 +42,12 @@ class _AgentStore:
     def get(self, agent_id: str):
         return self._agents.get(agent_id)
 
+    def get_by_name(self, name: str):
+        for agent in self._agents.values():
+            if agent.name == name and agent.session_id is None:
+                return agent
+        return None
+
     def list(self, limit=1000, after=None, before=None, order="asc", category=None):
         del limit, after, before, order
         data = list(self._agents.values())
@@ -437,7 +443,7 @@ def test_disable_stale_connector_grants_for_deleted_and_missing_agents(
     assert grants["ag_maya"].enabled is True
 
 
-def _app() -> FastAPI:
+def _app(agent_store=None) -> FastAPI:
     app = FastAPI()
     app.add_exception_handler(
         OmnigentError,
@@ -446,7 +452,7 @@ def _app() -> FastAPI:
             content={"error": exc.code},
         ),
     )
-    app.include_router(create_workforce_router(), prefix="/v1")
+    app.include_router(create_workforce_router(agent_store=agent_store), prefix="/v1")
     return app
 
 
@@ -492,6 +498,47 @@ def test_workforce_route_persists_department_connector_scope(
     assert assignment["connectionId"] == conn.id
     assert assignment["serviceKey"] == "drive"
     assert assignment["toolKey"] == "search"
+
+
+def test_workforce_agent_route_accepts_agent_name(
+    monkeypatch,
+    db_uri: str,
+) -> None:
+    workforce_store = SqlAlchemyWorkforceStore(db_uri)
+    agent_store = _AgentStore(
+        [
+            Agent(
+                id="ag_maya",
+                created_at=1,
+                name="chief-of-staff",
+                bundle_location="ag_maya/hash",
+            )
+        ]
+    )
+    effective_calls: list[str] = []
+
+    def _effective(agent_id: str, **kwargs):
+        del kwargs
+        effective_calls.append(agent_id)
+        return {"found": True, "agentId": agent_id, "instructions": []}
+
+    monkeypatch.setattr(
+        "bytedesk_omnigent.routes.workforce.get_workforce_store",
+        lambda: workforce_store,
+    )
+    monkeypatch.setattr(
+        "bytedesk_omnigent.routes.workforce.effective_workforce_for_agent",
+        _effective,
+    )
+
+    resp = TestClient(_app(agent_store=agent_store)).put(
+        "/v1/workforce/agents/chief-of-staff/instructions",
+        json={"body": "Coordinate the work.", "enabled": True},
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["instruction"]["scopeId"] == "ag_maya"
+    assert effective_calls == ["ag_maya", "ag_maya"]
 
 
 def test_workforce_route_persists_department_tool_scope(

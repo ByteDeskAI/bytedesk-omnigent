@@ -13,6 +13,7 @@ from bytedesk_omnigent.connectors.providers import (
 from bytedesk_omnigent.connectors.registry import ConnectorRegistry
 from bytedesk_omnigent.connectors.store import SqlAlchemyConnectorStore
 from bytedesk_omnigent.routes.connectors import create_connectors_router
+from omnigent.entities import Agent
 from omnigent.errors import OmnigentError
 
 
@@ -26,6 +27,20 @@ class _NonAdminStore:
         return False
 
 
+class _AgentStore:
+    def __init__(self, agents: list[Agent]) -> None:
+        self._agents = {agent.id: agent for agent in agents}
+
+    def get(self, agent_id: str) -> Agent | None:
+        return self._agents.get(agent_id)
+
+    def get_by_name(self, name: str) -> Agent | None:
+        for agent in self._agents.values():
+            if agent.name == name and agent.session_id is None:
+                return agent
+        return None
+
+
 def _registry() -> ConnectorRegistry:
     return ConnectorRegistry(
         {m.provider: m for m in bytedesk_connector_manifests()},
@@ -36,7 +51,7 @@ def _registry() -> ConnectorRegistry:
     )
 
 
-def _app(auth_provider=None, permission_store=None) -> FastAPI:
+def _app(auth_provider=None, permission_store=None, agent_store=None) -> FastAPI:
     app = FastAPI()
     app.add_exception_handler(
         OmnigentError,
@@ -48,6 +63,7 @@ def _app(auth_provider=None, permission_store=None) -> FastAPI:
         create_connectors_router(
             auth_provider=auth_provider,
             permission_store=permission_store,
+            agent_store=agent_store,
         ),
         prefix="/v1",
     )
@@ -258,6 +274,53 @@ def test_grant_endpoint_persists_individual_connector_tools(
         ("drive", "search"),
         ("gmail", "search"),
     ]
+
+
+def test_grant_endpoint_accepts_agent_name(
+    monkeypatch,
+    db_uri: str,
+) -> None:
+    store = SqlAlchemyConnectorStore(db_uri)
+    conn = store.upsert_connection(
+        provider="google_workspace",
+        display_name="Workspace",
+        auth_type="google_domain_wide_delegation",
+        scopes=[],
+        metadata={"delegated_subject": "admin@bytedesk.test"},
+        secret_ref="secret-ref",
+    )
+    GoogleWorkspaceConnectorProvider().bootstrap_services(store, conn)
+    monkeypatch.setattr("bytedesk_omnigent.routes.connectors.get_connector_store", lambda: store)
+    monkeypatch.setattr("bytedesk_omnigent.routes.connectors.build_connector_registry", _registry)
+    agent_store = _AgentStore(
+        [
+            Agent(
+                id="ag_maya",
+                created_at=1,
+                name="chief-of-staff",
+                bundle_location="ag_maya/hash",
+            )
+        ]
+    )
+
+    resp = TestClient(_app(agent_store=agent_store)).post(
+        f"/v1/connectors/connections/{conn.id}/agent-grants",
+        json={
+            "agentId": "chief-of-staff",
+            "tools": ["drive:search"],
+            "materialize": False,
+        },
+    )
+
+    assert resp.status_code == 200, resp.text
+    grant = resp.json()["grants"][0]
+    assert grant["agentId"] == "ag_maya"
+    listed = TestClient(_app(agent_store=agent_store)).get(
+        "/v1/connectors/agent-grants",
+        params={"agentId": "chief-of-staff"},
+    )
+    assert listed.status_code == 200, listed.text
+    assert [row["agentId"] for row in listed.json()["grants"]] == ["ag_maya"]
 
 
 def test_grant_endpoint_replaces_previous_active_tool_set(

@@ -155,6 +155,7 @@ from omnigent.server._elicitation_registry import (
     _ParkedHarnessElicitation,
     _PreResolvedHarnessElicitation,
 )
+from omnigent.server.agent_refs import require_agent_ref, resolve_agent_ref
 from omnigent.server.agent_write import apply_bundle_update
 from omnigent.server.auth import (
     LEVEL_EDIT,
@@ -11401,7 +11402,9 @@ async def _create_session_from_existing_agent(
 
     This preserves the existing JSON ``POST /v1/sessions`` contract:
     clients that uploaded an agent separately still bind by durable
-    ``agent_id`` and receive the full session snapshot.
+    ``agent_id`` and receive the full session snapshot. Operator-facing
+    callers may also pass a template agent's stable ``name``; it is
+    normalized to the durable id before persistence.
 
     :param conversation_store: Store for conversation persistence.
     :param agent_store: Store for agent lookup by durable id.
@@ -11427,12 +11430,7 @@ async def _create_session_from_existing_agent(
     """
     _reject_reserved_cost_control_label_seed(body.labels)
 
-    agent = await asyncio.to_thread(agent_store.get, body.agent_id)
-    if agent is None:
-        raise OmnigentError(
-            f"Agent not found: {body.agent_id!r}",
-            code=ErrorCode.NOT_FOUND,
-        )
+    agent = await asyncio.to_thread(require_agent_ref, agent_store, body.agent_id)
 
     # Session-scoped agents belong to a specific session.
     # The caller must have at least READ access to that owning
@@ -13747,13 +13745,19 @@ def create_sessions_router(
             if (permission_store is not None and user_id is not None)
             else False
         )
+        normalized_agent_id = agent_id
+        if agent_id:
+            resolved_agent = await asyncio.to_thread(resolve_agent_ref, agent_store, agent_id)
+            if resolved_agent is None:
+                return PaginatedList(data=[], first_id=None, last_id=None, has_more=False)
+            normalized_agent_id = resolved_agent.id
         normalized_query = search_query if search_query else None
         page = await asyncio.to_thread(
             conversation_store.list_conversations,
             limit=limit,
             after=after,
             before=before,
-            agent_id=agent_id,
+            agent_id=normalized_agent_id,
             agent_name=agent_name,
             accessible_by=_session_list_accessible_by(user_id, is_admin=user_is_admin),
             has_agent_id=True,
@@ -14611,15 +14615,18 @@ def create_sessions_router(
         # agent belongs to one conversation (possibly another user's) and
         # must never be cloned across sessions.
         base_agent = source_agent
-        switching_agent = body.agent_id is not None and body.agent_id != source.agent_id
-        if switching_agent:
-            target_agent = await asyncio.to_thread(agent_store.get, body.agent_id)
-            if target_agent is None or target_agent.session_id is not None:
-                raise OmnigentError(
-                    f"Agent not found or not bindable: {body.agent_id!r}",
-                    code=ErrorCode.NOT_FOUND,
-                )
-            base_agent = target_agent
+        switching_agent = False
+        if body.agent_id is not None and body.agent_id != source.agent_id:
+            target_agent = await asyncio.to_thread(
+                require_agent_ref,
+                agent_store,
+                body.agent_id,
+                template_only=True,
+                not_found=f"Agent not found or not bindable: {body.agent_id!r}",
+            )
+            switching_agent = target_agent.id != source.agent_id
+            if switching_agent:
+                base_agent = target_agent
 
         # Clone the chosen agent's bundle into a fresh session-scoped
         # AgentStore definition so the fork can be reconfigured without
@@ -14803,12 +14810,13 @@ def create_sessions_router(
         # Only built-in agents (``session_id IS NULL``) are bindable: a
         # session-scoped agent belongs to one conversation (possibly another
         # user's) and must never be cloned across sessions.
-        target_agent = await asyncio.to_thread(agent_store.get, body.agent_id)
-        if target_agent is None or target_agent.session_id is not None:
-            raise OmnigentError(
-                f"Agent not found or not bindable: {body.agent_id!r}",
-                code=ErrorCode.NOT_FOUND,
-            )
+        target_agent = await asyncio.to_thread(
+            require_agent_ref,
+            agent_store,
+            body.agent_id,
+            template_only=True,
+            not_found=f"Agent not found or not bindable: {body.agent_id!r}",
+        )
 
         # Reject a no-op switch to the built-in the session is already running:
         # its session-scoped clone shares the built-in's ``bundle_location``, so

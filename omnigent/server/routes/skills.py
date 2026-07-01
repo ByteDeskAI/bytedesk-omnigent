@@ -9,9 +9,9 @@ from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field, model_validator
 
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runtime.agent_cache import AgentCache
+from omnigent.server.agent_refs import resolve_agent_ref_id, resolve_agent_ref_ids
 from omnigent.server.auth import LEVEL_OWNER, AuthProvider
 from omnigent.server.routes._auth_helpers import require_user as _require_user
 from omnigent.skills.acquisition import (
@@ -37,12 +37,6 @@ _CONCIERGE_AGENT_NAME = "skills-concierge"
 #: staging workspace). They stay authenticated even on the otherwise-anonymous
 #: read routes — an unauthenticated caller must never reach arbitrary execution.
 _COMMAND_SOURCES = frozenset({"freeform", "configured"})
-
-#: Privilege capability gating cross-agent skill applies (agent-tiering step 2,
-#: BDP-2577). Held only by the bundled skills-concierge system agent; the apply
-#: route requires it before letting one agent install a skill into another.
-_SKILL_MANAGE_CAPABILITY = "system.skills.manage"
-
 
 class SkillCommandBody(BaseModel):
     """Command source for free-form/configured source adapters."""
@@ -239,29 +233,6 @@ class ConciergeSessionResponse(BaseModel):
     web_path: str
 
 
-def _calling_agent_id(
-    request: Request,
-    conversation_store: ConversationStore | None,
-) -> str | None:
-    """Resolve the agent behind a runner-tunnel-authenticated apply request.
-
-    The runner posts skill mutations with its tunnel token in the
-    ``X-Omnigent-Runner-Tunnel-Token`` header; the token deterministically
-    binds to a runner id, and the conversation store maps that runner to the
-    agent bound to its live session. Returns ``None`` when the call is not
-    agent-originated — no usable token (the authenticated human operator), no
-    ``conversation_store``, or no agent is bound to the runner.
-
-    :param request: The inbound apply request.
-    :param conversation_store: Store resolving runner → agent, or ``None``.
-    :returns: The calling agent id, or ``None``.
-    """
-    token = request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER)
-    if not token or not token.strip() or conversation_store is None:
-        return None
-    return conversation_store.agent_id_for_runner(token_bound_runner_id(token))
-
-
 def _scope_phrase(kind: str, target_id: str) -> str:
     if kind == "organization":
         return "the whole organization"
@@ -329,7 +300,17 @@ def create_skills_router(
         agent_id: str | None = None,
     ) -> InstalledSkillsResponse:
         _require_user(request, auth_provider)
-        rows = await asyncio.to_thread(acquisition.installed, agent_id=agent_id)
+        normalized_agent_id = (
+            await asyncio.to_thread(
+                resolve_agent_ref_id,
+                agent_store,
+                agent_id,
+                template_only=True,
+            )
+            if agent_id is not None
+            else None
+        )
+        rows = await asyncio.to_thread(acquisition.installed, agent_id=normalized_agent_id)
         return InstalledSkillsResponse(
             data=[InstalledSkillObject.model_validate(row) for row in rows]
         )
@@ -366,10 +347,16 @@ def create_skills_router(
         body: SkillPreviewRequest,
     ) -> SkillPreviewResponse:
         _require_user(request, auth_provider)
+        target_agent_ids = await asyncio.to_thread(
+            resolve_agent_ref_ids,
+            agent_store,
+            body.target_agent_ids,
+            template_only=True,
+        )
         preview = await asyncio.to_thread(
             acquisition.create_preview,
             operation=body.operation,
-            target_agent_ids=body.target_agent_ids,
+            target_agent_ids=target_agent_ids,
             install_mode=body.install_mode,
             source=body.source,
             source_ref=body.source_ref,
@@ -386,42 +373,20 @@ def create_skills_router(
         body: SkillApplyRequest | None = None,
     ) -> SkillApplyResponse:
         _require_user(request, auth_provider)
-        # ── Scoped server-side authz gate (agent-tiering step 2, BDP-2577) ──
-        # Guards AGENT-originated skill installs. An agent may freely apply to
-        # ITSELF, but a CROSS-AGENT apply (installing into any other agent) is
-        # privileged: it requires the calling agent to hold the
-        # `system.skills.manage` capability — held only by the bundled
-        # skills-concierge system agent.
-        #
-        # A request authenticates AS an agent only via the runner tunnel token,
-        # so a call with no resolvable calling agent is the authenticated human
-        # operator (already past `_require_user` — the fleet owner driving the
-        # web Skills UI), which this capability gate deliberately does NOT
-        # restrict (existing user-permission checks still apply). The gate's job
-        # is to stop an agent from autonomously escalating other agents, not to
-        # constrain the human. Scoped to this route — the global
-        # AuthorizationProvider is untouched.
-        calling_agent_id = _calling_agent_id(request, conversation_store)
-        if calling_agent_id is not None:
-            preview = await asyncio.to_thread(acquisition.get_preview, preview_id)
-            target_ids = (
-                set(body.target_agent_ids)
-                if body is not None and body.target_agent_ids
-                else {action.agent_id for action in preview.target_actions}
+        target_agent_ids = (
+            await asyncio.to_thread(
+                resolve_agent_ref_ids,
+                agent_store,
+                body.target_agent_ids,
+                template_only=True,
             )
-            if target_ids - {calling_agent_id}:  # at least one OTHER agent
-                if _SKILL_MANAGE_CAPABILITY not in agent_store.get_capabilities(
-                    calling_agent_id
-                ):
-                    raise OmnigentError(
-                        "cross-agent skill apply requires the "
-                        f"{_SKILL_MANAGE_CAPABILITY!r} capability",
-                        code=ErrorCode.FORBIDDEN,
-                    )
+            if body is not None and body.target_agent_ids
+            else None
+        )
         results = await asyncio.to_thread(
             acquisition.apply_preview,
             preview_id,
-            agent_ids=body.target_agent_ids if body is not None else None,
+            agent_ids=target_agent_ids,
         )
         return SkillApplyResponse(data=[_apply_result_to_response(result) for result in results])
 

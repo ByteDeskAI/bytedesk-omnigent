@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime.agent_cache import AgentCache
+from omnigent.server.agent_refs import require_agent_ref
 from omnigent.server.agent_write import apply_bundle_update
 from omnigent.server.auth import AuthProvider, local_single_user_enabled
 from omnigent.server.bundles import validate_agent_bundle
@@ -322,7 +323,12 @@ def create_agents_write_router(
         :raises OmnigentError: If the agent is missing or session-scoped.
         """
         _require_user(request, auth_provider)
-        agent = await asyncio.to_thread(agent_store.get, agent_id)
+        agent = await asyncio.to_thread(
+            require_agent_ref,
+            agent_store,
+            agent_id,
+            template_only=True,
+        )
         _require_template(agent, agent_id)
         response.headers["ETag"] = f'"{agent.version}"'
 
@@ -349,7 +355,12 @@ def create_agents_write_router(
     ) -> AgentImageTree:
         """Return a directory listing for a template agent image."""
         await _require_admin(request)
-        agent = await asyncio.to_thread(agent_store.get, agent_id)
+        agent = await asyncio.to_thread(
+            require_agent_ref,
+            agent_store,
+            agent_id,
+            template_only=True,
+        )
         _require_template(agent, agent_id)
         response.headers["ETag"] = f'"{agent.version}"'
         loaded = await asyncio.to_thread(_load_template_image, agent_cache, agent)
@@ -371,7 +382,12 @@ def create_agents_write_router(
     ) -> AgentImageFile:
         """Return one bounded UTF-8 text file from a template agent image."""
         await _require_admin(request)
-        agent = await asyncio.to_thread(agent_store.get, agent_id)
+        agent = await asyncio.to_thread(
+            require_agent_ref,
+            agent_store,
+            agent_id,
+            template_only=True,
+        )
         _require_template(agent, agent_id)
         response.headers["ETag"] = f'"{agent.version}"'
         loaded = await asyncio.to_thread(_load_template_image, agent_cache, agent)
@@ -411,7 +427,12 @@ def create_agents_write_router(
             (name is immutable).
         """
         await _require_admin(request)
-        agent = await asyncio.to_thread(agent_store.get, agent_id)
+        agent = await asyncio.to_thread(
+            require_agent_ref,
+            agent_store,
+            agent_id,
+            template_only=True,
+        )
         _require_template(agent, agent_id)
         # If-Match optimistic concurrency (BDP-2412): the agent version the
         # editor last read, threaded into the row write as a compare-and-swap

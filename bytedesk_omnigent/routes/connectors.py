@@ -18,7 +18,9 @@ from bytedesk_omnigent.connectors.providers import (
 from bytedesk_omnigent.connectors.registry import ConnectorRegistry, build_connector_registry
 from bytedesk_omnigent.connectors.store import ConnectorConnection, get_connector_store
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.server.agent_refs import resolve_agent_ref
 from omnigent.server.auth import AuthProvider
+from omnigent.stores import AgentStore
 from omnigent.stores.permission_store import PermissionStore
 
 
@@ -171,8 +173,40 @@ def _grant_targets(
 def create_connectors_router(
     auth_provider: AuthProvider | None = None,
     permission_store: PermissionStore | None = None,
+    agent_store: AgentStore | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    def _normalize_agent_ref(agent_ref: str, *, missing_ok: bool = False) -> str | None:
+        ref = agent_ref.strip()
+        if not ref:
+            return None if missing_ok else agent_ref
+        try:
+            store = agent_store
+            if store is None:
+                from omnigent.runtime import get_agent_store
+
+                store = get_agent_store()
+            agent = resolve_agent_ref(store, ref, template_only=True)
+        except Exception as exc:
+            if ref.startswith("ag_"):
+                return ref
+            if missing_ok:
+                return None
+            raise OmnigentError(
+                f"Agent not found or not bindable: {agent_ref!r}",
+                code=ErrorCode.NOT_FOUND,
+            ) from exc
+        if agent is not None:
+            return agent.id
+        if ref.startswith("ag_"):
+            return ref
+        if missing_ok:
+            return None
+        raise OmnigentError(
+            f"Agent not found or not bindable: {agent_ref!r}",
+            code=ErrorCode.NOT_FOUND,
+        )
 
     async def _require_admin(request: Request) -> None:
         from omnigent.server.routes._auth_helpers import get_user_id
@@ -354,13 +388,18 @@ def create_connectors_router(
         agent_id: str | None = Query(default=None, alias="agentId"),
     ) -> JSONResponse:
         await _require_admin(request)
+        normalized_agent_id = (
+            _normalize_agent_ref(agent_id, missing_ok=True) if agent_id is not None else None
+        )
+        if agent_id is not None and normalized_agent_id is None:
+            return JSONResponse({"grants": []})
         return JSONResponse(
             {
                 "grants": [
                     grant.to_dict()
                     for grant in get_connector_store().list_agent_grants(
                         connection_id=connection_id,
-                        agent_id=agent_id,
+                        agent_id=normalized_agent_id,
                     )
                 ]
             }
@@ -377,6 +416,7 @@ def create_connectors_router(
         conn = store.get_connection(connection_id)
         if conn is None:
             raise OmnigentError("connector connection not found", code=ErrorCode.NOT_FOUND)
+        normalized_agent_id = _normalize_agent_ref(body.agent_id)
         registry = build_connector_registry()
         known_services = {svc.service_key: svc for svc in store.list_services(connection_id)}
         requested = _grant_targets(
@@ -391,7 +431,7 @@ def create_connectors_router(
             grants.append(
                 store.upsert_agent_grant(
                     connection_id=connection_id,
-                    agent_id=body.agent_id,
+                    agent_id=normalized_agent_id,
                     service_key=service_key,
                     tool_key=tool_key,
                     enabled=body.enabled,
@@ -401,13 +441,13 @@ def create_connectors_router(
         if body.enabled and body.replace:
             for grant in store.list_agent_grants(
                 connection_id=connection_id,
-                agent_id=body.agent_id,
+                agent_id=normalized_agent_id,
             ):
                 if (grant.service_key, grant.tool_key) in requested_set:
                     continue
                 store.upsert_agent_grant(
                     connection_id=connection_id,
-                    agent_id=body.agent_id,
+                    agent_id=normalized_agent_id,
                     service_key=grant.service_key,
                     tool_key=grant.tool_key,
                     enabled=False,
@@ -419,9 +459,9 @@ def create_connectors_router(
                 services=list(known_services.values()),
                 grants=store.list_agent_grants(
                     connection_id=connection_id,
-                    agent_id=body.agent_id,
+                    agent_id=normalized_agent_id,
                 ),
-                agent_id=body.agent_id,
+                agent_id=normalized_agent_id,
             )
         return JSONResponse({"grants": [grant.to_dict() for grant in grants]})
 
