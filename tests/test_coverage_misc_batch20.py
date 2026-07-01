@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -15,25 +14,28 @@ from sqlalchemy.orm import Session
 
 from bytedesk_omnigent.policies.budget import cost_hard_stop
 from bytedesk_omnigent.policies.dry_run import dry_run_preview
+from bytedesk_omnigent.policies.github import _ShellOp, github_policy
 from bytedesk_omnigent.realtime import config as realtime_config
 from bytedesk_omnigent.session_state_store import SqlAlchemySessionStateStore
 from omnigent.coordination.inprocess import InProcessBackplane
 from omnigent.coordination.replica_id import server_replica_id
 from omnigent.coordination.sync import claim_resource, release_resource
+from omnigent.db.db_models import SqlHost
+from omnigent.db.utils import get_or_create_engine
 from omnigent.entities.environment_filesystem import ResourceError
 from omnigent.grok_native import _materialize_grok_agent_spec
-from bytedesk_omnigent.policies.github import _ShellOp, github_policy
 from omnigent.policies.builtins.prompt import prompt_policy
 from omnigent.server import presence
 from omnigent.server.routes.comments import create_comments_router
-from omnigent.session_lifecycle import CLOSED_LABEL_KEY, CLOSED_LABEL_VALUE, labels_with_closed_status
+from omnigent.session_lifecycle import (
+    CLOSED_LABEL_KEY,
+    CLOSED_LABEL_VALUE,
+    labels_with_closed_status,
+)
 from omnigent.stores.artifact_store.local import LocalArtifactStore
-from omnigent.db.db_models import SqlHost
-from omnigent.db.utils import get_or_create_engine
 from omnigent.stores.host_store import HostStore, _parse_configured_harnesses
-from omnigent.stores.lifecycle import LIFECYCLE_HOOKS_ENV_VAR, _invoke_one, run_store_lifecycle
+from omnigent.stores.lifecycle import _invoke_one, run_store_lifecycle
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
-
 
 # ── bytedesk_omnigent/realtime/config.py ─────────────────────────────────────
 
@@ -230,10 +232,8 @@ class _SyncLifecycleStore:
 
 @pytest.mark.asyncio
 async def test_invoke_one_tolerates_sync_lifecycle_hook(
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Sync overrides are returned directly without awaiting."""
-    monkeypatch.setenv(LIFECYCLE_HOOKS_ENV_VAR, "1")
     store = _SyncLifecycleStore()
     assert await _invoke_one(store, "startup") is True
     results = await run_store_lifecycle([store], "startup")
