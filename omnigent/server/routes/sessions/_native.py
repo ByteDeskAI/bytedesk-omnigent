@@ -292,6 +292,13 @@ _logger = logging.getLogger(__name__)
 from ._constants import *
 from ._state import *
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 _CLAUDE_NATIVE_SUBAGENT_WRAPPER_LABEL_VALUE = "claude-code-native-ui-subagent"
 
 _CLAUDE_NATIVE_SUBAGENT_ID_LABEL_KEY = "omnigent.claude_native.subagent_id"
@@ -350,6 +357,7 @@ _NATIVE_POLICY_NOT_ENFORCED_CODE = "native_policy_not_enforced"
 
 _CLAUDE_NATIVE_PERMISSION_HOOK_TIMEOUT_S = 86400.0
 
+@dataclass
 class _MirroredToolCall:
     """
     Tool identity of a forwarder-mirrored ``function_call``.
@@ -920,6 +928,7 @@ def _native_terminal_ensure_transport_error(
         message=message,
     )
 
+@dataclass
 class _NativeTerminalEnsureOutcome:
     """
     Result of a native terminal readiness probe.
@@ -1227,7 +1236,7 @@ def _build_native_terminal_message_event(
     :raises OmnigentError: If the event is not a user message.
     """
     display_name, model, harness = _native_terminal_runtime(conv)
-    data = parse_item_data(body.type, {"type": body.type, **body.data})
+    data = _sessions_facade().parse_item_data(body.type, {"type": body.type, **body.data})
     if not isinstance(data, MessageData) or data.role != "user":
         raise OmnigentError(
             f"{display_name} terminal sessions accept only user message events",
@@ -1537,4 +1546,3 @@ def _native_subagent_wrapper_labels(
     if sub_spec is None:
         return {}
     return _native_subagent_wrapper_labels_from_spec(sub_spec)
-

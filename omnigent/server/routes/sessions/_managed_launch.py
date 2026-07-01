@@ -294,6 +294,13 @@ from ._state import *
 
 _HOST_LAUNCH_RESULT_TIMEOUT_S = 15.0
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+@dataclass
 class _HostLaunchAttempt:
     """
     Outcome of a relaunch ``host.launch_runner`` round-trip.
@@ -418,7 +425,7 @@ async def _run_managed_launch(
         sandbox generation for, or ``None`` for a first launch (a
         fresh host identity is minted).
     """
-    managed = await _provision_managed_sandbox(
+    managed = await _sessions_facade()._provision_managed_sandbox(
         session_id=session_id,
         owner=owner,
         sandbox_config=sandbox_config,
@@ -429,7 +436,7 @@ async def _run_managed_launch(
     )
     if managed is None:
         return
-    await _bind_and_launch_managed_runner(
+    await _sessions_facade()._bind_and_launch_managed_runner(
         session_id=session_id,
         owner=owner,
         managed=managed,
@@ -484,7 +491,7 @@ async def _provision_managed_sandbox(
 
         :param stage: The stage just entered, e.g. ``"cloning"``.
         """
-        _publish_sandbox_status(session_id, stage)
+        _sessions_facade()._publish_sandbox_status(session_id, stage)
 
     try:
         if relaunch_host is not None:
@@ -509,7 +516,7 @@ async def _provision_managed_sandbox(
             exc.detail,
         )
         tracker.fail(session_id, str(exc.detail))
-        _publish_sandbox_status(session_id, "failed", str(exc.detail))
+        _sessions_facade()._publish_sandbox_status(session_id, "failed", str(exc.detail))
         return None
     except Exception:
         # Broad on purpose: this is a fire-and-forget task — an
@@ -521,7 +528,7 @@ async def _provision_managed_sandbox(
             session_id,
         )
         tracker.fail(session_id, "internal error during managed sandbox launch")
-        _publish_sandbox_status(
+        _sessions_facade()._publish_sandbox_status(
             session_id, "failed", "internal error during managed sandbox launch"
         )
         return None
@@ -687,7 +694,7 @@ def _kick_managed_relaunch(
     tracker.begin(session_id)
     # Seed the relaunch's progress indicator immediately — the user is
     # typically watching the session page when "wake the sandbox" runs.
-    _publish_sandbox_status(session_id, "provisioning")
+    _sessions_facade()._publish_sandbox_status(session_id, "provisioning")
     relaunch_task = asyncio.create_task(
         _run_managed_launch(
             session_id=session_id,
@@ -787,4 +794,3 @@ async def _persist_host_launch_failure_turn(
     # the same way a boot failure does — no-ops for top-level sessions.
     await _forward_native_subagent_terminal_failure(session_id, conv, error, runner_router)
     return consumed.id
-

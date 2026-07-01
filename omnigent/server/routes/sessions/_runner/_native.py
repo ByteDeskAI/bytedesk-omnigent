@@ -301,6 +301,13 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 def _native_terminal_failure_from_runner_response(
     resp: httpx.Response,
     *,
@@ -445,7 +452,7 @@ async def _forward_session_change_to_runner(
     """
     from omnigent.runtime import get_runner_client
 
-    runner_client = await _get_runner_client(session_id, runner_router)
+    runner_client = await _sessions_facade()._get_runner_client(session_id, runner_router)
     if runner_client is None:
         runner_client = cast("httpx.AsyncClient | None", get_runner_client())
     if runner_client is None:
@@ -472,4 +479,3 @@ async def _forward_session_change_to_runner(
             resp.text,
         )
     return _RunnerForwardResult(status_code=resp.status_code, body=resp.text)
-

@@ -292,6 +292,13 @@ _logger = logging.getLogger(__name__)
 from ._constants import *
 from ._state import *
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 def _intercept_tool(
     namespaced_name: str,
     arguments: dict[str, Any] | None,
@@ -330,6 +337,7 @@ def _intercept_tool(
                 return None
     return None
 
+@dataclass
 class _PendingPolicyAskWrites:
     """Policy writes deferred until a relay-path tool-call ASK is approved.
 
@@ -455,13 +463,14 @@ async def _apply_pending_policy_ask_writes(
     :returns: None.
     """
     elicitation_id = data.get("elicitation_id", "")
-    pending = _pending_policy_ask_writes.get(elicitation_id)
+    pending_writes = _sessions_facade()._pending_policy_ask_writes
+    pending = pending_writes.get(elicitation_id)
     if pending is None:
         return
     if data.get("action") != "accept":
         # Declined — remove the stashed writes (POLICIES.md §7.2:
         # a denied ASK leaves no trace).
-        _pending_policy_ask_writes.pop(elicitation_id, None)
+        pending_writes.pop(elicitation_id, None)
         return
     if pending.from_mcp:
         # MCP entries: the retry path (POST /mcp with requestState)
@@ -472,15 +481,20 @@ async def _apply_pending_policy_ask_writes(
         return
     # Non-MCP relay path: pop and apply writes here since no retry
     # will arrive.
-    _pending_policy_ask_writes.pop(elicitation_id, None)
+    pending_writes.pop(elicitation_id, None)
     # Resolve the agent spec + build the engine off the event loop: the
     # lookup, cold-cache bundle fetch, and engine construction are all
     # blocking DB/IO.
-    spec = await asyncio.to_thread(_load_agent_spec_for_session, conv, agent_store)
+    spec = await asyncio.to_thread(
+        _sessions_facade()._load_agent_spec_for_session, conv, agent_store
+    )
     if spec is None:
         return
     engine = await asyncio.to_thread(
-        _build_policy_engine_from_spec, spec, session_id, conversation_store
+        _sessions_facade()._build_policy_engine_from_spec,
+        spec,
+        session_id,
+        conversation_store,
     )
     # The label/state writes hit the DB synchronously too — keep them
     # off the loop.
@@ -641,7 +655,10 @@ async def _evaluate_tool_call_policy(
     if spec is None:
         return None
     engine = await asyncio.to_thread(
-        _build_policy_engine_from_spec, spec, session_id, conversation_store
+        _sessions_facade()._build_policy_engine_from_spec,
+        spec,
+        session_id,
+        conversation_store,
     )
 
     try:
@@ -688,7 +705,7 @@ async def _evaluate_tool_call_policy(
     # Always store an entry even when there are no deferred writes —
     # the MCP retry path checks the pending map to verify the
     # elicitation was genuinely issued by the server.
-    _pending_policy_ask_writes[elicitation_id] = _PendingPolicyAskWrites(
+    _sessions_facade()._pending_policy_ask_writes[elicitation_id] = _PendingPolicyAskWrites(
         state_updates=result.state_updates,
         set_labels=result.set_labels,
     )
@@ -800,7 +817,10 @@ async def _evaluate_input_policy(
         return None
 
     engine = await asyncio.to_thread(
-        _build_policy_engine_from_spec, spec, session_id, conversation_store
+        _sessions_facade()._build_policy_engine_from_spec,
+        spec,
+        session_id,
+        conversation_store,
     )
     ctx = EvaluationContext(
         phase=Phase.REQUEST,
@@ -896,7 +916,10 @@ async def _evaluate_output_policy(
         return None
 
     engine = await asyncio.to_thread(
-        _build_policy_engine_from_spec, spec, session_id, conversation_store
+        _sessions_facade()._build_policy_engine_from_spec,
+        spec,
+        session_id,
+        conversation_store,
     )
     ctx = EvaluationContext(
         phase=Phase.RESPONSE,
@@ -924,4 +947,3 @@ async def _evaluate_output_policy(
         "reason": reason,
         "_denied_body": denied_body,
     }
-

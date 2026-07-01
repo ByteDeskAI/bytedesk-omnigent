@@ -301,6 +301,13 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 async def _forward_event_to_runner(
     session_id: str,
     conv: Conversation,
@@ -1351,7 +1358,7 @@ def _ensure_runner_relay(
         _logger.info("Relay: creating new for session=%s runner=%s", session_id, runner_id)
     ready = asyncio.Event()
     task = asyncio.create_task(
-        _relay_runner_stream(
+        _sessions_facade()._relay_runner_stream(
             session_id,
             runner_client,
             conversation_store,
@@ -1398,7 +1405,7 @@ async def _ensure_runner_relay_ready(
     :raises OmnigentError: If the relay cannot observe the
         runner stream's ready heartbeat before the timeout.
     """
-    handle = _ensure_runner_relay(
+    handle = _sessions_facade()._ensure_runner_relay(
         session_id,
         runner_id,
         runner_client,
@@ -1409,7 +1416,7 @@ async def _ensure_runner_relay_ready(
     try:
         await asyncio.wait_for(
             handle.ready.wait(),
-            timeout=_RUNNER_RELAY_READY_TIMEOUT_S,
+            timeout=_sessions_facade()._RUNNER_RELAY_READY_TIMEOUT_S,
         )
     except asyncio.TimeoutError as exc:
         if handle.task.done():
@@ -1422,4 +1429,3 @@ async def _ensure_runner_relay_ready(
             code=ErrorCode.RUNNER_UNAVAILABLE,
         ) from exc
     return handle
-

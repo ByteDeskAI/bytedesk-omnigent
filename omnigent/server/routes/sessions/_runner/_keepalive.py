@@ -301,6 +301,7 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+@dataclass
 class _RelayHandle:
     """
     Active SSE relay task plus the runner it streams from.
@@ -318,6 +319,7 @@ class _RelayHandle:
     task: asyncio.Task[None]
     ready: asyncio.Event
 
+@dataclass
 class _KeepaliveHandle:
     """A per-session runner keepalive task plus its viewer refcount.
 
@@ -390,4 +392,3 @@ def _release_runner_keepalive(session_id: str) -> None:
     if existing.refcount <= 0:
         existing.task.cancel()
         _runner_keepalive_tasks.pop(session_id, None)
-

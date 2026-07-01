@@ -301,6 +301,13 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 def _publish_runner_recovered_status(session_id: str) -> None:
     """
     Clear a stale failed session status after runner recovery.
@@ -367,6 +374,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
     """The actual heal pipeline (one runner per session at a time)."""
     from omnigent.runtime import get_runner_router
 
+    sessions = _sessions_facade()
     cfg = load_runner_heal_config()
     app_state = request.app.state
     conversation_store: ConversationStore = app_state.conversation_store
@@ -393,7 +401,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
     if not acquired:
         # A peer replica owns the heal — its CAS repin is the observable result.
         conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
-        client = await _wait_for_runner_client(
+        client = await sessions._wait_for_runner_client(
             session_id,
             runner_router,
             runner_control_registry,
@@ -410,8 +418,8 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
 
         # Liveness gate: never heal a runner that is actually fine (a peer
         # replica may have just repaired it while we waited for the lock).
-        existing_client = await _get_runner_client(session_id, runner_router)
-        if existing_client is not None and await _runner_client_ready(existing_client):
+        existing_client = await sessions._get_runner_client(session_id, runner_router)
+        if existing_client is not None and await sessions._runner_client_ready(existing_client):
             return True
 
         host = (
@@ -424,7 +432,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
         # loss); relaunch a new sandbox generation under the same host identity.
         if host is not None and host.sandbox_provider is not None:
             try:
-                healed = await _maybe_relaunch_managed_sandbox(
+                healed = await sessions._maybe_relaunch_managed_sandbox(
                     session_id=session_id,
                     conv=conv,
                     app_state=app_state,
@@ -433,10 +441,10 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
             except OmnigentError:
                 healed = False
             if healed:
-                _publish_terminal_pending(session_id, False)
+                sessions._publish_terminal_pending(session_id, False)
                 _publish_runner_recovered_status(session_id)
                 return True
-            _publish_terminal_pending(session_id, True)
+            sessions._publish_terminal_pending(session_id, True)
             return False
 
         # ── Rung 1: relaunch on the bound host (plain session) ──
@@ -454,7 +462,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
 
             host_conn = host_registry.get(conv.host_id) if host_registry is not None else None
             if host_conn is not None:
-                attempt = await _launch_runner_on_host(
+                attempt = await sessions._launch_runner_on_host(
                     conv,
                     conversation_store,
                     host_registry,
@@ -465,7 +473,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                     repin=_repin,
                 )
             elif host_registry is not None:
-                attempt = await _launch_runner_on_host_id(
+                attempt = await sessions._launch_runner_on_host_id(
                     conv,
                     conversation_store,
                     host_registry,
@@ -481,7 +489,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
             if not attempt.repinned:
                 # The row moved under us (a concurrent heal / rebind won). Defer
                 # to that writer's runner rather than launch a competing one.
-                client = await _wait_for_runner_client(
+                client = await sessions._wait_for_runner_client(
                     session_id,
                     runner_router,
                     runner_control_registry,
@@ -501,7 +509,7 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                     with contextlib.suppress(Exception):
                         host_registry.evict(host_conn)
                 break
-            client = await _wait_for_runner_client(
+            client = await sessions._wait_for_runner_client(
                 session_id,
                 runner_router,
                 runner_control_registry,
@@ -510,14 +518,14 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                 runner_exit_reports=runner_exit_reports,
             )
             if client is not None:
-                _publish_terminal_pending(session_id, False)
+                sessions._publish_terminal_pending(session_id, False)
                 _publish_runner_recovered_status(session_id)
                 return True
             await asyncio.sleep(min(0.5 * (attempt_no + 1), 2.0))
 
         # ── Rung 2: host failover (PLAIN only, behind failover.enabled) ──
         if cfg.failover_enabled and host_store is not None:
-            healed = await _failover_to_new_host(
+            healed = await sessions._failover_to_new_host(
                 conv=conv,
                 owner=owner,
                 bad_host_id=conv.host_id,
@@ -533,12 +541,12 @@ async def _run_session_heal(session_id: str, request: Request) -> bool:
                 runner_exit_reports=runner_exit_reports,
             )
             if healed:
-                _publish_terminal_pending(session_id, False)
+                sessions._publish_terminal_pending(session_id, False)
                 _publish_runner_recovered_status(session_id)
                 return True
 
         # ── Rung 3: graceful "offline / reconnecting" (never a 503 storm) ──
-        _publish_terminal_pending(session_id, True)
+        sessions._publish_terminal_pending(session_id, True)
         return False
     finally:
         if backplane is not None and acquired:
@@ -589,8 +597,9 @@ async def _ensure_runner_relay_ready_with_heal(
         heal, when the heal exhausts every rung, or when the heal cannot
         re-resolve a runner client / the retried handshake still fails.
     """
+    sessions = _sessions_facade()
     try:
-        await _ensure_runner_relay_ready(
+        await sessions._ensure_runner_relay_ready(
             session_id,
             conv.runner_id,
             runner_client,
@@ -610,18 +619,17 @@ async def _ensure_runner_relay_ready_with_heal(
         )
         if refreshed is not None:
             conv = refreshed
-        healed_client = await _get_runner_client(session_id, runner_router)
+        healed_client = await sessions._get_runner_client(session_id, runner_router)
         if healed_client is None:
             raise OmnigentError(
                 "runner unavailable for message relay",
                 code=ErrorCode.RUNNER_UNAVAILABLE,
             ) from exc
         runner_client = healed_client
-        await _ensure_runner_relay_ready(
+        await sessions._ensure_runner_relay_ready(
             session_id,
             conv.runner_id,
             runner_client,
             conversation_store,
         )
         return conv, runner_client
-
