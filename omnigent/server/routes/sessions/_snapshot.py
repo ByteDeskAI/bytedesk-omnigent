@@ -418,11 +418,9 @@ def _build_session_response(
         external_session_id=conv.external_session_id,
         terminal_launch_args=conv.terminal_launch_args,
         # Replay outstanding approval prompts into the snapshot.
-        # The live SSE stream has no buffer, so a prompt emitted
-        # before the user opened this chat would otherwise never
-        # render — the UI rebuilds blocks from the snapshot on
-        # cold load, then live-tails. Empty list when nothing is
-        # outstanding (the common case).
+        # The live SSE replay window is bounded, so a prompt emitted
+        # before the user opened this chat may need snapshot recovery.
+        # Empty list when nothing is outstanding (the common case).
         pending_elicitations=(
             pending_elicitation_events
             if pending_elicitation_events is not None
