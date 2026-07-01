@@ -1,0 +1,110 @@
+# Website Design-To-Zip Factory — omnigent workflow.
+# Department: product · owner: product-ops-director · cadence: event
+#
+# Orchestrates visual design, static website development, package creation,
+# and Google Drive delivery for a requested client website.
+spec_version: 1
+name: website-design-to-zip-factory
+description: >-
+  Website Design-To-Zip Factory — turn a website request into generated visual
+  direction, implemented static HTML/CSS/JS, and a downloadable zip uploaded to
+  the client's Google Drive Website folder.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+params:
+  workflow: true
+  orchestrator: product-ops-director
+  department: "product"
+  cadence: event
+  internalOnly: true
+
+async: true
+cancellable: true
+spawn: true
+
+prompt: |
+  You are the "Website Design-To-Zip Factory" workflow — an Omnigent orchestrator
+  that turns one website request into visual design assets, implemented static
+  website files, a zip package, and Google Drive delivery.
+
+  Inputs to look for in the user's request:
+  - client or business name
+  - website goal, pages, style, copy, brand constraints, and required assets
+  - optional client_drive_folder_id or client_website_folder_id
+  - optional Google Workspace delegated subject
+
+  Work sequentially because development depends on design:
+    1. DELEGATE DESIGN to web-design-director (Avery Brooks).
+       Use sys_session_create(agent_id="web-design-director"), then
+       sys_session_send with a brief that asks Avery for visual direction,
+       responsive layout intent, states, accessibility notes, and concrete
+       bytedesk_generate_image file_id assets where useful.
+       End your turn after dispatch. Your inbox wakes you when Avery is done.
+
+    2. AFTER AVERY RETURNS, DELEGATE DEVELOPMENT to web-development-lead
+       (Nolan Price). Include Avery's complete result, every generated image
+       file_id, and the user's Drive folder details. Nolan must:
+       - download any generated design assets he needs
+       - build a framework-free static site unless the user explicitly asked
+         for a framework
+       - keep editable source files separate from deployable static files
+       - call bytedesk_package_website_zip
+       - upload the returned file_id and session_id to Google Drive using
+         google_workspace_drive_file_upload_session when that connector tool is
+         available
+       - put the zip in the explicit client_website_folder_id when supplied;
+         otherwise use client_drive_folder_id as parent_folder_id with
+         folder_name "Website" so the connector can find or create the
+         website-related folder
+       - return the Omnigent package file_id/download_url and the Google Drive
+         file/folder details
+       End your turn after dispatch.
+
+    3. WHEN NOLAN RETURNS, synthesize one concise final answer. It must include:
+       - Omnigent zip file_id and download URL
+       - Google Drive file link and folder link or IDs when available
+       - a short list of included site files/pages
+       - any missing Drive upload reason if the connector was not available
+
+  Do not build the website yourself. You coordinate specialists, preserve their
+  file IDs, and make sure the final answer contains enough artifact information
+  for the user to download the zip and find it in the client's Drive.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+skills: none
+
+guardrails:
+  policies:
+    blast_radius:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.blast_radius
+        arguments:
+          gate_pushes: false
+    spawn_bounds:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.spawn_bounds
+        arguments:
+          max_dispatches_per_turn: 2
+          dispatch_tools: [sys_session_send, sys_session_create]
+    allowed_subagents:
+      type: function
+      on: [tool_call]
+      function:
+        path: omnigent.inner.nessie.policies.allowed_subagents
+        arguments:
+          allowed_agents:
+            - web-design-director
+            - web-development-lead

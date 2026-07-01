@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -218,6 +219,152 @@ def test_google_drive_search_calls_drive_files_list(monkeypatch) -> None:
     assert captured["scopes"] == ["https://www.googleapis.com/auth/drive"]
     assert captured["params"]["q"] == "name contains 'Roadmap'"
     assert captured["params"]["pageSize"] == 5
+
+
+@dataclass
+class _StoredFile:
+    id: str = "file_zip_1"
+    filename: str = "acme-website.zip"
+    bytes: int = 9
+    content_type: str | None = "application/zip"
+    session_id: str | None = "conv_1"
+
+
+def test_google_drive_upload_session_file_uses_drive_multipart_upload(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    class FileStore:
+        def get(self, file_id: str, session_id: str | None = None) -> _StoredFile | None:
+            assert file_id == "file_zip_1"
+            assert session_id == "conv_1"
+            return _StoredFile()
+
+    class ArtifactStore:
+        def get(self, key: str) -> bytes:
+            assert key == "file_zip_1"
+            return b"zip-bytes"
+
+    class Response:
+        content = b'{"id":"drive_file_1","name":"acme-website.zip"}'
+        text = content.decode()
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"id": "drive_file_1", "name": "acme-website.zip"}
+
+    def fake_post(url: str, **kwargs: Any) -> Response:
+        captured.update({"url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: FileStore())
+    monkeypatch.setattr("omnigent.runtime.get_artifact_store", lambda: ArtifactStore())
+    monkeypatch.setattr(google_workspace_mcp, "_token", lambda *args, **kwargs: "drive-token")
+    monkeypatch.setattr(google_workspace_mcp.httpx, "post", fake_post)
+
+    out = google_workspace_mcp.drive_file_upload_session(
+        file_id="file_zip_1",
+        session_id="conv_1",
+        folder_id="folder_website",
+    )
+
+    assert out["ok"] is True
+    assert out["file"] == {"id": "drive_file_1", "name": "acme-website.zip"}
+    assert out["folder"] == {
+        "id": "folder_website",
+        "name": "Website",
+        "created": False,
+    }
+    assert out["source"]["file_id"] == "file_zip_1"
+    assert captured["url"] == "https://www.googleapis.com/upload/drive/v3/files"
+    assert captured["params"]["uploadType"] == "multipart"
+    assert captured["headers"]["Authorization"] == "Bearer drive-token"
+    assert captured["headers"]["Content-Type"].startswith("multipart/related")
+    assert b'"parents":["folder_website"]' in captured["content"]
+    assert b"zip-bytes" in captured["content"]
+
+
+def test_google_drive_upload_session_file_finds_or_creates_website_folder(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FileStore:
+        def get(self, file_id: str, session_id: str | None = None) -> _StoredFile | None:
+            return _StoredFile()
+
+    class ArtifactStore:
+        def get(self, key: str) -> bytes:
+            return b"zip-bytes"
+
+    class Response:
+        content = b'{"id":"drive_file_1","name":"site.zip"}'
+        text = content.decode()
+        status_code = 200
+
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict[str, Any]:
+            return {"id": "drive_file_1", "name": "site.zip"}
+
+    def fake_request(method: str, url: str, **kwargs: Any) -> dict[str, Any]:
+        calls.append({"method": method, "url": url, **kwargs})
+        if method == "GET":
+            return {"ok": True, "data": {"files": []}}
+        return {
+            "ok": True,
+            "data": {
+                "id": "folder_created",
+                "name": "Website",
+                "mimeType": "application/vnd.google-apps.folder",
+            },
+        }
+
+    def fake_post(url: str, **kwargs: Any) -> Response:
+        calls.append({"method": "POST_UPLOAD", "url": url, **kwargs})
+        return Response()
+
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: FileStore())
+    monkeypatch.setattr("omnigent.runtime.get_artifact_store", lambda: ArtifactStore())
+    monkeypatch.setattr(google_workspace_mcp, "_request", fake_request)
+    monkeypatch.setattr(google_workspace_mcp, "_token", lambda *args, **kwargs: "drive-token")
+    monkeypatch.setattr(google_workspace_mcp.httpx, "post", fake_post)
+
+    out = google_workspace_mcp.drive_file_upload_session(
+        file_id="file_zip_1",
+        session_id="conv_1",
+        folder_name="Website",
+        parent_folder_id="client_folder",
+    )
+
+    assert out["ok"] is True
+    assert out["folder"] == {"id": "folder_created", "name": "Website", "created": True}
+    assert "name = 'Website'" in calls[0]["params"]["q"]
+    assert "'client_folder' in parents" in calls[0]["params"]["q"]
+    assert calls[1]["json_body"]["name"] == "Website"
+    assert calls[1]["json_body"]["parents"] == ["client_folder"]
+    assert b'"parents":["folder_created"]' in calls[2]["content"]
+
+
+def test_google_drive_upload_session_file_rejects_wrong_session(monkeypatch) -> None:
+    class FileStore:
+        def get(self, file_id: str, session_id: str | None = None) -> None:
+            assert file_id == "file_zip_1"
+            assert session_id == "conv_other"
+
+    monkeypatch.setattr("omnigent.runtime.get_file_store", lambda: FileStore())
+    monkeypatch.setattr("omnigent.runtime.get_artifact_store", lambda: object())
+
+    out = google_workspace_mcp.drive_file_upload_session(
+        file_id="file_zip_1",
+        session_id="conv_other",
+        folder_id="folder_website",
+    )
+
+    assert out == {"ok": False, "error": "session_file_not_found"}
 
 
 def test_google_drive_search_reports_domain_wide_delegation_gap(monkeypatch) -> None:

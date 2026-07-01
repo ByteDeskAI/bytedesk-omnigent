@@ -33,6 +33,16 @@ def _yaml(name: str) -> dict:
     return yaml.safe_load((_AGENTS / name / "config.yaml").read_text())
 
 
+def _builtin_names(cfg: dict) -> set[str]:
+    names: set[str] = set()
+    for item in (cfg.get("tools") or {}).get("builtins") or []:
+        if isinstance(item, str):
+            names.add(item)
+        elif isinstance(item, dict) and isinstance(item.get("name"), str):
+            names.add(item["name"])
+    return names
+
+
 def test_all_top_level_bundles_parse() -> None:
     """Every top-level bundle parses (validates registered policy handlers)."""
     names = sorted(p.parent.name for p in _AGENTS.glob("*/config.yaml"))
@@ -81,6 +91,37 @@ def test_brand_creative_agent_can_generate_images() -> None:
     builtins = cfg["tools"]["builtins"]
     assert {"name": "bytedesk_generate_image"} in builtins
     assert "bytedesk_generate_image" in cfg["prompt"]
+
+
+def test_web_design_agent_can_generate_website_assets() -> None:
+    cfg = _yaml("web-design-director")
+    assert "bytedesk_generate_image" in _builtin_names(cfg)
+    assert "file_id" in cfg["prompt"]
+
+
+def test_web_development_agent_can_package_and_drive_handoff() -> None:
+    cfg = _yaml("web-development-lead")
+    assert {
+        "list_files",
+        "download_file",
+        "bytedesk_package_website_zip",
+    } <= _builtin_names(cfg)
+    assert "google_workspace_drive_file_upload_session" in cfg["prompt"]
+    assert "session_id" in cfg["prompt"]
+    assert "client_drive_folder_id" in cfg["prompt"]
+
+
+def test_website_design_to_zip_workflow_delegates_design_and_development() -> None:
+    cfg = _yaml("website-design-to-zip-factory")
+    assert str(cfg["params"]["workflow"]).lower() == "true"
+    assert cfg["params"]["orchestrator"] == "product-ops-director"
+    allowed = cfg["guardrails"]["policies"]["allowed_subagents"]["function"]["arguments"][
+        "allowed_agents"
+    ]
+    assert allowed == ["web-design-director", "web-development-lead"]
+    assert "bytedesk_package_website_zip" in cfg["prompt"]
+    assert "google_workspace_drive_file_upload_session" in cfg["prompt"]
+    assert "session_id" in cfg["prompt"]
 
 
 def test_nested_platform_developer_child_removed() -> None:

@@ -222,6 +222,17 @@ def test_drive_create_result_appends_file_id() -> None:
     ]
 
 
+def test_drive_upload_session_result_appends_file_id() -> None:
+    result = gdrive_policy()(
+        tr("mcp__google__drive_file_upload_session", '{"file": {"id": "1Uploaded"}}')
+    )
+
+    assert result is not None
+    assert result["state_updates"] == [
+        {"key": CREATED_FILES_STATE_KEY, "action": "append", "value": "1Uploaded"}
+    ]
+
+
 def test_drive_create_result_depth_bounded() -> None:
     """A pathologically deep create-result payload is scanned without crashing.
 

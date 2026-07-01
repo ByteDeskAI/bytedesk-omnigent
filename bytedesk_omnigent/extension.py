@@ -292,6 +292,9 @@ class BytedeskExtension:
             SignalDeliverTool,
         )
         from bytedesk_omnigent.tools.slack_tools import BytedeskSlackTool
+        from bytedesk_omnigent.tools.website_package_tools import (
+            BytedeskPackageWebsiteZipTool,
+        )
 
         return {
             "peer_send": lambda _c: PeerSendTool(),
@@ -321,6 +324,7 @@ class BytedeskExtension:
             "bytedesk_github": lambda _c: BytedeskGitHubTool(),
             "bytedesk_slack": lambda _c: BytedeskSlackTool(),
             "bytedesk_generate_image": lambda _c: BytedeskGenerateImageTool(),
+            "bytedesk_package_website_zip": lambda _c: BytedeskPackageWebsiteZipTool(),
             "signal_await": lambda _c: SignalAwaitTool(),
             "signal_deliver": lambda _c: SignalDeliverTool(),
             "signal_check": lambda _c: SignalCheckTool(),

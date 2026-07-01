@@ -33,6 +33,7 @@ GOOGLE_WORKSPACE_MCP_TOOLS = {
     "drive_replicate_template",
     "drive_search",
     "drive_file_create",
+    "drive_file_upload_session",
     "drive_file_copy",
     "gmail_draft_create",
     "gmail_thread_read",

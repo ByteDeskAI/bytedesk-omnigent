@@ -570,6 +570,12 @@ GOOGLE_WORKSPACE_CURATED_ACTIONS = {
             "drive_file_create",
         ),
         (
+            "file_upload_session",
+            "Upload session file",
+            "Upload an Omnigent session file artifact into Google Drive.",
+            "drive_file_upload_session",
+        ),
+        (
             "file_copy",
             "Copy file",
             "Copy a Drive file with Shared Drive support.",

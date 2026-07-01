@@ -154,6 +154,7 @@ _DRIVE_CREATE_TOOLS: frozenset[str] = frozenset(
         "docs_create",
         "docs_template_seed",
         "drive_file_create",
+        "drive_file_upload_session",
         "drive_replicate_template",
         "sheets_create",
         "slides_create",
