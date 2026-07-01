@@ -62,6 +62,20 @@ def _import_helper_bindings() -> None:
 
 _import_helper_bindings()
 
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
+
+
+def _resume_workspace_api_server_url(server: str) -> str:
+    from .debug import _workspace_api_server_url as fallback
+
+    workspace_api_server_url = __facade_binding("_workspace_api_server_url", fallback)
+    return workspace_api_server_url(server)
+
+
 @cli.command()
 @click.argument("target", required=False, metavar="[CONV_ID]")
 @click.option(
@@ -108,7 +122,7 @@ def resume(
     run_resume(
         target=target,
         # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-        server=_workspace_api_server_url(server) if server else server,
+        server=_resume_workspace_api_server_url(server) if server else server,
     )
 
 
@@ -632,7 +646,7 @@ def _resolve_attach_server(server: str | None, configured_server: str | None) ->
     chosen = server if server is not None else configured_server
     if chosen:
         # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-        return _workspace_api_server_url(chosen.rstrip("/"))
+        return _resume_workspace_api_server_url(chosen.rstrip("/"))
     local = local_server_url_if_healthy()
     return local.rstrip("/") if local else None
 
@@ -676,5 +690,4 @@ def _require_live_conversation(
             f"(server returned {result.status_code}). Run `omnigent host status` "
             "to list live sessions, or `omnigent run <agent.yaml>` to start one."
         )
-
 

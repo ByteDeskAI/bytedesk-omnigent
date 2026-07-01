@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 import click
 
 from .._core import cli
@@ -62,6 +64,42 @@ def _import_helper_bindings() -> None:
 
 _import_helper_bindings()
 
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
+
+
+def _login_workspace_api_server_url(server: str) -> str:
+    from .debug import _workspace_api_server_url as fallback
+
+    workspace_api_server_url = __facade_binding("_workspace_api_server_url", fallback)
+    return workspace_api_server_url(server)
+
+
+def _login_databricks_workspace_login_target(server: str, probe: Any) -> str | None:
+    from .debug import _databricks_workspace_login_target as fallback
+
+    databricks_workspace_login_target = __facade_binding(
+        "_databricks_workspace_login_target",
+        fallback,
+    )
+    return databricks_workspace_login_target(server, probe)
+
+
+def _login_databricks_login(server: str, workspace_host: str) -> None:
+    from .debug import _databricks_login as fallback
+
+    databricks_login = __facade_binding("_databricks_login", fallback)
+    databricks_login(server, workspace_host)
+
+
+def _login_accounts_login(server: str) -> None:
+    accounts_login = __facade_binding("_accounts_login", _accounts_login)
+    accounts_login(server)
+
+
 @cli.command("login")
 @click.argument("server_url")
 def login(server_url: str) -> None:
@@ -98,7 +136,7 @@ def login(server_url: str) -> None:
     import httpx as _httpx
 
     # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-    server = _workspace_api_server_url(server_url.rstrip("/"))
+    server = _login_workspace_api_server_url(server_url.rstrip("/"))
 
     # ── Step 0: Probe the server's auth mode. ──────────────────
     # /v1/me returns a JSON ``login_url`` on 401 — "/login" for
@@ -114,9 +152,9 @@ def login(server_url: str) -> None:
             f"Could not reach {server}/v1/me: {exc}\nIs the server running?"
         ) from exc
 
-    databricks_workspace = _databricks_workspace_login_target(server, probe)
+    databricks_workspace = _login_databricks_workspace_login_target(server, probe)
     if databricks_workspace is not None:
-        _databricks_login(server, databricks_workspace)
+        _login_databricks_login(server, databricks_workspace)
         return
 
     detected_login_url: str | None = None
@@ -139,7 +177,7 @@ def login(server_url: str) -> None:
         return
 
     if detected_login_url == "/login":
-        _accounts_login(server)
+        _login_accounts_login(server)
         return
 
     # Fall through: OIDC mode (or unknown — let the ticket endpoint's
@@ -279,5 +317,3 @@ def _accounts_login(server: str) -> None:
 # ``"h"`` = horizontal split (new pane side-by-side; tmux ``-h``).
 # ``"w"`` = new window/tab (tmux ``new-window``).
 _PANE_SPLIT_DIRECTIONS = ("v", "h", "w")
-
-
