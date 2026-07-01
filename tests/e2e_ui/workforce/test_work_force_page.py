@@ -71,6 +71,72 @@ _TOOL_CATALOG = [
     },
 ]
 
+_CONNECTOR_CATALOG = {
+    "providers": [
+        {
+            "provider": "google_workspace",
+            "name": "Google Workspace",
+            "description": "Google Workspace service tools.",
+            "auth": {
+                "type": "google_domain_wide_delegation",
+                "scopes": [],
+                "docsUrl": None,
+                "setupFields": [],
+            },
+            "services": [
+                {
+                    "key": "drive",
+                    "name": "Drive",
+                    "description": "Google Drive",
+                    "scopes": [],
+                    "toolMounts": [],
+                    "tools": [
+                        {
+                            "key": "search",
+                            "name": "Search Drive",
+                            "description": "Search Drive files.",
+                            "mcpTool": "drive_search",
+                            "scopes": [],
+                        }
+                    ],
+                }
+            ],
+            "connections": [
+                {
+                    "id": "conn_google",
+                    "provider": "google_workspace",
+                    "displayName": "Engineering Google Drive",
+                    "authType": "google_domain_wide_delegation",
+                    "status": "connected",
+                    "scopes": [],
+                    "metadata": {},
+                    "secretPresent": True,
+                    "lastHealthStatus": "healthy",
+                    "lastHealthAt": 1,
+                    "lastError": None,
+                    "createdAt": 1,
+                    "updatedAt": 1,
+                    "version": 1,
+                    "services": [
+                        {
+                            "id": "svc_drive",
+                            "connectionId": "conn_google",
+                            "serviceKey": "drive",
+                            "enabled": True,
+                            "status": "ready",
+                            "scopes": [],
+                            "metadata": {},
+                            "updatedAt": 1,
+                            "version": 1,
+                        }
+                    ],
+                    "grants": [],
+                }
+            ],
+        }
+    ]
+}
+
 
 def _tool_assignment(
     scope_kind: str,
@@ -84,6 +150,48 @@ def _tool_assignment(
         "scopeId": scope_id,
         "toolKey": tool_key,
         "itemKey": tool_key,
+        "enabled": enabled,
+        "createdAt": 1,
+        "updatedAt": 2,
+        "version": 1,
+        "metadata": {},
+    }
+
+
+def _connector_assignment(
+    scope_kind: str,
+    scope_id: str,
+    enabled: bool = True,
+) -> dict[str, object]:
+    return {
+        "id": f"wfconnector_{scope_kind}_{scope_id}_drive_search",
+        "scopeKind": scope_kind,
+        "scopeId": scope_id,
+        "connectionId": "conn_google",
+        "serviceKey": "drive",
+        "toolKey": "search",
+        "itemKey": "conn_google:drive:search",
+        "enabled": enabled,
+        "createdAt": 1,
+        "updatedAt": 2,
+        "version": 1,
+        "metadata": {},
+    }
+
+
+def _skill_assignment(
+    scope_kind: str,
+    scope_id: str,
+    enabled: bool = True,
+) -> dict[str, object]:
+    return {
+        "id": f"wfskill_{scope_kind}_{scope_id}_customer_research",
+        "scopeKind": scope_kind,
+        "scopeId": scope_id,
+        "skillName": "customer-research",
+        "source": "github_marketplace",
+        "sourceRef": "github:bytedesk/customer-research",
+        "itemKey": "customer-research",
         "enabled": enabled,
         "createdAt": 1,
         "updatedAt": 2,
@@ -122,12 +230,27 @@ def _register_api_routes(page: Page) -> _WorkforceRouteState:
             _tool_assignment(scope_kind, scope_id, tool_key, enabled)
             for tool_key, enabled in sorted(scope_tools.get((scope_kind, scope_id), {}).items())
         ]
+        is_department = scope_kind == "department" and scope_id == "engineering"
         return {
             "scopeKind": scope_kind,
             "scopeId": scope_id,
-            "instruction": None,
-            "connectors": [],
-            "skills": [],
+            "instruction": {
+                "id": f"wfinst_{scope_kind}_{scope_id}",
+                "scopeKind": scope_kind,
+                "scopeId": scope_id,
+                "body": (
+                    "Engineering permission instructions"
+                    if is_department
+                    else "Organization permission instructions"
+                ),
+                "enabled": True,
+                "createdAt": 1,
+                "updatedAt": 2,
+                "version": 1,
+                "metadata": {},
+            },
+            "connectors": [_connector_assignment(scope_kind, scope_id)] if is_department else [],
+            "skills": [_skill_assignment(scope_kind, scope_id)] if is_department else [],
             "tools": tools,
             "revision": 7 + len(tool_mutations) + len(override_mutations),
         }
@@ -183,6 +306,8 @@ def _register_api_routes(page: Page) -> _WorkforceRouteState:
             _agent_override(tool_key, enabled)
             for tool_key, enabled in sorted(agent_tool_overrides.items())
         ]
+        skill = _skill_assignment("department", "engineering")
+        connector = _connector_assignment("department", "engineering")
         return {
             "agentId": "ag_employee",
             "found": True,
@@ -190,9 +315,43 @@ def _register_api_routes(page: Page) -> _WorkforceRouteState:
             "department": "Engineering",
             "departmentSlug": "engineering",
             "revision": 7 + len(tool_mutations) + len(override_mutations),
-            "instructions": [],
-            "connectors": [],
-            "skills": [],
+            "instructions": [
+                {
+                    "id": "wfinst_agent",
+                    "scopeKind": "agent",
+                    "scopeId": "ag_employee",
+                    "body": "Agent-specific permission guidance",
+                    "enabled": True,
+                    "createdAt": 1,
+                    "updatedAt": 2,
+                    "version": 1,
+                    "metadata": {},
+                }
+            ],
+            "connectors": [
+                {
+                    "itemKey": "conn_google:drive:search",
+                    "connectionId": "conn_google",
+                    "serviceKey": "drive",
+                    "toolKey": "search",
+                    "enabled": True,
+                    "inherited": True,
+                    "inheritedFrom": [connector],
+                    "override": None,
+                }
+            ],
+            "skills": [
+                {
+                    "itemKey": "customer-research",
+                    "skillName": "customer-research",
+                    "source": "github_marketplace",
+                    "sourceRef": "github:bytedesk/customer-research",
+                    "enabled": True,
+                    "inherited": True,
+                    "inheritedFrom": [skill],
+                    "override": None,
+                }
+            ],
             "tools": effective_tools(),
             "overrides": overrides,
             "materializations": [],
@@ -229,13 +388,41 @@ def _register_api_routes(page: Page) -> _WorkforceRouteState:
             fulfill_json(route, {"data": []})
             return
         if path == "/v1/connectors/catalog":
-            fulfill_json(route, {"data": []})
+            fulfill_json(route, _CONNECTOR_CATALOG)
             return
         if path == "/v1/connectors/agent-grants":
-            fulfill_json(route, {"data": []})
+            fulfill_json(route, {"grants": []})
             return
         if path == "/v1/skills/installed":
-            fulfill_json(route, {"data": []})
+            fulfill_json(
+                route,
+                {
+                    "data": [
+                        {
+                            "name": "repo-rules",
+                            "description": "Applies ByteDesk repository rules.",
+                            "agents": [
+                                {
+                                    "id": "ag_employee",
+                                    "name": "platform-developer",
+                                    "version": 3,
+                                }
+                            ],
+                        },
+                        {
+                            "name": "browser-smoke",
+                            "description": "Runs browser smoke checks.",
+                            "agents": [
+                                {
+                                    "id": "ag_employee",
+                                    "name": "platform-developer",
+                                    "version": 3,
+                                }
+                            ],
+                        },
+                    ]
+                },
+            )
             return
         if path == "/v1/workforce/scopes":
             fulfill_json(
@@ -489,6 +676,56 @@ def test_work_force_page_renders_agent_admin_shell(page: Page, built_spa: None) 
         assert route_state.custom_agent_scan_requests == []
 
 
+def test_work_force_permission_sub_tabs_show_bound_data(
+    page: Page,
+    built_spa: None,
+) -> None:
+    """The grouped permission sub-tabs render their bound scope and agent data."""
+    del built_spa
+
+    route_state = _register_api_routes(page)
+    with _serve_static_spa() as base_url:
+        page.goto(f"{base_url}/work-force")
+
+        expect(page.get_by_role("heading", name="Work Force")).to_be_visible(timeout=30_000)
+        engineering = page.get_by_role("button", name=re.compile("Department Engineering"))
+        expect(engineering).to_be_visible()
+        if engineering.get_attribute("aria-expanded") != "true":
+            engineering.click()
+        page.get_by_text("Platform Developer").first.click()
+        expect(page.get_by_role("heading", name="Platform Developer")).to_be_visible()
+        page.get_by_role("tab", name=re.compile("Permissions")).click()
+        permission_groups = page.get_by_role("tablist", name="Permission groups")
+
+        permission_groups.get_by_role("tab", name="Instructions", exact=True).click()
+        expect(page.get_by_label("Engineering instructions")).to_have_value(
+            "Engineering permission instructions"
+        )
+        expect(page.get_by_label("Agent instructions")).to_have_value(
+            "Agent-specific permission guidance"
+        )
+
+        permission_groups.get_by_role("tab", name="Tools", exact=True).click()
+        expect(page.get_by_text("Engineering Builtin Tools")).to_be_visible()
+        expect(page.get_by_test_id("scope-tool-row-web_search")).to_be_visible()
+        expect(page.get_by_test_id("effective-tool-row-web_search")).to_be_visible()
+
+        permission_groups.get_by_role("tab", name="Skills", exact=True).click()
+        expect(page.get_by_text("customer-research").first).to_be_visible()
+        expect(page.get_by_text("Agent Image Skills")).to_be_visible()
+        expect(page.get_by_text("repo-rules")).to_be_visible()
+        expect(page.get_by_text("browser-smoke")).to_be_visible()
+
+        permission_groups.get_by_role("tab", name="Connectors", exact=True).click()
+        expect(
+            page.get_by_label("Engineering Engineering Google Drive Search Drive")
+        ).to_be_checked()
+        expect(page.get_by_text("Engineering Google Drive · Search Drive")).to_be_visible()
+        expect(page.get_by_text("Effective Connector Permissions")).to_be_visible()
+
+    assert route_state.custom_agent_scan_requests == []
+
+
 def test_work_force_builtin_tool_permissions_toggle_at_each_level(
     page: Page,
     built_spa: None,
@@ -508,7 +745,9 @@ def test_work_force_builtin_tool_permissions_toggle_at_each_level(
         page.get_by_text("Platform Developer").first.click()
         expect(page.get_by_role("heading", name="Platform Developer")).to_be_visible()
         page.get_by_role("tab", name=re.compile("Permissions")).click()
-        page.get_by_role("tab", name="Tools", exact=True).click()
+        page.get_by_role("tablist", name="Permission groups").get_by_role(
+            "tab", name="Tools", exact=True
+        ).click()
 
         scope_row = page.get_by_test_id("scope-tool-row-web_search")
         effective_row = page.get_by_test_id("effective-tool-row-web_search")
