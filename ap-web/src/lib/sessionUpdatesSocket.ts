@@ -16,7 +16,7 @@
 // id list is NEVER trusted from the client for authorization — the server
 // access-checks every watched id against the connection's user.
 
-import { resolveWebSocketUrl } from "@/lib/host";
+import { hostFetch, resolveWebSocketUrl } from "@/lib/host";
 import type { SessionListWireItem } from "@/lib/sessionListCache";
 
 /** A frame pushed by the server over the updates stream. */
@@ -60,10 +60,29 @@ function nextReconnectDelay(failedAttempts: number): number {
  * (whether served by the Omnigent server directly or through the Vite dev proxy),
  * and an embedding host rebases it onto its proxied WS surface.
  *
- * @returns The fully-qualified WebSocket URL.
+ * The browser drops the session cookie on a cross-site iframe WebSocket
+ * handshake (it rides every HTTP request but not this upgrade, BDP-2513), so we
+ * fetch a short-TTL ticket over the working cookie/HTTP path and pass it as
+ * `?ticket=`. Best-effort: on any failure, or an empty ticket (header / local
+ * mode, where the cookie/proxy identity rides the WS), connect without one.
+ *
+ * @returns The fully-qualified WebSocket URL, with `?ticket=` when available.
  */
-function buildUpdatesUrl(): string {
-  return resolveWebSocketUrl("/v1/sessions/updates");
+async function buildUpdatesUrl(): Promise<string> {
+  const base = resolveWebSocketUrl("/v1/sessions/updates");
+  try {
+    const resp = await hostFetch("/v1/auth/ws-ticket");
+    if (resp.ok) {
+      const data = (await resp.json()) as { ticket?: string };
+      if (data.ticket) {
+        const sep = base.includes("?") ? "&" : "?";
+        return `${base}${sep}ticket=${encodeURIComponent(data.ticket)}`;
+      }
+    }
+  } catch (err) {
+    console.warn("[session-updates] ws-ticket fetch failed; connecting without", err);
+  }
+  return base;
 }
 
 /**
@@ -162,9 +181,16 @@ class SessionUpdatesSocket {
   }
 
   private connect(): void {
+    // Fire-and-forget: openSocket awaits the ws-ticket fetch (BDP-2513) before
+    // constructing the socket. connect() stays sync so its callers (start /
+    // scheduleReconnect) are unchanged.
+    void this.openSocket();
+  }
+
+  private async openSocket(): Promise<void> {
     let ws: WebSocket;
     try {
-      ws = new WebSocket(buildUpdatesUrl());
+      ws = new WebSocket(await buildUpdatesUrl());
     } catch (err) {
       // Construction can throw on a malformed URL / blocked context; treat
       // it as a failed open and retry with backoff.

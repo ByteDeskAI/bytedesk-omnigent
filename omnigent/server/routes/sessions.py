@@ -13978,6 +13978,23 @@ def create_sessions_router(
         # exclude_none — it replaces whole pages, so it has nothing to clear.
         return [item.model_dump() for item in items]
 
+    @router.get("/auth/ws-ticket")
+    async def ws_ticket(request: Request) -> dict[str, str]:
+        """Mint a short-TTL ticket for authenticating a WebSocket handshake.
+
+        The embedded omnigent UI loads in a cross-origin iframe; the browser
+        sends the session cookie on every HTTP request but NOT on the
+        ``WS /v1/sessions/updates`` handshake (a third-party-cookie limitation),
+        so that socket can't authenticate by cookie. The UI calls this over the
+        working cookie/HTTP path, then passes the returned ticket as the WS
+        ``?ticket=`` (BDP-2513). ``{"ticket": ""}`` when the provider can't mint
+        (header / local mode — the cookie rides the WS there anyway), so the UI
+        connects without one; 401 when the caller isn't authenticated.
+        """
+        user_id = _require_user(request, auth_provider)
+        ticket = auth_provider.mint_ws_ticket(user_id) if auth_provider is not None else None
+        return {"ticket": ticket or ""}
+
     @router.websocket("/sessions/updates")
     async def session_updates(websocket: WebSocket) -> None:
         """
@@ -14012,6 +14029,15 @@ def create_sessions_router(
         :param websocket: The incoming FastAPI :class:`WebSocket`.
         """
         user_id = auth_provider.get_user_id(websocket) if auth_provider is not None else None
+        # The browser drops the session cookie on a cross-site iframe WS
+        # handshake (it rides every HTTP request but not this upgrade), so fall
+        # back to the short-TTL ?ticket= the UI fetched over the working HTTP
+        # path (GET /v1/auth/ws-ticket, BDP-2513). kind-restricted so only a
+        # ticket — never a long-lived cookie JWT — is accepted via the query.
+        if user_id is None and auth_provider is not None:
+            ticket = websocket.query_params.get("ticket")
+            if ticket:
+                user_id = auth_provider.verify_ws_ticket(ticket)
         # When permissions are enabled, an unauthenticated socket can see
         # nothing useful and must not be allowed to probe ids; reject the
         # handshake (mirrors the terminal-attach authorization gate).
