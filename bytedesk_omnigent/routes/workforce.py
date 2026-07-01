@@ -342,7 +342,8 @@ def create_workforce_router(
                 )
         reconciled: list[str] = []
         if body.reconcile:
-            reconciled = reconcile_workforce_for_scope(
+            reconciled = await asyncio.to_thread(
+                reconcile_workforce_for_scope,
                 kind,
                 sid,
                 store=store,
@@ -392,7 +393,8 @@ def create_workforce_router(
         )
         reconciled: list[str] = []
         if body.reconcile:
-            reconciled = reconcile_workforce_for_scope(
+            reconciled = await asyncio.to_thread(
+                reconcile_workforce_for_scope,
                 kind,
                 sid,
                 store=store,
@@ -442,7 +444,8 @@ def create_workforce_router(
             raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
         reconciled: list[str] = []
         if body.reconcile:
-            reconciled = reconcile_workforce_for_scope(
+            reconciled = await asyncio.to_thread(
+                reconcile_workforce_for_scope,
                 kind,
                 sid,
                 store=store,
@@ -526,11 +529,11 @@ def create_workforce_router(
             raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
         if body.reconcile:
             if body.item_kind == "connector":
-                reconcile_connectors_for_agent(resolved_agent_id, store=store)
+                await asyncio.to_thread(reconcile_connectors_for_agent, resolved_agent_id, store=store)
             elif body.item_kind == "skill":
-                reconcile_skills_for_agent(resolved_agent_id, store=store)
+                await asyncio.to_thread(reconcile_skills_for_agent, resolved_agent_id, store=store)
             else:
-                reconcile_tools_for_agent(resolved_agent_id, store=store)
+                await asyncio.to_thread(reconcile_tools_for_agent, resolved_agent_id, store=store)
         return JSONResponse(
             {
                 "override": override.to_dict(),

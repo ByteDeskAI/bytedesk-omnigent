@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SCRATCH="${ATOMIZE_SCRATCH:-/tmp/grok-goal-206e2ee288a2/implementer}"
+SCRATCH="${ATOMIZE_SCRATCH:-$(mktemp -d "${TMPDIR:-/tmp}/atomize-verify-frontend.XXXXXX")}"
 mkdir -p "$SCRATCH"
 
 cd "$ROOT"

@@ -69,9 +69,12 @@ export function JumpToTopButton({
         state.escapedFromLock = true;
         await nextFrame();
       }
+      // Pin to the very top, re-asserting across frames until it holds. The last
+      // prepends keep growing scrollHeight after the store settles, and
+      // HistoryAutoLoader's offset-preservation can bump scrollTop right after
+      // we zero it. Force 0 each frame until it stays 0 for two consecutive
+      // frames (or we hit the frame cap).
       for (let i = 0, stable = 0; i < 60 && stable < 2; i++) {
-        el.scrollTop = 0;
-        await nextFrame();
         if (el.scrollTop === 0) stable += 1;
         else {
           el.scrollTop = 0;

@@ -79,9 +79,24 @@ export function useConnectionPanelState({
   const clientId =
     typeof healthMetadata.clientId === "string" ? healthMetadata.clientId : undefined;
 
+  // Select-all only when the connection changes. A catalog refetch (any
+  // mutation, window refocus) produces a new availableTools identity and must
+  // NOT clobber a curated selection — grants are sent with replace: true, so a
+  // silent reset would over-grant everything on the next Grant click. Tokens
+  // whose service was disabled are pruned instead.
+  const [selectionInitializedFor, setSelectionInitializedFor] = useState<string | null>(null);
   useEffect(() => {
-    setSelectedTools(availableTools.map((tool) => tool.token));
-  }, [availableTools]);
+    if (selectionInitializedFor !== connection.id) {
+      setSelectionInitializedFor(connection.id);
+      setSelectedTools(availableTools.map((tool) => tool.token));
+      return;
+    }
+    const available = new Set(availableTools.map((tool) => tool.token));
+    setSelectedTools((prev) => {
+      const next = prev.filter((token) => available.has(token));
+      return next.length === prev.length ? prev : next;
+    });
+  }, [connection.id, availableTools, selectionInitializedFor]);
 
   function setToolSelected(token: string, checked: boolean) {
     setSelectedTools((prev) => {

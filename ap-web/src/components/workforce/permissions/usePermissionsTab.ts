@@ -288,7 +288,7 @@ export function usePermissionsTab(agent: AvailableAgent, editable: boolean) {
   }
 
   function inheritedToolLabel(tool: WorkforceEffectiveTool | undefined): string {
-    if (!tool) return "No inherited grant";
+    if (!tool) return "Not managed — agent config applies";
     if (!tool.inherited) return "Agent override";
     const last = tool.inheritedFrom[tool.inheritedFrom.length - 1];
     if (!last) return "Inherited";
