@@ -328,9 +328,8 @@ def register_session_stream(
 ):
         # ── GET /sessions/{session_id}/stream ────────────────────────
 
-        # Live-tail only. Clients reconnect via GET /v1/sessions/{id}
-        # for snapshot, then open a new stream; events that fire
-        # between are deduped client-side by item id (see API.md).
+        # Live-tail plus bounded Last-Event-ID resume. Clients still reconcile via
+        # GET /v1/sessions/{id} for snapshot and item-id dedupe (see API.md).
         @router.get(
             "/sessions/{session_id}/stream",
             # response_model=None: returns StreamingResponse, not a model.
@@ -361,7 +360,8 @@ def register_session_stream(
             """
             Subscribe to the session's live SSE event stream.
 
-            Does NOT replay history; clients reconcile via the snapshot
+            Does not replay durable history; bounded Last-Event-ID resume covers
+            recent live events, and clients reconcile older gaps via the snapshot
             endpoint. The generator handles disconnects via a
             ``try/finally`` that emits the ``[DONE]`` sentinel in all
             exit paths — see :func:`_stream_live_events`.
