@@ -11,6 +11,10 @@ from bytedesk_omnigent.integration_capabilities import (
     integration_capability_categories,
     list_integration_capabilities,
 )
+from bytedesk_omnigent.integration_capability_bundles import (
+    compile_integration_capability_bundle,
+    list_integration_capability_bundles,
+)
 from bytedesk_omnigent.integration_verification_matrix import (
     compile_integration_verification_matrix,
 )
@@ -48,6 +52,33 @@ def create_integration_capabilities_router(
                 "categories": integration_capability_categories(),
             }
         )
+
+    @router.get("/integration-capabilities/bundles")
+    async def list_capability_bundles(request: Request) -> JSONResponse:
+        """List productized capability bundles for agent workforce offers."""
+
+        require_user(request, auth_provider)
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": [
+                    bundle.to_dict() for bundle in list_integration_capability_bundles()
+                ],
+            }
+        )
+
+    @router.get("/integration-capabilities/bundles/{slug}")
+    async def get_capability_bundle(request: Request, slug: str) -> JSONResponse:
+        """Read one compiled capability bundle by slug."""
+
+        require_user(request, auth_provider)
+        bundle = compile_integration_capability_bundle(slug)
+        if bundle is None:
+            return JSONResponse(
+                {"error": "not_found", "detail": f"unknown integration bundle: {slug}"},
+                status_code=404,
+            )
+        return JSONResponse(bundle.to_dict())
 
     @router.get("/integration-capabilities/{slug}")
     async def get_capability(request: Request, slug: str) -> JSONResponse:
