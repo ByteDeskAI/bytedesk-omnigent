@@ -62,6 +62,25 @@ def _import_helper_bindings() -> None:
 
 _import_helper_bindings()
 
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
+
+
+def _host_effective_config() -> dict[str, object]:
+    load_config = __facade_binding("_load_effective_config", _load_effective_config)
+    return load_config()
+
+
+def _host_workspace_api_server_url(server: str) -> str:
+    from .debug import _workspace_api_server_url as fallback
+
+    workspace_api_server_url = __facade_binding("_workspace_api_server_url", fallback)
+    return workspace_api_server_url(server)
+
+
 @cli.group("host", cls=_HostGroup, invoke_without_command=True)
 @click.option("--server", default=None, help="Remote omnigent server URL.")
 @click.pass_context
@@ -89,12 +108,12 @@ def host(ctx: click.Context, server: str | None) -> None:
     ctx.obj["server"] = server
     if ctx.invoked_subcommand is not None:
         return
-    cfg = _load_effective_config()
+    cfg = _host_effective_config()
     if server is None:
         server = cfg.get("server")
     if server:
         # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-        server = _workspace_api_server_url(server)
+        server = _host_workspace_api_server_url(server)
 
     from omnigent.host.connect import run_host_process
 
@@ -164,10 +183,10 @@ def _resolve_host_server(server: str | None) -> str | None:
     :returns: Normalized server URL, or ``None`` for local mode.
     """
     if server is None:
-        configured = _load_effective_config().get("server")
+        configured = _host_effective_config().get("server")
         server = str(configured) if configured else None
     # A bare Databricks workspace URL means its /api/2.0/omnigent mount.
-    return _workspace_api_server_url(server.rstrip("/")) if server else None
+    return _host_workspace_api_server_url(server.rstrip("/")) if server else None
 
 
 def _daemon_base_url(record: _HostDaemonRecord) -> str | None:
@@ -1105,5 +1124,4 @@ def host_stop_session(
             click.echo(f"Failed to stop session {session_id!r}.", err=True)
             continue
         click.echo(f"Stopped session {session_id}.")
-
 
