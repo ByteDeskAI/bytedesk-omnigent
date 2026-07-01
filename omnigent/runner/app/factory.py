@@ -1030,6 +1030,7 @@ def create_runner_app(
     _route_ns = globals().copy()
     _route_ns.update(locals())
     _exec_runner_route_chunks(_route_ns)
+    _extract_last_assistant_text = _route_ns["_extract_last_assistant_text"]
 
     async def _catch_up_scan() -> None:
         """Catch-up scan after tunnel reconnect (Step 8.5 Scenario B).

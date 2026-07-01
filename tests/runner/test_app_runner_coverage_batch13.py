@@ -156,6 +156,89 @@ async def test_child_status_failed_malformed_error_is_ignored(
 
 
 @pytest.mark.asyncio
+async def test_child_status_idle_fanout_uses_history_preview() -> None:
+    """Child idle fan-out reads runner history for the parent preview."""
+    parent_id = "conv_parent_child_preview"
+    child_id = "conv_child_child_preview"
+    stream_finished = asyncio.Event()
+    harness = _ScriptedHarnessClient(
+        [
+            _sse({"type": "response.created", "response": {"id": "resp_child_preview"}}),
+            _sse({"type": "response.output_text.delta", "delta": "DELEGATE_ACK_SINGLE"}),
+            _sse(
+                {
+                    "type": "response.completed",
+                    "response": {"id": "resp_child_preview", "status": "completed"},
+                }
+            ),
+        ],
+        stream_finished=stream_finished,
+    )
+
+    async def _resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return AgentSpec(spec_version=1, name="platform-architect")
+
+    app = create_runner_app(
+        process_manager=_FakeProcessManager(harness),  # type: ignore[arg-type]
+        spec_resolver=_resolver,
+        server_client=NullServerClient(),  # type: ignore[arg-type]
+    )
+    runner_app_mod._session_event_queues_ref.pop(parent_id, None)
+    runner_app_mod._session_event_queues_ref.pop(child_id, None)
+    runner_app_mod._session_histories_ref.pop(child_id, None)
+    runner_app_mod.register_child_session(
+        child_id,
+        parent_session_id=parent_id,
+        title="platform-architect:MAYA_SINGLE_DELEGATION",
+        tool="platform-architect",
+        session_name="MAYA_SINGLE_DELEGATION",
+    )
+
+    try:
+        async with _runner_client(app) as client:
+            create_resp = await client.post(
+                "/v1/sessions",
+                json={"session_id": child_id, "agent_id": "ag_platform_architect"},
+            )
+            assert create_resp.status_code == 201
+            event_resp = await client.post(
+                f"/v1/sessions/{child_id}/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Reply with exactly DELEGATE_ACK_SINGLE.",
+                        }
+                    ],
+                },
+            )
+            assert event_resp.status_code == 202
+            await asyncio.wait_for(stream_finished.wait(), timeout=2.0)
+            await asyncio.sleep(0)
+
+        events: list[dict[str, Any]] = []
+        queue = _session_event_queues_ref.get(parent_id)
+        if queue is not None:
+            while not queue.empty():
+                item = queue.get_nowait()
+                if isinstance(item, dict):
+                    events.append(item)
+    finally:
+        runner_app_mod.unregister_child_session(child_id)
+        runner_app_mod.unregister_subagent_work(child_id)
+        _session_event_queues_ref.pop(parent_id, None)
+        _session_event_queues_ref.pop(child_id, None)
+        _session_histories_ref.pop(child_id, None)
+
+    child_updates = [e for e in events if e.get("type") == "session.child_session.updated"]
+    assert child_updates
+    assert child_updates[-1]["child"]["last_message_preview"] == "DELEGATE_ACK_SINGLE"
+
+
+@pytest.mark.asyncio
 async def test_concurrent_skills_reads_share_cached_session_snapshot(
     tmp_path: Path,
 ) -> None:
