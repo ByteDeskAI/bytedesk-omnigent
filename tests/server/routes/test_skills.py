@@ -293,6 +293,25 @@ async def test_installed_route_aggregates_template_agent_skills(
     assert skill["agents"] == [{"id": agent_id, "name": "demo", "version": 1}]
 
 
+async def test_installed_route_skips_missing_bundle_in_aggregate_listing(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    tmp_path: Path,
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path)
+    SqlAlchemyAgentStore(db_uri).create(
+        generate_agent_id(),
+        name="missing-bundle",
+        bundle_location="ag_missing/not-in-artifact-store",
+    )
+
+    resp = await client.get("/v1/skills/installed")
+
+    assert resp.status_code == 200, resp.text
+    skill = next(item for item in resp.json()["data"] if item["name"] == "deep-search")
+    assert skill["agents"] == [{"id": agent_id, "name": "demo", "version": 1}]
+
+
 async def test_installed_route_rejects_missing_agent_filter(
     client: httpx.AsyncClient,
 ) -> None:

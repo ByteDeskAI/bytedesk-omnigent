@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shlex
@@ -39,11 +40,11 @@ from omnigent.server.auth import local_single_user_enabled
 from omnigent.server.bundles import validate_agent_bundle
 from omnigent.server.routes.agents_write import _MIGRATED_TIER, _require_template
 from omnigent.server.routes.builtin_agents import _to_agent_object
-from omnigent.spec.tar_utils import ExtractionError, build_bundle_bytes, extract_safe
 from omnigent.skills.marketplace_config import (
     SkillsMarketplaceConfig,
     load_skills_marketplace_config,
 )
+from omnigent.spec.tar_utils import ExtractionError, build_bundle_bytes, extract_safe
 from omnigent.stores import AgentStore
 from omnigent.stores.artifact_store import ArtifactStore
 
@@ -70,6 +71,7 @@ _GITHUB_MARKETPLACE_CATALOG_PATH = ".claude-plugin/marketplace.json"
 _GITHUB_MARKETPLACE_DEFAULT_REPOS: tuple[str, ...] = ("ByteDeskAI/bytedesk-marketplace",)
 _GITHUB_MARKETPLACE_DEFAULT_REF = "main"
 _GITHUB_MARKETPLACE_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_logger = logging.getLogger(__name__)
 
 #: Supercharge Claude Code marketplace (https://superchargeclaudecode.com).
 #: The public discovery/download GETs are no-auth; see the bundled
@@ -410,11 +412,21 @@ class SkillAcquisitionService:
         by_skill: dict[str, dict[str, object]] = {}
         for agent in agents:
             _require_template(agent, agent.id)
-            loaded = self._agent_cache.load(
-                agent.id,
-                agent.bundle_location,
-                expand_env=False,
-            )
+            try:
+                loaded = self._agent_cache.load(
+                    agent.id,
+                    agent.bundle_location,
+                    expand_env=False,
+                )
+            except KeyError:
+                if agent_id is not None:
+                    raise
+                _logger.warning(
+                    "Skipping agent %s while listing installed skills: bundle %s is missing",
+                    agent.id,
+                    agent.bundle_location,
+                )
+                continue
             for skill in loaded.spec.skills:
                 row = by_skill.setdefault(
                     skill.name,
@@ -778,7 +790,7 @@ class SkillAcquisitionService:
         limit: int,
         repos: tuple[str, ...] | None = None,
     ) -> list[SkillSearchHit]:
-        """Search Claude-format GitHub marketplace catalogs (``.claude-plugin/marketplace.json``)."""
+        """Search Claude-format GitHub marketplace catalogs."""
         selected_repos = repos or self._marketplace_config.github_marketplace_repos
         catalog_ref = self._marketplace_config.github_marketplace_ref
         query_lower = query.lower().strip()
