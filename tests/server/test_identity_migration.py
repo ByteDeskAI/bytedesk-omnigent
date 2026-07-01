@@ -22,6 +22,7 @@ from omnigent.cli import cli
 from omnigent.db.db_models import (
     SqlAccountToken,
     SqlComment,
+    SqlConversation,
     SqlHost,
     SqlPolicy,
 )
@@ -104,6 +105,16 @@ def test_remap_repoints_comments_policies_tokens_hosts(db_uri: str) -> None:
 
     # Seed one row per referencing table keyed on "alice".
     with Session(engine) as s:
+        s.add(
+            SqlConversation(
+                id="conv_x",
+                created_at=1,
+                updated_at=1,
+                kind="default",
+                root_conversation_id="conv_x",
+            )
+        )
+        s.flush()
         s.add(
             SqlComment(
                 id="cmt_1",

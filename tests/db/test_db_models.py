@@ -615,6 +615,7 @@ class TestSqlComment:
         conv = _make_conversation()
         with managed() as session:
             session.add(conv)
+            session.flush()
             session.add(comment)
 
         with managed() as session:
@@ -645,6 +646,7 @@ class TestSqlComment:
         conv = _make_conversation()
         with managed() as session:
             session.add(conv)
+            session.flush()
             session.add(comment)
 
         with managed() as session:

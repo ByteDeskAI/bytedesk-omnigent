@@ -903,23 +903,22 @@ class SqlAlchemyConversationStore(ConversationStore):
                         "ORDER BY rank LIMIT :limit"
                     )
             else:
-                # PostgreSQL: ILIKE fallback (no FTS5 virtual table).
-                # Full tsvector/tsquery indexing can be added later.
-                like_pattern = f"%{query}%"
+                # PostgreSQL: tsvector GIN index on search_text (bdp2610schemaopt).
                 if conversation_id is not None:
                     stmt = text(
                         "SELECT ci.id FROM conversation_items ci "
                         "WHERE ci.conversation_id = :cid "
-                        "AND ci.data::text ILIKE :query "
+                        "AND to_tsvector('english', coalesce(ci.search_text, '')) "
+                        "@@ plainto_tsquery('english', :query) "
                         "ORDER BY ci.created_at DESC LIMIT :limit"
                     )
                 else:
                     stmt = text(
                         "SELECT ci.id FROM conversation_items ci "
-                        "WHERE ci.data::text ILIKE :query "
+                        "WHERE to_tsvector('english', coalesce(ci.search_text, '')) "
+                        "@@ plainto_tsquery('english', :query) "
                         "ORDER BY ci.created_at DESC LIMIT :limit"
                     )
-                query = like_pattern
             params: dict[str, str | int] = {"query": query, "limit": limit}
             if conversation_id is not None:
                 params["cid"] = conversation_id
@@ -1345,11 +1344,24 @@ class SqlAlchemyConversationStore(ConversationStore):
             if search_query:
                 pattern = f"%{search_query.lower()}%"
                 title_match = func.lower(SqlConversation.title).like(pattern)
-                content_match = SqlConversation.id.in_(
-                    select(SqlConversationItem.conversation_id)
-                    .where(func.lower(SqlConversationItem.search_text).like(pattern))
-                    .distinct()
-                )
+                is_sqlite = self._engine.dialect.name == "sqlite"
+                if is_sqlite:
+                    content_match = SqlConversation.id.in_(
+                        select(SqlConversationItem.conversation_id)
+                        .where(func.lower(SqlConversationItem.search_text).like(pattern))
+                        .distinct()
+                    )
+                else:
+                    content_match = SqlConversation.id.in_(
+                        select(SqlConversationItem.conversation_id)
+                        .where(
+                            text(
+                                "to_tsvector('english', coalesce(search_text, '')) "
+                                "@@ plainto_tsquery('english', :search_query)"
+                            ).bindparams(search_query=search_query)
+                        )
+                        .distinct()
+                    )
                 stmt = stmt.where(or_(title_match, content_match))
             if after:
                 stmt = self._apply_cursor(

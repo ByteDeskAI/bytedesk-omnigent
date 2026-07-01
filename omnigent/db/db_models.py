@@ -464,6 +464,19 @@ class SqlConversation(Base):
         Index("ix_conversations_created_at", "created_at"),
         Index("ix_conversations_updated_at", "updated_at"),
         Index("ix_conversations_kind", "kind"),
+        Index("ix_conversations_runner_id", "runner_id"),
+        Index("ix_conversations_agent_id", "agent_id"),
+        Index(
+            "ix_conversations_active_sessions",
+            text("updated_at DESC"),
+            text("id DESC"),
+            sqlite_where=text(
+                "kind = 'default' AND archived = 0 AND agent_id IS NOT NULL"
+            ),
+            postgresql_where=text(
+                "kind = 'default' AND archived = false AND agent_id IS NOT NULL"
+            ),
+        ),
         # Reconnect reconciliation queries conversations by host_id on
         # every host reconnect; index it to avoid a full scan.
         Index("ix_conversations_host_id", "host_id"),
@@ -557,6 +570,12 @@ class SqlConversationItem(Base):
             unique=True,
         ),
         Index("ix_conversation_items_response_id", "response_id"),
+        Index(
+            "ix_conversation_items_conv_type_pos",
+            "conversation_id",
+            "type",
+            "position",
+        ),
     )
 
 
@@ -691,7 +710,11 @@ class SqlComment(Base):
     __tablename__ = "comments"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    conversation_id: Mapped[str] = mapped_column(String(64))
+    conversation_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("conversations.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     path: Mapped[str] = mapped_column(String(4096))
     start_index: Mapped[int] = mapped_column(Integer)
     end_index: Mapped[int] = mapped_column(Integer)
@@ -848,6 +871,7 @@ class SqlHost(Base):
         ),
         UniqueConstraint("host_id", name="uq_hosts_host_id"),
         UniqueConstraint("token_hash", name="uq_hosts_token_hash"),
+        Index("ix_hosts_updated_at", text("updated_at DESC")),
     )
 
 
@@ -995,5 +1019,12 @@ class SqlMemory(Base):
             unique=True,
             sqlite_where=text("key IS NOT NULL AND archived = 0"),
             postgresql_where=text("key IS NOT NULL AND archived = false"),
+        ),
+        Index(
+            "ix_memories_sweep_candidates",
+            "compartment_id",
+            "last_accessed_at",
+            sqlite_where=text("archived = 0 AND key IS NULL"),
+            postgresql_where=text("archived = false AND key IS NULL"),
         ),
     )
