@@ -159,6 +159,7 @@ _import_package_bindings()
 def _build_mcp_tools(
     tool_schemas: list[ToolSpec],
     tool_executor: ToolExecutor | None,
+    sdk: _ClaudeSDK | None = None,
 ) -> list[SdkMcpTool]:
     """Build SdkMcpTool objects from Omnigent tool schemas.
 
@@ -166,7 +167,7 @@ def _build_mcp_tools(
     callback, which routes through the Session's tool registry (and thus
     respects policies, history recording, etc.).
     """
-    sdk = cast(_ClaudeSDK, _ensure_sdk())
+    sdk = sdk or cast(_ClaudeSDK, _ensure_sdk())
 
     mcp_tools: list[SdkMcpTool] = []
     for schema in tool_schemas:
@@ -254,7 +255,7 @@ def _build_sdk_mcp_servers(
             continue
         chunk_index = offset // _OMNIGENT_MCP_SERVER_CHUNK_SIZE
         server_name = _omnigent_mcp_server_name(chunk_index)
-        mcp_tools = _build_mcp_tools(chunk, tool_executor)
+        mcp_tools = _build_mcp_tools(chunk, tool_executor, sdk=sdk)
         if not mcp_tools:
             continue
         mcp_servers[server_name] = sdk.create_sdk_mcp_server(

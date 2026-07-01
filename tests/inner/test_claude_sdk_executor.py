@@ -1743,7 +1743,7 @@ class TestStreamEventStreaming(unittest.TestCase):
 
         _run(_t())
 
-    def test_large_mcp_surface_uses_single_stdio_bridge(self):
+    def test_large_mcp_surface_uses_chunked_sdk_mcp_servers(self):
         from omnigent.inner.claude_sdk_executor import ClaudeSDKExecutor
 
         captured_options = {}
@@ -1807,15 +1807,27 @@ class TestStreamEventStreaming(unittest.TestCase):
 
         async def _t():
             executor = ClaudeSDKExecutor()
+            schema_names = [
+                "sys_session_list",
+                "sys_session_get_history",
+                "sys_session_get_info",
+                "sys_session_send",
+                "sys_session_close",
+                "sys_session_create",
+                "sys_agent_list",
+            ]
             schemas = [
                 {
-                    "name": f"bytedesk-platform__googleworkspace_tool_{i}",
-                    "description": f"Tool {i}",
+                    "name": name,
+                    "description": name,
                     "parameters": {"type": "object"},
                 }
-                for i in range(6)
+                for name in schema_names
             ]
-            with patch("omnigent.inner.claude_sdk_executor._ensure_sdk", return_value=_FakeSDK):
+            with patch(
+                "omnigent.inner.claude_sdk_executor._executor._ensure_sdk",
+                return_value=_FakeSDK,
+            ):
                 events = [
                     e
                     async for e in executor.run_turn(
@@ -1825,18 +1837,19 @@ class TestStreamEventStreaming(unittest.TestCase):
                     )
             ]
 
-            self.assertEqual(list(captured_options["mcp_servers"]), ["omnigent"])
-            self.assertIn("command", captured_options["mcp_servers"]["omnigent"])
+            self.assertEqual(list(captured_options["mcp_servers"]), ["omnigent", "omnigent2"])
+            self.assertEqual(len(captured_options["mcp_servers"]["omnigent"]["tools"]), 5)
+            self.assertEqual(len(captured_options["mcp_servers"]["omnigent2"]["tools"]), 2)
             self.assertIn(
-                "omnigent.claude_native_bridge",
-                captured_options["mcp_servers"]["omnigent"]["args"],
-            )
-            self.assertIn(
-                "mcp__omnigent__bytedesk_platform_googleworkspace_tool_5",
+                "mcp__omnigent__sys_session_send",
                 captured_options["allowed_tools"],
             )
             self.assertIn(
-                "`mcp__omnigent__bytedesk_platform_googleworkspace_tool_5`",
+                "mcp__omnigent2__sys_session_create",
+                captured_options["allowed_tools"],
+            )
+            self.assertIn(
+                "`mcp__omnigent2__sys_session_create`",
                 captured_options["system_prompt"],
             )
             self.assertIsInstance(events[-1], TurnComplete)
@@ -1905,7 +1918,10 @@ class TestStreamEventStreaming(unittest.TestCase):
 
         async def _t():
             executor = ClaudeSDKExecutor()
-            with patch("omnigent.inner.claude_sdk_executor._ensure_sdk", return_value=_FakeSDK):
+            with patch(
+                "omnigent.inner.claude_sdk_executor._executor._ensure_sdk",
+                return_value=_FakeSDK,
+            ):
                 events = [
                     e
                     async for e in executor.run_turn(
