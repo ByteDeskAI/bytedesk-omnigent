@@ -29,7 +29,8 @@ def _delete_orphaned_child_rows() -> None:
     op.execute(
         sa.text(
             "DELETE FROM comments "
-            "WHERE conversation_id NOT IN (SELECT id FROM conversations)"
+            "WHERE conversation_id IS NULL "
+            "OR conversation_id NOT IN (SELECT id FROM conversations)"
         )
     )
     op.execute(
