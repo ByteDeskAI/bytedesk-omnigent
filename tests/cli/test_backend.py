@@ -28,6 +28,7 @@ from rich.console import Console
 # generic aliases in the import chain against the stub (not subscriptable).
 import omnigent.host.connect  # noqa: F401
 from omnigent import cli
+from omnigent.cli.commands import host as host_command_module
 from omnigent.cli import (
     _build_host_daemon_env,
     _discover_local_server_url,
@@ -1550,6 +1551,50 @@ def test_resolve_host_server_none_stays_local(monkeypatch: pytest.MonkeyPatch) -
     )
 
     assert _resolve_host_server(None) is None
+
+
+def test_host_command_expands_server_before_connect(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Foreground ``omnigent host --server`` resolves Databricks workspace URLs."""
+    seen: list[str] = []
+    connected: list[str] = []
+    record = object()
+
+    monkeypatch.setattr(cli, "_load_effective_config", dict)
+    monkeypatch.setattr(cli, "_workspace_api_server_url", _recording_expander(seen))
+    monkeypatch.setattr(
+        host_command_module,
+        "_normalize_daemon_target",
+        lambda server: f"target:{server}",
+    )
+    monkeypatch.setattr(host_command_module, "_load_or_create_host_id", lambda: "host_abc")
+    monkeypatch.setattr(
+        host_command_module,
+        "_foreground_daemon_record",
+        lambda **_kwargs: record,
+    )
+    monkeypatch.setattr(
+        host_command_module,
+        "_claim_foreground_daemon_record",
+        lambda _record: None,
+    )
+    monkeypatch.setattr(
+        host_command_module,
+        "_restore_replaced_daemon_record",
+        lambda _record, _previous: None,
+    )
+    monkeypatch.setattr(
+        "omnigent.host.connect.run_host_process",
+        lambda *, server_url: connected.append(server_url),
+    )
+
+    result = CliRunner().invoke(
+        cli_group,
+        ["host", "--server", "https://ws.example.net"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert seen == ["https://ws.example.net"]
+    assert connected == ["https://ws.example.net/api/2.0/omnigent"]
 
 
 def test_resume_command_expands_server_url(monkeypatch: pytest.MonkeyPatch) -> None:
