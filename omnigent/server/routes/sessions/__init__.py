@@ -25,10 +25,40 @@ _SUBMODULES = (
     "_usage",
 )
 
+_ROUTE_SUBMODULES = (
+    "session_await",
+    "session_child_sessions",
+    "session_codex_elicitation_hook",
+    "session_create",
+    "session_delete",
+    "session_events",
+    "session_fork",
+    "session_get",
+    "session_global_events",
+    "session_items",
+    "session_list",
+    "session_mcp",
+    "session_patch",
+    "session_permission_hook",
+    "session_policy_evaluate",
+    "session_resources",
+    "session_stream",
+    "session_switch_agent",
+    "session_updates_ws",
+)
+
 from .router import create_sessions_router
 
 
-_FACADE_SKIP = frozenset({"_SUBMODULES", "_export_submodule", "importlib", "_FACADE_SKIP"})
+_FACADE_SKIP = frozenset({
+    "_SUBMODULES",
+    "_ROUTE_SUBMODULES",
+    "_IMPORTED_SUBMODULES",
+    "_wire_submodule_globals",
+    "_export_submodule",
+    "importlib",
+    "_FACADE_SKIP",
+})
 _IMPORTED_SUBMODULES = []
 
 
@@ -55,6 +85,8 @@ def _wire_submodule_globals() -> None:
     runner_facade = importlib.import_module("._runner", __name__)
     for runner_name in getattr(runner_facade, "_SUBMODULES", ()):
         modules.append(importlib.import_module(f"._runner.{runner_name}", __name__))
+    for route_name in _ROUTE_SUBMODULES:
+        modules.append(importlib.import_module(f".routes.{route_name}", __name__))
     for mod in modules:
         for key, value in exports.items():
             mod.__dict__.setdefault(key, value)

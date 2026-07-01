@@ -1341,6 +1341,18 @@ async def test_session_route_value_objects_accept_keyword_construction() -> None
         await task
 
 
+def test_nested_session_route_modules_receive_facade_globals() -> None:
+    from omnigent.server.routes.sessions.routes import session_stream, session_updates_ws
+
+    assert session_stream._get_runner_client is sessions_mod._get_runner_client
+    assert session_stream._ensure_runner_relay_ready is sessions_mod._ensure_runner_relay_ready
+    assert session_updates_ws._discovery_key is sessions_mod._discovery_key
+    assert (
+        session_updates_ws._SESSION_UPDATES_RESCAN_INTERVAL_S
+        == sessions_mod._SESSION_UPDATES_RESCAN_INTERVAL_S
+    )
+
+
 @pytest.mark.asyncio
 async def test_apply_liveness_to_items_mutates_runner_and_host_fields() -> None:
     from omnigent.server.schemas import SessionListItem
