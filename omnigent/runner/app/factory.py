@@ -89,19 +89,45 @@ from omnigent.tools.builtins.load_skill import (
 )
 
 _logger = logging.getLogger(__name__)
-from fastapi import FastAPI
-from ._constants import *
-from ._state import *
-from ._dispatch import *  # noqa: F403
-from ._forwarders import *  # noqa: F403
-from ._harness import *  # noqa: F403
-from ._helpers import *  # noqa: F403
-from ._policy import *  # noqa: F403
-from ._streaming import *  # noqa: F403
-from ._subagents import *  # noqa: F403
-from ._terminals import *  # noqa: F403
-from ._timers import *  # noqa: F403
-from ._tools import *  # noqa: F403
+
+
+def _import_package_bindings() -> None:
+    from . import (
+        _constants as _pkg_constants,
+        _dispatch as _pkg_dispatch,
+        _forwarders as _pkg_forwarders,
+        _harness as _pkg_harness,
+        _helpers as _pkg_helpers,
+        _policy as _pkg_policy,
+        _state as _pkg_state,
+        _streaming as _pkg_streaming,
+        _subagents as _pkg_subagents,
+        _terminals as _pkg_terminals,
+        _timers as _pkg_timers,
+        _tools as _pkg_tools,
+    )
+
+    g = globals()
+    for _mod in (
+        _pkg_constants,
+        _pkg_state,
+        _pkg_dispatch,
+        _pkg_forwarders,
+        _pkg_harness,
+        _pkg_helpers,
+        _pkg_policy,
+        _pkg_streaming,
+        _pkg_subagents,
+        _pkg_terminals,
+        _pkg_timers,
+        _pkg_tools,
+    ):
+        for _key, _value in _mod.__dict__.items():
+            if not _key.startswith("__"):
+                g[_key] = _value
+
+
+_import_package_bindings()
 
 def create_runner_app(
     *,
@@ -1001,50 +1027,9 @@ def create_runner_app(
             },
         )
 
-
-
-def _exec_runner_route_chunks(ns: dict) -> None:
-    """Execute route registration chunks in a shared closure namespace."""
-    import importlib.resources as _res
-    from pathlib import Path as _Path
-    _routes_pkg = _Path(__file__).resolve().parent / "routes"
-    for _fname in (
-        "health.py",
-        "create_session.py",
-        "stream_session.py",
-        "get_session.py",
-        "delete_session.py",
-        "post_session_events.py",
-        "list_session_resources.py",
-        "list_session_environments.py",
-        "get_session_environment.py",
-        "list_session_terminals.py",
-        "create_session_terminal.py",
-        "get_session_terminal.py",
-        "transfer_session_terminal.py",
-        "delete_session_terminal.py",
-        "terminal_resource_attach_ws.py",
-        "list_environment_root.py",
-        "search_environment_files.py",
-        "list_filesystem_changes.py",
-        "read_environment_file_diff.py",
-        "read_or_list_environment_path.py",
-        "write_environment_file.py",
-        "edit_environment_file.py",
-        "delete_environment_path.py",
-        "get_session_skills.py",
-        "resolve_session_skill.py",
-        "run_environment_shell.py",
-        "get_session_resource.py",
-        "cleanup_session_resources.py",
-        "reset_session_state.py",
-        "mcp_execute.py",
-        "summarize.py",
-        "elicitation.py",
-    ):
-        _code = (_routes_pkg / _fname).read_text()
-        exec(compile(_code, str(_routes_pkg / _fname), "exec"), ns)
-    _exec_runner_route_chunks(locals().copy())
+    _route_ns = globals().copy()
+    _route_ns.update(locals())
+    _exec_runner_route_chunks(_route_ns)
 
     async def _catch_up_scan() -> None:
         """Catch-up scan after tunnel reconnect (Step 8.5 Scenario B).
@@ -1129,3 +1114,56 @@ def _exec_runner_route_chunks(ns: dict) -> None:
     app.state.catch_up_scan = _catch_up_scan
 
     return app
+
+
+def _exec_runner_route_chunks(ns: dict) -> None:
+    """Execute route registration chunks in a shared closure namespace."""
+    import textwrap
+    from pathlib import Path as _Path
+
+    _routes_pkg = _Path(__file__).resolve().parent / "routes"
+    for _fname in (
+        "health.py",
+        "create_session.py",
+        "stream_session.py",
+        "get_session.py",
+        "delete_session/_advisor.py",
+        "delete_session/_cancellation.py",
+        "delete_session/_comment_relay.py",
+        "delete_session/_compact.py",
+        "delete_session/_history.py",
+        "delete_session/_native.py",
+        "delete_session/_subagent.py",
+        "delete_session/_turn_execution.py",
+        "delete_session/_turn_lifecycle.py",
+        "delete_session/_route.py",
+        "post_session_events.py",
+        "list_session_resources.py",
+        "list_session_environments.py",
+        "get_session_environment.py",
+        "list_session_terminals.py",
+        "create_session_terminal.py",
+        "get_session_terminal.py",
+        "transfer_session_terminal.py",
+        "delete_session_terminal.py",
+        "terminal_resource_attach_ws.py",
+        "list_environment_root.py",
+        "search_environment_files.py",
+        "list_filesystem_changes.py",
+        "read_environment_file_diff.py",
+        "read_or_list_environment_path.py",
+        "write_environment_file.py",
+        "edit_environment_file.py",
+        "delete_environment_path.py",
+        "get_session_skills.py",
+        "resolve_session_skill.py",
+        "run_environment_shell.py",
+        "get_session_resource.py",
+        "cleanup_session_resources.py",
+        "reset_session_state.py",
+        "mcp_execute.py",
+        "summarize.py",
+        "elicitation.py",
+    ):
+        _code = textwrap.dedent((_routes_pkg / _fname).read_text())
+        exec(compile(_code, str(_routes_pkg / _fname), "exec"), ns)

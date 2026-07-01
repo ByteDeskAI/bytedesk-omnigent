@@ -28,6 +28,8 @@ import {
   workforceScopeSlug,
 } from "../workforce-utils";
 
+export type PermissionsTabState = ReturnType<typeof usePermissionsTab>;
+
 export function usePermissionsTab(agent: AvailableAgent, editable: boolean) {
   const department = agent.department?.trim() || null;
   const departmentScopeId = workforceScopeSlug(department);
