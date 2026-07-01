@@ -55,6 +55,40 @@ def create_agentic_inbox_router() -> APIRouter:
                 status_code=422,
             )
 
+        # Strangler cutover (ADR-0155, BDP-2567): when the flag is on, run the
+        # verified email payload through the generic inbound pipeline instead of
+        # the legacy initiator/process_email_event path below. Default OFF → fall
+        # through unchanged. The signature check above stays the auth boundary.
+        from bytedesk_omnigent.inbound.flags import (
+            INBOUND_CUTOVER_AGENTIC_INBOX,
+            evaluate_inbound_flag,
+        )
+
+        if await evaluate_inbound_flag(INBOUND_CUTOVER_AGENTIC_INBOX, source="agentic-inbox"):
+            from bytedesk_omnigent.inbound.pipeline import ingest
+            from bytedesk_omnigent.inbound.processors import all_processors
+            from bytedesk_omnigent.inbound.store import get_inbound_event_store
+            from bytedesk_omnigent.inbound.translators import CHANNEL_AGENTIC_INBOX
+
+            result = ingest(
+                channel=CHANNEL_AGENTIC_INBOX,
+                source="agentic-inbox",
+                raw_payload=payload,
+                headers=dict(request.headers),
+                store=get_inbound_event_store(),
+                processors=all_processors(),
+            )
+            return JSONResponse(
+                {
+                    "status": result.status,
+                    "idempotencyKey": result.idempotency_key,
+                    "eventType": result.event_type,
+                    "duplicate": result.duplicate,
+                    "detail": result.detail,
+                },
+                status_code=result.http_status,
+            )
+
         initiator = get_session_initiator()
         if initiator is None:
             initiator = build_self_call_initiator_from_env()

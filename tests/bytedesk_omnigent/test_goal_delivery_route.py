@@ -118,3 +118,61 @@ def test_unmatched_delivery_is_not_claimed_and_retryable(tmp_path, monkeypatch) 
     second = client.post("/v1/goal-delivery/github", content=body)
     assert second.status_code == 404
     assert second.json()["status"] == "no_match"
+
+
+# ── ADR-0155 cutover flag (BDP-2565): default OFF = no behavior change ──────────
+
+
+def _boom_ingest(**_kwargs):  # pragma: no cover - only invoked on regression
+    raise AssertionError("ingest() must not run while the cutover flag is OFF")
+
+
+def test_flag_off_by_default_never_calls_pipeline(tmp_path, monkeypatch) -> None:
+    """Default flag state (unset → off) leaves the legacy projector path intact."""
+    client, location = _setup(tmp_path, monkeypatch)
+    _seed_goal(location)
+    # If the route ever routed to the pipeline while off, this ingest would blow up.
+    monkeypatch.setattr("bytedesk_omnigent.inbound.pipeline.ingest", _boom_ingest)
+
+    resp = client.post("/v1/goal-delivery/github", content=_github_body("sha-abc"))
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "projected"
+    assert resp.json()["milestoneStatus"] == "awaiting_jira"
+
+
+def test_flag_on_routes_through_pipeline(tmp_path, monkeypatch) -> None:
+    """Flag ON → the verified payload is handed to ``ingest`` on the goal channel."""
+    from bytedesk_omnigent.inbound.pipeline import IngestResult
+
+    client, _location = _setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "bytedesk_omnigent.inbound.flags.evaluate_inbound_flag", _async_true
+    )
+
+    calls: dict = {}
+
+    def _fake_ingest(**kwargs):
+        calls.update(kwargs)
+        return IngestResult(
+            status="projected", http_status=202, idempotency_key="k-1",
+            event_type="pull_request.merged",
+        )
+
+    monkeypatch.setattr("bytedesk_omnigent.inbound.pipeline.ingest", _fake_ingest)
+    monkeypatch.setattr(
+        "bytedesk_omnigent.inbound.store.get_inbound_event_store", lambda: object()
+    )
+    monkeypatch.setattr("bytedesk_omnigent.inbound.processors.all_processors", list)
+
+    resp = client.post("/v1/goal-delivery/github", content=_github_body("sha-abc"))
+
+    assert resp.status_code == 202
+    assert resp.json()["status"] == "projected"
+    assert resp.json()["idempotencyKey"] == "k-1"
+    assert calls["channel"] == "goal-delivery"
+    assert calls["source"] == "github"
+    assert calls["raw_payload"]["pull_request"]["merge_commit_sha"] == "sha-abc"
+
+
+async def _async_true(*_args, **_kwargs) -> bool:
+    return True
