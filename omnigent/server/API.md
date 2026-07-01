@@ -459,19 +459,25 @@ session-scoped events on the wire (see "Stream Events" below).
 |---|---|---|
 | Sessions (`/v1/sessions`) | Omnigent (ours) | No external reference. Purpose-built for agent-native workflows: live tail, queued input, interrupt. |
 
-### Session Lifecycle States
+### Live Session Status States
 
-A session is always in one of these states:
+Live `session.status` events use this transient status vocabulary:
 
 ```
-idle -> running -> idle
-                -> waiting -> running -> idle
-                -> failed
+idle -> launching -> running -> idle
+idle ------------> running -> idle
+                         -> waiting -> running -> idle
+                         -> failed
+failed -> launching/running
 ```
 
 - **idle**: No agent loop running. The session is ready to accept
   new events. This is the initial state when no `initial_items` are
   posted on creation, and the terminal state after a turn finishes.
+- **launching**: A session, child session, or runner-backed task has
+  been created, but no concrete harness start has been observed yet.
+  This is usually short-lived and can transition to `running`,
+  `waiting`, `idle`, or `failed` depending on the launch result.
 - **running**: An agent loop is actively processing. The session's
   SSE stream is emitting events. New events can still be posted —
   they queue behind the current turn and are consumed at the next
@@ -482,12 +488,18 @@ idle -> running -> idle
   `status: "waiting"`. The loop resumes (back to `running`) when
   the signal arrives.
 - **failed**: An unrecoverable error occurred during processing.
-  The session cannot accept new events.
+  The error remains visible until real work resumes (`launching` or
+  `running`) or runner recovery explicitly clears the stale failure.
 
 `action_required` is intentionally NOT a session status — it lives at
-the task layer (see runtime). The session schema's `status` field is a
-`Literal["idle", "running", "waiting", "failed"]` and the route layer
-rejects any other value with a 500 (fail loud).
+the task layer (see runtime). `SessionStatusEvent.status` is a
+`Literal["idle", "launching", "running", "waiting", "failed"]` and the
+route layer rejects any other event value with a 500 (fail loud).
+
+`SessionResponse.status` and list-item `status` remain snapshot/list
+projections with the narrower `"idle" | "running" | "failed"` shape.
+Transient `"launching"` and `"waiting"` are live stream states unless a
+future schema migration deliberately broadens the response models.
 
 ### Session Object
 
@@ -531,8 +543,9 @@ Fields:
     resolve the agent row.
 
   status (string, required)
-    Current lifecycle state: `"idle"`, `"running"`, `"waiting"`, or
-    `"failed"`.
+    Current snapshot lifecycle state: `"idle"`, `"running"`, or
+    `"failed"`. Transient `"launching"` and `"waiting"` appear on
+    live `session.status` events.
 
   created_at (integer, required)
     Unix timestamp (seconds) when the session was created.
@@ -580,7 +593,8 @@ Fields:
   pending_elicitations (array, default `[]`)
     Outstanding `response.elicitation_request` event payloads at
     snapshot build time. Replayed by the client as ApprovalCard blocks
-    on cold load, since the live SSE stream has no replay buffer.
+    on cold load, and still included in snapshots even though the live
+    SSE stream supports bounded `Last-Event-ID` replay.
 
   pending_inputs (array, default `[]`)
     Un-consumed web-composer user messages on native-terminal
@@ -1219,9 +1233,11 @@ data: [DONE]
 404 Not Found — no session with that id
 ```
 
-**Live tail only.** No `starting_after` parameter, no replay of past
-events, no sequence numbers exposed on the wire. Reconnecting clients
-reconcile via the snapshot endpoint — see "Reconnect Contract".
+**Live tail with bounded resume.** No `starting_after` parameter is
+accepted. The SSE route emits per-session event ids and supports
+`Last-Event-ID` resume from a bounded in-memory replay ring. Clients
+that reconnect beyond the replay window reconcile via the snapshot
+endpoint — see "Reconnect Contract".
 
 The stream stays open until the client disconnects or the conversation
 is closed; events flow in publish order. Multiple subscribers to the
@@ -1250,7 +1266,7 @@ stream and surface queue/interrupt semantics.
 
 | Event | Pydantic class | Wire shape (illustrative) |
 |---|---|---|
-| `session.status` | `SessionStatusEvent` | `{type, conversation_id, status: "running" \| "waiting" \| "idle" \| "failed"}` |
+| `session.status` | `SessionStatusEvent` | `{type, conversation_id, status: "launching" \| "running" \| "waiting" \| "idle" \| "failed"}` |
 | `session.input.consumed` | `SessionInputConsumedEvent` | `{type, data: {queued_item_id, type, data, position}}` (nested envelope) |
 | `session.interrupted` | `SessionInterruptedEvent` | `{type, data: {requested_at, queued_item_id?: null}}` (nested envelope) |
 | `session.created` | `SessionCreatedEvent` | `{type, conversation_id: <parent>, child_conversation_id, agent_id, ...}` — emitted on the PARENT session's stream when a sub-agent is spawned. |
@@ -1295,17 +1311,21 @@ session whose resolve endpoint must receive the verdict.
 
 ### Reconnect Contract
 
-The session API has **no replay machinery**. To reconnect to a
-session after a disconnect:
+The session API uses **bounded replay plus snapshot reconciliation**.
+To reconnect to a session after a disconnect:
 
-1. **Open the SSE stream** (`GET /v1/sessions/{id}/stream`). The
-   stream is registered eagerly at session create and survives
-   across turns, so subscribing is safe at any point in the session
-   lifecycle — including before the first turn starts.
+1. **Open the SSE stream** (`GET /v1/sessions/{id}/stream`). When the
+   client has a prior SSE event id, send it as `Last-Event-ID`; recent
+   missed events are replayed before the live tail. The stream is
+   registered eagerly at session create and survives across turns, so
+   subscribing is safe at any point in the session lifecycle — including
+   before the first turn starts.
 2. **GET the snapshot** (`GET /v1/sessions/{id}`).
 3. **Dedupe items between the snapshot and the stream by item id.**
    Items in `snapshot.items` that also appear in stream events are
    the same item — drop the duplicate. Server-issued IDs are stable.
+   If the replay cursor fell outside the bounded window, the snapshot
+   is the recovery source of truth.
 
 Opening the stream BEFORE the snapshot is still recommended so no
 events fire in the gap, but because the stream queue stays alive

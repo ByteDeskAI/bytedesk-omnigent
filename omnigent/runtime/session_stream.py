@@ -3,10 +3,10 @@
 This module is a fan-out broadcaster keyed by ``conversation_id``.
 Every active call to :func:`subscribe` owns its own ephemeral
 ``asyncio.Queue``; :func:`publish` fans the event out to all
-queues currently subscribed to that conversation_id. Events emitted
-before any subscriber is connected are LOST — there is no buffer
-and no replay. Clients that need to recover state across a
-disconnect fetch ``GET /v1/sessions/{id}`` for the persisted
+queues currently subscribed to that conversation_id. Published events
+also enter a bounded per-conversation replay ring so reconnecting SSE
+clients can resume with ``Last-Event-ID``. Clients that fall outside
+that window recover through ``GET /v1/sessions/{id}`` for the persisted
 history and dedupe by item id.
 
 This module owns no per-conversation lifecycle. There is no
@@ -67,10 +67,12 @@ def publish(conversation_id: str, event: dict[str, Any]) -> None:
     """
     Broadcast an event to every active subscriber of the given
     conversation (called from sync workflow thread). The event
-    payload is delivered verbatim — no sequence number or other
-    ordering field is added on the wire. Events emitted while no
-    subscriber is connected are dropped silently; reconnecting
-    clients use the snapshot endpoint, not replay.
+    payload is delivered verbatim to subscribers. The SSE route carries
+    the assigned monotonic sequence number as the event id for
+    ``Last-Event-ID`` resume; no ordering field is injected into the
+    event payload itself. Events emitted while no subscriber is connected
+    are not live-delivered, but they are retained in the bounded replay
+    ring for reconnecting clients that present a recent cursor.
 
     No-op when ``_subscribers`` has no entry for this
     ``conversation_id`` (typical between turns when nothing is
@@ -281,10 +283,12 @@ async def subscribe_with_ids(
     ``finally`` block always unregisters this subscriber slot so
     a stale queue cannot keep accumulating events.
 
-    Live-tail only: events emitted before this call are NOT
-    replayed. Multiple concurrent subscribers to the same
-    conversation each see every event independently — there is
-    no contention between them.
+    Without ``last_event_id``, this is live-tail only: events emitted
+    before this call are NOT replayed. With ``last_event_id``, recent
+    buffered events with a higher sequence number are replayed before
+    the live tail. Multiple concurrent subscribers to the same
+    conversation each see every event independently — there is no
+    contention between them.
 
     Must be called from the asyncio event loop that the caller
     intends to iterate on; the sync producer side uses

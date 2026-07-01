@@ -13,10 +13,10 @@ tunnel. The persist-before-forward order is invariant I1 in
 ``designs/SESSION_REARCHITECTURE.md`` — a snapshot read immediately
 after POST observes the input in ``items``.
 
-The reconnect contract is **snapshot + live tail**, not replay: a
-client opens the live stream and ``GET``s the snapshot, then
-deduplicates by item id any events that fire between the two reads.
-See ``server/API.md`` for the full contract.
+The reconnect contract is bounded ``Last-Event-ID`` replay plus
+snapshot reconciliation: a client opens the live stream, ``GET``s the
+snapshot, and deduplicates by item id any events that appear in both
+places. See ``server/API.md`` for the full contract.
 """
 
 from __future__ import annotations
@@ -64,6 +64,7 @@ from omnigent.blueprints import (
     render_blueprint_value,
 )
 from omnigent.codex_native_elicitation import codex_elicitation_id
+from omnigent.communications.state import should_publish_status
 from omnigent.cost_plan import (
     COST_CONTROL_LABEL_NAMESPACE,
     reserved_cost_control_keys,
@@ -2486,11 +2487,9 @@ def _build_session_response(
         external_session_id=conv.external_session_id,
         terminal_launch_args=conv.terminal_launch_args,
         # Replay outstanding approval prompts into the snapshot.
-        # The live SSE stream has no buffer, so a prompt emitted
-        # before the user opened this chat would otherwise never
-        # render — the UI rebuilds blocks from the snapshot on
-        # cold load, then live-tails. Empty list when nothing is
-        # outstanding (the common case).
+        # The live SSE replay window is bounded, so a prompt emitted
+        # before the user opened this chat may need snapshot recovery.
+        # Empty list when nothing is outstanding (the common case).
         pending_elicitations=(
             pending_elicitation_events
             if pending_elicitation_events is not None
@@ -4876,8 +4875,8 @@ def _publish_status(
     update the cache the list endpoint reads.
 
     ``status`` must be one of the literals on
-    :class:`SessionStatusEvent` (``idle`` / ``running`` / ``waiting``
-    / ``failed``); other values fail Pydantic validation rather than
+    :class:`SessionStatusEvent` (``idle`` / ``launching`` / ``running`` /
+    ``waiting`` / ``failed``); other values fail Pydantic validation rather than
     silently shipping a non-conforming wire shape (rule 15).
 
     Every publish site funnels through here so the in-memory
@@ -4898,21 +4897,9 @@ def _publish_status(
     :param response_id: Optional response id for terminal-backed status
         edges, e.g. ``"codex_turn_abc123"``.
     """
-    # ``failed`` is sticky against a trailing ``idle``. A turn error is
-    # terminal — it must not be silently downgraded to ``idle`` by a
-    # follow-on quiescence signal. This matters for claude-native: the
-    # turn-error edge comes from the ``StopFailure`` hook (→ ``failed``),
-    # but the pane then goes quiet, so the PTY-activity watcher emits a
-    # trailing ``idle`` ~1s later. Without this guard that ``idle`` would
-    # erase the error state before the user could see it. The next
-    # ``running`` edge (new activity) clears ``failed`` normally, so the
-    # error persists exactly until the session does real work again. No
-    # in-process flow performs a legitimate ``failed`` → ``idle``
-    # transition (compaction failure publishes ``running`` → ``idle``, not
-    # ``failed``), so this is a safe, harness-agnostic invariant.
-    if status == "idle" and _session_status_cache.get(session_id) == "failed":
-        return
     previous_status = _session_status_cache.get(session_id)
+    if not should_publish_status(previous_status, status):
+        return
     _session_status_cache[session_id] = status
     try:
         from omnigent.server.push.service import get_push_service
@@ -10730,11 +10717,11 @@ async def _stream_live_events(
     """
     Yield SSE-formatted events from the conversation's live stream.
 
-    Events are delivered live from the moment :func:`session_stream.subscribe`
-    is invoked forward — there is no buffer and no replay. Events
-    published before this generator subscribed are lost; clients
-    reconcile pre-subscribe state via the snapshot endpoint
-    (``GET /v1/sessions/{id}``) and dedupe by item id.
+    Events are delivered live from the moment
+    :func:`session_stream.subscribe_with_ids` is invoked forward. When the
+    caller supplies ``last_event_id``, recent missed events are replayed
+    before the live tail. Clients reconcile older pre-subscribe state via
+    the snapshot endpoint (``GET /v1/sessions/{id}``) and dedupe by item id.
 
     On client disconnect the subscribe loop breaks; the
     ``finally`` block emits a ``[DONE]`` sentinel so well-behaved
@@ -18650,9 +18637,8 @@ def create_sessions_router(
 
     # ── GET /sessions/{session_id}/stream ────────────────────────
 
-    # Live-tail only. Clients reconnect via GET /v1/sessions/{id}
-    # for snapshot, then open a new stream; events that fire
-    # between are deduped client-side by item id (see API.md).
+    # Live-tail plus bounded Last-Event-ID resume. Clients still reconcile via
+    # GET /v1/sessions/{id} for snapshot and item-id dedupe (see API.md).
     @router.get(
         "/sessions/{session_id}/stream",
         # response_model=None: returns StreamingResponse, not a model.
@@ -18683,7 +18669,8 @@ def create_sessions_router(
         """
         Subscribe to the session's live SSE event stream.
 
-        Does NOT replay history; clients reconcile via the snapshot
+        Does not replay durable history; bounded Last-Event-ID resume covers
+        recent live events, and clients reconcile older gaps via the snapshot
         endpoint. The generator handles disconnects via a
         ``try/finally`` that emits the ``[DONE]`` sentinel in all
         exit paths — see :func:`_stream_live_events`.
