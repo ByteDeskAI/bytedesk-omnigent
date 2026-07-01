@@ -13,12 +13,14 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
     false,
+    text,
     true,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -292,7 +294,11 @@ class SqlInboundEventResult(Base):
     __tablename__ = "inbound_event_results"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    idempotency_key: Mapped[str] = mapped_column(String(256), nullable=False)
+    idempotency_key: Mapped[str] = mapped_column(
+        String(256),
+        ForeignKey("inbound_events.idempotency_key", ondelete="CASCADE"),
+        nullable=False,
+    )
     processor: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ok")
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
@@ -466,6 +472,7 @@ class SqlGoal(Base):
         Index("ix_goals_owner_status", "owner_agent_id", "status"),
         Index("ix_goals_target_status", "target_kind", "target_id", "status"),
         Index("ix_goals_activation_status", "activation_state", "status"),
+        Index("ix_goals_claimable", "status", "activation_state", "priority", "created_at"),
         Index("ix_goals_parent", "parent_goal_id"),
         Index("ix_goals_department_status", "department_slug", "status"),
         Index("ix_goals_outcome_kind_status", "outcome_kind", "status"),
@@ -540,7 +547,11 @@ class SqlConnectorService(Base):
     __tablename__ = "connector_services"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    connection_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    connection_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("connector_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     service_key: Mapped[str] = mapped_column(String(64), nullable=False)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
     status: Mapped[str] = mapped_column(String(32), nullable=False, server_default="ready")
@@ -569,7 +580,11 @@ class SqlConnectorAgentGrant(Base):
     __tablename__ = "connector_agent_grants"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    connection_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    connection_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("connector_connections.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     agent_id: Mapped[str] = mapped_column(String(64), nullable=False)
     service_key: Mapped[str] = mapped_column(String(64), nullable=False)
     tool_key: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -615,6 +630,12 @@ class SqlConnectorOAuthState(Base):
 
     __table_args__ = (
         Index("ix_connector_oauth_states_provider_expires", "provider", "expires_at"),
+        Index(
+            "ix_connector_oauth_states_expires_unconsumed",
+            "expires_at",
+            sqlite_where=text("consumed_at IS NULL"),
+            postgresql_where=text("consumed_at IS NULL"),
+        ),
     )
 
 
@@ -640,7 +661,6 @@ class SqlWorkforceInstruction(Base):
 
     __table_args__ = (
         UniqueConstraint("scope_kind", "scope_id", name="uq_workforce_instructions_scope"),
-        Index("ix_workforce_instructions_scope", "scope_kind", "scope_id"),
         CheckConstraint(
             "scope_kind in ('organization', 'department', 'agent')",
             name="ck_workforce_instructions_scope_kind",
@@ -864,7 +884,11 @@ class SqlGoalDependency(Base):
     __tablename__ = "goal_dependencies"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    goal_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("goals.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     kind: Mapped[str] = mapped_column(String(32), nullable=False)
     ref: Mapped[str | None] = mapped_column(String(256), nullable=True)
     label: Mapped[str] = mapped_column(String(512), nullable=False)
@@ -875,7 +899,6 @@ class SqlGoalDependency(Base):
     meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
 
     __table_args__ = (
-        Index("ix_goal_dependencies_goal", "goal_id"),
         Index("ix_goal_dependencies_status", "status"),
         Index("ix_goal_dependencies_goal_status", "goal_id", "status"),
         CheckConstraint(
@@ -929,7 +952,11 @@ class SqlGoalOutcome(Base):
     __tablename__ = "goal_outcomes"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
-    goal_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    goal_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("goals.id", ondelete="CASCADE"),
+        nullable=False,
+    )
     booked_at: Mapped[int] = mapped_column(Integer, nullable=False)
     realized_value_cents: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     source: Mapped[str] = mapped_column(String(64), nullable=False)
