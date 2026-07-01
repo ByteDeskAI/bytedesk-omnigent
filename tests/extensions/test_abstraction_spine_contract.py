@@ -30,7 +30,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _APP_PY = _REPO_ROOT / "omnigent" / "server" / "app.py"
 _HARNESSES_INIT = _REPO_ROOT / "omnigent" / "runtime" / "harnesses" / "__init__.py"
 _OMNIGENT_COMPAT = _REPO_ROOT / "omnigent" / "spec" / "_omnigent_compat.py"
-_TOOL_DISPATCH = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatch.py"
+_LIFESPAN_PHASES = _REPO_ROOT / "omnigent" / "kernel" / "lifespan_phases.py"
+_TOOL_DISPATCH = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatch" / "_dispatch.py"
 _TOOL_DISPATCHER_REGISTRY = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatcher_registry.py"
 # Canonical kernel location post-BDP-2515 (omnigent/extensions.py is now a
 # strangler re-export shim; the extension_*() getter defs live in the kernel).
@@ -71,7 +72,7 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         "server_metrics_otel",
         # BDP-2424 / MCP acting-identity: optional HMAC signer for assertion tokens.
         "assertion_signer",
-        # DI composition root (flag-gated; AST scan sees the source-level assignment).
+        # DI composition root (always-on; AST scan sees the source-level assignment).
         "di_container",
         # BDP-2623: the Phase 1 / ServiceRegistry dual-write sidecar
         # (OMNIGENT_USE_SERVICE_REGISTRY + omnigent/kernel/service_registry.py) was
@@ -133,10 +134,8 @@ def _assigned_app_state_keys(source: str, *, root_names: set[str]) -> set[str]:
     """Return every ``<root>.state.<key> = ...`` key assigned in *source* via AST.
 
     *root_names* selects the assignment owner: ``{"app"}`` for the synchronous
-    ``create_app`` body (Phase 1 / ServiceRegistry) and ``{"app_inst"}`` for the
-    ``_lifespan`` closure (Phase 3). AST (not regex) so a reformatted assignment block
-    still resolves the same keys — matching the plan's promise that the bind is a
-    behavior-free swap of the literal key set.
+    ``create_app`` body and ``{"ctx"}`` for phase-owned ``ctx.app.state`` writes.
+    AST (not regex) so a reformatted assignment block still resolves the same keys.
     """
     keys: set[str] = set()
     tree = ast.parse(source)
@@ -152,6 +151,17 @@ def _assigned_app_state_keys(source: str, *, root_names: set[str]) -> set[str]:
                 and target.value.attr == "state"
                 and isinstance(target.value.value, ast.Name)
                 and target.value.value.id in root_names
+            ):
+                keys.add(target.attr)
+            # Match `<root>.app.state.<key>` as used by lifespan phases.
+            if (
+                isinstance(target, ast.Attribute)
+                and isinstance(target.value, ast.Attribute)
+                and target.value.attr == "state"
+                and isinstance(target.value.value, ast.Attribute)
+                and target.value.value.attr == "app"
+                and isinstance(target.value.value.value, ast.Name)
+                and target.value.value.value.id in root_names
             ):
                 keys.add(target.attr)
     return keys
@@ -172,13 +182,14 @@ def test_app_state_body_singleton_key_set_is_pinned():
 
 
 def test_app_state_lifespan_key_is_separate_from_body():
-    """Phase 3 anchor — harness_process_manager is set in _lifespan, not the body.
+    """Phase 3 anchor — harness_process_manager is set by the lifespan phase.
 
     This separation is load-bearing for the 'why sequential' argument: Phase 1
     (ServiceRegistry) and Phase 3 (lifespan phases) touch DIFFERENT app.state write
     sites, so the spine never collides two phases on a single app.state hunk.
     """
     lifespan_keys = _assigned_app_state_keys(_read(_APP_PY), root_names={"app_inst"})
+    lifespan_keys |= _assigned_app_state_keys(_read(_LIFESPAN_PHASES), root_names={"ctx"})
     assert lifespan_keys == _EXPECTED_LIFESPAN_APP_STATE_KEYS, (
         f"_lifespan app.state keys drifted (Phase 3). Got: {sorted(lifespan_keys)}"
     )
@@ -186,6 +197,7 @@ def test_app_state_lifespan_key_is_separate_from_body():
     assert _EXPECTED_BODY_APP_STATE_KEYS.isdisjoint(_EXPECTED_LIFESPAN_APP_STATE_KEYS)
     # And together they are the complete app.state surface (no third writer slipped in).
     all_keys = _assigned_app_state_keys(_read(_APP_PY), root_names={"app", "app_inst"})
+    all_keys |= _assigned_app_state_keys(_read(_LIFESPAN_PHASES), root_names={"ctx"})
     assert all_keys == _EXPECTED_ALL_APP_STATE_KEYS, (
         "an unexpected app.state writer appeared (neither the factory body nor the "
         f"_lifespan closure). Got: {sorted(all_keys)}"
@@ -260,7 +272,22 @@ def test_omnigent_compat_allowlist_consumes_the_same_harness_names():
 
 def test_dispatch_registry_order_is_pinned():
     src = _read(_TOOL_DISPATCHER_REGISTRY)
-    names = tuple(re.findall(r'name="([^"]+)"', src))
+    communication_dispatchers = {
+        "InboxDispatcher": "async_inbox",
+        "SessionSendDispatcher": "subagent",
+        "SessionCreateDispatcher": "session_create",
+        "SessionQueryDispatcher": "session_query",
+    }
+    names: list[str] = []
+    for match in re.finditer(
+        r'name="([^"]+)"|registry\.register\((\w+Dispatcher)\(',
+        src,
+    ):
+        if match.group(1) is not None:
+            names.append(match.group(1))
+        elif match.group(2) in communication_dispatchers:
+            names.append(communication_dispatchers[match.group(2)])
+    names = tuple(names)
     assert names == _EXPECTED_DISPATCHER_NAMES, (
         f"dispatch registry order drifted: {names}. Add/remove the dispatcher in "
         "the canonical precedence position and re-pin _EXPECTED_DISPATCHER_NAMES."

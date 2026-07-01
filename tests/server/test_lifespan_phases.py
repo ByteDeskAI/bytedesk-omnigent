@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from omnigent.kernel.lifespan_phases import (
@@ -48,7 +50,7 @@ class _RecordingPhase(LifespanPhase):
         self._log.append((self.name, "down"))
 
 
-def _ctx() -> LifespanContext:
+def _ctx(*, di_container: object | None = None) -> LifespanContext:
     """Return a context with placeholder wiring (phases under test ignore it)."""
     return LifespanContext(
         app=None,
@@ -63,6 +65,7 @@ def _ctx() -> LifespanContext:
         server_metrics_otel=None,
         bootstrap_result=None,
         policy_modules=None,
+        di_container=di_container,
     )
 
 
@@ -197,6 +200,11 @@ def test_default_phases_topo_sort_and_reverse_matches_finally_order() -> None:
     names = [p.name for p in ordered]
     assert names.index("runner_router") < names.index("runner_ws_factory")
     assert names.index("runner_router") < names.index("subagent_block_notifier")
+    assert names.index("extension_discovery") < names.index("builtin_tool_registration")
+    assert names.index("builtin_tool_registration") < names.index("firstparty_seams")
+    assert names.index("firstparty_seams") < names.index("coordination")
+    assert names.index("coordination") < names.index("extension_background_tasks")
+    assert names.index("coordination") < names.index("default_agents")
 
     teardown_order = [p.name for p in reversed(ordered)]
     # BDP-2516: the standalone metrics_publish / memory_maintenance phases were
@@ -225,6 +233,9 @@ def test_default_phases_topo_sort_and_reverse_matches_finally_order() -> None:
         "anyio_thread_limiter",
         "log_level",
         "default_agents",
+        "extension_discovery",
+        "builtin_tool_registration",
+        "firstparty_seams",
         "policy_registry",
         "accounts_auto_open",
     }
@@ -245,6 +256,147 @@ def test_default_phases_include_coordination() -> None:
     assert ordered.index("coordination") < ordered.index("default_agents")
 
 
+def test_default_phases_include_extension_startup_cutover() -> None:
+    """Always-on lifespan must include the formerly monolithic extension setup."""
+    ordered = [p.name for p in topological_order(build_default_lifespan_phases())]
+
+    for phase in (
+        "extension_discovery",
+        "builtin_tool_registration",
+        "firstparty_seams",
+    ):
+        assert phase in ordered
+
+    assert ordered.index("extension_discovery") < ordered.index("builtin_tool_registration")
+    assert ordered.index("builtin_tool_registration") < ordered.index("firstparty_seams")
+    assert ordered.index("firstparty_seams") < ordered.index("coordination")
+
+
+@pytest.mark.asyncio
+async def test_extension_discovery_phase_prefers_di_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Startup discovery is owned by the DI composition root when available."""
+    from omnigent.kernel.lifespan_phases import ExtensionDiscoveryPhase
+
+    calls: list[str] = []
+
+    class _Container:
+        def run_startup_discovery(self) -> None:
+            calls.append("container")
+
+    monkeypatch.setattr(
+        "omnigent.kernel.pluggable.manifest.discover_all_extensions",
+        lambda: calls.append("fallback"),
+    )
+
+    await ExtensionDiscoveryPhase().startup(_ctx(di_container=_Container()))
+
+    assert calls == ["container"]
+
+
+@pytest.mark.asyncio
+async def test_extension_discovery_phase_falls_back_without_di_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Bare test contexts still run discovery through the canonical helper."""
+    from omnigent.kernel.lifespan_phases import ExtensionDiscoveryPhase
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "omnigent.kernel.pluggable.manifest.discover_all_extensions",
+        lambda: calls.append("fallback"),
+    )
+
+    await ExtensionDiscoveryPhase().startup(_ctx())
+
+    assert calls == ["fallback"]
+
+
+@pytest.mark.asyncio
+async def test_builtin_tool_registration_phase_registers_extension_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The phase path merges extension builtin tools before first-party seams."""
+    from omnigent.kernel.lifespan_phases import BuiltinToolRegistrationPhase
+
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "omnigent.tools.builtins.register_extension_tools",
+        lambda: calls.append("tools"),
+    )
+
+    await BuiltinToolRegistrationPhase().startup(_ctx())
+
+    assert calls == ["tools"]
+
+
+@pytest.mark.asyncio
+async def test_firstparty_seams_phase_registers_and_stores_extensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """First-party seam registration feeds later first-party background startup."""
+    from omnigent.kernel.lifespan_phases import FirstpartySeamsPhase
+
+    extensions = [object(), object()]
+    calls: list[object] = []
+
+    monkeypatch.setattr("omnigent.core.default_extensions", lambda: extensions)
+    monkeypatch.setattr(
+        "omnigent.core.register_firstparty_seams",
+        lambda ext: calls.append(ext),
+    )
+
+    ctx = _ctx()
+    await FirstpartySeamsPhase().startup(ctx)
+
+    assert calls == [extensions]
+    assert ctx.state["firstparty_extensions"] == extensions
+
+
+@pytest.mark.asyncio
+async def test_extension_background_tasks_include_firstparty_extension_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Background startup uses first-party extensions captured by the seam phase."""
+    from omnigent.kernel.lifespan_phases import ExtensionBackgroundTasksPhase
+
+    calls: list[str | tuple[str, tuple[object, ...]]] = []
+    firstparty_extension = object()
+
+    async def _firstparty_loop() -> None:
+        calls.append("started")
+        await asyncio.Event().wait()
+
+    def _factories(extensions: list[object]) -> list[object]:
+        calls.append(("factories", tuple(extensions)))
+        if extensions == [firstparty_extension]:
+            return [_firstparty_loop]
+        return []
+
+    monkeypatch.setattr(
+        "omnigent.kernel.extensions.extension_background_factories",
+        list,
+    )
+    monkeypatch.setattr(
+        "omnigent.core.firstparty_background_task_extensions",
+        lambda **_: [],
+    )
+    monkeypatch.setattr("omnigent.core.firstparty_background_factories", _factories)
+
+    ctx = _ctx()
+    ctx.state["firstparty_extensions"] = [firstparty_extension]
+    phase = ExtensionBackgroundTasksPhase()
+
+    await phase.startup(ctx)
+    await asyncio.sleep(0)
+    await phase.shutdown(ctx)
+
+    assert ("factories", ()) in calls
+    assert ("factories", (firstparty_extension,)) in calls
+    assert "started" in calls
+
+
 @pytest.mark.asyncio
 async def test_coordination_phase_starts_and_stops_backplane(
     monkeypatch: pytest.MonkeyPatch,
@@ -261,12 +413,8 @@ async def test_coordination_phase_starts_and_stops_backplane(
     async def _fake_stop() -> None:
         calls.append("stop")
 
-    monkeypatch.setattr(
-        "omnigent.coordination.lifecycle.start_coordination", _fake_start
-    )
-    monkeypatch.setattr(
-        "omnigent.coordination.lifecycle.stop_coordination", _fake_stop
-    )
+    monkeypatch.setattr("omnigent.coordination.lifecycle.start_coordination", _fake_start)
+    monkeypatch.setattr("omnigent.coordination.lifecycle.stop_coordination", _fake_stop)
 
     phase = CoordinationPhase()
     await phase.startup(_ctx())

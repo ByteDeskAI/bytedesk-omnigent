@@ -5,7 +5,7 @@ import logging
 import os
 import tarfile
 from collections.abc import AsyncIterator, Awaitable
-from contextlib import asynccontextmanager, suppress
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -26,14 +26,7 @@ from omnigent.native_coding_agents import (
     PI_NATIVE_CODING_AGENT,
 )
 from omnigent.resources import examples as _examples_resources
-from omnigent.runtime import (
-    get_terminal_registry,
-    set_harness_process_manager,
-    set_runner_router,
-    set_runner_ws_factory,
-)
 from omnigent.runtime.agent_cache import AgentCache
-from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
 from omnigent.server.auth import AuthProvider
 from omnigent.server.managed_hosts import ManagedSandboxConfig
 from omnigent.server.performance_metrics import (
@@ -984,290 +977,42 @@ def create_app(
             ],
         )
 
+    from omnigent.kernel.lifespan_phases import (
+        LifespanContext,
+        LifespanOrchestrator,
+        build_default_lifespan_phases,
+    )
+
     @asynccontextmanager
-    async def _lifespan(
-        app_inst: FastAPI,
-    ) -> AsyncIterator[None]:
-        """FastAPI lifespan: start/stop the harness process manager
-        and tear down the tmux terminal registry on shutdown.
-
-        On startup: construct + start the
-        :class:`HarnessProcessManager` and stash it on
-        ``app.state.harness_process_manager`` for workflow
-        dispatch to use when routing through the harness contract
-        (see ``designs/SERVER_HARNESS_CONTRACT.md`` §Process
-        management).
-
-        On shutdown: shut down the harness process manager (which
-        terminates every per-conversation runner subprocess and
-        cleans up the per-AP-instance dir) and close every live
-        tmux terminal in the :class:`TerminalRegistry`. Terminal
-        cleanup is best-effort with per-instance timeouts; see
-        ``designs/OMNIGENT_TERMINAL_BRIDGE.md`` §4.4.
-
-        :param app_inst: The FastAPI app, used to attach
-            per-AP state via ``app_inst.state.*``.
-        """
-        # Global error handler for the server's event loop (BDP-2550): report
-        # unhandled asyncio task exceptions — background tasks the FastAPI /
-        # Starlette Sentry integration (which covers request scope) does not see
-        # — to observability. Self-gates to a no-op when Sentry is disabled.
+    async def _lifespan(app_inst: FastAPI) -> AsyncIterator[None]:
+        """Run the canonical phase-DAG server lifespan."""
         from omnigent.runtime.sentry import install_asyncio_exception_handler
 
         install_asyncio_exception_handler()
 
-        # Bump AnyIO default thread limiter from 40 → 200; every
-        # ``asyncio.to_thread`` and FastAPI sync route grabs one.
-        from anyio import to_thread as _to_thread
-
-        _to_thread.current_default_thread_limiter().total_tokens = 200
-
-        # Apply OMNIGENT_LOG_LEVEL to the omnigent namespace after
-        # uvicorn's dictConfig runs (dictConfig resets existing handlers,
-        # making a pre-run basicConfig call ineffective).
-        import os as _os
-
-        _log_level_name = _os.environ.get("OMNIGENT_LOG_LEVEL", "INFO").upper()
-        logging.getLogger("omnigent").setLevel(getattr(logging, _log_level_name, logging.INFO))
-
-        harness_pm = HarnessProcessManager()
-        await harness_pm.start()
-        # Store on both ``app.state`` (canonical, accessible from
-        # routes) AND a runtime-module global (workflows access it
-        # via ``get_harness_process_manager()`` because workflows
-        # can't easily receive non-serializable args).
-        app_inst.state.harness_process_manager = harness_pm
-        set_harness_process_manager(harness_pm)
-
-        set_runner_router(runner_router)
-
-        # Wake a blocked sub-agent's immediate parent: hooks
-        # ``pending_elicitations.record_publish`` to post a ``[System: …]``
-        # notice to the parent's ``/events``. Uninstalled at teardown so a
-        # fresh app instance doesn't inherit a prior run's observer (matters
-        # for multi-app test setups).
-        from omnigent.server.routes.sessions import (
-            configure_subagent_block_notifier,
-        )
-
-        _uninstall_subagent_block_notifier = configure_subagent_block_notifier(
-            conversation_store,
-            runner_router,
-        )
-
-        from omnigent.runner.resource_registry import (
-            SessionResourceRegistry,
-        )
-        from omnigent.runtime import set_resource_registry
-
-        resource_reg = SessionResourceRegistry(
-            terminal_registry=get_terminal_registry(),
-        )
-        set_resource_registry(resource_reg)
-
-        set_runner_ws_factory(None)
-
-        # MCP execution moved to the runner (designs/RUNNER_MCP.md);
-        # SessionFilesystemRegistry moved to the runner. Both
-        # warmup blocks deleted here.
-
-        _ensure_default_agents(agent_store, artifact_store, agent_cache)
-
-        # BDP-2374/2368: run pluggable-seam extension discovery ONCE through
-        # the always-on composition root. The hook delegates to the SAME
-        # ``discover_all_extensions`` helper; discovery is not duplicated.
-        _di_container.run_startup_discovery()
-
-        # BDP-2506: the ``tools`` builtin registry is not a SEAMS row, so its
-        # extension merge is driven here at the server composition root (not at
-        # import — entry-point discovery loads the FastAPI-heavy hub and must
-        # stay off the runner hot path, BDP-2371). Error-isolated inside the
-        # helper; runs once per boot regardless of the DI path above.
-        from omnigent.tools.builtins import register_extension_tools
-
-        register_extension_tools()
-
-        # BDP-2503: first-party ("core") plugins now register seam
-        # contributions unconditionally through the SAME registries third-party
-        # extensions use. Registry conflicts are skipped by
-        # register_firstparty_seams, so this is safe alongside existing built-in
-        # defaults while making the core plugin path authoritative for seams.
-        # Synchronous route mounting is handled later by firstparty_route_extensions(),
-        # after the app state carries the built stores and route collaborators.
-        from omnigent.core import (
-            default_extensions,
-            register_firstparty_seams,
-        )
-
-        _firstparty_extensions: list[Any] = default_extensions()
-        register_firstparty_seams(_firstparty_extensions)
-
-        from omnigent.coordination.lifecycle import start_coordination
-
-        await start_coordination()
-
-        # Populate the policy registry (builtins + user-configured
-        # modules) so GET /v1/policy-registry serves the catalog.
-        from omnigent.policies.registry import load_registry
-
-        load_registry(extra_modules=policy_modules)
-
-        # Accounts first-run: open the browser after uvicorn has bound
-        # the port. bootstrap_admin sets open_url to the loopback base
-        # URL on a needs-setup boot so the browser lands on the
-        # Create-admin form. Gated on (a) bootstrap asked for an open,
-        # and (b) the auto-open env var is truthy (default ON; CLI
-        # passes OMNIGENT_ACCOUNTS_AUTO_OPEN=0 for --no-open). Broad
-        # try so a missing display / browser never blocks startup.
-        if _bootstrap_result is not None and _bootstrap_result.open_url:
-            from omnigent.server.auth import env_var_is_truthy
-
-            if env_var_is_truthy("OMNIGENT_ACCOUNTS_AUTO_OPEN", default=True):
-                import webbrowser
-
-                try:
-                    webbrowser.open(_bootstrap_result.open_url)
-                except Exception as exc:  # noqa: BLE001
-                    _logger.warning(
-                        "accounts: auto-open browser failed (%s) — open the "
-                        "server URL in a browser instead",
-                        exc,
-                    )
-
-        # BDP-2300 (ADR-0143): start first-party extension background loops — the
-        # signal-bus reaper, cron heartbeat, accountability loop, and the one-shot
-        # tool-step resume sweep — via the generic omnigent.kernel.extensions seam. They
-        # are cancelled on shutdown in the finally below. Generic: no ByteDesk
-        # reference in core.
-        from omnigent.kernel.extensions import extension_background_factories
-
-        _ext_bg_tasks = [
-            asyncio.create_task(factory()) for factory in extension_background_factories()
-        ]
-        # BDP-2516: the omnigent.metrics + omnigent.memory_maintenance loops are
-        # now AUTHORITATIVE first-party plugins — started through the SAME
-        # lifespan task path as the extension loops above. This replaces the former inline
-        # asyncio.create_task(publish_server_metrics_periodically(...)) +
-        # memory_maintenance_loop() callsites. The metrics loop is injected with
-        # the live server_metrics / server_metrics_otel (the SAME instances the
-        # HTTP middleware records into) so snapshots reflect real traffic — exact
-        # parity with the removed inline callsite. Cancelled in the finally below
-        # with the other bg tasks.
-        from omnigent.core import (
-            firstparty_background_factories,
-            firstparty_background_task_extensions,
-        )
-
-        _bg_task_extensions = firstparty_background_task_extensions(
+        ctx = LifespanContext(
+            app=app_inst,
+            agent_store=agent_store,
+            artifact_store=artifact_store,
+            agent_cache=agent_cache,
+            conversation_store=conversation_store,
+            runner_router=runner_router,
+            runner_control_registry=runner_control_registry,
+            mcp_pool=_mcp_pool,
             server_metrics=server_metrics,
             server_metrics_otel=server_metrics_otel,
+            bootstrap_result=_bootstrap_result,
+            policy_modules=policy_modules,
+            di_container=_di_container,
         )
-        _ext_bg_tasks.extend(
-            asyncio.create_task(factory())
-            for factory in firstparty_background_factories(_bg_task_extensions)
-        )
-        # BDP-2509: the OTHER first-party-plugin background loops (if any) start
-        # through the SAME lifespan task path. Metrics + memory_maintenance are
-        # excluded from this list (they are authoritative above), so no
-        # double-start. Cancelled in the finally below with the other bg tasks.
-        if _firstparty_extensions:
-            _ext_bg_tasks.extend(
-                asyncio.create_task(factory())
-                for factory in firstparty_background_factories(_firstparty_extensions)
-            )
+        orchestrator = LifespanOrchestrator(build_default_lifespan_phases())
+        await orchestrator.startup(ctx)
         try:
             yield
         finally:
-            from omnigent.coordination.lifecycle import stop_coordination
+            await orchestrator.shutdown(ctx)
 
-            await stop_coordination()
-            for _bg in _ext_bg_tasks:
-                _bg.cancel()
-                with suppress(asyncio.CancelledError):
-                    await _bg
-            # Stop in-flight background managed-sandbox launches so a
-            # slow provision doesn't outlive the ASGI shutdown (the
-            # sandbox itself, if already provisioned, is reaped by the
-            # provider lifetime cap — see the hook's docstring).
-            from omnigent.server.routes.sessions import cancel_managed_launch_tasks
-
-            await cancel_managed_launch_tasks()
-            _uninstall_subagent_block_notifier()
-            set_resource_registry(None)
-            set_runner_ws_factory(None)
-            set_runner_router(None)
-            await runner_router.aclose()
-
-            set_harness_process_manager(None)
-            await harness_pm.shutdown()
-            await get_terminal_registry().shutdown()
-            # Shut down all AP-side MCP connections opened by the proxy
-            # endpoint. Best-effort — individual close failures are logged
-            # inside shutdown_all().
-            await _mcp_pool.shutdown_all()
-
-    # BDP-2327 (core-refactor spine, Phase 3): behind
-    # OMNIGENT_USE_LIFESPAN_PHASES (default OFF), run the same startup/
-    # shutdown steps through the LifespanOrchestrator's depends_on DAG
-    # (omnigent.kernel.lifespan_phases) instead of the monolithic _lifespan
-    # above. The phases mirror _lifespan 1:1 and the orchestrator's reverse-
-    # topological teardown reproduces the original ``finally`` order; with
-    # the flag off the orchestrator is never built and _lifespan stays the
-    # live path, so the app behaves identically to today.
-    from omnigent.server.auth import env_var_is_truthy as _env_var_is_truthy
-
-    if _env_var_is_truthy("OMNIGENT_USE_LIFESPAN_PHASES"):
-        from omnigent.kernel.lifespan_phases import (
-            LifespanContext,
-            LifespanOrchestrator,
-            build_default_lifespan_phases,
-        )
-
-        @asynccontextmanager
-        async def _lifespan_via_phases(
-            app_inst: FastAPI,
-        ) -> AsyncIterator[None]:
-            """Flag-gated alternate lifespan: run the phase DAG.
-
-            Captures the same wiring the monolithic ``_lifespan`` closes
-            over into a :class:`LifespanContext`, then drives the default
-            phases through the orchestrator (topological startup, reverse-
-            topological shutdown). Behaviorally equivalent to ``_lifespan``.
-
-            :param app_inst: The FastAPI app, for ``app_inst.state.*`` writes.
-            """
-            # Global error handler for the server's event loop (BDP-2550) —
-            # parity with ``_lifespan``. Self-gates when Sentry is disabled.
-            from omnigent.runtime.sentry import install_asyncio_exception_handler
-
-            install_asyncio_exception_handler()
-
-            ctx = LifespanContext(
-                app=app_inst,
-                agent_store=agent_store,
-                artifact_store=artifact_store,
-                agent_cache=agent_cache,
-                conversation_store=conversation_store,
-                runner_router=runner_router,
-                runner_control_registry=runner_control_registry,
-                mcp_pool=_mcp_pool,
-                server_metrics=server_metrics,
-                server_metrics_otel=server_metrics_otel,
-                bootstrap_result=_bootstrap_result,
-                policy_modules=policy_modules,
-            )
-            orchestrator = LifespanOrchestrator(build_default_lifespan_phases())
-            await orchestrator.startup(ctx)
-            try:
-                yield
-            finally:
-                await orchestrator.shutdown(ctx)
-
-        _active_lifespan: Any = _lifespan_via_phases
-    else:
-        _active_lifespan = _lifespan
-
-    app = FastAPI(title="Omnigent Server", lifespan=_active_lifespan)
+    app = FastAPI(title="Omnigent Server", lifespan=_lifespan)
     from omnigent.runtime import telemetry
 
     telemetry.instrument_fastapi_app(app)

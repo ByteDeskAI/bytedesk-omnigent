@@ -208,6 +208,7 @@ def test_builtin_names_size_matches_registry() -> None:
                 "bytedesk_generate_image",
                 "bytedesk_github",
                 "bytedesk_jira",
+                "bytedesk_package_website_zip",
                 "bytedesk_slack",
                 "resolve_assignee",
             }

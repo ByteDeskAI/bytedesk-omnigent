@@ -71,7 +71,7 @@ These are the packages that form the extension host. An extension must not depen
 | `extensions.py` | CORE — extension host / discovery | Defines `OmnigentExtension` Protocol. Owns `discover_extensions()` (entry-point + env-var), `install_extensions()` (router mounting), and the eight `extension_*()` aggregator functions that the rest of core consumes. This IS the plugin framework. |
 | `pluggable/` | CORE — pluggable registry | `PluggableRegistry[T]` — the generic 4-invariant seam (Protocol per seam, named-factory registry, entry-point discovery via hook, `OMNIGENT_USE_<SEAM>` strangler flag). `manifest.py` declares `SEAMS` and `discover_all_extensions()`. |
 | `server/app.py` | CORE — application factory | `create_app()` + `_lifespan`. Calls `install_extensions()`, `extension_principal_resolvers()`, `extension_background_factories()`. The app composition root. |
-| `server/lifespan_phases.py` | CORE — lifespan DAG | Dependency-sorted startup/shutdown phases. Supersedes the inline lifespan path (strangler-fig behind `OMNIGENT_USE_LIFESPAN_PHASES`). |
+| `kernel/lifespan_phases.py` | CORE — lifespan DAG | Dependency-sorted startup/shutdown phases. This is the authoritative `create_app` lifespan path. |
 | `runtime/` | CORE — execution engine | Harness process manager, executor adapter, policy engine/enforcement, memory maintenance, tool output, tool retry, compaction, agent cache, session stream, subagent block notifier. |
 | `runtime/harnesses/` | CORE — harness registry | `HarnessDescriptor` + `HARNESS_REGISTRY` (`PluggableRegistry[HarnessDescriptor]`). The `hermes` descriptor is hard-wired in the default set (documented as "hard fork"). Extensions contribute additional harnesses via the `harness_descriptors` hook. |
 | `tools/builtins/__init__.py` | CORE — builtin tool registry | `_BUILTIN_REGISTRY` dict. Merges `**extension_tool_factories()` at import time. |
@@ -572,7 +572,7 @@ Convert each `bytedesk_omnigent/tools/*.py` to declare `TOOL_CONTRIBUTIONS: dict
 
 **Step 8 — Extract `hermes` harness descriptor into a `harness_descriptors` hook**
 
-Remove the `hermes` entry from `_DEFAULT_DESCRIPTORS` in `omnigent/runtime/harnesses/descriptors.py` and contribute it through `BytedeskExtension.harness_descriptors()`. This closes the remaining hard fork in core. Requires `discover_all_extensions()` to be called before `HARNESS_REGISTRY` is first consulted, which is already the pattern (deferred to server startup via `server/lifespan_phases.py` or the legacy lifespan). Risk: any test that reads `_HARNESS_MODULES` without a lifespan setup will no longer see `hermes`; test fixtures may need updating.
+Remove the `hermes` entry from `_DEFAULT_DESCRIPTORS` in `omnigent/runtime/harnesses/descriptors.py` and contribute it through `BytedeskExtension.harness_descriptors()`. This closes the remaining hard fork in core. Requires `discover_all_extensions()` to be called before `HARNESS_REGISTRY` is first consulted, which is already the pattern (deferred to server startup via `omnigent/kernel/lifespan_phases.py`). Risk: any test that reads `_HARNESS_MODULES` without a lifespan setup will no longer see `hermes`; test fixtures may need updating.
 
 ---
 
@@ -663,8 +663,7 @@ The kernel is the minimum set of files required to boot the system and host plug
 | `omnigent/pluggable/registry.py` | `PluggableRegistry[T]` — named-factory registry, `OMNIGENT_USE_<SEAM>` override, `discover_extensions(hook=...)` per-seam hook. The single shared data structure behind all ten seams. |
 | `omnigent/pluggable/manifest.py` | `SEAMS` tuple (the single source of truth for which seams exist), `discover_all_extensions()`, `capability_manifest()`. |
 | `omnigent/pluggable/errors.py` | `ProviderError` + subclasses (`ProviderNotRegistered`, `RegistryConflict`, `ProviderUnconfigured`, `ProviderUnavailable`). Shared error taxonomy for all seams. |
-| `omnigent/server/lifespan_phases.py` | `LifespanPhase` ABC, `LifespanOrchestrator` (topological DAG), `topological_order`, `LifespanContext`, `LifespanCycleError`. The lifecycle engine. Currently behind `OMNIGENT_USE_LIFESPAN_PHASES` flag but the design is the canonical target. |
-| `omnigent/server/service_registry.py` | `ServiceRegistry` — typed `{type: instance}` service container. Behind `OMNIGENT_USE_SERVICE_REGISTRY` flag; replaces `app.state.*` scatter. |
+| `omnigent/kernel/lifespan_phases.py` | `LifespanPhase` ABC, `LifespanOrchestrator` (topological DAG), `topological_order`, `LifespanContext`, `LifespanCycleError`. The authoritative lifecycle engine. |
 | `omnigent/server/app.py` (the composition root fragment) | `create_app()` signature, the `_lifespan` context manager (specifically: the calls to `discover_all_extensions()`, `install_extensions()`, `extension_principal_resolvers()`, `extension_background_factories()`). **Not** the 2000+ lines of domain route mounting — those are first-party plugin contributions (see Section 9). |
 
 ### 8.2 What does NOT belong in the kernel
@@ -690,7 +689,7 @@ The kernel files listed in 8.1 have no imports of domain types (agents, conversa
 - `fastapi.APIRouter` and `fastapi.FastAPI` (for `install_extensions`)
 - Each other
 
-The one current violation: `omnigent/server/lifespan_phases.py` imports domain types (`HarnessProcessManager`, `RunnerRouter`, etc.) through `LifespanContext` dataclass fields. A clean kernel extraction would make `LifespanContext.state: dict[str, Any]` the only mutable slot, with a typed `ServiceRegistry` holding structured services, and phases importing their domain types locally (deferred inside `startup`). This is already the pattern for `DefaultAgentsPhase` (line 446: `from omnigent.server.app import _ensure_default_agents` is deferred inside `startup`).
+`omnigent/kernel/lifespan_phases.py` keeps the concrete domain imports deferred inside phase `startup()` / `shutdown()` methods. `LifespanContext` carries injected app wiring as `Any` fields plus `state: dict[str, Any]`, so the module stays import-light while still serving as the authoritative lifecycle engine.
 
 ---
 
@@ -751,7 +750,7 @@ kernel boots
     → server ready
 ```
 
-This is a topological sort over the same `LifespanPhase.depends_on` DAG that `LifespanOrchestrator` already implements in `omnigent/server/lifespan_phases.py`. The only change is that first-party "core" packages become `LifespanPhase` contributors rather than inline `_lifespan` statements. `ExtensionBackgroundTasksPhase` (already in `lifespan_phases.py`, line 553) is the proof that the pattern works for third-party extensions; it needs to be generalized to cover first-party plugins too.
+This is a topological sort over the same `LifespanPhase.depends_on` DAG that `LifespanOrchestrator` already implements in `omnigent/kernel/lifespan_phases.py`. The only change is that first-party "core" packages become `LifespanPhase` contributors rather than inline `_lifespan` statements. `ExtensionBackgroundTasksPhase` is the proof that the pattern works for third-party extensions and now also starts first-party background task contributions.
 
 ---
 
@@ -761,8 +760,7 @@ This is a topological sort over the same `LifespanPhase.depends_on` DAG that `Li
 KERNEL
   omnigent/extensions.py          OmnigentExtension Protocol, discover/install
   omnigent/pluggable/             PluggableRegistry, SEAMS, manifest
-  omnigent/server/lifespan_phases.py  LifespanPhase, LifespanOrchestrator
-  omnigent/server/service_registry.py ServiceRegistry
+  omnigent/kernel/lifespan_phases.py  LifespanPhase, LifespanOrchestrator
 
 CORE (kernel + first-party plugins below)
   omnigent.db          → pre_init: run Alembic migrations
@@ -1049,7 +1047,7 @@ This supersedes Section 7.
 
 **Tier 1 — Kernel (extract, stabilize, never change without a major version)**
 
-Identify the eight kernel files listed in Section 8.1. Draw a hard import boundary: nothing outside those files is imported by them at module scope. `omnigent/server/lifespan_phases.py` achieves this already (deferred imports inside `startup()`). `omnigent/server/app.py` does not — refactor `create_app()` so all domain imports are deferred into `_lifespan` or injected as parameters. This makes the kernel independently testable with zero domain dependencies.
+Identify the kernel files listed in Section 8.1. Draw a hard import boundary: nothing outside those files is imported by them at module scope. `omnigent/kernel/lifespan_phases.py` follows this pattern with deferred imports inside `startup()` / `shutdown()`. `omnigent/server/app.py` does not — refactor `create_app()` so all domain imports are deferred into lifecycle phases or injected as parameters. This makes the kernel independently testable with zero domain dependencies.
 
 **Tier 2 — Core as first-party plugins (incremental, one subpackage at a time)**
 
