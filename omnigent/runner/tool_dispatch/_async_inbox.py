@@ -51,12 +51,19 @@ from omnigent.model_override import (
     normalize_model_for_provider,
     validate_model_override,
 )
+from omnigent.runner.tool_dispatch._helpers import _CancelAsyncToolResult
 from omnigent.runner.subagent_status import (
     _ACTIVE as _SUBAGENT_ACTIVE_STATUSES,
 )
 from omnigent.runner.subagent_status import (
     SubagentWorkStatus,
 )
+from omnigent.runner.tool_dispatch._subagent import (
+    _cancel_subagent_task,
+    _cleanup_drained_subagent_work,
+    _evaluate_subagent_inbox_output,
+)
+from omnigent.runner.tool_dispatch._terminal import _format_terminal_idle_item
 from omnigent.runner.tool_execution_context import ToolExecutionContext
 from omnigent.runtime import pending_elicitations
 from omnigent.session_lifecycle import (
@@ -527,4 +534,3 @@ async def _execute_task_lifecycle_tool(
         conversation_id=conversation_id,
         server_client=server_client,
     )
-
