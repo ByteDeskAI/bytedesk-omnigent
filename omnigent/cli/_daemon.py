@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.table import Table
 
 from omnigent._startup_profile import StartupProfiler
+from omnigent.cli._config import _effective_global_config_path
 from omnigent.cli_sandbox import lakebox as _lakebox_alias_group
 from omnigent.cli_sandbox import sandbox as _sandbox_group
 from omnigent.harness_aliases import canonicalize_harness
@@ -71,6 +72,7 @@ def _import_package_bindings() -> None:
 
 _import_package_bindings()
 
+@dataclass(frozen=True)
 class _HostDaemonRecord:
     """
     Local registry record for one background host daemon.
@@ -109,6 +111,7 @@ class _HostDaemonRecord:
     resolved_server_url: str | None = None
     config_sig: str | None = None
 
+@dataclass(frozen=True)
 class _DaemonSessionsResult:
     """
     Sessions fetched for one daemon target.
@@ -124,6 +127,7 @@ class _DaemonSessionsResult:
     sessions: list[_HostSessionRow]
     error: str | None
 
+@dataclass(frozen=True)
 class _SpawnedDaemonProcess:
     """
     Background host daemon process metadata.
@@ -461,6 +465,7 @@ def _terminate_host_unit(record: _HostDaemonRecord, *, reason: str) -> None:
     if record.mode == "local":
         stop_local_omnigent_server()
 
+@dataclass(frozen=True)
 class _DaemonReuseDecision:
     """Outcome of evaluating whether an existing daemon can be reused.
 
@@ -846,4 +851,3 @@ def _host_daemon_alive() -> bool:
     if existing is None:
         return False
     return _pid_alive(existing.pid)
-

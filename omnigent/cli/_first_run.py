@@ -30,6 +30,7 @@ from rich.console import Console
 from rich.table import Table
 
 from omnigent._startup_profile import StartupProfiler
+from omnigent.cli._deploy import _bundled_example_path
 from omnigent.cli_sandbox import lakebox as _lakebox_alias_group
 from omnigent.cli_sandbox import sandbox as _sandbox_group
 from omnigent.harness_aliases import canonicalize_harness
@@ -104,6 +105,7 @@ def _peek_default_agent_harness(target: str) -> str | None:
         return None
     return canonicalize_harness(declared) or declared
 
+@dataclass(frozen=True)
 class _FirstRunPlan:
     """The harness + optional default agent a bare ``run`` should launch.
 
@@ -223,4 +225,3 @@ def _resolve_default_agent_target(
             err=True,
         )
     return None
-

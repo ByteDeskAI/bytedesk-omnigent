@@ -3,6 +3,10 @@ from __future__ import annotations
 
 import importlib
 
+from . import _core as _core_module
+from ._core import cli, _is_removed_ad_hoc_invocation, _is_run_shorthand, _is_server_url
+from . import commands  # noqa: F401 — register click commands
+
 _SUBMODULES = (
     "_constants",
     "_state",
@@ -18,11 +22,21 @@ _SUBMODULES = (
     "_version",
 )
 
-from ._core import cli, main
-from . import commands  # noqa: F401 — register click commands
 
-
-_FACADE_SKIP = frozenset({"_SUBMODULES", "_export_submodule", "importlib", "_FACADE_SKIP"})
+_FACADE_SKIP = frozenset(
+    {
+        "_SUBMODULES",
+        "_export_submodule",
+        "importlib",
+        "_core_module",
+        "_FACADE_SKIP",
+        "cli",
+        "main",
+        "_is_removed_ad_hoc_invocation",
+        "_is_run_shorthand",
+        "_is_server_url",
+    }
+)
 
 
 def _export_submodule(name: str) -> None:
@@ -69,3 +83,13 @@ def _export_command_module(name: str) -> None:
 
 for _name in _COMMAND_MODULES:
     _export_command_module(_name)
+
+
+def main() -> None:
+    """Console-script entry point exported by the facade."""
+    original_cli = _core_module.cli
+    _core_module.cli = cli
+    try:
+        _core_module.main()
+    finally:
+        _core_module.cli = original_cli

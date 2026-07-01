@@ -3,6 +3,13 @@ from __future__ import annotations
 import click
 
 from .._core import cli
+from .resume import _split_resume_value as _resume_split_resume_value
+
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
 
 def _import_package_bindings() -> None:
     from .. import _constants as _pkg_constants
@@ -115,7 +122,7 @@ def pi(
       omnigent pi --resume                    # interactive picker
       omnigent pi --model local-deepseek/deepseek-v4-flash
     """
-    choice = _split_resume_value(resume)
+    choice = __facade_binding("_split_resume_value", _resume_split_resume_value)(resume)
     if session_id is not None and (choice.picker or choice.conversation_id is not None):
         raise click.UsageError(
             "--session and --resume are mutually exclusive; "
@@ -124,12 +131,15 @@ def pi(
 
     from omnigent.pi_native import run_pi_native
 
-    cfg = _load_effective_config()
+    cfg = __facade_binding("_load_effective_config", _load_effective_config)()
     if server is None:
         server = cfg.get("server")
-    auto_open_conversation = _resolve_auto_open_conversation_from_config(cfg)
+    auto_open_conversation = __facade_binding(
+        "_resolve_auto_open_conversation_from_config",
+        _resolve_auto_open_conversation_from_config,
+    )(cfg)
 
-    server = _ensure_backend(server)
+    server = __facade_binding("_ensure_backend", _ensure_backend)(server)
     resolved_session_id = (
         choice.conversation_id if choice.conversation_id is not None else session_id
     )
@@ -169,5 +179,3 @@ def _run_bundled_agent(name: str, run_args: tuple[str, ...]) -> None:
         prog_name="omnigent run",
         standalone_mode=False,
     )
-
-

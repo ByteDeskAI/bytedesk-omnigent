@@ -3,6 +3,17 @@ from __future__ import annotations
 import click
 
 from .._core import cli
+from .resume import (
+    _build_resume_parts as _resume_build_resume_parts,
+    _dispatch_run as _resume_dispatch_run,
+    _split_resume_value as _resume_split_resume_value,
+)
+
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
 
 def _import_package_bindings() -> None:
     from .. import _constants as _pkg_constants
@@ -168,14 +179,17 @@ def run(
         target is None and server_from_cli and server is not None and not harness_from_cli
     )
 
-    _global_cfg = _load_effective_config()
+    _global_cfg = __facade_binding("_load_effective_config", _load_effective_config)()
     if target is None and not direct_server_cli:
         # Harness-aware default-agent resolution (this branch) under main's
         # direct-`--server` guard: skip the configured default_agent when the
         # invocation is a bare `--server` (no AGENT, no --harness), else pick
         # it — but fall back to a built-in launcher when an explicit --harness
         # doesn't match the default agent's harness.
-        target = _resolve_default_agent_target(_global_cfg.get("default_agent"), harness)
+        target = __facade_binding(
+            "_resolve_default_agent_target",
+            _resolve_default_agent_target,
+        )(_global_cfg.get("default_agent"), harness)
     if server is None:
         server = _global_cfg.get("server")
     if model is None and not direct_server_cli:
@@ -189,7 +203,7 @@ def run(
     # when nothing is set up. The derived pick is NOT persisted, so it tracks
     # the credentials — adding Claude later promotes a Codex-only user to polly.
     if target is None and harness is None and not direct_server_cli:
-        plan = _resolve_first_run_plan()
+        plan = __facade_binding("_resolve_first_run_plan", _resolve_first_run_plan)()
         if plan is None:
             return  # nothing configured even after offering configure — exit cleanly
         harness = plan.harness
@@ -202,7 +216,10 @@ def run(
     # ``auto_open_conversation`` config value (true/false) always wins, so
     # users who opted out stay opted out. Headless ``-p`` one-shots stay
     # quiet unless the user explicitly opted in.
-    auto_open_setting = _resolve_auto_open_conversation_setting(_global_cfg)
+    auto_open_setting = __facade_binding(
+        "_resolve_auto_open_conversation_setting",
+        _resolve_auto_open_conversation_setting,
+    )(_global_cfg)
     auto_open_conversation = auto_open_setting if auto_open_setting is not None else prompt is None
 
     # NOTE: the host daemon + Omnigent server are ensured inside ``run_chat``'s
@@ -210,11 +227,11 @@ def run(
     # redundant (the daemon is always ensured) and kept only as a no-op.
     del register_host
 
-    choice = _split_resume_value(resume)
+    choice = __facade_binding("_split_resume_value", _resume_split_resume_value)(resume)
     # Capture resume-safe CLI parts before dispatch mutates target,
     # harness, or model for no-AGENT launcher mode.
-    resume_parts = _build_resume_parts()
-    _dispatch_run(
+    resume_parts = __facade_binding("_build_resume_parts", _resume_build_resume_parts)()
+    __facade_binding("_dispatch_run", _resume_dispatch_run)(
         target=target,
         tools=tools,
         harness=harness,
@@ -233,5 +250,3 @@ def run(
         auto_open_conversation=auto_open_conversation,
         server_from_cli=server_from_cli,
     )
-
-

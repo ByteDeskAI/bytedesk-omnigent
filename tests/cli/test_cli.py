@@ -212,6 +212,7 @@ def test_claude_command_resume_binds_session_and_passes_unknown_args(
     """
     captured: dict[str, object] = {}
     monkeypatch.setattr("omnigent.cli._load_effective_config", dict)
+    monkeypatch.setattr("omnigent.cli._ensure_backend", lambda server: server)
     monkeypatch.setattr(
         "omnigent.claude_native.run_claude_native",
         _fake_run_claude_native_capture(captured),
@@ -424,6 +425,7 @@ def test_codex_command_resume_binds_session_and_passes_unknown_args(
     """
     captured: dict[str, object] = {}
     monkeypatch.setattr("omnigent.cli._load_effective_config", dict)
+    monkeypatch.setattr("omnigent.cli._ensure_backend", lambda server: server)
     monkeypatch.setattr(
         "omnigent.codex_native.run_codex_native",
         _fake_run_codex_native_capture(captured),
@@ -3549,6 +3551,22 @@ def test_bare_omnigent_harness_flag_dispatches_to_run(
 
     assert dispatched["harness"] == "claude"
     assert dispatched["target"] is None
+
+
+def test_console_entrypoint_uses_core_dispatcher(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The package facade must not export the partial helper-module ``main``."""
+    import omnigent.cli as cli_module
+    from omnigent.cli import _core
+
+    calls: list[str] = []
+    monkeypatch.setattr(_core, "main", lambda: calls.append("core-main"))
+
+    cli_module.main()
+
+    assert calls == ["core-main"]
+    assert cli_module._is_run_shorthand is _core._is_run_shorthand
+    assert cli_module._is_removed_ad_hoc_invocation is _core._is_removed_ad_hoc_invocation
+    assert cli_module._is_server_url is _core._is_server_url
 
 
 def test_bare_omnigent_non_tty_shows_help(
