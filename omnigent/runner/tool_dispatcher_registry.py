@@ -45,8 +45,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
-import httpx
-
 if TYPE_CHECKING:
     from omnigent.runner.tool_execution_context import ToolExecutionContext
 
@@ -204,7 +202,21 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
 
     :param registry: The registry to populate. Callers pass a fresh one.
     """
+    from omnigent.communications.runner_tools import CommunicationServiceProvider
     from omnigent.runner import tool_dispatch as td
+    from omnigent.runner.communication_dispatchers import (
+        InboxDispatcher,
+        SessionCreateDispatcher,
+        SessionQueryDispatcher,
+        SessionSendDispatcher,
+    )
+
+    communication_provider = CommunicationServiceProvider.for_runner_tools(
+        inbox_handler=td._execute_async_inbox_tool,
+        session_send_handler=td._execute_subagent_tool,
+        session_create_handler=td._execute_session_create,
+        session_query_handler=td._execute_session_query_tool,
+    )
 
     # 1. MCP first — an unconditional override whenever an mcp_manager is
     # present, regardless of tool name (the elif chain's leading
@@ -301,54 +313,9 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 6. Async inbox tools. ``harness_client`` defaults to a fresh
-    # AsyncClient when absent — same fallback the elif branch applies.
-    async def _run_async_inbox(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_async_inbox_tool(
-            ctx.tool_name,
-            args,
-            session_inbox=ctx.session_inbox,
-            session_async_tasks=ctx.session_async_tasks,
-            harness_client=ctx.harness_client or httpx.AsyncClient(),
-            server_client=ctx.server_client,
-            terminal_registry=ctx.terminal_registry,
-            resource_registry=ctx.resource_registry,
-            agent_spec=ctx.agent_spec,
-            conversation_id=ctx.conversation_id,
-            task_id=ctx.task_id,
-            agent_id=ctx.agent_id,
-            agent_name=ctx.agent_name,
-            runner_workspace=ctx.runner_workspace,
-            mcp_manager=ctx.mcp_manager,
-            filesystem_registry=ctx.filesystem_registry,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="async_inbox",
-            match=lambda ctx, _args: ctx.tool_name in td._ASYNC_INBOX_TOOLS,
-            run=_run_async_inbox,
-        )
-    )
-
-    # 7. Sub-agent tools.
-    async def _run_subagent(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_subagent_tool(
-            args,
-            server_client=ctx.server_client,
-            conversation_id=ctx.conversation_id,
-            agent_spec=ctx.agent_spec,
-            publish_event=ctx.publish_event,
-            session_inbox=ctx.session_inbox,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="subagent",
-            match=lambda ctx, _args: ctx.tool_name in td._SUBAGENT_TOOLS,
-            run=_run_subagent,
-        )
-    )
+    # 6-7. Communication tools use class-backed, DI-composed dispatchers.
+    registry.register(InboxDispatcher(td._ASYNC_INBOX_TOOLS, communication_provider))
+    registry.register(SessionSendDispatcher(td._SUBAGENT_TOOLS, communication_provider))
 
     # 8. List-models tool.
     async def _run_list_models(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
@@ -362,42 +329,9 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 9. Session-create tool.
-    async def _run_session_create(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_session_create(
-            args,
-            server_client=ctx.server_client,
-            conversation_id=ctx.conversation_id,
-            publish_event=ctx.publish_event,
-            agent_spec=ctx.agent_spec,
-            runner_workspace=ctx.runner_workspace,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="session_create",
-            match=lambda ctx, _args: ctx.tool_name in td._SESSION_CREATE_TOOLS,
-            run=_run_session_create,
-        )
-    )
-
-    # 10. Session-query tools. (Passes the raw ``ctx.arguments`` string, not
-    # the parsed dict — same as the elif branch.)
-    async def _run_session_query(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
-        return await td._execute_session_query_tool(
-            ctx.tool_name,
-            ctx.arguments,
-            conversation_id=ctx.conversation_id,
-            server_client=ctx.server_client,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="session_query",
-            match=lambda ctx, _args: ctx.tool_name in td._SESSION_QUERY_TOOLS,
-            run=_run_session_query,
-        )
-    )
+    # 9-10. Child session create and query use the same communication provider.
+    registry.register(SessionCreateDispatcher(td._SESSION_CREATE_TOOLS, communication_provider))
+    registry.register(SessionQueryDispatcher(td._SESSION_QUERY_TOOLS, communication_provider))
 
     # 11. web_fetch tool.
     async def _run_web_fetch(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:

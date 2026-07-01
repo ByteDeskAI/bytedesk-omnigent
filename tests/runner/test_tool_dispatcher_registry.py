@@ -9,6 +9,12 @@ import pytest
 
 from omnigent.runner import tool_dispatch
 from omnigent.runner import tool_dispatcher_registry as reg
+from omnigent.runner.communication_dispatchers import (
+    InboxDispatcher,
+    SessionCreateDispatcher,
+    SessionQueryDispatcher,
+    SessionSendDispatcher,
+)
 from omnigent.runner.tool_dispatcher_registry import (
     DispatcherRegistry,
     ToolDispatcher,
@@ -62,6 +68,17 @@ def test_default_registry_registers_all_branches() -> None:
         "uc_function",
         "spec_callable",
     ]
+
+
+def test_default_registry_uses_class_backed_communication_dispatchers() -> None:
+    """Communication branches are concrete dispatchers backed by DI services."""
+    registry = build_default_registry()
+    by_name = {dispatcher.name: dispatcher for dispatcher in registry.dispatchers}
+
+    assert isinstance(by_name["async_inbox"], InboxDispatcher)
+    assert isinstance(by_name["subagent"], SessionSendDispatcher)
+    assert isinstance(by_name["session_create"], SessionCreateDispatcher)
+    assert isinstance(by_name["session_query"], SessionQueryDispatcher)
 
 
 def test_mcp_dispatcher_is_first_and_unconditional() -> None:
