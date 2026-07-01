@@ -2,30 +2,19 @@
 # Combined-flags parity harness (BDP-2343, ADR-0145 §parity).
 #
 # scripts/test_parity.sh diffs ONE abstraction-spine flag OFF vs ON at a
-# time. BDP-2343 plans to ship ALL FIVE spine flags ON together in
+# time. BDP-2343 plans to ship the remaining spine flags ON together in
 # production, and no existing test covers that exact configuration. This
-# driver runs a representative slice TWICE — once with all five flags OFF
-# (the legacy baseline) and once with all five ON (the production target) —
+# driver runs a representative slice TWICE — once with the flags OFF
+# (the legacy baseline) and once with the flags ON (the production target) —
 # then diffs the two JUnit reports. Exit 0 iff every test has the SAME
 # per-nodeid outcome under both configurations.
 #
-# The five flags (all default OFF, strangler-fig — see ADR-0145):
+# The remaining flags (all default OFF, strangler-fig — see ADR-0145):
 #   OMNIGENT_USE_SERVICE_REGISTRY        (Phase 1)
 #   OMNIGENT_STORE_LIFECYCLE_HOOKS       (Phase 2)
 #   OMNIGENT_USE_LIFESPAN_PHASES         (Phase 3)
-#   OMNIGENT_USE_TOOL_EXECUTION_CONTEXT  (Phase 4)
-#   OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY(Phase 5)
-#
-# Known superseded test (deselected on BOTH runs, so the diff stays fair):
-#   tests/runner/test_tool_execution_context.py::
-#     test_flag_on_routes_through_context_preserving_inbox_reference
-# That test asserts the Phase-4 context seam is *reached* when only the
-# Phase-4 flag is on. When the Phase-5 registry flag is ALSO on (the
-# production config), execute_tool() routes through the registry FIRST
-# (registry precedes context in execute_tool), so _execute_tool_from_context
-# is structurally unreachable through the integration path. That is the
-# intended precedence (registry wins), not a regression — the module's own
-# unit tests still pass standalone (run this file directly with no flags).
+# ToolExecutionContext and ToolDispatcher-registry are canonical runtime
+# code paths now, so their former flags are intentionally absent here.
 #
 # Usage:
 #   scripts/test_parity_combined.sh [PYTEST_PATHS...]
@@ -43,19 +32,14 @@
 #                        deselect on both runs (appended to the built-in one).
 set -euo pipefail
 
-# The five abstraction-spine flags shipped together by BDP-2343.
+# The abstraction-spine flags still shipped together by BDP-2343.
 COMBINED_FLAGS=(
   OMNIGENT_USE_SERVICE_REGISTRY
   OMNIGENT_STORE_LIFECYCLE_HOOKS
   OMNIGENT_USE_LIFESPAN_PHASES
-  OMNIGENT_USE_TOOL_EXECUTION_CONTEXT
-  OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY
 )
 
-# Deselected on BOTH runs (see header) so the OFF/ON diff is apples-to-apples.
-DESELECT=(
-  "tests/runner/test_tool_execution_context.py::test_flag_on_routes_through_context_preserving_inbox_reference"
-)
+DESELECT=()
 # shellcheck disable=SC2206
 if [[ -n "${PARITY_EXTRA_DESELECT:-}" ]]; then
   DESELECT+=(${PARITY_EXTRA_DESELECT})
@@ -65,13 +49,13 @@ PYTEST_PATHS=("$@")
 if [[ ${#PYTEST_PATHS[@]} -eq 0 ]]; then
   # Representative slice — one behavioral test group per spine flag seam:
   #   STORE_LIFECYCLE_HOOKS        → tests/stores
-  #   TOOL_EXECUTION_CONTEXT + TOOL_DISPATCHER_REGISTRY → tests/runner tool-dispatch
+  #   canonical runner tool dispatch → tests/runner tool-dispatch
   #   SERVICE_REGISTRY             → tests/server/test_service_registry.py
   #   LIFESPAN_PHASES              → tests/server/test_lifespan_phases.py
   #   (parity skeletons)           → tests/parity
   # tests/extensions/test_abstraction_spine_contract.py is deliberately NOT
   # here: it is a pure source-AST scan of app.py (flag-independent — it never
-  # reads any of the five flags) so it exercises no runtime seam, and it is
+  # reads any of the combined flags) so it exercises no runtime seam, and it is
   # currently red on develop for an unrelated app.state drift. Add it back only
   # once that drift is re-pinned; it contributes nothing to a flag-parity diff.
   PYTEST_PATHS=(
@@ -143,21 +127,21 @@ echo "==> Deselected (both runs, superseded by registry precedence):"
 for nodeid in "${DESELECT[@]}"; do echo "      - ${nodeid}"; done
 echo
 
-echo "==> Run 1/2: ALL FIVE flags OFF (legacy baseline)"
+echo "==> Run 1/2: combined flags OFF (legacy baseline)"
 (
   for flag in "${COMBINED_FLAGS[@]}"; do unset "${flag}" || true; done
   run_suite "${OFF_REPORT}"
 )
 
 echo
-echo "==> Run 2/2: ALL FIVE flags ON (BDP-2343 production target)"
+echo "==> Run 2/2: combined flags ON (BDP-2343 production target)"
 (
   for flag in "${COMBINED_FLAGS[@]}"; do export "${flag}=1"; done
   run_suite "${ON_REPORT}"
 )
 
 echo
-echo "==> Diffing per-test outcomes (all-OFF vs all-ON)"
+echo "==> Diffing per-test outcomes (flags-OFF vs flags-ON)"
 
 # Reduce each JUnit report to a sorted `nodeid<TAB>outcome` table so the diff is
 # order-independent and ignores timing noise. Pure stdlib — mirrors test_parity.sh.
@@ -191,7 +175,7 @@ outcomes "${ON_REPORT}" >"${ON_TABLE}"
 
 if diff -u "${OFF_TABLE}" "${ON_TABLE}"; then
   echo
-  echo "==> PARITY OK: all five spine flags ON produced identical per-test outcomes"
+  echo "==> PARITY OK: combined spine flags ON produced identical per-test outcomes"
   echo "    vs the flags-OFF baseline across $(wc -l <"${OFF_TABLE}") tests."
   exit 0
 fi

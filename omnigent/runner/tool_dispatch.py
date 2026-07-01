@@ -272,11 +272,6 @@ class SessionSnapshotPayload(TypedDict, total=False):
 _INBOX_OUTPUT_MAX_CHARS = 12000
 _OS_ENV_SHELL_DEFAULT_TIMEOUT_S = 120.0
 
-# Spine Phase 4 (BDP-2327): when truthy, ``execute_tool`` bundles its
-# per-dispatch dependencies into a ``ToolExecutionContext`` and dispatches
-# through the context-consuming path. Default OFF — with the flag unset the
-# existing per-kwarg signature is the live path and behavior is unchanged.
-_USE_TOOL_EXECUTION_CONTEXT_ENV = "OMNIGENT_USE_TOOL_EXECUTION_CONTEXT"
 _RUNNER_EXECUTION_TIMEOUT_S = 7200.0
 _SUBAGENT_POLICY_STATUSES = frozenset({"completed", "failed"})
 _SUBAGENT_INBOX_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
@@ -3836,6 +3831,7 @@ def _build_tool_execution_context(
     harness_client: httpx.AsyncClient | None,
     publish_event: Callable[[str, dict[str, Any]], None] | None,
     filesystem_registry: FilesystemRegistry | None,
+    acting_identity: ActingIdentity | None,
 ) -> ToolExecutionContext:
     """Bundle ``execute_tool``'s per-dispatch args into a context.
 
@@ -3864,42 +3860,7 @@ def _build_tool_execution_context(
         harness_client=harness_client,
         publish_event=publish_event,
         filesystem_registry=filesystem_registry,
-    )
-
-
-async def _execute_tool_from_context(ctx: ToolExecutionContext) -> str:
-    """Dispatch a tool from a bundled :class:`ToolExecutionContext`.
-
-    The context-consuming alternate path (spine Phase 4, gated by
-    ``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT``). Unpacks the context's
-    by-reference fields back into the existing per-kwarg dispatch chain so
-    there is one dispatch implementation, not two. ``session_inbox`` /
-    ``session_async_tasks`` are forwarded by reference, so a background
-    task that mutates ``ctx.session_inbox`` is visible to the caller that
-    shares the same queue.
-
-    :param ctx: The bundled per-dispatch dependencies.
-    :returns: Tool output string.
-    """
-    return await execute_tool(
-        tool_name=ctx.tool_name,
-        arguments=ctx.arguments,
-        server_client=ctx.server_client,
-        terminal_registry=ctx.terminal_registry,
-        resource_registry=ctx.resource_registry,
-        agent_spec=ctx.agent_spec,
-        conversation_id=ctx.conversation_id,
-        task_id=ctx.task_id,
-        agent_id=ctx.agent_id,
-        agent_name=ctx.agent_name,
-        runner_workspace=ctx.runner_workspace,
-        mcp_manager=ctx.mcp_manager,
-        session_inbox=ctx.session_inbox,
-        session_async_tasks=ctx.session_async_tasks,
-        harness_client=ctx.harness_client,
-        publish_event=ctx.publish_event,
-        filesystem_registry=ctx.filesystem_registry,
-        _from_context=True,
+        acting_identity=acting_identity,
     )
 
 
@@ -3923,7 +3884,6 @@ async def execute_tool(
     publish_event: Callable[[str, dict[str, Any]], None] | None = None,
     filesystem_registry: FilesystemRegistry | None = None,
     acting_identity: ActingIdentity | None = None,
-    _from_context: bool = False,
 ) -> str:
     """
     Execute a tool and return the output string.
@@ -3933,13 +3893,9 @@ async def execute_tool(
     POST) and by ``_spawn_async_tool`` background tasks (which
     push to the inbox queue instead).
 
-    When ``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT`` is truthy (spine Phase 4,
-    default OFF), the args are bundled into a :class:`ToolExecutionContext`
-    and dispatched through :func:`_execute_tool_from_context`; the
-    mutable ``session_inbox`` / ``session_async_tasks`` are carried by
-    reference, so the dispatch is identical to the default per-kwarg path.
-    ``_from_context`` is the internal re-entry marker that prevents the
-    context path from recursing — callers never set it.
+    The args are bundled into a :class:`ToolExecutionContext` and dispatched
+    through the canonical dispatcher registry. The mutable ``session_inbox`` /
+    ``session_async_tasks`` are carried by reference.
 
     :param tool_name: Tool to execute, e.g. ``"sys_os_shell"``.
     :param arguments: JSON-encoded arguments string.
@@ -3955,278 +3911,34 @@ async def execute_tool(
         so that ``sys_os_write`` and ``sys_os_edit`` calls record changed
         paths for the ``GET …/changes`` endpoint. ``sys_os_shell`` is
         not tracked — shell side-effects cannot be attributed to a session.
+    :param acting_identity: Optional caller identity propagated to local,
+        builtin, terminal, and skill tool contexts.
     :returns: Tool output string.
     """
-    # Spine Phase 5 (BDP-2327): default OFF. When
-    # ``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` is on and this is not the
-    # context path's re-entry, route dispatch through the
-    # DispatcherRegistry (Strategy + Registry) instead of the elif chain
-    # below. The registry walks the SAME precedence (MCP first) and calls
-    # the SAME per-tool helpers, carrying the identical by-reference
-    # queue/map inside a ToolExecutionContext — so the routing decision and
-    # result are unchanged; only the seam differs. Lazy import keeps the
-    # registry module out of the default import path.
-    if not _from_context:
-        from omnigent.runner.tool_dispatcher_registry import (
-            dispatch_via_registry,
-            use_tool_dispatcher_registry,
+    from omnigent.runner.tool_dispatcher_registry import dispatch_via_registry
+
+    return await dispatch_via_registry(
+        _build_tool_execution_context(
+            tool_name=tool_name,
+            arguments=arguments,
+            server_client=server_client,
+            terminal_registry=terminal_registry,
+            resource_registry=resource_registry,
+            agent_spec=agent_spec,
+            conversation_id=conversation_id,
+            task_id=task_id,
+            agent_id=agent_id,
+            agent_name=agent_name,
+            runner_workspace=runner_workspace,
+            mcp_manager=mcp_manager,
+            session_inbox=session_inbox,
+            session_async_tasks=session_async_tasks,
+            harness_client=harness_client,
+            publish_event=publish_event,
+            filesystem_registry=filesystem_registry,
+            acting_identity=acting_identity,
         )
-
-        if use_tool_dispatcher_registry():
-            return await dispatch_via_registry(
-                _build_tool_execution_context(
-                    tool_name=tool_name,
-                    arguments=arguments,
-                    server_client=server_client,
-                    terminal_registry=terminal_registry,
-                    resource_registry=resource_registry,
-                    agent_spec=agent_spec,
-                    conversation_id=conversation_id,
-                    task_id=task_id,
-                    agent_id=agent_id,
-                    agent_name=agent_name,
-                    runner_workspace=runner_workspace,
-                    mcp_manager=mcp_manager,
-                    session_inbox=session_inbox,
-                    session_async_tasks=session_async_tasks,
-                    harness_client=harness_client,
-                    publish_event=publish_event,
-                    filesystem_registry=filesystem_registry,
-                )
-            )
-
-    # Spine Phase 4 (BDP-2327): default OFF. When the flag is on and this is
-    # not the context path's re-entry, bundle the args into a
-    # ToolExecutionContext and dispatch through it. The carrier forwards the
-    # same by-reference queue/map, so the result is identical to the path
-    # below — this only exercises the new seam. Lazy import of the env helper
-    # mirrors this module's existing ``omnigent.server.*`` import discipline
-    # (server.schemas is imported lazily too) to keep import order clean.
-    from omnigent.server.auth import env_var_is_truthy
-
-    if not _from_context and env_var_is_truthy(_USE_TOOL_EXECUTION_CONTEXT_ENV):
-        return await _execute_tool_from_context(
-            _build_tool_execution_context(
-                tool_name=tool_name,
-                arguments=arguments,
-                server_client=server_client,
-                terminal_registry=terminal_registry,
-                resource_registry=resource_registry,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                runner_workspace=runner_workspace,
-                mcp_manager=mcp_manager,
-                session_inbox=session_inbox,
-                session_async_tasks=session_async_tasks,
-                harness_client=harness_client,
-                publish_event=publish_event,
-                filesystem_registry=filesystem_registry,
-            )
-        )
-
-    try:
-        args = json.loads(arguments)
-    except json.JSONDecodeError:
-        args = {}
-
-    try:
-        if mcp_manager is not None:
-            # All MCP tool calls are routed through the AP server's
-            # /mcp endpoint, which enforces TOOL_CALL and TOOL_RESULT
-            # policies centrally before forwarding to the runner's
-            # /mcp/execute. No runner-side policy gate needed.
-            output = await mcp_manager.call_tool(
-                cast("AgentSpec | None", agent_spec), tool_name, args
-            )
-        elif tool_name in _OS_ENV_TOOLS:
-            output = await _execute_os_env_tool(
-                tool_name,
-                args,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                runner_workspace=runner_workspace,
-                filesystem_registry=filesystem_registry,
-            )
-        elif tool_name in _REST_TOOLS:
-            output = await _execute_rest_tool(
-                tool_name,
-                args,
-                server_client,
-                agent_id=agent_id,
-                conversation_id=conversation_id,
-            )
-        elif tool_name in _FILE_TOOLS:
-            output = await _execute_file_tool(
-                tool_name,
-                args,
-                server_client,
-                conversation_id=conversation_id,
-                agent_spec=agent_spec,
-                runner_workspace=runner_workspace,
-            )
-        elif tool_name in _TERMINAL_TOOLS:
-            output = await _execute_terminal_tool(
-                tool_name,
-                args,
-                acting_identity=acting_identity,
-                terminal_registry=terminal_registry,
-                resource_registry=resource_registry,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                runner_workspace=runner_workspace,
-                session_inbox=session_inbox,
-                publish_event=publish_event,
-            )
-        elif tool_name in _ASYNC_INBOX_TOOLS:
-            output = await _execute_async_inbox_tool(
-                tool_name,
-                args,
-                session_inbox=session_inbox,
-                session_async_tasks=session_async_tasks,
-                harness_client=harness_client or httpx.AsyncClient(),
-                server_client=server_client,
-                terminal_registry=terminal_registry,
-                resource_registry=resource_registry,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                agent_name=agent_name,
-                runner_workspace=runner_workspace,
-                mcp_manager=mcp_manager,
-                filesystem_registry=filesystem_registry,
-            )
-        elif tool_name in _SUBAGENT_TOOLS:
-            # The dispatcher carries args as the open ``dict[str, Any]`` from
-            # ``json.loads``; narrow to the boundary TypedDict here (the
-            # helpers still read every key defensively).
-            output = await _execute_subagent_tool(
-                cast("SubagentSendArgs", args),
-                server_client=server_client,
-                conversation_id=conversation_id,
-                agent_spec=agent_spec,
-                publish_event=publish_event,
-                session_inbox=session_inbox,
-            )
-        elif tool_name in _LIST_MODELS_TOOLS:
-            output = await _execute_list_models_tool(agent_spec=agent_spec)
-        elif tool_name in _SESSION_CREATE_TOOLS:
-            output = await _execute_session_create(
-                args,
-                server_client=server_client,
-                conversation_id=conversation_id,
-                publish_event=publish_event,
-                agent_spec=agent_spec,
-                runner_workspace=runner_workspace,
-            )
-        elif tool_name in _SESSION_QUERY_TOOLS:
-            output = await _execute_session_query_tool(
-                tool_name,
-                arguments,
-                conversation_id=conversation_id,
-                server_client=server_client,
-            )
-        elif tool_name in _WEB_FETCH_TOOLS:
-            output = await _execute_web_fetch_tool(
-                args,
-                server_client=server_client,
-                conversation_id=conversation_id,
-                agent_spec=agent_spec,
-                task_id=task_id,
-                publish_event=publish_event,
-                session_inbox=session_inbox,
-            )
-        elif tool_name in _TIMER_TOOLS:
-            if tool_name == "sys_timer_set":
-                output = await _execute_timer_set(
-                    args,
-                    server_client=server_client,
-                    conversation_id=conversation_id,
-                )
-            else:
-                output = await _execute_timer_cancel(
-                    args,
-                    conversation_id=conversation_id,
-                )
-        elif tool_name in _TASK_LIFECYCLE_TOOLS:
-            output = await _execute_task_lifecycle_tool(
-                args,
-                session_async_tasks=session_async_tasks,
-                conversation_id=conversation_id,
-                server_client=server_client,
-            )
-        elif tool_name in _SKILL_TOOLS:
-            output = _execute_skill_tool(
-                tool_name,
-                args,
-                acting_identity=acting_identity,
-                agent_spec=agent_spec,
-                runner_workspace=runner_workspace,
-            )
-        elif tool_name in _COMMENT_TOOLS:
-            output = await _execute_comment_tool(
-                tool_name,
-                arguments,
-                conversation_id=conversation_id,
-                server_client=server_client,
-            )
-        elif tool_name in _AGENT_TOOLS:
-            output = await _execute_agent_tool(
-                tool_name,
-                args,
-                server_client=server_client,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                runner_workspace=runner_workspace,
-            )
-        elif tool_name in _POLICY_TOOLS:
-            output = await _execute_policy_tool(
-                tool_name,
-                arguments,
-                conversation_id=conversation_id,
-                server_client=server_client,
-            )
-        elif tool_name in _SKILL_ACQ_TOOLS:
-            output = await _execute_skill_acq_tool(
-                tool_name,
-                args,
-                server_client,
-            )
-        elif _is_spec_builtin_tool(tool_name, agent_spec):
-            output = await _execute_spec_builtin_tool(
-                tool_name,
-                arguments,
-                acting_identity=acting_identity,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                runner_workspace=runner_workspace,
-            )
-        elif _is_spec_local_python_tool(tool_name, agent_spec):
-            output = await _execute_local_python_tool(
-                tool_name,
-                arguments,
-                acting_identity=acting_identity,
-                agent_spec=agent_spec,
-                conversation_id=conversation_id,
-                task_id=task_id,
-                agent_id=agent_id,
-                runner_workspace=runner_workspace,
-            )
-        elif _is_uc_function_tool(tool_name, agent_spec):
-            output = await _execute_uc_function_tool(tool_name, args, agent_spec=agent_spec)
-        else:
-            output = await _execute_spec_callable_tool(tool_name, args, agent_spec=agent_spec)
-    except Exception as exc:  # noqa: BLE001
-        output = f"Error: {type(exc).__name__}: {exc}"
-
-    return output
+    )
 
 
 # Per-session leading-edge throttle for changed-files invalidation

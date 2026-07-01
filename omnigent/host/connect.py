@@ -285,15 +285,6 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # Testing knob: override the context window size for compaction
         # trigger threshold. Not a secret — a plain integer.
         "AP_CONTEXT_WINDOW_OVERRIDE",
-        # Spine Phase 4/5 (BDP-2330/2331) tool-dispatch abstraction toggles. The
-        # runner subprocess (omnigent/runner/tool_dispatch.py +
-        # tool_dispatcher_registry.py) reads these to route through the new
-        # ToolExecutionContext / ToolDispatcher-registry paths. Plain on/off
-        # flags (default OFF), not secrets — must propagate host→runner so the
-        # operator can enable the new dispatch path the same way the server-side
-        # spine flags are enabled. Unset/0 keeps the legacy dispatch path.
-        "OMNIGENT_USE_TOOL_EXECUTION_CONTEXT",
-        "OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY",
         # Sentry error/performance telemetry config (BDP-2550). The runner
         # subprocess calls omnigent.runtime.sentry.init_sentry("runner"), so it
         # needs the DSN + reporting config + the content-capture flag the same

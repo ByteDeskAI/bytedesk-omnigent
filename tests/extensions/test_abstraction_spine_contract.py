@@ -6,8 +6,8 @@ The handoff plan is a sequential, parity-gated refactor of the *contended*
 HarnessProvider, StoreBootstrapper) plus a tool-exec context and a tool-dispatch
 registry. Each phase's diff lands on top of specific anchors in core files. If one of
 those anchors silently moves (an ``app.state`` key renamed, a harness registration
-site relocated, the dispatch ``elif`` chain reshaped, the extension seam getter
-renamed), the plan's line-number claims rot and a phase rebases onto the wrong hunk.
+site relocated, the dispatch registry reshaped, the extension seam getter renamed),
+the plan's line-number claims rot and a phase rebases onto the wrong hunk.
 
 This test freezes the anchors the plan quotes so any drift fails *here* — pointing the
 implementer at the exact paragraph of the plan to re-pin — rather than surfacing as a
@@ -31,6 +31,7 @@ _APP_PY = _REPO_ROOT / "omnigent" / "server" / "app.py"
 _HARNESSES_INIT = _REPO_ROOT / "omnigent" / "runtime" / "harnesses" / "__init__.py"
 _OMNIGENT_COMPAT = _REPO_ROOT / "omnigent" / "spec" / "_omnigent_compat.py"
 _TOOL_DISPATCH = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatch.py"
+_TOOL_DISPATCHER_REGISTRY = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatcher_registry.py"
 # Canonical kernel location post-BDP-2515 (omnigent/extensions.py is now a
 # strangler re-export shim; the extension_*() getter defs live in the kernel).
 _EXTENSIONS = _REPO_ROOT / "omnigent" / "kernel" / "extensions.py"
@@ -87,13 +88,31 @@ _EXPECTED_LIFESPAN_APP_STATE_KEYS = frozenset({"harness_process_manager"})
 # Full set the AST scan sees across the whole module (body + lifespan).
 _EXPECTED_ALL_APP_STATE_KEYS = _EXPECTED_BODY_APP_STATE_KEYS | _EXPECTED_LIFESPAN_APP_STATE_KEYS
 
-# ── Phase 5 anchor: dispatch elif chain (tool_dispatch.py 3412–3570). ──
-# 17 set-family branches + 4 predicate tails
-# (spec-builtin, spec-local-python, UC-function, else).
-# 17th set-family branch is _SKILL_ACQ_TOOLS (sys_skill_* acquisition family),
-# a legit tool family added by BDP-2487 (skills as runner builtins).
-_EXPECTED_SET_FAMILY_BRANCHES = 17
-_EXPECTED_PREDICATE_TAILS = 4
+# ── Phase 5 anchor: canonical dispatch registry order. ──
+_EXPECTED_DISPATCHER_NAMES = (
+    "mcp",
+    "os_env",
+    "rest",
+    "file",
+    "terminal",
+    "async_inbox",
+    "subagent",
+    "list_models",
+    "session_create",
+    "session_query",
+    "web_fetch",
+    "timer",
+    "task_lifecycle",
+    "skill",
+    "comment",
+    "agent",
+    "policy",
+    "skill_acq",
+    "spec_builtin",
+    "local_python",
+    "uc_function",
+    "spec_callable",
+)
 
 # ── Phase 3/lifespan + Phase 1/harness anchors. ──
 _EXPECTED_EXTENSION_GETTERS = frozenset(
@@ -236,28 +255,30 @@ def test_omnigent_compat_allowlist_consumes_the_same_harness_names():
     )
 
 
-# ── Phase 4/5: the dispatch elif chain shape (16 set-family + 4 predicate tails) ──
+# ── Phase 4/5: the canonical dispatch registry shape ──────────────────────
 
 
-def test_dispatch_elif_chain_branch_counts_are_pinned():
-    src = _read(_TOOL_DISPATCH)
-    # Set-family branches: ``elif tool_name in _<NAME>_TOOLS:`` between the MCP guard
-    # and the predicate tails. Counted by regex over the canonical region; the plan
-    # quotes lines 3412–3570.
-    set_family = re.findall(r"^\s*elif tool_name in _\w+:", src, flags=re.MULTILINE)
-    assert len(set_family) == _EXPECTED_SET_FAMILY_BRANCHES, (
-        f"dispatch set-family elif count = {len(set_family)}, expected "
-        f"{_EXPECTED_SET_FAMILY_BRANCHES}. A tool family was added/removed — add it to "
-        "TOOL_FAMILIES (Phase 5) and re-pin _EXPECTED_SET_FAMILY_BRANCHES + the plan."
+def test_dispatch_registry_order_is_pinned():
+    src = _read(_TOOL_DISPATCHER_REGISTRY)
+    names = tuple(re.findall(r'name="([^"]+)"', src))
+    assert names == _EXPECTED_DISPATCHER_NAMES, (
+        f"dispatch registry order drifted: {names}. Add/remove the dispatcher in "
+        "the canonical precedence position and re-pin _EXPECTED_DISPATCHER_NAMES."
     )
-    # Predicate tails the plan enumerates: spec-builtin, spec-local-python,
-    # UC-function, else-fallback.
-    assert "_is_spec_builtin_tool(tool_name, agent_spec)" in src
-    assert "_is_spec_local_python_tool(tool_name, agent_spec)" in src
-    assert "_is_uc_function_tool(tool_name, agent_spec)" in src
-    assert "_execute_spec_callable_tool(tool_name, args, agent_spec=agent_spec)" in src
-    # Total routing branches quoted by the plan (17 + 4 = 21).
-    assert _EXPECTED_SET_FAMILY_BRANCHES + _EXPECTED_PREDICATE_TAILS == 21
+
+    # Predicate tails the registry enumerates: spec-builtin, spec-local-python,
+    # UC-function, catch-all fallback.
+    assert "_is_spec_builtin_tool(ctx.tool_name, ctx.agent_spec)" in src
+    assert "_is_spec_local_python_tool(ctx.tool_name, ctx.agent_spec)" in src
+    assert "_is_uc_function_tool(ctx.tool_name, ctx.agent_spec)" in src
+    assert "_execute_spec_callable_tool(ctx.tool_name, args, agent_spec=ctx.agent_spec)" in src
+
+
+def test_execute_tool_uses_registry_without_tool_dispatch_flags():
+    src = _read(_TOOL_DISPATCH)
+    assert "dispatch_via_registry" in src
+    assert "OMNIGENT_USE_TOOL_EXECUTION_CONTEXT" not in src
+    assert "OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY" not in src
 
 
 # ── Phase 1/3: the generic extension seam getters the plan mirrors ──
