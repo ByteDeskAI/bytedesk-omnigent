@@ -124,7 +124,9 @@ export function PermissionsToolsTabView({
                     </div>
                   </div>
                   <Badge variant={enabled ? "default" : "outline"}>
-                    {enabled ? "Enabled" : "Disabled"}
+                    {/* An unmanaged tool isn't "Disabled" — the agent's own
+                        config.yaml decides; workforce only knows managed state. */}
+                    {tool ? (enabled ? "Enabled" : "Disabled") : "Not managed"}
                   </Badge>
                 </div>
                 <Button

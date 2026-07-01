@@ -59,6 +59,12 @@ export function useWorkForcePage(): WorkForcePageShellProps {
 
   const selectedAgent = filteredAgents.find((agent) => agent.id === selectedAgentId) ?? null;
   const selectedTier = selectedAgent ? tierForAgent(selectedAgent) : "employee";
+
+  // Workflow agents only expose the Overview tab; switching to one while on a
+  // now-disabled tab would leave its empty content rendered under a disabled trigger.
+  useEffect(() => {
+    if (selectedTier === "workflow" && tab !== "overview") setTab("overview");
+  }, [selectedTier, tab]);
   const imageEnabled = Boolean(selectedAgent && selectedTier !== "workflow");
   const image = useAgentImage(selectedAgent?.id, imageEnabled);
   const imageSnapshot = image.data;
