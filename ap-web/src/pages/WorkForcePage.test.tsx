@@ -142,6 +142,16 @@ async function activateTab(name: RegExp) {
   return tab;
 }
 
+async function activatePermissionSubTab(name: RegExp) {
+  const tablist = await screen.findByRole("tablist", { name: "Permission groups" });
+  const tab = within(tablist).getByRole("tab", { name });
+  fireEvent.mouseDown(tab, { button: 0, ctrlKey: false });
+  fireEvent.mouseUp(tab, { button: 0 });
+  fireEvent.click(tab);
+  await waitFor(() => expect(tab).toHaveAttribute("aria-selected", "true"));
+  return tab;
+}
+
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(useServerInfo).mockReturnValue(ACCOUNTS_OFF);
@@ -674,6 +684,7 @@ describe("WorkForcePage", () => {
 
     await activateTab(/Permissions/);
 
+    await activatePermissionSubTab(/Instructions/);
     const instructions = await screen.findByLabelText("Engineering instructions");
     fireEvent.change(instructions, { target: { value: "Follow department policy." } });
     const scopeSection = screen.getByText("Engineering Instructions").closest("section");
@@ -701,6 +712,7 @@ describe("WorkForcePage", () => {
       }),
     );
 
+    await activatePermissionSubTab(/Tools/);
     const toolSection = screen.getByText("Engineering Builtin Tools").closest("section");
     expect(toolSection).not.toBeNull();
     fireEvent.click(
@@ -735,6 +747,7 @@ describe("WorkForcePage", () => {
       }),
     );
 
+    await activatePermissionSubTab(/Skills/);
     expect(screen.getAllByText("customer-research").length).toBeGreaterThan(0);
     const effectiveSkillsSection = screen.getByText("Effective Skills").closest("section");
     expect(effectiveSkillsSection).not.toBeNull();
@@ -753,5 +766,8 @@ describe("WorkForcePage", () => {
         reconcile: true,
       }),
     );
+
+    await activatePermissionSubTab(/Connectors/);
+    expect(screen.getByText("No connector connections.")).toBeInTheDocument();
   });
 });

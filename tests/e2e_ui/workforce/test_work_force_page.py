@@ -508,6 +508,7 @@ def test_work_force_builtin_tool_permissions_toggle_at_each_level(
         page.get_by_text("Platform Developer").first.click()
         expect(page.get_by_role("heading", name="Platform Developer")).to_be_visible()
         page.get_by_role("tab", name=re.compile("Permissions")).click()
+        page.get_by_role("tab", name="Tools", exact=True).click()
 
         scope_row = page.get_by_test_id("scope-tool-row-web_search")
         effective_row = page.get_by_test_id("effective-tool-row-web_search")
