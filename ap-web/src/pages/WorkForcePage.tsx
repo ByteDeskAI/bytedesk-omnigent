@@ -61,9 +61,11 @@ import {
   useUpsertWorkforceAgentOverride,
   useUpsertWorkforceConnector,
   useUpsertWorkforceSkill,
+  useUpsertWorkforceTool,
   useWorkforceAgentEffective,
   useWorkforceScope,
   useWorkforceScopes,
+  useWorkforceToolCatalog,
 } from "@/hooks/useWorkforce";
 import { getMe } from "@/lib/accountsApi";
 import { groupAgentsByTier, tierForAgent, type AgentTier } from "@/lib/agentTiers";
@@ -75,10 +77,12 @@ import { cn } from "@/lib/utils";
 import type {
   WorkforceEffectiveConnector,
   WorkforceEffectiveSkill,
+  WorkforceEffectiveTool,
   WorkforceScopeKind,
+  WorkforceToolCatalogItem,
 } from "@/lib/workforceApi";
 
-type WorkForceTab = "overview" | "config" | "inheritance" | "skills" | "connectors" | "files";
+type WorkForceTab = "overview" | "config" | "permissions" | "skills" | "connectors" | "files";
 
 interface PendingSave {
   body: AgentImageUpdate;
@@ -426,34 +430,32 @@ function RosterPanel({
             />
           </div>
           <div className="mt-3 flex flex-wrap gap-1.5">
-            {(
-              [
-                {
-                  tier: "employee" as const,
-                  count: employeeCount,
-                  accent: "text-accent-blue",
-                  icon: <UsersIcon className="size-3.5" />,
-                },
-                {
-                  tier: "system" as const,
-                  count: systemAgents.length,
-                  accent: "text-accent-purple",
-                  icon: <ShieldAlertIcon className="size-3.5" />,
-                },
-                {
-                  tier: "harness" as const,
-                  count: harnessAgents.length,
-                  accent: "text-accent-cyan",
-                  icon: <TerminalIcon className="size-3.5" />,
-                },
-                {
-                  tier: "workflow" as const,
-                  count: workflowAgents.length,
-                  accent: "text-accent-amber",
-                  icon: <WorkflowIcon className="size-3.5" />,
-                },
-              ]
-            ).map((chip) => (
+            {[
+              {
+                tier: "employee" as const,
+                count: employeeCount,
+                accent: "text-accent-blue",
+                icon: <UsersIcon className="size-3.5" />,
+              },
+              {
+                tier: "system" as const,
+                count: systemAgents.length,
+                accent: "text-accent-purple",
+                icon: <ShieldAlertIcon className="size-3.5" />,
+              },
+              {
+                tier: "harness" as const,
+                count: harnessAgents.length,
+                accent: "text-accent-cyan",
+                icon: <TerminalIcon className="size-3.5" />,
+              },
+              {
+                tier: "workflow" as const,
+                count: workflowAgents.length,
+                accent: "text-accent-amber",
+                icon: <WorkflowIcon className="size-3.5" />,
+              },
+            ].map((chip) => (
               <button
                 key={chip.tier}
                 type="button"
@@ -591,7 +593,10 @@ function DetailHeader({
               <h2 className="truncate text-xl font-semibold">{agentDisplayName(agent)}</h2>
               <Badge variant={editable ? "secondary" : "outline"} className="gap-1.5">
                 {editable && (
-                  <span className="size-1.5 rounded-full bg-accent-green mc-live-dot" aria-hidden="true" />
+                  <span
+                    className="size-1.5 rounded-full bg-accent-green mc-live-dot"
+                    aria-hidden="true"
+                  />
                 )}
                 {editable ? "Editable" : "Read-only"}
               </Badge>
@@ -1027,7 +1032,7 @@ function sameConnectionSelection(
   });
 }
 
-function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: boolean }) {
+function PermissionsTab({ agent, editable }: { agent: AvailableAgent; editable: boolean }) {
   const department = agent.department?.trim() || null;
   const departmentScopeId = workforceScopeSlug(department);
   const [scopeKind, setScopeKind] = useState<WorkforceScopeKind>(
@@ -1037,11 +1042,13 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
   const scopes = useWorkforceScopes();
   const scope = useWorkforceScope(scopeKind, scopeId, editable);
   const effective = useWorkforceAgentEffective(agent.id, editable);
-  const catalog = useConnectorsCatalog();
+  const connectorCatalog = useConnectorsCatalog();
+  const toolCatalog = useWorkforceToolCatalog();
   const updateInstructions = useUpdateWorkforceInstructions();
   const updateAgentInstructions = useUpdateWorkforceAgentInstructions();
   const upsertConnector = useUpsertWorkforceConnector();
   const upsertSkill = useUpsertWorkforceSkill();
+  const upsertTool = useUpsertWorkforceTool();
   const upsertOverride = useUpsertWorkforceAgentOverride();
   const skillSearch = useSearchSkills();
   const [instructionDraft, setInstructionDraft] = useState("");
@@ -1054,14 +1061,14 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
 
   const rows = useMemo(
     () =>
-      (catalog.data ?? []).flatMap((provider) =>
+      (connectorCatalog.data ?? []).flatMap((provider) =>
         provider.connections.map((connection) => ({
           provider,
           connection,
           tools: toolsForConnection(provider, connection),
         })),
       ),
-    [catalog.data],
+    [connectorCatalog.data],
   );
 
   useEffect(() => {
@@ -1103,6 +1110,17 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
   );
   const scopeSkills = [...(scope.data?.skills ?? [])].sort((a, b) =>
     compareText(a.skillName, b.skillName),
+  );
+  const scopeTools = [...(scope.data?.tools ?? [])].sort((a, b) =>
+    compareText(a.toolKey, b.toolKey),
+  );
+  const effectiveTools = [...(effective.data?.tools ?? [])].sort((a, b) =>
+    compareText(a.label, b.label),
+  );
+  const effectiveToolByKey = new Map(effectiveTools.map((item) => [item.toolKey, item]));
+  const scopeToolByKey = new Map(scopeTools.map((item) => [item.toolKey, item]));
+  const toolCatalogRows = [...(toolCatalog.data?.tools ?? [])].sort(
+    (a, b) => compareText(a.group, b.group) || compareText(a.label, b.label),
   );
 
   function setTool(connectionId: string, token: string, checked: boolean) {
@@ -1223,8 +1241,25 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
     }
   }
 
+  async function setScopeTool(tool: WorkforceToolCatalogItem, enabled: boolean) {
+    setNotice(null);
+    setError(null);
+    try {
+      await upsertTool.mutateAsync({
+        scopeKind,
+        scopeId,
+        toolKey: tool.toolKey,
+        enabled,
+        reconcile: true,
+      });
+      setNotice(`${scopeLabel} tool permission saved.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Tool permission save failed");
+    }
+  }
+
   async function toggleOverride(
-    itemKind: "connector" | "skill",
+    itemKind: "connector" | "skill" | "tool",
     itemKey: string,
     enabled: boolean,
   ) {
@@ -1242,6 +1277,20 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
     } catch (err) {
       setError(err instanceof Error ? err.message : "Override save failed");
     }
+  }
+
+  function toolStateLabel(tool: WorkforceToolCatalogItem): string {
+    const assignment = scopeToolByKey.get(tool.toolKey);
+    if (!assignment) return "Not set here";
+    return assignment.enabled ? "Granted here" : "Denied here";
+  }
+
+  function inheritedToolLabel(tool: WorkforceEffectiveTool | undefined): string {
+    if (!tool) return "No inherited grant";
+    if (!tool.inherited) return "Agent override";
+    const last = tool.inheritedFrom[tool.inheritedFrom.length - 1];
+    if (!last) return "Inherited";
+    return last.scopeKind === "organization" ? "Organization" : last.scopeId;
   }
 
   return (
@@ -1289,6 +1338,114 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
           </Badge>
         </div>
       </section>
+
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_25rem]">
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div>
+              <div className="mc-label">{scopeLabel} Builtin Tools</div>
+              <div className="text-xs text-muted-foreground">
+                Explicit grant or deny rows for this inheritance level.
+              </div>
+            </div>
+            <Badge variant="secondary">{scopeTools.length}</Badge>
+          </div>
+          <div className="grid max-h-[32rem] gap-2 overflow-y-auto p-3 md:grid-cols-2">
+            {toolCatalogRows.map((tool) => {
+              const assignment = scopeToolByKey.get(tool.toolKey);
+              return (
+                <div
+                  key={tool.toolKey}
+                  data-testid={`scope-tool-row-${tool.toolKey}`}
+                  className="flex min-w-0 flex-col gap-2 rounded-md border border-border/70 px-3 py-2 text-sm"
+                >
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center justify-between gap-2">
+                      <span className="truncate font-medium">{tool.label}</span>
+                      <Badge variant={assignment?.enabled ? "default" : "outline"}>
+                        {toolStateLabel(tool)}
+                      </Badge>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {tool.toolKey} · {tool.description}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant={assignment?.enabled ? "secondary" : "outline"}
+                      disabled={!editable || upsertTool.isPending}
+                      onClick={() => void setScopeTool(tool, true)}
+                    >
+                      Grant here
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant={assignment && !assignment.enabled ? "secondary" : "outline"}
+                      disabled={!editable || upsertTool.isPending}
+                      onClick={() => void setScopeTool(tool, false)}
+                    >
+                      Deny here
+                    </Button>
+                  </div>
+                </div>
+              );
+            })}
+            {!toolCatalog.isLoading && toolCatalogRows.length === 0 && (
+              <div className="text-sm text-muted-foreground">No builtin tools reported.</div>
+            )}
+          </div>
+        </section>
+
+        <section className="mc-surface">
+          <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+            <div>
+              <div className="mc-label text-accent-cyan">Effective Agent Tools</div>
+              <div className="text-xs text-muted-foreground">{agentDisplayName(agent)}</div>
+            </div>
+            <Badge variant="secondary">
+              {effectiveTools.filter((item) => item.enabled).length}
+            </Badge>
+          </div>
+          <div className="max-h-[32rem] divide-y divide-border-dimmer overflow-y-auto">
+            {toolCatalogRows.map((catalogItem) => {
+              const tool = effectiveToolByKey.get(catalogItem.toolKey);
+              const enabled = tool?.enabled ?? false;
+              return (
+                <div
+                  key={catalogItem.toolKey}
+                  data-testid={`effective-tool-row-${catalogItem.toolKey}`}
+                  className="p-3"
+                >
+                  <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{catalogItem.label}</div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {catalogItem.toolKey} · {inheritedToolLabel(tool)}
+                      </div>
+                    </div>
+                    <Badge variant={enabled ? "default" : "outline"}>
+                      {enabled ? "Enabled" : "Disabled"}
+                    </Badge>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="mt-2"
+                    disabled={!editable || upsertOverride.isPending}
+                    onClick={() => void toggleOverride("tool", catalogItem.toolKey, !enabled)}
+                  >
+                    {enabled ? "Disable for agent" : "Enable for agent"}
+                  </Button>
+                </div>
+              );
+            })}
+            {!toolCatalog.isLoading && toolCatalogRows.length === 0 && (
+              <div className="p-4 text-sm text-muted-foreground">No builtin tools reported.</div>
+            )}
+          </div>
+        </section>
+      </div>
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
         <section className="mc-surface">
@@ -1373,7 +1530,7 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
                   <div>
                     <div className="text-sm font-medium">{connection.displayName}</div>
                     <div className="text-xs text-muted-foreground">
-                      {provider.name} · {selected.length}/{tools.length} actions
+                      {provider.name} · {selected.length}/{tools.length} permissions
                     </div>
                   </div>
                   <div className="flex gap-2">
@@ -1390,7 +1547,7 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
                       disabled={!editable || selected.length === 0 || upsertConnector.isPending}
                       onClick={() => void saveConnector(connection.id, selected, true)}
                     >
-                      <PlugIcon /> Save actions
+                      <PlugIcon /> Save permissions
                     </Button>
                   </div>
                 </div>
@@ -1425,7 +1582,7 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
               </div>
             );
           })}
-          {!catalog.isLoading && rows.length === 0 && (
+          {!connectorCatalog.isLoading && rows.length === 0 && (
             <div className="text-sm text-muted-foreground">No connector connections.</div>
           )}
         </div>
@@ -1433,7 +1590,9 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_23rem]">
         <section className="mc-surface">
-          <div className="mc-label border-b border-border-dimmer px-3 py-2">{scopeLabel} Skills</div>
+          <div className="mc-label border-b border-border-dimmer px-3 py-2">
+            {scopeLabel} Skills
+          </div>
           <div className="space-y-3 p-3">
             <form
               className="flex gap-2"
@@ -1539,7 +1698,7 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
 
         <section className="mc-surface">
           <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
-            <div className="mc-label text-accent-cyan">Effective Connector Actions</div>
+            <div className="mc-label text-accent-cyan">Effective Connector Permissions</div>
             <Badge variant="secondary">
               {effectiveConnectors.filter((item) => item.enabled).length}
             </Badge>
@@ -1565,7 +1724,7 @@ function InheritanceTab({ agent, editable }: { agent: AvailableAgent; editable: 
             ))}
             {!effective.isLoading && effectiveConnectors.length === 0 && (
               <div className="p-4 text-sm text-muted-foreground">
-                No inherited connector actions.
+                No inherited connector permissions.
               </div>
             )}
           </div>
@@ -1642,9 +1801,7 @@ function FilesTab({
                 <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
               )}
               <span className="min-w-0 flex-1 truncate">{entry.name}</span>
-              {entry.type === "file" && (
-                <span className="mc-value text-2xs">{entry.size}</span>
-              )}
+              {entry.type === "file" && <span className="mc-value text-2xs">{entry.size}</span>}
             </button>
           ))}
           {tree.isError && (
@@ -1656,9 +1813,7 @@ function FilesTab({
       </section>
       <section className="mc-surface flex min-h-[34rem] flex-col">
         <div className="flex items-center justify-between gap-2 border-b border-border-dimmer px-3 py-2">
-          <div className="mc-value min-w-0 truncate text-xs">
-            {selectedPath || "Select file"}
-          </div>
+          <div className="mc-value min-w-0 truncate text-xs">{selectedPath || "Select file"}</div>
           <div className="flex gap-2">
             <Button
               size="xs"
@@ -1843,8 +1998,8 @@ export function WorkForcePage() {
                       <span className="size-1.5 rounded-full bg-accent-amber" aria-hidden="true" />
                     )}
                   </TabsTrigger>
-                  <TabsTrigger value="inheritance" disabled={!workforceEditable}>
-                    <UsersIcon /> Inheritance
+                  <TabsTrigger value="permissions" disabled={!workforceEditable}>
+                    <UsersIcon /> Permissions
                   </TabsTrigger>
                   <TabsTrigger value="skills" disabled={!editable}>
                     <PuzzleIcon /> Skills
@@ -1880,9 +2035,9 @@ export function WorkForcePage() {
                       dirty={isConfigDirty}
                     />
                   </TabsContent>
-                  <TabsContent value="inheritance">
+                  <TabsContent value="permissions">
                     {selectedAgent && (
-                      <InheritanceTab agent={selectedAgent} editable={workforceEditable} />
+                      <PermissionsTab agent={selectedAgent} editable={workforceEditable} />
                     )}
                   </TabsContent>
                   <TabsContent value="skills">

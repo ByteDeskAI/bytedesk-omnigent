@@ -3,14 +3,17 @@ import {
   fetchWorkforceAgentEffective,
   fetchWorkforceScope,
   fetchWorkforceScopes,
+  fetchWorkforceToolCatalog,
   updateWorkforceAgentInstructions,
   updateWorkforceInstructions,
   upsertWorkforceAgentOverride,
   upsertWorkforceConnector,
   upsertWorkforceSkill,
+  upsertWorkforceTool,
   type UpsertWorkforceConnectorPayload,
   type UpsertWorkforceOverridePayload,
   type UpsertWorkforceSkillPayload,
+  type UpsertWorkforceToolPayload,
   type WorkforceScopeKind,
 } from "@/lib/workforceApi";
 
@@ -21,6 +24,14 @@ export function useWorkforceScopes() {
     queryKey: [...WORKFORCE_KEY, "scopes"],
     queryFn: fetchWorkforceScopes,
     staleTime: 10_000,
+  });
+}
+
+export function useWorkforceToolCatalog() {
+  return useQuery({
+    queryKey: [...WORKFORCE_KEY, "tool-catalog"],
+    queryFn: fetchWorkforceToolCatalog,
+    staleTime: 60_000,
   });
 }
 
@@ -103,6 +114,19 @@ export function useUpsertWorkforceSkill() {
       ...payload
     }: { scopeKind: WorkforceScopeKind; scopeId?: string | null } & UpsertWorkforceSkillPayload) =>
       upsertWorkforceSkill(scopeKind, scopeId ?? null, payload),
+    onSuccess: () => invalidateWorkforce(queryClient),
+  });
+}
+
+export function useUpsertWorkforceTool() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      scopeKind,
+      scopeId,
+      ...payload
+    }: { scopeKind: WorkforceScopeKind; scopeId?: string | null } & UpsertWorkforceToolPayload) =>
+      upsertWorkforceTool(scopeKind, scopeId ?? null, payload),
     onSuccess: () => invalidateWorkforce(queryClient),
   });
 }

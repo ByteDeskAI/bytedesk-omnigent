@@ -19,7 +19,9 @@ from bytedesk_omnigent.workforce import (
     normalize_scope,
     reconcile_connectors_for_agent,
     reconcile_skills_for_agent,
+    reconcile_tools_for_agent,
     reconcile_workforce_for_scope,
+    workforce_tool_catalog,
 )
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import AuthProvider
@@ -67,6 +69,19 @@ class SkillAssignmentBody(BaseModel):
         default=None,
         max_length=512,
         validation_alias=AliasChoices("sourceRef", "source_ref"),
+    )
+    enabled: bool = True
+    reconcile: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ToolAssignmentBody(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    tool_key: str = Field(
+        min_length=1,
+        max_length=128,
+        validation_alias=AliasChoices("toolKey", "tool_key"),
     )
     enabled: bool = True
     reconcile: bool = True
@@ -122,6 +137,9 @@ def _scope_response(scope_kind: str, scope_id: str | None) -> dict[str, Any]:
         "skills": [
             item.to_dict() for item in store.list_skill_assignments(scope_kind=kind, scope_id=sid)
         ],
+        "tools": [
+            item.to_dict() for item in store.list_tool_assignments(scope_kind=kind, scope_id=sid)
+        ],
         "revision": store.revision(),
     }
 
@@ -169,6 +187,11 @@ def create_workforce_router(
                 "revision": get_workforce_store().revision(),
             }
         )
+
+    @router.get("/workforce/tools/catalog")
+    async def get_tool_catalog(request: Request) -> JSONResponse:
+        await _require_admin(request, auth_provider, permission_store)
+        return JSONResponse({"tools": workforce_tool_catalog()})
 
     @router.get("/workforce/scopes/{scope_kind}/{scope_id}")
     async def get_scope(
@@ -298,6 +321,7 @@ def create_workforce_router(
                 store=store,
                 connectors=True,
                 skills=False,
+                tools=False,
                 materialize_connectors=body.materialize,
             )
         return JSONResponse(
@@ -347,6 +371,7 @@ def create_workforce_router(
                 store=store,
                 connectors=False,
                 skills=True,
+                tools=False,
             )
         return JSONResponse(
             {
@@ -362,6 +387,56 @@ def create_workforce_router(
         body: SkillAssignmentBody,
     ) -> JSONResponse:
         return await upsert_scope_skill(request, "organization", ORG_SCOPE_ID, body)
+
+    @router.post("/workforce/scopes/{scope_kind}/{scope_id}/tools")
+    async def upsert_scope_tool(
+        request: Request,
+        scope_kind: str,
+        scope_id: str,
+        body: ToolAssignmentBody,
+    ) -> JSONResponse:
+        await _require_admin(request, auth_provider, permission_store)
+        kind, sid = normalize_scope(scope_kind, scope_id)
+        if kind == "agent":
+            raise OmnigentError(
+                "agent tool overrides use /workforce/agents",
+                code=ErrorCode.INVALID_INPUT,
+            )
+        store = get_workforce_store()
+        try:
+            assignment = store.upsert_tool_assignment(
+                scope_kind=kind,
+                scope_id=sid,
+                tool_key=body.tool_key,
+                enabled=body.enabled,
+                metadata=body.metadata,
+            )
+        except ValueError as exc:
+            raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+        reconciled: list[str] = []
+        if body.reconcile:
+            reconciled = reconcile_workforce_for_scope(
+                kind,
+                sid,
+                store=store,
+                connectors=False,
+                skills=False,
+                tools=True,
+            )
+        return JSONResponse(
+            {
+                "assignment": assignment.to_dict(),
+                "reconciledAgentIds": reconciled,
+                "scope": _scope_response(kind, sid),
+            }
+        )
+
+    @router.post("/workforce/scopes/organization/tools")
+    async def upsert_organization_tool(
+        request: Request,
+        body: ToolAssignmentBody,
+    ) -> JSONResponse:
+        return await upsert_scope_tool(request, "organization", ORG_SCOPE_ID, body)
 
     @router.get("/workforce/agents/{agent_id}/effective")
     async def get_agent_effective(
@@ -406,21 +481,26 @@ def create_workforce_router(
         body: AgentOverrideBody,
     ) -> JSONResponse:
         await _require_admin(request, auth_provider, permission_store)
-        if body.item_kind not in {"connector", "skill"}:
+        if body.item_kind not in {"connector", "skill", "tool"}:
             raise OmnigentError("unsupported override item kind", code=ErrorCode.INVALID_INPUT)
         store = get_workforce_store()
-        override = store.upsert_agent_override(
-            agent_id=agent_id,
-            item_kind=body.item_kind,
-            item_key=body.item_key,
-            enabled=body.enabled,
-            metadata=body.metadata,
-        )
+        try:
+            override = store.upsert_agent_override(
+                agent_id=agent_id,
+                item_kind=body.item_kind,
+                item_key=body.item_key,
+                enabled=body.enabled,
+                metadata=body.metadata,
+            )
+        except ValueError as exc:
+            raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
         if body.reconcile:
             if body.item_kind == "connector":
                 reconcile_connectors_for_agent(agent_id, store=store)
-            else:
+            elif body.item_kind == "skill":
                 reconcile_skills_for_agent(agent_id, store=store)
+            else:
+                reconcile_tools_for_agent(agent_id, store=store)
         return JSONResponse(
             {
                 "override": override.to_dict(),

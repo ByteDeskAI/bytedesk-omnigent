@@ -47,6 +47,7 @@ from omnigent.tools.local import load_local_python_tools
 # MCP lifecycle moved to runner; see designs/RUNNER_MCP.md.
 
 _logger = logging.getLogger(__name__)
+_MANAGED_TOOL_PERMISSIONS_PARAM = "managed_tool_permissions"
 
 
 class _UCFunctionSchemaTool(Tool):
@@ -300,6 +301,9 @@ class ToolManager:
         # Policy tool is always auto-registered so agents can add
         # inline CEL policies at runtime without spec changes.
         self._register_policy_tools()
+        # Work Force and other admin surfaces can manage a named
+        # subset of registered tools without inventing new spec fields.
+        self._apply_managed_tool_permissions()
 
     def _register_policy_tools(self) -> None:
         """
@@ -314,6 +318,28 @@ class ToolManager:
 
         self._tools[SysAddPolicyTool.name()] = SysAddPolicyTool()
         self._tools[SysPolicyRegistryTool.name()] = SysPolicyRegistryTool()
+
+    def _apply_managed_tool_permissions(self) -> None:
+        """
+        Hide disabled admin-managed tools after registration.
+
+        ``params.managed_tool_permissions`` has the shape
+        ``{"managed": [...], "enabled": [...]}``. Registration still
+        follows the normal Omnigent config gates (``tools.builtins``,
+        ``os_env``, ``terminals``, ``timers``, ``spawn``), then this
+        filter removes any managed tool not currently enabled.
+        """
+        raw = self._spec.params.get(_MANAGED_TOOL_PERMISSIONS_PARAM)
+        if not isinstance(raw, dict):
+            return
+        managed_raw = raw.get("managed")
+        enabled_raw = raw.get("enabled")
+        if not isinstance(managed_raw, list) or not isinstance(enabled_raw, list):
+            return
+        managed = {str(name) for name in managed_raw if isinstance(name, str)}
+        enabled = {str(name) for name in enabled_raw if isinstance(name, str)}
+        for name in managed - enabled:
+            self._tools.pop(name, None)
 
     def _register_async_inbox_tools(self) -> None:
         """
