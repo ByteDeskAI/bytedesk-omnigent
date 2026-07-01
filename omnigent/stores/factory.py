@@ -186,17 +186,14 @@ class BootstrappedStores:
         )
 
     async def run_lifecycle(self, phase: str) -> dict[int, bool | None]:
-        """Drive one lifecycle phase across every wired store (gated, no-op default).
+        """Drive one lifecycle phase across every wired store.
 
         Delegates to :func:`omnigent.stores.lifecycle.run_store_lifecycle`,
-        which invokes a store's hook **only when the store defines one** and
-        is itself gated behind ``OMNIGENT_STORE_LIFECYCLE_HOOKS`` (default
-        OFF). With the flag unset this is an immediate no-op, so it is safe
-        to call from a boot/shutdown path without changing behavior.
+        which invokes a store's hook **only when the store defines one**.
 
         :param phase: ``"startup"``, ``"shutdown"``, or ``"health_check"``.
         :returns: Mapping of ``id(store) -> result`` for stores that define
-            the hook; empty when the flag is off.
+            the hook.
         """
         from omnigent.stores.lifecycle import LifecyclePhase, run_store_lifecycle
 

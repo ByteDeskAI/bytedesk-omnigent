@@ -113,10 +113,6 @@ patches:
                 env:
                   - name: OMNIGENT_INFISICAL_ENV
                     value: production
-                  # Remaining store-lifecycle strangler gate. Server DI and
-                  # lifespan phases are now unconditional code paths.
-                  - name: OMNIGENT_STORE_LIFECYCLE_HOOKS
-                    value: "1"
   - target:
       kind: Deployment
       name: github-mcp

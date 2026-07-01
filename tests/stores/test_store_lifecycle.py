@@ -1,9 +1,8 @@
-"""Tests for omnigent.stores.lifecycle (BDP-2327, Phase 2).
+"""Tests for omnigent.stores.lifecycle.
 
-Covers the optional async store lifecycle hooks and the gated driver:
-no-op defaults change nothing, the driver is an immediate no-op while
-``OMNIGENT_STORE_LIFECYCLE_HOOKS`` is off, and when on it invokes a hook
-only for stores that define one.
+Covers async store lifecycle hooks and the cutover driver: no-op defaults
+change nothing, hook-capable stores run unconditionally, and stores without a
+matching hook are skipped.
 """
 
 from __future__ import annotations
@@ -15,7 +14,6 @@ import pytest
 
 from omnigent.stores.factory import StoreBootstrapper
 from omnigent.stores.lifecycle import (
-    LIFECYCLE_HOOKS_ENV_VAR,
     StoreLifecycleMixin,
     run_store_lifecycle,
 )
@@ -55,22 +53,8 @@ def test_mixin_defaults_are_noops() -> None:
     assert asyncio.run(store.health_check()) is True
 
 
-def test_driver_is_noop_when_flag_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the flag unset the driver invokes nothing and returns empty."""
-    monkeypatch.delenv(LIFECYCLE_HOOKS_ENV_VAR, raising=False)
-    store = _OptedInStore()
-
-    result = asyncio.run(run_store_lifecycle([store], "startup"))
-
-    assert result == {}
-    assert store.calls == []
-
-
-def test_driver_invokes_opted_in_store_when_flag_on(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """With the flag on, the opted-in store's hook runs and is reported."""
-    monkeypatch.setenv(LIFECYCLE_HOOKS_ENV_VAR, "1")
+def test_driver_invokes_opted_in_store() -> None:
+    """The cutover driver invokes hook-capable stores unconditionally."""
     store = _OptedInStore()
 
     result = asyncio.run(run_store_lifecycle([store], "startup"))
@@ -79,9 +63,8 @@ def test_driver_invokes_opted_in_store_when_flag_on(
     assert result == {id(store): None}
 
 
-def test_driver_skips_store_without_hook(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_driver_skips_store_without_hook() -> None:
     """A store that didn't opt in is transparently skipped, not errored."""
-    monkeypatch.setenv(LIFECYCLE_HOOKS_ENV_VAR, "1")
     opted_in = _OptedInStore()
     plain = _PlainStore()
 
@@ -92,9 +75,8 @@ def test_driver_skips_store_without_hook(monkeypatch: pytest.MonkeyPatch) -> Non
     assert result == {id(opted_in): None}
 
 
-def test_health_check_reports_bool(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_health_check_reports_bool() -> None:
     """health_check threads the store's bool through the driver result."""
-    monkeypatch.setenv(LIFECYCLE_HOOKS_ENV_VAR, "1")
     store = _OptedInStore()
     store.healthy = False
 
@@ -106,14 +88,11 @@ def test_health_check_reports_bool(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_bootstrapped_stores_run_lifecycle_noop_default(
     db_uri: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """BootstrappedStores.run_lifecycle is a no-op over real stores by default.
+    """BootstrappedStores.run_lifecycle skips real stores with no hooks.
 
-    None of the existing concrete stores have opted into the mixin, and the
-    flag defaults off, so driving the real bundle changes nothing and
-    returns an empty mapping — proving the seam is inert against today's
-    store set.
+    None of the existing concrete stores have opted into lifecycle hooks, so
+    driving the real bundle changes nothing and returns an empty mapping.
     """
-    monkeypatch.delenv(LIFECYCLE_HOOKS_ENV_VAR, raising=False)
     monkeypatch.setenv("OMNIGENT_NATS_URL", "nats://omnigent-nats:4222")
     stores = StoreBootstrapper.create(db_uri, str(tmp_path / "artifacts"))
 

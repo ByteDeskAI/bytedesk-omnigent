@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from omnigent.runner import tool_dispatch
 from omnigent.runner.tool_dispatch import (
+    _builtin_exec,
     _execute_local_python_tool,
     _execute_spec_builtin_tool,
 )
@@ -41,7 +41,7 @@ async def test_execute_spec_builtin_tool_returns_error_on_manager_failure(
         def call_tool(self, *_args, **_kwargs) -> str:
             raise RuntimeError("tool manager down")
 
-    monkeypatch.setattr(tool_dispatch, "ToolManager", _BoomManager)
+    monkeypatch.setattr(_builtin_exec, "ToolManager", _BoomManager)
 
     result = await _execute_spec_builtin_tool(
         "spawn",
@@ -72,7 +72,7 @@ async def test_execute_spec_builtin_tool_creates_per_conversation_workspace(
             captured.append((tool_name, args, ctx.workspace))
             return "ok"
 
-    monkeypatch.setattr(tool_dispatch, "ToolManager", _RecordingManager)
+    monkeypatch.setattr(_builtin_exec, "ToolManager", _RecordingManager)
 
     workspace_root = tmp_path / "runner"
     workspace_root.mkdir()
@@ -107,7 +107,7 @@ async def test_execute_local_python_tool_returns_error_on_manager_failure(
         def call_tool(self, *_args, **_kwargs) -> str:
             raise KeyError("missing tool")
 
-    monkeypatch.setattr(tool_dispatch, "ToolManager", _BoomManager)
+    monkeypatch.setattr(_builtin_exec, "ToolManager", _BoomManager)
 
     result = await _execute_local_python_tool(
         "echo",
@@ -138,7 +138,7 @@ async def test_execute_local_python_tool_uses_conversation_fallback_task_id(
             captured_ctx.append(ctx)
             return "done"
 
-    monkeypatch.setattr(tool_dispatch, "ToolManager", _RecordingManager)
+    monkeypatch.setattr(_builtin_exec, "ToolManager", _RecordingManager)
 
     await _execute_local_python_tool(
         "echo",

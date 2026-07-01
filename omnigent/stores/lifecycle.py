@@ -1,4 +1,4 @@
-"""Optional async store lifecycle hooks — startup / shutdown / health.
+"""Async store lifecycle hooks — startup / shutdown / health.
 
 Part of the omnigent core-refactor spine (BDP-2327, Phase 2). The store
 ABCs (``AgentStore``, ``ConversationStore``, ``FileStore``,
@@ -17,18 +17,11 @@ behavior**:
   exactly like the non-abstract default methods already on
   :class:`~omnigent.stores.agent_store.AgentStore`
   (``set_sot_tier`` / ``get_capabilities`` …).
-- :func:`run_store_lifecycle` is a strangler-fig driver: given a set of
+- :func:`run_store_lifecycle` is a driver: given a set of
   store objects it invokes one lifecycle phase across them, calling a hook
   **only when the store actually defines an awaitable for it**. Stores
   without the hook are skipped, so this is safe to point at the existing
   store set whether or not any store has opted in.
-
-The driver is gated behind ``OMNIGENT_STORE_LIFECYCLE_HOOKS`` (default
-**OFF**). With the flag unset the driver is an immediate no-op return, so
-a caller that wires it in still behaves byte-identically to today. The
-hooks themselves are no-ops by default, so even with the flag on a store
-that hasn't opted in sees no change. Two independent safety nets, both
-inert by default — strangler-fig, not replacement.
 """
 
 from __future__ import annotations
@@ -38,14 +31,7 @@ import logging
 from collections.abc import Iterable
 from typing import Any, Literal
 
-from omnigent.server.auth import env_var_is_truthy
-
 _logger = logging.getLogger(__name__)
-
-#: Default-OFF env flag gating the lifecycle-hook driver. Truthy values
-#: follow the existing harness convention (``1``/``true``/``yes``); unset
-#: or empty leaves the driver an immediate no-op.
-LIFECYCLE_HOOKS_ENV_VAR = "OMNIGENT_STORE_LIFECYCLE_HOOKS"
 
 #: The lifecycle phases a store may implement. ``health_check`` is the
 #: only phase whose return value is meaningful (``True`` = healthy).
@@ -73,7 +59,6 @@ class StoreLifecycleMixin:
         No-op by default. Override in a backend that needs eager setup;
         idempotency is the backend's responsibility.
         """
-        return None
 
     async def shutdown(self) -> None:
         """Release the store's resources (e.g. close a pool, flush).
@@ -81,7 +66,6 @@ class StoreLifecycleMixin:
         No-op by default. Override in a backend that holds resources that
         must be released on a clean shutdown.
         """
-        return None
 
     async def health_check(self) -> bool:
         """Report whether the store is currently usable.
@@ -121,29 +105,19 @@ async def run_store_lifecycle(
     stores: Iterable[Any],  # type: ignore[explicit-any]  # heterogeneous store objects
     phase: LifecyclePhase,
 ) -> dict[int, bool | None]:
-    """Drive one lifecycle phase across a set of stores (gated, no-op default).
+    """Drive one lifecycle phase across a set of stores.
 
-    Strangler-fig driver: a caller (e.g. a future ``StoreBootstrapper``
-    boot path or a server lifespan) can hand this the existing store set
-    to run ``startup`` / ``shutdown`` / ``health_check`` uniformly. Each
-    store's hook is invoked **only when present** (see :func:`_invoke_one`),
-    so stores that have not opted into :class:`StoreLifecycleMixin` are
+    A caller can hand this the existing store set to run ``startup`` /
+    ``shutdown`` / ``health_check`` uniformly. Each store's hook is
+    invoked **only when present** (see :func:`_invoke_one`), so stores
+    that have not opted into :class:`StoreLifecycleMixin` are
     transparently skipped.
-
-    The whole driver is gated behind ``OMNIGENT_STORE_LIFECYCLE_HOOKS``
-    (default **OFF**): when the flag is unset this returns immediately
-    with an empty mapping and invokes nothing, so wiring it into a live
-    path is byte-identical to today until the flag is flipped.
 
     :param stores: The store objects to drive the phase across, in order.
     :param phase: The lifecycle phase to run on each store.
     :returns: Mapping of ``id(store) -> hook result`` for every store
-        that defined the hook (absent stores are omitted). Empty when the
-        flag is off.
+        that defined the hook; absent stores are omitted.
     """
-    if not env_var_is_truthy(LIFECYCLE_HOOKS_ENV_VAR):
-        return {}
-
     results: dict[int, bool | None] = {}
     for store in stores:
         outcome = await _invoke_one(store, phase)
@@ -172,7 +146,6 @@ def _defines_hook(store: Any, phase: LifecyclePhase) -> bool:  # type: ignore[ex
 
 
 __all__ = [
-    "LIFECYCLE_HOOKS_ENV_VAR",
     "LifecyclePhase",
     "StoreLifecycleMixin",
     "run_store_lifecycle",
