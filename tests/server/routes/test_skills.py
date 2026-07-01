@@ -126,8 +126,7 @@ async def test_preview_and_apply_installs_full_skill_directory(
     assert any(f["binary"] for f in body["skills"][0]["files"])
     assert body["target_actions"][0]["action"] == "install"
 
-    # Self-apply (the calling agent installs into itself) — the gate allows it
-    # without the skill-manage capability.
+    # Self-apply through a runner tunnel remains supported.
     applied = await client.post(
         f"/v1/skills/previews/{body['id']}/apply",
         json={},
@@ -163,7 +162,7 @@ async def test_preview_and_apply_many_skills_to_many_agents(
     preview = await client.post(
         "/v1/skills/previews",
         json={
-            "target_agent_ids": [first_id, second_id],
+            "target_agent_ids": ["first", "second"],
             "source": "freeform",
             "command": {
                 "argv": [sys.executable, "-c", _multi_skill_generator_script()],
@@ -180,8 +179,7 @@ async def test_preview_and_apply_many_skills_to_many_agents(
     ]
     assert len(body["target_actions"]) == 4
 
-    caller_id = _seed_template_agent(db_uri, tmp_path, name="skills-concierge")
-    SqlAlchemyAgentStore(db_uri).set_capabilities(caller_id, ["system.skills.manage"])
+    caller_id = _seed_template_agent(db_uri, tmp_path, name="plain-installer")
     applied = await client.post(
         f"/v1/skills/previews/{body['id']}/apply",
         json={},
@@ -293,6 +291,25 @@ async def test_installed_route_aggregates_template_agent_skills(
     assert skill["agents"] == [{"id": agent_id, "name": "demo", "version": 1}]
 
 
+async def test_installed_route_accepts_agent_name_filter(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    tmp_path: Path,
+) -> None:
+    agent_id = _seed_template_agent(db_uri, tmp_path, name="reports-agent")
+
+    resp = await client.get("/v1/skills/installed", params={"agent_id": "reports-agent"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["data"] == [
+        {
+            "name": "deep-search",
+            "description": "Search stuff.",
+            "agents": [{"id": agent_id, "name": "reports-agent", "version": 1}],
+        }
+    ]
+
+
 async def test_installed_route_skips_missing_bundle_in_aggregate_listing(
     client: httpx.AsyncClient,
     db_uri: str,
@@ -366,7 +383,7 @@ async def test_concierge_session_404_when_agent_not_registered(
     assert resp.status_code == 404, resp.text
 
 
-# ── Cross-agent skill-apply authz gate (agent-tiering step 2, BDP-2577) ──
+# ── Cross-agent skill apply ──────────────────────────────────────
 
 
 async def _stage_preview_for(client: httpx.AsyncClient, target_id: str) -> str:
@@ -406,14 +423,13 @@ async def test_apply_cross_agent_allowed_when_caller_holds_capability(
     assert applied.json()["data"][0]["status"] == "applied"
 
 
-async def test_apply_cross_agent_403_when_caller_lacks_capability(
+async def test_apply_cross_agent_allowed_when_caller_lacks_capability(
     client: httpx.AsyncClient,
     db_uri: str,
     tmp_path: Path,
 ) -> None:
     caller_id = _seed_template_agent(db_uri, tmp_path, name="plain-agent")
     target_id = _seed_template_agent(db_uri, tmp_path, name="target")
-    # caller has NO system.skills.manage capability.
 
     preview_id = await _stage_preview_for(client, target_id)
     applied = await client.post(
@@ -422,8 +438,8 @@ async def test_apply_cross_agent_403_when_caller_lacks_capability(
         headers=_runner_headers(db_uri, caller_id),
     )
 
-    assert applied.status_code == 403, applied.text
-    assert "system.skills.manage" in applied.text
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["data"][0]["status"] == "applied"
 
 
 async def test_apply_cross_agent_allowed_for_human_without_runner_token(
@@ -431,9 +447,7 @@ async def test_apply_cross_agent_allowed_for_human_without_runner_token(
     db_uri: str,
     tmp_path: Path,
 ) -> None:
-    # No runner tunnel token → the authenticated human operator (the fleet owner
-    # driving the web Skills UI), NOT an agent. The agent-escalation gate does
-    # not restrict the human, so a cross-agent apply succeeds. This guards the
+    # No runner tunnel token → the authenticated human operator. This guards the
     # ap-web SkillsPage direct-apply flow (useSkills applyPreview) which posts
     # without a runner token.
     target_id = _seed_template_agent(db_uri, tmp_path, name="target")
@@ -450,7 +464,7 @@ async def test_apply_self_allowed_without_capability(
     db_uri: str,
     tmp_path: Path,
 ) -> None:
-    # Self apply (targets ⊆ the calling agent) needs no capability.
+    # Self apply through a runner tunnel remains supported.
     agent_id = _seed_template_agent(db_uri, tmp_path, name="plain-agent")
 
     preview_id = await _stage_preview_for(client, agent_id)

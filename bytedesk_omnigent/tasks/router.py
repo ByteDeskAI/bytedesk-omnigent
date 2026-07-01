@@ -16,6 +16,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from omnigent.server.agent_refs import resolve_agent_ref
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -48,6 +49,28 @@ def create_tasks_router(auth_provider: AuthProvider | None = None) -> APIRouter:
     """
     router = APIRouter()
 
+    def _normalize_agent_ref(agent_ref: str, *, missing_ok: bool = False) -> str | None:
+        ref = agent_ref.strip()
+        if not ref:
+            return None if missing_ok else agent_ref
+        try:
+            from omnigent.runtime import get_agent_store
+
+            agent = resolve_agent_ref(get_agent_store(), ref, template_only=True)
+        except Exception as exc:
+            if ref.startswith("ag_"):
+                return ref
+            if missing_ok:
+                return None
+            raise HTTPException(status_code=404, detail="agent not found") from exc
+        if agent is not None:
+            return agent.id
+        if ref.startswith("ag_"):
+            return ref
+        if missing_ok:
+            return None
+        raise HTTPException(status_code=404, detail="agent not found")
+
     @router.get("/tasks")
     async def list_tasks(
         request: Request,
@@ -59,10 +82,14 @@ def create_tasks_router(auth_provider: AuthProvider | None = None) -> APIRouter:
         require_user(request, auth_provider)
         from bytedesk_omnigent.tasks.store import get_task_store
 
+        owner_agent_id = _normalize_agent_ref(owner, missing_ok=True) if owner else None
+        assignee_agent_id = _normalize_agent_ref(assignee, missing_ok=True) if assignee else None
+        if (owner and owner_agent_id is None) or (assignee and assignee_agent_id is None):
+            return JSONResponse({"tasks": []})
         tasks = get_task_store().list_tasks(
             status=status,
-            owner_agent_id=owner,
-            assignee_agent_id=assignee,
+            owner_agent_id=owner_agent_id,
+            assignee_agent_id=assignee_agent_id,
         )
         return JSONResponse({"tasks": [asdict(t) for t in tasks]})
 
@@ -83,9 +110,10 @@ def create_tasks_router(auth_provider: AuthProvider | None = None) -> APIRouter:
             payload=payload,
         )
         if body.owner_agent_id:
+            owner_agent_id = _normalize_agent_ref(body.owner_agent_id)
             get_task_store().claim_task(
                 task_id=task.id,
-                owner_agent_id=body.owner_agent_id,
+                owner_agent_id=owner_agent_id,
             )
             task = get_task_store().get_task(task.id) or task
         return JSONResponse({"task": asdict(task)}, status_code=201)
@@ -121,7 +149,7 @@ def create_tasks_router(auth_provider: AuthProvider | None = None) -> APIRouter:
             payload["prompt"] = body.prompt.strip()
             task = replace(task, payload=payload)
         if body.run_as_agent_id:
-            task = replace(task, owner_agent_id=body.run_as_agent_id)
+            task = replace(task, owner_agent_id=_normalize_agent_ref(body.run_as_agent_id))
         try:
             dispatch = run_task(task, external_key=body.external_key)
         except TaskDispatchError as exc:

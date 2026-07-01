@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from bytedesk_omnigent.scheduler.scheduler import CronTrigger, compute_next_fire
 from omnigent.db.utils import now_epoch
+from omnigent.server.agent_refs import resolve_agent_ref
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -186,6 +187,28 @@ def create_schedules_router(auth_provider: AuthProvider | None = None) -> APIRou
     """Build the schedules admin router."""
     router = APIRouter()
 
+    def _normalize_agent_ref(agent_ref: str, *, missing_ok: bool = False) -> str | None:
+        ref = agent_ref.strip()
+        if not ref:
+            return None if missing_ok else agent_ref
+        try:
+            from omnigent.runtime import get_agent_store
+
+            agent = resolve_agent_ref(get_agent_store(), ref, template_only=True)
+        except Exception as exc:
+            if ref.startswith("ag_"):
+                return ref
+            if missing_ok:
+                return None
+            raise HTTPException(status_code=404, detail="agent not found") from exc
+        if agent is not None:
+            return agent.id
+        if ref.startswith("ag_"):
+            return ref
+        if missing_ok:
+            return None
+        raise HTTPException(status_code=404, detail="agent not found")
+
     @router.post("/schedules/assistant/draft")
     async def draft_cadence(request: Request, body: CadenceDraftBody) -> JSONResponse:
         require_user(request, auth_provider)
@@ -204,7 +227,15 @@ def create_schedules_router(auth_provider: AuthProvider | None = None) -> APIRou
         require_user(request, auth_provider)
         from bytedesk_omnigent.runtime import get_cron_scheduler
 
-        schedules = get_cron_scheduler().list_triggers(agent_id=agent_id, enabled=enabled)
+        normalized_agent_id = (
+            _normalize_agent_ref(agent_id, missing_ok=True) if agent_id is not None else None
+        )
+        if agent_id is not None and normalized_agent_id is None:
+            return JSONResponse({"schedules": []})
+        schedules = get_cron_scheduler().list_triggers(
+            agent_id=normalized_agent_id,
+            enabled=enabled,
+        )
         return JSONResponse({"schedules": [_trigger_to_dict(s) for s in schedules]})
 
     @router.post("/schedules")
@@ -223,6 +254,7 @@ def create_schedules_router(auth_provider: AuthProvider | None = None) -> APIRou
             )
         if body.task_id and get_task_store().get_task(body.task_id) is None:
             raise HTTPException(status_code=404, detail="task not found")
+        resolved_agent_id = _normalize_agent_ref(body.agent_id)
 
         next_fire_at = _epoch(body.start_at) if body.start_at else None
         if schedule_kind == "once":
@@ -237,13 +269,13 @@ def create_schedules_router(auth_provider: AuthProvider | None = None) -> APIRou
             "title": body.title.strip(),
             "task_id": body.task_id,
             "prompt": body.prompt.strip() if body.prompt else None,
-            "run_as_agent_id": body.agent_id,
+            "run_as_agent_id": resolved_agent_id,
             "timezone": body.timezone,
         }
         key = f"schedule:{_slug(body.title)}:{uuid.uuid4().hex[:8]}"
         try:
             trigger = get_cron_scheduler().register_trigger(
-                agent_id=body.agent_id,
+                agent_id=resolved_agent_id,
                 key=key,
                 schedule_kind=schedule_kind,
                 schedule_expr=schedule_expr,
@@ -280,6 +312,11 @@ def create_schedules_router(auth_provider: AuthProvider | None = None) -> APIRou
         require_user(request, auth_provider)
         from bytedesk_omnigent.runtime import get_cron_scheduler
 
+        normalized_agent_id = (
+            _normalize_agent_ref(agent_id, missing_ok=True) if agent_id is not None else None
+        )
+        if agent_id is not None and normalized_agent_id is None:
+            return JSONResponse({"occurrences": [], "now": now_epoch()})
         now = datetime.now(tz=UTC)
         start_dt = _parse_iso(start) or now.replace(hour=0, minute=0, second=0, microsecond=0)
         end_dt = _parse_iso(end) or (start_dt + timedelta(days=7))
@@ -289,7 +326,10 @@ def create_schedules_router(auth_provider: AuthProvider | None = None) -> APIRou
             raise HTTPException(status_code=422, detail="end must be after start")
 
         occurrences: list[dict] = []
-        for trigger in get_cron_scheduler().list_triggers(agent_id=agent_id, enabled=True):
+        for trigger in get_cron_scheduler().list_triggers(
+            agent_id=normalized_agent_id,
+            enabled=True,
+        ):
             if len(occurrences) >= limit:
                 break
             occurrences.extend(

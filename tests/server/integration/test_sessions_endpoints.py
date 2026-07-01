@@ -21,15 +21,19 @@ from typing import Any
 import httpx
 import pytest
 
+from omnigent.db.utils import generate_agent_id
 from omnigent.llms.context_window import ModelPricing
 from omnigent.runtime.tool_output import MAX_TOOL_OUTPUT_BYTES
+from omnigent.server.bundles import bundle_location
 from omnigent.spec.types import SkillSpec
+from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
+from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.conversation_store.sqlalchemy_store import (
     SqlAlchemyConversationStore,
 )
 from omnigent.stores.host_store import HostStore
 from omnigent.tools.builtins.load_skill import format_skill_meta_text
-from tests.server.helpers import create_test_agent
+from tests.server.helpers import build_agent_bundle, create_test_agent
 
 pytestmark = pytest.mark.asyncio
 
@@ -80,6 +84,16 @@ async def _create_session(
     resp = await client.post("/v1/sessions", json=payload)
     assert resp.status_code == 201, f"session create failed: {resp.status_code} {resp.text}"
     return resp.json()
+
+
+def _seed_template_agent(db_uri: str, tmp_path, *, name: str) -> dict[str, str]:
+    """Seed a built-in template agent with a real artifact-backed bundle."""
+    agent_id = generate_agent_id()
+    bundle = build_agent_bundle(name=name)
+    location = bundle_location(agent_id, bundle)
+    LocalArtifactStore(str(tmp_path / "artifacts")).put(location, bundle)
+    SqlAlchemyAgentStore(db_uri).create(agent_id, name=name, bundle_location=location)
+    return {"id": agent_id, "name": name}
 
 
 async def _wait_for_idle(
@@ -139,6 +153,20 @@ async def test_create_session_without_title_returns_none(
     assert session["title"] is None
 
 
+async def test_create_session_accepts_template_agent_name(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    tmp_path,
+) -> None:
+    """JSON session create can bind a template agent by stable name."""
+    agent = _seed_template_agent(db_uri, tmp_path, name="chief-of-staff")
+
+    session = await _create_session(client, agent["name"], title="slug create")
+
+    assert session["agent_id"] == agent["id"]
+    assert session["agent_name"] == agent["name"]
+
+
 # ── GET /v1/sessions (list) ──────────────────────────────
 
 
@@ -183,6 +211,23 @@ async def test_list_sessions_filters_by_agent_id(
     ids = {s["id"] for s in data}
     assert s1["id"] in ids
     assert all(s["agent_id"] == a1["id"] for s in data)
+
+
+async def test_list_sessions_agent_id_filter_accepts_template_agent_name(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    tmp_path,
+) -> None:
+    """``agent_id`` filter accepts a template-agent name and normalizes it."""
+    agent = _seed_template_agent(db_uri, tmp_path, name="agent-filter-slug")
+    session = await _create_session(client, agent["id"], title="slug-filter-session")
+
+    resp = await client.get("/v1/sessions", params={"agent_id": agent["name"]})
+
+    assert resp.status_code == 200
+    data = resp.json()["data"]
+    assert {row["id"] for row in data} == {session["id"]}
+    assert data[0]["agent_id"] == agent["id"]
 
 
 async def test_list_sessions_pagination(

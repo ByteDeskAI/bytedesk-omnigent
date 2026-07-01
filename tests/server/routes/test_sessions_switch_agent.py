@@ -40,6 +40,13 @@ class _AgentStore:
         """:returns: The agent if present, else None."""
         return self._agents.get(agent_id)
 
+    def get_by_name(self, name: str) -> Agent | None:
+        """Return a built-in agent by stable name."""
+        for agent in self._agents.values():
+            if agent.name == name and agent.session_id is None:
+                return agent
+        return None
+
     def list(
         self,
         limit: int = 20,
@@ -395,6 +402,32 @@ async def test_switch_same_family_native_carries_history(
     # The origin built-in shares the current agent's bundle → that's the
     # built-in to offer for "Switch back" (NOT the switched-to target).
     assert call["previous_builtin_id"] == "ag_builtin_origin"
+
+
+@pytest.mark.asyncio
+async def test_switch_accepts_target_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The switch target may be addressed by stable built-in agent name."""
+    conv_store = _ConversationStore(conversations={"conv_src": _conv()})
+    agent_store = _AgentStore(
+        {
+            "ag_session_scoped": _CURRENT,
+            "ag_builtin_claude": _BUILTIN_CLAUDE,
+            "ag_builtin_origin": _BUILTIN_ORIGIN,
+        }
+    )
+    _patch_family_helpers(monkeypatch, same_family=True, native=True, labels={})
+    client = TestClient(_build_app(conv_store, agent_store))
+
+    resp = client.post(
+        "/v1/sessions/conv_src/switch-agent",
+        json={"agent_id": "claude-native-ui"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    call = conv_store.switch_calls[0]
+    assert call["new_agent_bundle_location"] == "bundle/claude-native"
 
 
 @pytest.mark.asyncio

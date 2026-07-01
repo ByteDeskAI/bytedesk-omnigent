@@ -24,7 +24,9 @@ from bytedesk_omnigent.workforce import (
     workforce_tool_catalog,
 )
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.server.agent_refs import resolve_agent_ref
 from omnigent.server.auth import AuthProvider
+from omnigent.stores import AgentStore
 from omnigent.stores.permission_store import PermissionStore
 
 
@@ -147,8 +149,33 @@ def _scope_response(scope_kind: str, scope_id: str | None) -> dict[str, Any]:
 def create_workforce_router(
     auth_provider: AuthProvider | None = None,
     permission_store: PermissionStore | None = None,
+    agent_store: AgentStore | None = None,
 ) -> APIRouter:
     router = APIRouter()
+
+    def _normalize_agent_ref(agent_ref: str) -> str:
+        ref = agent_ref.strip()
+        if not ref:
+            return agent_ref
+        try:
+            store = agent_store
+            if store is None:
+                from omnigent.runtime import get_agent_store
+
+                store = get_agent_store()
+            agent = resolve_agent_ref(store, ref, template_only=True)
+        except Exception as exc:
+            if ref.startswith("ag_"):
+                return ref
+            raise OmnigentError(
+                f"agent not found: {agent_ref!r}",
+                code=ErrorCode.NOT_FOUND,
+            ) from exc
+        if agent is not None:
+            return agent.id
+        if ref.startswith("ag_"):
+            return ref
+        raise OmnigentError(f"agent not found: {agent_ref!r}", code=ErrorCode.NOT_FOUND)
 
     @router.get("/workforce/scopes")
     async def list_scopes(request: Request) -> JSONResponse:
@@ -444,7 +471,8 @@ def create_workforce_router(
         agent_id: str,
     ) -> JSONResponse:
         await _require_admin(request, auth_provider, permission_store)
-        effective = effective_workforce_for_agent(agent_id)
+        resolved_agent_id = _normalize_agent_ref(agent_id)
+        effective = effective_workforce_for_agent(resolved_agent_id)
         if effective.get("found") is False:
             raise OmnigentError("agent not found", code=ErrorCode.NOT_FOUND)
         return JSONResponse(effective)
@@ -456,13 +484,14 @@ def create_workforce_router(
         body: InstructionBody,
     ) -> JSONResponse:
         await _require_admin(request, auth_provider, permission_store)
-        effective = effective_workforce_for_agent(agent_id)
+        resolved_agent_id = _normalize_agent_ref(agent_id)
+        effective = effective_workforce_for_agent(resolved_agent_id)
         if effective.get("found") is False:
             raise OmnigentError("agent not found", code=ErrorCode.NOT_FOUND)
         store = get_workforce_store()
         instruction = store.set_instruction(
             scope_kind="agent",
-            scope_id=agent_id,
+            scope_id=resolved_agent_id,
             body=body.body,
             enabled=body.enabled,
             metadata=body.metadata,
@@ -470,7 +499,7 @@ def create_workforce_router(
         return JSONResponse(
             {
                 "instruction": instruction.to_dict(),
-                "effective": effective_workforce_for_agent(agent_id, store=store),
+                "effective": effective_workforce_for_agent(resolved_agent_id, store=store),
             }
         )
 
@@ -483,10 +512,11 @@ def create_workforce_router(
         await _require_admin(request, auth_provider, permission_store)
         if body.item_kind not in {"connector", "skill", "tool"}:
             raise OmnigentError("unsupported override item kind", code=ErrorCode.INVALID_INPUT)
+        resolved_agent_id = _normalize_agent_ref(agent_id)
         store = get_workforce_store()
         try:
             override = store.upsert_agent_override(
-                agent_id=agent_id,
+                agent_id=resolved_agent_id,
                 item_kind=body.item_kind,
                 item_key=body.item_key,
                 enabled=body.enabled,
@@ -496,15 +526,15 @@ def create_workforce_router(
             raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
         if body.reconcile:
             if body.item_kind == "connector":
-                reconcile_connectors_for_agent(agent_id, store=store)
+                reconcile_connectors_for_agent(resolved_agent_id, store=store)
             elif body.item_kind == "skill":
-                reconcile_skills_for_agent(agent_id, store=store)
+                reconcile_skills_for_agent(resolved_agent_id, store=store)
             else:
-                reconcile_tools_for_agent(agent_id, store=store)
+                reconcile_tools_for_agent(resolved_agent_id, store=store)
         return JSONResponse(
             {
                 "override": override.to_dict(),
-                "effective": effective_workforce_for_agent(agent_id, store=store),
+                "effective": effective_workforce_for_agent(resolved_agent_id, store=store),
             }
         )
 

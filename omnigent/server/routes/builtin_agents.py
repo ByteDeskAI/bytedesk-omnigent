@@ -28,6 +28,7 @@ from omnigent.blueprints import blueprint_to_graph
 from omnigent.entities import Automation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime.agent_cache import AgentCache
+from omnigent.server.agent_refs import require_agent_ref
 from omnigent.server.auth import AuthProvider
 from omnigent.server.routes._auth_helpers import require_user as _require_user
 from omnigent.server.schemas import (
@@ -215,12 +216,7 @@ def create_builtin_agents_router(
         :raises OmnigentError: 404 when the agent or blueprint is absent.
         """
         _require_user(request, auth_provider)
-        agent = agent_store.get(agent_id)
-        if agent is None:
-            raise OmnigentError(
-                f"Agent not found: {agent_id!r}",
-                code=ErrorCode.NOT_FOUND,
-            )
+        agent = require_agent_ref(agent_store, agent_id, template_only=True)
         loaded = agent_cache.load(
             agent.id,
             agent.bundle_location,

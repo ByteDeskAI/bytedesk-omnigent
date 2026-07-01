@@ -1697,7 +1697,8 @@ def _build_session_create_body(
     are included when provided; the message becomes the child's first
     queued user turn via ``initial_items``.
 
-    :param agent_id: The existing agent to launch, e.g. ``"ag_abc123"``.
+    :param agent_id: The existing agent id or template name to launch,
+        e.g. ``"ag_abc123"`` or ``"chief-of-staff"``.
     :param conversation_id: The caller's session id — the forced parent.
     :param title: Optional session label; included only when a non-empty
         string.
@@ -1740,7 +1741,7 @@ def _finalize_created_session(
 
     :param data: The :class:`SessionResponse` JSON from the create call.
     :param conversation_id: The caller (parent) session id.
-    :param agent_id: The launched agent id, e.g. ``"ag_abc123"``.
+    :param agent_id: The launched durable agent id, e.g. ``"ag_abc123"``.
     :param title: The caller-supplied title (or non-str when absent).
     :param publish_event: Callback that enqueues an SSE event on the
         caller's outbound queue; ``None`` for in-process callers.
@@ -1873,10 +1874,13 @@ async def _execute_session_create(
     data = resp.json()
     if not isinstance(data.get("id"), str) or not data["id"]:
         return json.dumps({"error": "server did not return a child session id"})
+    launched_agent_id = (
+        data.get("agent_id") if isinstance(data.get("agent_id"), str) else str(agent_id)
+    )
     return _finalize_created_session(
         data,
         conversation_id=conversation_id,
-        agent_id=str(agent_id),
+        agent_id=launched_agent_id,
         title=args.get("title"),
         publish_event=publish_event,
     )
@@ -3303,6 +3307,8 @@ async def _execute_skill_acq_tool(
             targets = [
                 {
                     "id": a.get("id"),
+                    "agent_ref": a.get("name") or a.get("id"),
+                    "name": a.get("name"),
                     "display_name": a.get("display_name"),
                     "department": a.get("department"),
                 }
