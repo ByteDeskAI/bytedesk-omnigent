@@ -883,10 +883,9 @@ class SqlAlchemyConversationStore(ConversationStore):
             objects in relevance order.
         """
         with self._session() as session:
-            # Dialect-specific search: SQLite has FTS5 virtual tables
-            # (MATCH + rank), PostgreSQL doesn't. ILIKE on the JSON
-            # data column is a functional fallback. Proper tsvector
-            # indexing is a future optimization (tracked in GAPS.md).
+            # Dialect-specific search: SQLite uses FTS5 (MATCH + rank);
+            # PostgreSQL uses plainto_tsquery against the GIN index on
+            # search_text (bdp2610schemaopt).
             is_sqlite = self._engine.dialect.name == "sqlite"
             if is_sqlite:
                 if conversation_id is not None:
@@ -1352,14 +1351,14 @@ class SqlAlchemyConversationStore(ConversationStore):
                         .distinct()
                     )
                 else:
+                    tsvector = func.to_tsvector(
+                        "english",
+                        func.coalesce(SqlConversationItem.search_text, ""),
+                    )
+                    tsquery = func.plainto_tsquery("english", search_query)
                     content_match = SqlConversation.id.in_(
                         select(SqlConversationItem.conversation_id)
-                        .where(
-                            text(
-                                "to_tsvector('english', coalesce(search_text, '')) "
-                                "@@ plainto_tsquery('english', :search_query)"
-                            ).bindparams(search_query=search_query)
-                        )
+                        .where(tsvector.op("@@")(tsquery))
                         .distinct()
                     )
                 stmt = stmt.where(or_(title_match, content_match))
