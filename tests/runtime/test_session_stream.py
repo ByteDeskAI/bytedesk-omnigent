@@ -758,3 +758,155 @@ async def test_on_subscribed_failure_does_not_block_live_tail() -> None:
         assert event == {"type": "live", "i": 1}
     finally:
         await gen.aclose()
+
+
+# ── Cross-replica NATS fan-out: apply_remote_publish (BDP-2621, ADR-0158) ──
+
+
+@pytest.mark.asyncio
+async def test_apply_remote_publish_drops_when_no_local_subscriber() -> None:
+    """A remote publish for a conversation with no local subscriber is a no-op.
+
+    The replica running a browser's SSE connection is the only place a remote
+    publish should materialize; a replica with no subscriber for that
+    conversation must NOT accumulate ``_seq``/``_replay`` state for it, or every
+    replica would grow unbounded per-conversation bookkeeping for conversations
+    it never serves.
+    """
+    session_stream.apply_remote_publish("conv_remote_nosub", 5, {"type": "e", "i": 1})
+    assert "conv_remote_nosub" not in session_stream._seq
+    assert "conv_remote_nosub" not in session_stream._replay
+
+
+@pytest.mark.asyncio
+async def test_apply_remote_publish_delivers_and_advances_seq() -> None:
+    """A remote publish with a fresh seq is delivered locally and advances state.
+
+    This is the fix for the 2-replica no-affinity bug: the relay task ran on a
+    peer replica and published there; this replica holds the SSE subscriber, so
+    the fanned-out event arrives via ``apply_remote_publish`` and must reach the
+    local queue, updating the replay ring + seq cursor exactly like a local
+    ``publish``.
+    """
+    task = asyncio.create_task(_collect("conv_remote", expected=1))
+    await asyncio.sleep(0)  # let the subscriber register its slot
+    session_stream.apply_remote_publish("conv_remote", 3, {"type": "e", "i": 1})
+    received = await asyncio.wait_for(task, timeout=2.0)
+    assert received == [{"type": "e", "i": 1}]
+    assert session_stream._seq["conv_remote"] == 3
+    assert list(session_stream._replay["conv_remote"]) == [(3, {"type": "e", "i": 1})]
+
+
+@pytest.mark.asyncio
+async def test_apply_remote_publish_drops_stale_or_duplicate_seq() -> None:
+    """A remote publish whose seq is <= the current cursor is dropped (dedup).
+
+    The origin replica's own local ``publish`` always reaches its subscribers
+    before a NATS round-trip could echo back, so a same-or-lower seq arriving
+    remotely is either that echo or a stale redelivery. It must not be
+    re-delivered to the live subscriber nor re-appended to the replay ring.
+    """
+    gen = session_stream.subscribe("conv_dedup")
+    try:
+        fut = asyncio.ensure_future(anext(gen))
+        await asyncio.sleep(0)  # register the slot
+        session_stream.apply_remote_publish("conv_dedup", 5, {"type": "e", "i": 5})
+        first = await asyncio.wait_for(fut, timeout=1.0)
+        assert first == {"type": "e", "i": 5}
+        assert session_stream._seq["conv_dedup"] == 5
+
+        # A duplicate (seq == cursor) and a stale (seq < cursor) are both dropped.
+        session_stream.apply_remote_publish("conv_dedup", 5, {"type": "e", "i": "dup"})
+        session_stream.apply_remote_publish("conv_dedup", 3, {"type": "e", "i": "stale"})
+        assert session_stream._seq["conv_dedup"] == 5
+        assert list(session_stream._replay["conv_dedup"]) == [(5, {"type": "e", "i": 5})]
+
+        # Nothing further is delivered to the live subscriber.
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(anext(gen), timeout=0.2)
+    finally:
+        await gen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_apply_remote_publish_accepts_any_strictly_greater_seq() -> None:
+    """Dedup accepts any seq strictly greater than the cursor (not contiguous).
+
+    Contiguity isn't guaranteed across replicas (this replica may only ever see
+    a subset of a conversation's events), so the rule is "strictly greater",
+    not "exactly current + 1".
+    """
+    gen = session_stream.subscribe("conv_gap")
+    try:
+        fut = asyncio.ensure_future(anext(gen))
+        await asyncio.sleep(0)
+        session_stream.apply_remote_publish("conv_gap", 2, {"type": "e", "i": 2})
+        assert (await asyncio.wait_for(fut, timeout=1.0)) == {"type": "e", "i": 2}
+        # seq jumps 2 -> 9 (a gap): still accepted because 9 > 2.
+        fut2 = asyncio.ensure_future(anext(gen))
+        await asyncio.sleep(0)
+        session_stream.apply_remote_publish("conv_gap", 9, {"type": "e", "i": 9})
+        assert (await asyncio.wait_for(fut2, timeout=1.0)) == {"type": "e", "i": 9}
+        assert session_stream._seq["conv_gap"] == 9
+    finally:
+        await gen.aclose()
+
+
+def test_publish_invokes_fanout_remote(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every non-suppressed ``publish`` fans the event out to peer replicas.
+
+    A regression that drops the ``_fanout_remote`` call re-opens the 2-replica
+    bug: an SSE connection on a peer replica would only ever see heartbeats.
+    """
+    calls: list[tuple[str, int, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        session_stream,
+        "_fanout_remote",
+        lambda cid, seq, event: calls.append((cid, seq, event)),
+    )
+    session_stream.publish("conv_fr", {"type": "e", "i": 1})
+    # First publish for this conversation → seq 1, forwarded with that seq.
+    assert calls == [("conv_fr", 1, {"type": "e", "i": 1})]
+
+
+def test_publish_does_not_fanout_suppressed_duplicate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A withheld committed-duplicate delta is not fanned out to peers either.
+
+    The suppress verdict short-circuits ``publish`` before the fan-out; a peer
+    replica must not receive a duplicate the origin already dropped locally.
+    """
+    from omnigent.runtime import inflight_text
+
+    inflight_text.reset_for_tests()
+    calls: list[tuple[str, int, dict[str, Any]]] = []
+    monkeypatch.setattr(
+        session_stream,
+        "_fanout_remote",
+        lambda cid, seq, event: calls.append((cid, seq, event)),
+    )
+    cid = "conv_fr_suppress"
+    session_stream.publish(
+        cid,
+        {
+            "type": "response.output_item.done",
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "id": "ci_1",
+                "content": [{"type": "output_text", "text": "Hi there"}],
+            },
+        },
+    )
+    # Matches the committed item → suppressed → must NOT be fanned out.
+    session_stream.publish(
+        cid,
+        {
+            "type": "response.output_text.delta",
+            "delta": "Hi there",
+            "message_id": "m1",
+            "index": 0,
+            "final": True,
+        },
+    )
+    assert [c[0] for c in calls] == [cid]  # only the committed item forwarded
+    inflight_text.reset_for_tests()

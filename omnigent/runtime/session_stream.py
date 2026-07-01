@@ -129,6 +129,84 @@ def publish(conversation_id: str, event: dict[str, Any]) -> None:
         subs = list(_subscribers.get(conversation_id, ()))
     for queue, loop in subs:
         loop.call_soon_threadsafe(queue.put_nowait, (seq, event))
+    # Cross-replica fan-out (BDP-2621, ADR-0158): omnigent-server runs multiple
+    # replicas with no sessionAffinity, so a browser's SSE connection can land on
+    # a different replica than the one running this session's relay. Mirror the
+    # event onto the coordination backplane so a peer replica holding the
+    # subscriber can deliver it. Runs AFTER local fan-out and only for events
+    # that were NOT suppressed above (suppressed duplicates already returned).
+    _fanout_remote(conversation_id, seq, event)
+
+
+def _fanout_remote(conversation_id: str, seq: int, event: dict[str, Any]) -> None:
+    """
+    Best-effort mirror of a published event to peer replicas.
+
+    Deferred import of the coordination producer (matches
+    :mod:`omnigent.runtime.pending_elicitations`) so this module never imports
+    the coordination layer at load time — avoiding any import cycle. A no-op
+    when no coordination backplane is active (single-replica / in-process
+    posture), and defensively swallows any error so the local publish hot path
+    can never be broken by the fan-out side-channel.
+
+    :param conversation_id: Conversation the event was published on.
+    :param seq: The per-conversation monotonic seq assigned by :func:`publish`.
+    :param event: The event dict, forwarded verbatim.
+    """
+    try:
+        from omnigent.coordination.lifecycle import fanout_session_publish
+
+        fanout_session_publish(conversation_id, seq, event)
+    except Exception:  # fan-out must never break local delivery
+        _logger.debug(
+            "session_stream remote fan-out failed for %s",
+            conversation_id,
+            exc_info=True,
+        )
+
+
+def apply_remote_publish(conversation_id: str, seq: int, event: dict[str, Any]) -> None:
+    """
+    Deliver an event that originated on a PEER replica to local subscribers.
+
+    Called ONLY by the coordination session-stream fan-out listener (see
+    :func:`omnigent.coordination.lifecycle._session_stream_fanout_listener`),
+    never by application code — application code always uses :func:`publish`,
+    which both fans out locally and mirrors to peers.
+
+    Delivery + dedup, all under ``_lock`` for the read/compare/update, then the
+    thread-safe enqueue outside it (same shape as :func:`publish`):
+
+    * If this replica has no local subscriber for ``conversation_id``, return
+      immediately without touching ``_seq``/``_replay`` — a replica must not
+      accumulate per-conversation bookkeeping for conversations it never serves.
+    * If ``seq <= _seq[conversation_id]`` (the current cursor), drop it as a
+      duplicate or stale redelivery. The origin replica's own local
+      :func:`publish` always reaches its subscribers before a NATS round-trip
+      could echo the same event back, so a same-or-lower seq arriving remotely
+      is never new. The rule is "accept any seq STRICTLY GREATER than the
+      cursor" — not "exactly cursor + 1" — because this replica may only ever
+      observe a subset of a conversation's events, so contiguity is not
+      guaranteed and a gap must not wedge the stream.
+    * Otherwise advance the cursor, append to the bounded replay ring (so a
+      Last-Event-ID reconnect on THIS replica can still resume), and enqueue the
+      ``(seq, event)`` tuple onto every local subscriber queue.
+
+    :param conversation_id: Conversation the peer published on.
+    :param seq: The peer-assigned per-conversation monotonic seq.
+    :param event: The event dict to deliver verbatim.
+    """
+    with _lock:
+        subs = _subscribers.get(conversation_id)
+        if not subs:
+            return
+        if seq <= _seq.get(conversation_id, 0):
+            return
+        _seq[conversation_id] = seq
+        _replay.setdefault(conversation_id, deque(maxlen=_REPLAY_WINDOW)).append((seq, event))
+        targets = list(subs)
+    for queue, loop in targets:
+        loop.call_soon_threadsafe(queue.put_nowait, (seq, event))
 
 
 def close(conversation_id: str) -> None:
