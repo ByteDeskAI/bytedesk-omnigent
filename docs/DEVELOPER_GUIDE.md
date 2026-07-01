@@ -400,9 +400,10 @@ heartbeat plus DI service overrides.
 The SDK ships a small, stdlib-only DI container (`omnigent/sdk/di.py`, ported
 from `prototype/omnigent_demo/kernel/di.py`). It is the
 *extension-author-facing* container — separate from the internal
-`omnigent.server.container` composition-root container (which is gated behind
-`OMNIGENT_USE_DI_CONTAINER`). You rarely touch the `Container` directly; you use
-`@provides` + typed params and let the container inject.
+`omnigent.server.container` composition-root container. The server container is
+always on for internal runtime composition; the SDK container is for extension
+authors. You rarely touch the SDK `Container` directly; you use `@provides` +
+typed params and let the container inject.
 
 It gives your extension:
 

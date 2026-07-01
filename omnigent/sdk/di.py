@@ -3,10 +3,10 @@
 Ported from the runnable prototype (``prototype/omnigent_demo/kernel/di.py``).
 This is the *extension-author-facing* DI container the :mod:`omnigent.sdk`
 facade exposes; it is intentionally separate from the internal
-``omnigent.server.container`` core container (which is gated behind
-``OMNIGENT_USE_DI_CONTAINER`` and serves the composition root). The SDK
-container is a small, stdlib-only, general-purpose resolver an extension author
-uses to wire its own services and have seam factories method-injected.
+``omnigent.server.container`` core container, which serves the always-on server
+composition root. The SDK container is a small,
+stdlib-only, general-purpose resolver an extension author uses to wire its own
+services and have seam factories method-injected.
 
 It gives an extension:
 

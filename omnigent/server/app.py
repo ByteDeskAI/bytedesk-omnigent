@@ -36,9 +36,7 @@ from omnigent.runtime.agent_cache import AgentCache
 from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
 from omnigent.server.auth import AuthProvider
 from omnigent.server.managed_hosts import ManagedSandboxConfig
-from omnigent.server.mcp_pool import ServerMcpPool
 from omnigent.server.performance_metrics import (
-    ServerMetricsOtelPublisher,
     ServerPerformanceMetrics,
     set_request_duration_for_access_log,
 )
@@ -934,59 +932,26 @@ def create_app(
                 cookie_secret=_accounts_cfg.cookie_secret,
             )
 
-    from omnigent.runner.control_registry import RunnerControlRegistry
-    from omnigent.runner.routing import RunnerRouter
-    from omnigent.server.auth import env_var_is_truthy as _env_truthy_di
-    from omnigent.server.host_registry import HostRegistry, RunnerExitReports
-
-    # BDP-2368 (core-refactor spine, capstone): behind OMNIGENT_USE_DI_CONTAINER
-    # (default OFF), resolve the process-singleton composition root from the
-    # ``dependency-injector`` ``Core`` container instead of constructing it
-    # inline below. Each container provider is a Singleton resolved once per
-    # built app, so the resolved object graph (and the resulting ``app.state``)
-    # is identical to the inline path — only the construction site moves. With
-    # the flag off the container module is never imported and the app is
-    # byte-identical to today. ``managed_launches`` is also produced by the
-    # container so the same object reaches ``app.state.managed_launches`` below.
-    _di_container = None
     from omnigent.fabric.credentials import create_runner_credential_store_from_env
+    from omnigent.server.container import build_core_container
 
     runner_credential_store = create_runner_credential_store_from_env()
+    _di_container = build_core_container(conversation_store, runner_credential_store)
+    runner_control_registry = _di_container.runner_control_registry()
+    runner_router = _di_container.runner_router()
+    host_registry = _di_container.host_registry()
+    # Shared between the host tunnel and the runner status endpoint.
+    runner_exit_reports = _di_container.runner_exit_reports()
+    # AP-server-side MCP proxy pool. Manages connections to agents' external
+    # MCP servers on behalf of ``POST /v1/sessions/{id}/mcp``. Created here
+    # before lifespan and route registration so the same object is closed by
+    # lifespan and held by the router closure.
+    _mcp_pool = _di_container.mcp_pool()
+    server_metrics = _di_container.server_metrics()
+    server_metrics_otel = _di_container.server_metrics_otel()
+    from omnigent.server.communication_composition import set_server_communication_services
 
-    if _env_truthy_di("OMNIGENT_USE_DI_CONTAINER"):
-        from omnigent.server.container import build_core_container
-
-        _di_container = build_core_container(conversation_store, runner_credential_store)
-        runner_control_registry = _di_container.runner_control_registry()
-        runner_router = _di_container.runner_router()
-        host_registry = _di_container.host_registry()
-        # Shared between the host tunnel and the runner status endpoint.
-        runner_exit_reports = _di_container.runner_exit_reports()
-        _mcp_pool = _di_container.mcp_pool()
-        server_metrics = _di_container.server_metrics()
-        server_metrics_otel = _di_container.server_metrics_otel()
-    else:
-        runner_control_registry = RunnerControlRegistry()
-        runner_router = RunnerRouter(
-            registry=runner_control_registry,
-            conversation_store=conversation_store,
-            credential_store=runner_credential_store,
-        )
-        host_registry = HostRegistry()
-        # Shared between the host tunnel (which records ``host.runner_exited``
-        # reports from daemons) and the runner status endpoint (which surfaces
-        # them to clients waiting for a launched runner to connect).
-        runner_exit_reports = RunnerExitReports()
-        # AP-server-side MCP proxy pool. Manages connections to agents'
-        # external MCP servers on behalf of the
-        # ``POST /v1/sessions/{id}/mcp`` endpoint. Created here (before the
-        # lifespan and before the sessions router is registered) so the same
-        # object is closed by the lifespan and held by the router closure.
-        # ``ServerMcpPool.__init__`` is synchronous and safe to call outside
-        # a running event loop.
-        _mcp_pool = ServerMcpPool()
-        server_metrics = ServerPerformanceMetrics()
-        server_metrics_otel = ServerMetricsOtelPublisher()
+    set_server_communication_services(_di_container.communication_services())
 
     # BDP-2437: assemble the principal composite now that the runner control
     # registry exists. The configured provider stays the ``_base`` (so
@@ -1108,21 +1073,10 @@ def create_app(
 
         _ensure_default_agents(agent_store, artifact_store, agent_cache)
 
-        # BDP-2374: run pluggable-seam extension discovery ONCE, now that the
-        # stores are wired. The seam modules deliberately do NOT discover at
-        # import (FastAPI-heavy entry-point extensions must stay off the runner
-        # hot path), so discovery is a server-startup concern. Error-isolated
-        # inside the helper — a bad extension can never break boot.
-        # BDP-2368: when the DI container is active, route the (single) startup
-        # discovery through the container's startup hook so the composition root
-        # owns the concern; the hook delegates to the SAME
-        # ``discover_all_extensions`` — discovery is not duplicated.
-        if _di_container is not None:
-            _di_container.run_startup_discovery()
-        else:
-            from omnigent.kernel.pluggable.manifest import discover_all_extensions
-
-            discover_all_extensions()
+        # BDP-2374/2368: run pluggable-seam extension discovery ONCE through
+        # the always-on composition root. The hook delegates to the SAME
+        # ``discover_all_extensions`` helper; discovery is not duplicated.
+        _di_container.run_startup_discovery()
 
         # BDP-2506: the ``tools`` builtin registry is not a SEAMS row, so its
         # extension merge is driven here at the server composition root (not at
@@ -1351,17 +1305,10 @@ def create_app(
     # racing the provision can rendezvous instead of failing with
     # "no runner bound". Always wired — cheap, and post_event probes
     # it regardless of whether managed hosts are configured.
-    from omnigent.server.managed_hosts import ManagedLaunchTracker
-
-    # BDP-2368: resolve from the DI container when active (Singleton), else
-    # construct inline — same object either way.
-    app.state.managed_launches = (
-        _di_container.managed_launches() if _di_container is not None else ManagedLaunchTracker()
-    )
+    app.state.managed_launches = _di_container.managed_launches()
     app.state.server_metrics = server_metrics
     app.state.server_metrics_otel = server_metrics_otel
-    # BDP-2368: expose the DI container (or None) for diagnostics and the
-    # boot-parity test; readers off ``app.state`` are unchanged regardless.
+    # BDP-2368/Phase 2: expose the always-on DI container for diagnostics.
     app.state.di_container = _di_container
     from omnigent.server.auth import env_var_is_truthy
 

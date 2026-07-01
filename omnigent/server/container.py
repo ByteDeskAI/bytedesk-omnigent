@@ -9,14 +9,11 @@ and route-factory arguments. BDP-2327 introduced :class:`ServiceRegistry` as a
 typed *record* of the wired instances; this module goes one step further and
 makes the container the **producer** of those instances with real lifetimes.
 
-:class:`Core` is a ``dependency-injector`` :class:`DeclarativeContainer`. It is
-introduced behind ``OMNIGENT_USE_DI_CONTAINER`` (default OFF). When the flag is
-OFF, ``create_app`` builds every singleton inline exactly as it does today and
-this module is never imported — the running server is byte-identical. When the
-flag is ON, ``create_app`` resolves the *same* singletons from the container;
-because each provider is a ``Singleton`` resolved once per built app, the
-resulting ``app.state`` holds the identical object graph (same shapes, same
-wiring) — only the construction site moves.
+:class:`Core` is a ``dependency-injector`` :class:`DeclarativeContainer`.
+``create_app`` resolves its process-singleton services from the container
+unconditionally; because each provider is a ``Singleton`` resolved once per
+built app, ``app.state`` holds the same object graph the former inline path
+constructed, but the construction site is now centralized.
 
 Lifetimes
 ---------
@@ -37,15 +34,14 @@ Lifetimes
 
 Startup hook
 ------------
-:meth:`Core.run_startup_discovery` calls the EXISTING
+The ``run_startup_discovery`` provider calls the EXISTING
 :func:`omnigent.kernel.pluggable.manifest.discover_all_extensions` — discovery is not
-duplicated here. ``create_app`` already invokes that function from its lifespan;
-when the DI path is active the call is simply routed through the container so
-the container owns the one composition-root startup concern.
+duplicated here. ``create_app`` routes the call through the container so the
+composition root owns the one startup-discovery concern.
 
 This module imports ``dependency_injector`` (a Cython C-extension) and the
-server service modules; it is therefore a **server-only** import, gated at the
-``create_app`` call site, and never reached on the runner hot path.
+server service modules; it is therefore a **server-only** import and never
+reached on the runner hot path.
 """
 
 from __future__ import annotations
@@ -58,6 +54,7 @@ from dependency_injector import containers, providers
 
 from omnigent.runner.control_registry import RunnerControlRegistry
 from omnigent.runner.routing import RunnerRouter
+from omnigent.server.communication_composition import build_server_communication_services
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
 from omnigent.server.managed_hosts import ManagedLaunchTracker
 from omnigent.server.mcp_pool import ServerMcpPool
@@ -65,6 +62,13 @@ from omnigent.server.performance_metrics import (
     ServerMetricsOtelPublisher,
     ServerPerformanceMetrics,
 )
+
+
+def _run_startup_discovery() -> None:
+    """Run the composition-root startup hook: extension discovery."""
+    from omnigent.kernel.pluggable.manifest import discover_all_extensions
+
+    discover_all_extensions()
 
 
 class Core(containers.DeclarativeContainer):
@@ -113,6 +117,10 @@ class Core(containers.DeclarativeContainer):
 
     managed_launches = providers.Singleton(ManagedLaunchTracker)
 
+    communication_services = providers.Singleton(build_server_communication_services)
+
+    run_startup_discovery = providers.Callable(_run_startup_discovery)
+
     # ── Scoped seam (request-bound) ─────────────────────────────────────
     # Deliberately empty stub. No request-lifetime dependency is constructed
     # by ``create_app`` today (the per-request MCP manager / tool-exec context
@@ -120,19 +128,6 @@ class Core(containers.DeclarativeContainer):
     # behavior-neutral. :func:`request_scope` provides the reset mechanism a
     # future ``providers.Resource`` / ``ContextLocalSingleton`` request-bound
     # provider would hook into; see the module docstring "Scoped" note.
-
-    def run_startup_discovery(self) -> None:
-        """Run the composition-root startup hook: extension discovery.
-
-        Delegates to the EXISTING
-        :func:`omnigent.kernel.pluggable.manifest.discover_all_extensions` — the one
-        place discovery is triggered — rather than duplicating it. Called from
-        ``create_app``'s lifespan when the DI path is active.
-        """
-        from omnigent.kernel.pluggable.manifest import discover_all_extensions
-
-        discover_all_extensions()
-
 
 @contextmanager
 def request_scope(container: Core) -> Iterator[Core]:

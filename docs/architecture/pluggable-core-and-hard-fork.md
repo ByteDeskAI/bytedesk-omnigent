@@ -34,7 +34,7 @@ Converted to registries/strategies across this epic (BDP-2344): harness identity
 
 **Capability manifest:** `GET /v1/_capabilities` enumerates the live seams (name, active impl, alternatives, override env) — the browser-visible surface of the framework.
 
-**Composition root:** a `dependency-injector` container (`omnigent/server/container.py`, `OMNIGENT_USE_DI_CONTAINER`, default-OFF, boot-parity proven; abi3 wheels resolve on amd64+arm64).
+**Composition root:** an always-on `dependency-injector` container (`omnigent/server/container.py`; abi3 wheels resolve on amd64+arm64) for internal server runtime services. The SDK DI container remains separate and extension-author-facing.
 
 ## 4. Strong typing
 
