@@ -370,6 +370,7 @@ _ASYNC_INBOX_TOOLS = frozenset(
 # continues child sessions. The read-only observability helpers
 # (peek/list/close) dispatch via ``_SESSION_QUERY_TOOLS`` below.
 _SUBAGENT_TOOLS = frozenset({"sys_session_send"})
+_CHILD_MESSAGE_RETRY_DELAYS_S = (0.5, 1.0)
 
 # Priority 5f.0a: Session-create write. ``sys_session_create`` spawns a
 # child session (parent forced to the caller) from an existing agent_id
@@ -1444,16 +1445,10 @@ async def _execute_subagent_tool(
     # post_event forwards it to the runner and starts the child
     # turn.
     try:
-        msg_resp = await server_client.post(
-            f"/v1/sessions/{child_session_id}/events",
-            json={
-                "type": "message",
-                "data": {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": str(message)}],
-                },
-            },
-            timeout=30.0,
+        msg_resp = await _post_child_message_event(
+            server_client=server_client,
+            child_session_id=child_session_id,
+            message=str(message),
         )
     except httpx.HTTPError as exc:
         _runner_app.unregister_child_session(child_session_id)
@@ -1485,6 +1480,72 @@ async def _execute_subagent_tool(
             ),
         }
     )
+
+
+def _is_retryable_child_message_response(response: httpx.Response) -> bool:
+    """
+    Return whether a child message POST failed on a transient relay race.
+
+    The server returns ``503 runner_unavailable`` when the session row exists
+    but the runner stream relay is still subscribing. Retrying here keeps the
+    public delegation API stable while the relay catches up.
+    """
+    if response.status_code != 503:
+        return False
+    try:
+        payload = response.json()
+    except ValueError:
+        return "runner_unavailable" in response.text or "message relay" in response.text
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if isinstance(error, dict):
+        code = error.get("code")
+        message = error.get("message")
+        return code == "runner_unavailable" or (
+            isinstance(message, str) and "message relay" in message
+        )
+    return False
+
+
+async def _post_child_message_event(
+    *,
+    server_client: httpx.AsyncClient,
+    child_session_id: str,
+    message: str,
+) -> httpx.Response:
+    """
+    Post a user message to a child session, retrying relay-readiness races.
+
+    :param server_client: HTTP client pointed at the Omnigent server.
+    :param child_session_id: Child conversation id to start/continue.
+    :param message: User message text.
+    :returns: The final server response.
+    :raises httpx.HTTPError: If the HTTP client itself fails.
+    """
+    body = {
+        "type": "message",
+        "data": {
+            "role": "user",
+            "content": [{"type": "input_text", "text": message}],
+        },
+    }
+    for attempt in range(len(_CHILD_MESSAGE_RETRY_DELAYS_S) + 1):
+        response = await server_client.post(
+            f"/v1/sessions/{child_session_id}/events",
+            json=body,
+            timeout=30.0,
+        )
+        if not _is_retryable_child_message_response(response):
+            return response
+        if attempt >= len(_CHILD_MESSAGE_RETRY_DELAYS_S):
+            return response
+        delay_s = _CHILD_MESSAGE_RETRY_DELAYS_S[attempt]
+        _logger.info(
+            "child message post for session %s hit runner relay race; retrying in %.1fs",
+            child_session_id,
+            delay_s,
+        )
+        await asyncio.sleep(delay_s)
+    return response
 
 
 async def _send_to_existing_session(
@@ -1586,16 +1647,10 @@ async def _send_to_existing_session(
     )
 
     try:
-        msg_resp = await server_client.post(
-            f"/v1/sessions/{target_session_id}/events",
-            json={
-                "type": "message",
-                "data": {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": message}],
-                },
-            },
-            timeout=30.0,
+        msg_resp = await _post_child_message_event(
+            server_client=server_client,
+            child_session_id=target_session_id,
+            message=message,
         )
     except httpx.HTTPError as exc:
         _runner_app.unregister_child_session(target_session_id)
@@ -1889,16 +1944,10 @@ async def _post_child_first_message(
         ``sys_session_send``) on failure.
     """
     try:
-        msg_resp = await server_client.post(
-            f"/v1/sessions/{child_session_id}/events",
-            json={
-                "type": "message",
-                "data": {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": message}],
-                },
-            },
-            timeout=30.0,
+        msg_resp = await _post_child_message_event(
+            server_client=server_client,
+            child_session_id=child_session_id,
+            message=message,
         )
     except httpx.HTTPError as exc:
         return json.dumps(
