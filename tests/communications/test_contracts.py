@@ -48,6 +48,7 @@ def test_chat_command_contracts_capture_start_post_and_delegation_intent() -> No
     assert start.agent_id == "ag_1"
     assert start.labels["client"] == "acme"
     assert post.payload["content"] == "Implement it"
+    assert post.tool_specs == ()
     assert delegate.reuse_existing is True
     assert delegate.metadata["step"] == "design"
 

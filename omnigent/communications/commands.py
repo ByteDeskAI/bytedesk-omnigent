@@ -48,6 +48,7 @@ class PostSessionEventCommand:
     actor: ChatActor
     event_type: str
     payload: Mapping[str, object] = field(default_factory=dict)
+    tool_specs: tuple[Mapping[str, object], ...] = ()
     request_id: str | None = None
 
 

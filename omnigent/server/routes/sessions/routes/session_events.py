@@ -64,6 +64,12 @@ from omnigent.blueprints import (
     render_blueprint_value,
 )
 from omnigent.codex_native_elicitation import codex_elicitation_id
+from omnigent.communications import (
+    ChatActor,
+    ChatActorKind,
+    ChatApplicationService,
+    PostSessionEventCommand,
+)
 from omnigent.cost_plan import (
     COST_CONTROL_LABEL_NAMESPACE,
     reserved_cost_control_keys,
@@ -326,6 +332,33 @@ def register_session_events(
     runner_exit_reports,
 
 ):
+        chat_application_service = ChatApplicationService(
+            allowed_event_types=_ALLOWED_EVENT_TYPES,
+            payload_validation_exempt_event_types=frozenset(
+                {
+                    _INTERRUPT_TYPE,
+                    _APPROVAL_TYPE,
+                    _MCP_ELICITATION_TYPE,
+                    _COMPACT_TYPE,
+                    _SLASH_COMMAND_TYPE,
+                    _STOP_SESSION_TYPE,
+                    _EXTERNAL_ASSISTANT_MESSAGE_TYPE,
+                    _EXTERNAL_CONVERSATION_ITEM_TYPE,
+                    _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE,
+                    _EXTERNAL_SESSION_INTERRUPTED_TYPE,
+                    _EXTERNAL_ELICITATION_RESOLVED_TYPE,
+                    _EXTERNAL_SESSION_STATUS_TYPE,
+                    _EXTERNAL_SESSION_USAGE_TYPE,
+                    _EXTERNAL_COMPACTION_STATUS_TYPE,
+                    _EXTERNAL_MODEL_CHANGE_TYPE,
+                    _EXTERNAL_SESSION_TODOS_TYPE,
+                    _EXTERNAL_SUBAGENT_START_TYPE,
+                    _EXTERNAL_CODEX_SUBAGENT_START_TYPE,
+                }
+            ),
+            item_payload_validator=parse_item_data,
+            tool_spec_validator=parse_client_side_tool_specs,
+        )
         # ── POST /sessions/{session_id}/events ───────────────────────
 
         @router.post(
@@ -543,58 +576,15 @@ def register_session_events(
             # later ``tools/call`` mint presents a fresh on-behalf-of bearer. No-op
             # when the header is absent (degrade-to-default).
             stash_subject_token_from_headers(request.app.state, session_id, request.headers)
-            # Validate event type at the route boundary. Anything not in
-            # ``_ALLOWED_EVENT_TYPES`` is a client mistake — failing here
-            # is far better than silently persisting an item the agent
-            # loop will only crash on later when ``parse_item_data`` runs
-            # against the payload (rule 15 — fail loud).
-            if body.type not in _ALLOWED_EVENT_TYPES:
-                raise OmnigentError(
-                    f"Unknown event type: {body.type!r}. "
-                    f"Allowed types: {sorted(_ALLOWED_EVENT_TYPES)}",
-                    code=ErrorCode.INVALID_INPUT,
+            chat_application_service.admit_post_event(
+                PostSessionEventCommand(
+                    session_id=session_id,
+                    actor=ChatActor(kind=ChatActorKind.USER, user_id=user_id),
+                    event_type=body.type,
+                    payload=body.data,
+                    tool_specs=tuple(body.tools or ()),
                 )
-            # For item types, validate the data payload shape against
-            # the item-type's discriminator class. The control types
-            # (interrupt, approval) bypass the item-persist path and have
-            # their own payload schemas — they skip this check (interrupt
-            # has no payload; approval's MCP-shape payload is validated
-            # inside ``_dispatch_approval``).
-            if body.type not in (
-                _INTERRUPT_TYPE,
-                _APPROVAL_TYPE,
-                _MCP_ELICITATION_TYPE,
-                _COMPACT_TYPE,
-                _SLASH_COMMAND_TYPE,
-                _STOP_SESSION_TYPE,
-                _EXTERNAL_ASSISTANT_MESSAGE_TYPE,
-                _EXTERNAL_CONVERSATION_ITEM_TYPE,
-                _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE,
-                _EXTERNAL_SESSION_INTERRUPTED_TYPE,
-                _EXTERNAL_ELICITATION_RESOLVED_TYPE,
-                _EXTERNAL_SESSION_STATUS_TYPE,
-                _EXTERNAL_SESSION_USAGE_TYPE,
-                _EXTERNAL_COMPACTION_STATUS_TYPE,
-                _EXTERNAL_MODEL_CHANGE_TYPE,
-                _EXTERNAL_SESSION_TODOS_TYPE,
-                _EXTERNAL_SUBAGENT_START_TYPE,
-                _EXTERNAL_CODEX_SUBAGENT_START_TYPE,
-            ):
-                try:
-                    parse_item_data(body.type, {"type": body.type, **body.data})
-                except (ValueError, TypeError) as exc:
-                    raise OmnigentError(
-                        f"Invalid data payload for event type {body.type!r}: {exc}",
-                        code=ErrorCode.INVALID_INPUT,
-                    ) from exc
-            # Fail fast on malformed tools at the boundary. The raw dicts
-            # (not the parsed objects) are what the runner stores — the
-            # parse call is purely a validator.
-            if body.tools:
-                try:
-                    parse_client_side_tool_specs(body.tools)
-                except ValueError as exc:
-                    raise OmnigentError(str(exc), code=ErrorCode.INVALID_INPUT) from exc
+            )
             # ── Policy evaluation (path-agnostic) ────────────────
             # Evaluate policies BEFORE persistence/runner forwarding so
             # enforcement fires on both paths. On DENY, persist the
@@ -1836,4 +1826,3 @@ def register_session_events(
                 "blueprint_event",
             )
             return BlueprintRunResponse.model_validate(blueprint_events_to_run(page.data))
-
