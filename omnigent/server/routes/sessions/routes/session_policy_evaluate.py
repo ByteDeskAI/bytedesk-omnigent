@@ -309,6 +309,20 @@ from .._snapshot import *  # noqa: F403
 from .._subagent import *  # noqa: F403
 from .._usage import *  # noqa: F403
 
+_PROTO_EVENT_TYPE_TO_PHASE: dict[str, Phase] = {
+    "PHASE_TOOL_CALL": Phase.TOOL_CALL,
+    "PHASE_TOOL_RESULT": Phase.TOOL_RESULT,
+    "PHASE_LLM_REQUEST": Phase.LLM_REQUEST,
+    "PHASE_LLM_RESPONSE": Phase.LLM_RESPONSE,
+    "PHASE_REQUEST": Phase.REQUEST,
+}
+
+_PHASE_TO_PROTO_ACTION: dict[PolicyAction, str] = {
+    PolicyAction.ALLOW: "POLICY_ACTION_ALLOW",
+    PolicyAction.DENY: "POLICY_ACTION_DENY",
+    PolicyAction.ASK: "POLICY_ACTION_ASK",
+}
+
 def register_session_policy_evaluate(
     router,
     *,
@@ -542,4 +556,3 @@ def register_session_policy_evaluate(
                 content=json.dumps(resp_body),
                 media_type="application/json",
             )
-
