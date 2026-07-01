@@ -68,6 +68,8 @@ from omnigent.communications import (
     ChatActor,
     ChatActorKind,
     ChatApplicationService,
+    ChildSessionDelegationService,
+    DelegateToAgentCommand,
     PostSessionEventCommand,
 )
 from omnigent.cost_plan import (
@@ -1570,6 +1572,87 @@ def register_session_events(
                 expand_env=agent.session_id is None,
             )
 
+        def _blueprint_child_delegation_service(
+            *,
+            request: Request,
+            node: BlueprintNode,
+            target_agent: Agent,
+        ) -> ChildSessionDelegationService:
+            """Build the child-session delegation service for a blueprint node."""
+
+            async def create_child_session(command: DelegateToAgentCommand) -> str:
+                if command.agent_id is None:
+                    raise OmnigentError(
+                        f"Blueprint node {node.id!r} is missing a target agent id",
+                        code=ErrorCode.INVALID_INPUT,
+                    )
+                child = await _create_session_from_existing_agent(
+                    conversation_store,
+                    agent_store,
+                    runner_router,
+                    SessionCreateRequest(
+                        agent_id=command.agent_id,
+                        parent_session_id=command.parent_session_id,
+                        title=command.title,
+                        labels=dict(command.labels),
+                    ),
+                    request,
+                    agent_cache=agent_cache,
+                    user_id=command.actor.user_id,
+                    permission_store=permission_store,
+                    liveness_lookup=liveness_lookup,
+                )
+                return child.id
+
+            async def post_child_prompt(
+                child_session_id: str,
+                prompt: str,
+                actor: ChatActor,
+            ) -> None:
+                del actor
+                await post_event(
+                    request,
+                    child_session_id,
+                    SessionEventInput(
+                        type="message",
+                        data={
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": prompt}],
+                        },
+                    ),
+                )
+
+            async def record_child_return(
+                command: DelegateToAgentCommand,
+                child_session_id: str,
+                raw_output: str,
+            ) -> None:
+                await _append_blueprint_child_return(
+                    command.parent_session_id,
+                    node=node,
+                    child_session_id=child_session_id,
+                    target=command.agent_name or target_agent.name,
+                    output=raw_output,
+                )
+
+            def parse_child_output(
+                command: DelegateToAgentCommand,
+                raw_output: str,
+            ) -> tuple[Literal["completed", "failed"], Any, str | None]:
+                del command
+                return _blueprint_child_output(node, raw_output)
+
+            return ChildSessionDelegationService(
+                create_child_session=create_child_session,
+                post_child_prompt=post_child_prompt,
+                read_child_output=_latest_assistant_text,
+                record_child_return=record_child_return,
+                parse_child_output=parse_child_output,
+                is_runner_unavailable=lambda exc: (
+                    isinstance(exc, OmnigentError) and exc.code == ErrorCode.RUNNER_UNAVAILABLE
+                ),
+            )
+
         async def _dispatch_blueprint_child_node(
             *,
             request: Request,
@@ -1597,61 +1680,39 @@ def register_session_events(
                     )
 
             rendered_input = render_blueprint_value(node.input, context)
-            child = await _create_session_from_existing_agent(
-                conversation_store,
-                agent_store,
-                runner_router,
-                SessionCreateRequest(
-                    agent_id=target_agent.id,
-                    parent_session_id=parent_session_id,
-                    title=f"{node.kind}:{node.id}",
-                    labels={
-                        "omnigent.blueprint.node_id": node.id,
-                        "omnigent.blueprint.node_kind": node.kind,
-                        "omnigent.blueprint.target": target_agent.name,
-                        "omnigent.blueprint.loop_iteration": (
-                            str(loop_iteration) if loop_iteration is not None else ""
-                        ),
-                    },
-                ),
-                request,
-                agent_cache=agent_cache,
-                user_id=parent_user_id,
-                permission_store=permission_store,
-                liveness_lookup=liveness_lookup,
-            )
             prompt = _child_prompt_text(rendered_input)
-            post_body = SessionEventInput(
-                type="message",
-                data={
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": prompt}],
+            command = DelegateToAgentCommand(
+                parent_session_id=parent_session_id,
+                actor=ChatActor(kind=ChatActorKind.USER, user_id=parent_user_id),
+                agent_id=target_agent.id,
+                agent_name=target_agent.name,
+                title=f"{node.kind}:{node.id}",
+                prompt=prompt,
+                labels={
+                    "omnigent.blueprint.node_id": node.id,
+                    "omnigent.blueprint.node_kind": node.kind,
+                    "omnigent.blueprint.target": target_agent.name,
+                    "omnigent.blueprint.loop_iteration": (
+                        str(loop_iteration) if loop_iteration is not None else ""
+                    ),
+                },
+                metadata={
+                    "blueprint_node_id": node.id,
+                    "blueprint_node_kind": node.kind,
+                    "blueprint_target": target_agent.name,
+                    "blueprint_loop_iteration": loop_iteration,
                 },
             )
-            try:
-                await post_event(request, child.id, post_body)
-            except OmnigentError as exc:
-                if exc.code == ErrorCode.RUNNER_UNAVAILABLE:
-                    return ChildDispatchResult(
-                        status="waiting",
-                        child_session_id=child.id,
-                        output={"prompt": prompt},
-                    )
-                raise
-            raw_output = await _latest_assistant_text(child.id)
-            await _append_blueprint_child_return(
-                parent_session_id,
+            outcome = await _blueprint_child_delegation_service(
+                request=request,
                 node=node,
-                child_session_id=child.id,
-                target=target_agent.name,
-                output=raw_output,
-            )
-            status, output, error = _blueprint_child_output(node, raw_output)
+                target_agent=target_agent,
+            ).delegate(command)
             return ChildDispatchResult(
-                status=status,
-                child_session_id=child.id,
-                output=output,
-                error=error,
+                status=outcome.status,
+                child_session_id=outcome.child_session_id,
+                output=outcome.output,
+                error=outcome.error,
             )
 
         async def _append_blueprint_child_return(

@@ -12,6 +12,10 @@ from omnigent.communications.commands import (
     PostSessionEventCommand,
     StartSessionCommand,
 )
+from omnigent.communications.delegation import (
+    ChildDelegationOutcome,
+    ChildSessionDelegationService,
+)
 from omnigent.communications.events import (
     BlueprintNodeUpdated,
     ChildSessionUpdated,
@@ -46,6 +50,8 @@ __all__ = [
     "ChatActorKind",
     "ChatApplicationService",
     "ChatCommandResult",
+    "ChildDelegationOutcome",
+    "ChildSessionDelegationService",
     "ChildSessionUpdated",
     "CommunicationServiceProvider",
     "DelegateToAgentCommand",

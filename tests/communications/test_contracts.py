@@ -42,6 +42,7 @@ def test_chat_command_contracts_capture_start_post_and_delegation_intent() -> No
         agent_name="designer",
         title="Visual design",
         prompt="Generate hero options",
+        labels={"workflow": "website"},
         metadata={"step": "design"},
     )
 
@@ -50,6 +51,7 @@ def test_chat_command_contracts_capture_start_post_and_delegation_intent() -> No
     assert post.payload["content"] == "Implement it"
     assert post.tool_specs == ()
     assert delegate.reuse_existing is True
+    assert delegate.labels["workflow"] == "website"
     assert delegate.metadata["step"] == "design"
 
 
