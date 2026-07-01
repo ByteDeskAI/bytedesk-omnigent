@@ -68,6 +68,36 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Get Integration Deprecation Plan
+
+```
+GET /v1/integration-capabilities/{slug}/deprecation-plan
+
+200 OK
+{
+  "object": "integration_deprecation_plan",
+  "capability_slug": "slack-command-center",
+  "capability_name": "Slack command center",
+  "category": "communication",
+  "risk_tier": "external_write",
+  "requires_customer_notice": true,
+  "minimum_notice_days": 14,
+  "reversible_until_phase": "revoke-credentials",
+  "category_retention_notes": "channel export or thread permalink inventory",
+  "successor_requirements": ["..."],
+  "phases": [
+    {
+      "id": "announce-freeze",
+      "title": "Announce retirement window and freeze new activations",
+      "owner": "platform-operator",
+      "exit_criteria": ["..."]
+    }
+  ]
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management
