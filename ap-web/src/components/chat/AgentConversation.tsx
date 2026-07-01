@@ -5,13 +5,13 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
+import { HistoryAutoLoader } from "./HistoryAutoLoader";
 import {
-  HistoryAutoLoader,
   buildPendingBubbles,
   computeShowsWorking,
   mergePendingBubbles,
   shouldShowWorkingIndicator,
-} from "@/pages/ChatPage";
+} from "./chat-utils";
 import {
   type Bubble,
   type BubbleCache,

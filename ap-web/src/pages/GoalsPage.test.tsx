@@ -15,6 +15,9 @@ vi.mock("@/hooks/useGoals", () => ({
   useActivateGoal: vi.fn(),
   useAddGoalDependency: vi.fn(),
   useUpdateGoalDependency: vi.fn(),
+  useDeleteGoal: vi.fn(),
+  useGoalTemplates: vi.fn(),
+  useInstantiateGoalTemplate: vi.fn(),
 }));
 
 const startPlanningSession = vi.fn();
@@ -150,6 +153,19 @@ beforeEach(() => {
   } as never);
   vi.mocked(goalHooks.useUpdateGoalDependency).mockReturnValue({
     mutateAsync: updateDependency,
+    isPending: false,
+  } as never);
+  vi.mocked(goalHooks.useDeleteGoal).mockReturnValue({
+    mutateAsync: vi.fn(),
+    isPending: false,
+  } as never);
+  vi.mocked(goalHooks.useGoalTemplates).mockReturnValue({
+    data: [],
+    isLoading: false,
+    isError: false,
+  } as never);
+  vi.mocked(goalHooks.useInstantiateGoalTemplate).mockReturnValue({
+    mutateAsync: vi.fn(),
     isPending: false,
   } as never);
 });

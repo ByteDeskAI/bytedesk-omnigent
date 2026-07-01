@@ -22,7 +22,7 @@ import type { Comment } from "@/hooks/useComments";
 
 // ── Mock heavy child components ───────────────────────────────────────────────
 
-vi.mock("./CodeViewer", () => ({
+vi.mock("./components/code-viewer/CodeViewer", () => ({
   CodeViewer: () => <div data-testid="code-viewer" />,
 }));
 

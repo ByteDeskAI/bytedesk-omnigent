@@ -5,15 +5,23 @@ import type { Bubble } from "@/lib/renderItems";
 
 // BubbleView/RunnerStartingIndicator read the module-level chatStore; stub
 // them (and keep a real-ish bubbleKey) so this stays a focused unit test.
-vi.mock("@/pages/ChatPage", () => ({
+vi.mock("./BubbleView", () => ({
   BubbleView: ({ bubble }: { bubble: Bubble }) => (
     <div data-testid="bubble">{bubble.kind}</div>
   ),
+}));
+vi.mock("./RunnerStartingIndicator", () => ({
   RunnerStartingIndicator: ({ variant }: { variant: string }) => (
     <div data-testid={`runner-${variant}`} />
   ),
-  bubbleKey: (b: Bubble) => `${b.kind}:${"itemId" in b ? b.itemId : ""}`,
 }));
+vi.mock("./chat-utils", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./chat-utils")>();
+  return {
+    ...actual,
+    bubbleKey: (b: Bubble) => `${b.kind}:${"itemId" in b ? b.itemId : ""}`,
+  };
+});
 
 function userBubble(id: string): Bubble {
   return { kind: "user", itemId: id, content: [] } as Bubble;
