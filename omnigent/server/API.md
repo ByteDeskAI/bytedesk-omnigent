@@ -68,6 +68,30 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Get Integration Autonomy Policy
+
+```
+GET /v1/integration-capabilities/{slug}/autonomy-policy
+
+200 OK
+{
+  "capability_slug": "slack-command-center",
+  "capability_name": "Slack command center",
+  "category": "communication",
+  "risk_tier": "external_write",
+  "autonomy_level": "supervised_external_write",
+  "requires_human_approval": true,
+  "read_scopes": ["channels:history", "commands", "users:read"],
+  "write_scopes": ["chat:write"],
+  "allowed_actions": ["read explicitly authorized provider context", "..."],
+  "approval_required_for": ["posting outbound messages to Slack command center", "..."],
+  "forbidden_actions": ["mutating provider records without an Omnigent approval record", "..."],
+  "rationale": "Slack command center requests write-capable scopes (...)."
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management
