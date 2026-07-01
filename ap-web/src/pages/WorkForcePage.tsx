@@ -1043,6 +1043,7 @@ function PermissionsTab({ agent, editable }: { agent: AvailableAgent; editable: 
   const scope = useWorkforceScope(scopeKind, scopeId, editable);
   const effective = useWorkforceAgentEffective(agent.id, editable);
   const connectorCatalog = useConnectorsCatalog();
+  const installedSkills = useInstalledSkills(agent.id);
   const toolCatalog = useWorkforceToolCatalog();
   const updateInstructions = useUpdateWorkforceInstructions();
   const updateAgentInstructions = useUpdateWorkforceAgentInstructions();
@@ -1110,6 +1111,9 @@ function PermissionsTab({ agent, editable }: { agent: AvailableAgent; editable: 
   );
   const scopeSkills = [...(scope.data?.skills ?? [])].sort((a, b) =>
     compareText(a.skillName, b.skillName),
+  );
+  const agentImageSkills = [...(installedSkills.data ?? [])].sort((a, b) =>
+    compareText(a.name, b.name),
   );
   const scopeTools = [...(scope.data?.tools ?? [])].sort((a, b) =>
     compareText(a.toolKey, b.toolKey),
@@ -1642,6 +1646,31 @@ function PermissionsTab({ agent, editable }: { agent: AvailableAgent; editable: 
               ))}
               {!effective.isLoading && effectiveSkills.length === 0 && (
                 <div className="p-4 text-sm text-muted-foreground">No inherited skills.</div>
+              )}
+            </div>
+          </section>
+
+          <section className="mc-surface">
+            <div className="flex items-center justify-between border-b border-border-dimmer px-3 py-2">
+              <div>
+                <div className="mc-label text-accent-cyan">Agent Image Skills</div>
+                <div className="text-xs text-muted-foreground">{agentDisplayName(agent)}</div>
+              </div>
+              <Badge variant="secondary">{agentImageSkills.length}</Badge>
+            </div>
+            <div className="max-h-80 divide-y divide-border-dimmer overflow-y-auto">
+              {agentImageSkills.map((skill) => (
+                <div key={skill.name} className="p-3">
+                  <div className="truncate text-sm font-medium">{skill.name}</div>
+                  <div className="line-clamp-2 text-xs text-muted-foreground">
+                    {skill.description}
+                  </div>
+                </div>
+              ))}
+              {!installedSkills.isLoading && agentImageSkills.length === 0 && (
+                <div className="p-4 text-sm text-muted-foreground">
+                  No agent image skills installed.
+                </div>
               )}
             </div>
           </section>

@@ -10,6 +10,7 @@ import * as workforceHooks from "@/hooks/useWorkforce";
 import * as accountsApi from "@/lib/accountsApi";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import type { ServerInfo } from "@/lib/capabilities";
+import type { ConnectorManifest } from "@/lib/connectorsApi";
 
 vi.mock("@/hooks/useAgentImages", () => ({
   useAgentImage: vi.fn(),
@@ -117,6 +118,70 @@ const agents = [
   },
 ];
 
+const connectorCatalog: ConnectorManifest[] = [
+  {
+    provider: "google_workspace",
+    name: "Google Workspace",
+    description: "Workspace connector",
+    auth: {
+      type: "google_domain_wide_delegation",
+      scopes: [],
+      docsUrl: null,
+      setupFields: [],
+    },
+    services: [
+      {
+        key: "drive",
+        name: "Drive",
+        description: "Google Drive",
+        scopes: [],
+        toolMounts: [],
+        tools: [
+          {
+            key: "search",
+            name: "Search Drive",
+            description: "Search Drive files.",
+            mcpTool: "drive_search",
+            scopes: [],
+          },
+        ],
+      },
+    ],
+    connections: [
+      {
+        id: "conn_google",
+        provider: "google_workspace",
+        displayName: "Engineering Google Drive",
+        authType: "google_domain_wide_delegation",
+        status: "connected",
+        scopes: [],
+        metadata: {},
+        secretPresent: true,
+        lastHealthStatus: "ok",
+        lastHealthAt: 2,
+        lastError: null,
+        createdAt: 1,
+        updatedAt: 2,
+        version: 1,
+        services: [
+          {
+            id: "svc_drive",
+            connectionId: "conn_google",
+            serviceKey: "drive",
+            enabled: true,
+            status: "ready",
+            scopes: [],
+            metadata: {},
+            updatedAt: 2,
+            version: 1,
+          },
+        ],
+        grants: [],
+      },
+    ],
+  },
+];
+
 const mutateImage = vi.fn();
 const updateWorkforceInstructions = vi.fn();
 const updateWorkforceAgentInstructions = vi.fn();
@@ -210,7 +275,7 @@ beforeEach(() => {
     isPending: false,
   } as never);
   vi.mocked(connectorHooks.useConnectorsCatalog).mockReturnValue({
-    data: [],
+    data: connectorCatalog,
     isLoading: false,
   } as never);
   vi.mocked(connectorHooks.useConnectorAgentGrants).mockReturnValue({
@@ -224,7 +289,18 @@ beforeEach(() => {
     error: null,
   } as never);
   vi.mocked(skillsHooks.useInstalledSkills).mockReturnValue({
-    data: [],
+    data: [
+      {
+        name: "repo-rules",
+        description: "Applies ByteDesk repository rules.",
+        agents: [{ id: "ag_employee", name: "platform-developer", version: 3 }],
+      },
+      {
+        name: "browser-smoke",
+        description: "Runs browser smoke checks.",
+        agents: [{ id: "ag_employee", name: "platform-developer", version: 3 }],
+      },
+    ],
     isLoading: false,
   } as never);
   vi.mocked(skillsHooks.useSearchSkills).mockReturnValue({
@@ -303,7 +379,22 @@ beforeEach(() => {
             version: 1,
             metadata: {},
           },
-          connectors: [],
+          connectors: [
+            {
+              id: "wfconnector_department",
+              scopeKind: "department",
+              scopeId: "engineering",
+              connectionId: "conn_google",
+              serviceKey: "drive",
+              toolKey: "search",
+              itemKey: "conn_google:drive:search",
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              version: 1,
+              metadata: {},
+            },
+          ],
           tools: [
             {
               id: "wftool_department",
@@ -360,7 +451,33 @@ beforeEach(() => {
           metadata: {},
         },
       ],
-      connectors: [],
+      connectors: [
+        {
+          itemKey: "conn_google:drive:search",
+          connectionId: "conn_google",
+          serviceKey: "drive",
+          toolKey: "search",
+          enabled: true,
+          inherited: true,
+          inheritedFrom: [
+            {
+              id: "wfconnector_department",
+              scopeKind: "department",
+              scopeId: "engineering",
+              connectionId: "conn_google",
+              serviceKey: "drive",
+              toolKey: "search",
+              itemKey: "conn_google:drive:search",
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              version: 1,
+              metadata: {},
+            },
+          ],
+          override: null,
+        },
+      ],
       tools: [
         {
           itemKey: "web_search",
@@ -749,6 +866,9 @@ describe("WorkForcePage", () => {
 
     await activatePermissionSubTab(/Skills/);
     expect(screen.getAllByText("customer-research").length).toBeGreaterThan(0);
+    expect(screen.getByText("Agent Image Skills")).toBeInTheDocument();
+    expect(screen.getByText("repo-rules")).toBeInTheDocument();
+    expect(screen.getByText("browser-smoke")).toBeInTheDocument();
     const effectiveSkillsSection = screen.getByText("Effective Skills").closest("section");
     expect(effectiveSkillsSection).not.toBeNull();
     fireEvent.click(
@@ -768,6 +888,30 @@ describe("WorkForcePage", () => {
     );
 
     await activatePermissionSubTab(/Connectors/);
-    expect(screen.getByText("No connector connections.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Engineering Engineering Google Drive Search Drive")).toBeChecked();
+    const effectiveConnectorsSection = screen
+      .getByText("Effective Connector Permissions")
+      .closest("section");
+    expect(effectiveConnectorsSection).not.toBeNull();
+    expect(
+      within(effectiveConnectorsSection as HTMLElement).getByText(
+        "Engineering Google Drive · Search Drive",
+      ),
+    ).toBeInTheDocument();
+    fireEvent.click(
+      within(effectiveConnectorsSection as HTMLElement).getByRole("button", {
+        name: "Disable for agent",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(upsertWorkforceOverride).toHaveBeenCalledWith({
+        agentId: "ag_employee",
+        itemKind: "connector",
+        itemKey: "conn_google:drive:search",
+        enabled: false,
+        reconcile: true,
+      }),
+    );
   });
 });
