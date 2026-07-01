@@ -71,6 +71,13 @@ def _import_package_bindings() -> None:
 
 _import_package_bindings()
 
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
+
+
 def _load_config(path: str | None) -> dict[str, Any]:  # type: ignore[explicit-any]
     """
     Load and return config from a YAML file.
@@ -174,7 +181,9 @@ def _load_effective_config() -> dict[str, Any]:  # type: ignore[explicit-any]
 
     :returns: Merged config dict.
     """
-    return {**_load_global_config(), **_load_local_config()}
+    load_global_config = __facade_binding("_load_global_config", _load_global_config)
+    load_local_config = __facade_binding("_load_local_config", _load_local_config)
+    return {**load_global_config(), **load_local_config()}
 
 def _parse_config_bool(key: str, value: _ConfigValue) -> bool:
     """
@@ -197,6 +206,20 @@ def _parse_config_bool(key: str, value: _ConfigValue) -> bool:
     raise click.ClickException(
         f"Config key {key!r} must be a boolean (true/false, yes/no, on/off, or 1/0)."
     )
+
+def _resolve_auto_open_conversation_setting(cfg: dict[str, Any]) -> bool | None:  # type: ignore[explicit-any]
+    """
+    Resolve the explicit ``auto_open_conversation`` config value, if set.
+
+    :param cfg: Effective config dict from :func:`_load_effective_config`.
+    :returns: ``True`` / ``False`` when present, otherwise ``None``.
+    :raises click.ClickException: If the configured value is not a
+        supported boolean.
+    """
+    raw = cfg.get(_AUTO_OPEN_CONVERSATION_CONFIG_KEY)
+    if raw is None:
+        return None
+    return _parse_config_bool(_AUTO_OPEN_CONVERSATION_CONFIG_KEY, raw)
 
 def _resolve_auto_open_conversation_from_config(cfg: dict[str, Any]) -> bool:  # type: ignore[explicit-any]
     """
@@ -349,6 +372,5 @@ class _ConfigGroup(click.Group):
             if hint is not None:
                 raise click.UsageError(hint)
         return super().parse_args(ctx, args)
-
 
 

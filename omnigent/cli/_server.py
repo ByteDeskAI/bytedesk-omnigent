@@ -30,6 +30,12 @@ from rich.console import Console
 from rich.table import Table
 
 from omnigent._startup_profile import StartupProfiler
+from omnigent.cli._constants import _LOCAL_DAEMON_MARKER, _LOCAL_SERVER_DISCOVER_TIMEOUT_S
+from omnigent.cli._daemon import (
+    _ensure_host_daemon,
+    _host_daemon_alive,
+    _update_daemon_resolved_server_url,
+)
 from omnigent.cli_sandbox import lakebox as _lakebox_alias_group
 from omnigent.cli_sandbox import sandbox as _sandbox_group
 from omnigent.harness_aliases import canonicalize_harness
@@ -70,6 +76,13 @@ def _import_package_bindings() -> None:
 
 
 _import_package_bindings()
+
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
+
 
 def _default_db_uri() -> str:
     """Default DB URI for ``omnigent server`` — the machine-global
@@ -353,7 +366,21 @@ def _ensure_databricks_server_auth(server: str) -> None:
         return
     if probe.status_code == 200:
         return
-    workspace_host = _databricks_workspace_login_target(server, probe)
+    try:
+        databricks_workspace_login_target = __facade_binding(
+            "_databricks_workspace_login_target",
+            None,
+        )
+        if databricks_workspace_login_target is None:
+            from omnigent.cli.commands.debug import (
+                _databricks_workspace_login_target as databricks_workspace_login_target,
+            )
+    except ImportError:
+
+        def databricks_workspace_login_target(_server: str, _probe: _httpx.Response) -> None:
+            return None
+
+    workspace_host = databricks_workspace_login_target(server, probe)
     if workspace_host is None:
         return
     login_cmd = f"omnigent login {server}"
@@ -363,7 +390,16 @@ def _ensure_databricks_server_auth(server: str) -> None:
             f"HTTP {probe.status_code}). Run `{login_cmd}` and retry."
         )
     click.echo(f"Not signed in to {server} — running `{login_cmd}` first.")
-    _databricks_login(server, workspace_host)
+    try:
+        databricks_login = __facade_binding("_databricks_login", None)
+        if databricks_login is None:
+            from omnigent.cli.commands.debug import _databricks_login as databricks_login
+    except ImportError as exc:
+        raise click.ClickException(
+            "Databricks login helpers are unavailable; run "
+            f"`{login_cmd}` and retry."
+        ) from exc
+    databricks_login(server, workspace_host)
 
 def _ensure_backend(server: str | None) -> str:
     """Ensure the host daemon is running and return the Omnigent server URL.
@@ -398,7 +434,18 @@ def _ensure_backend(server: str | None) -> str:
         # otherwise the session-create call deep in the REPL bring-up
         # surfaces the edge redirect as an opaque non-JSON-response
         # traceback.
-        server = _workspace_api_server_url(server)
+        try:
+            workspace_api_server_url = __facade_binding("_workspace_api_server_url", None)
+            if workspace_api_server_url is None:
+                from omnigent.cli.commands.debug import (
+                    _workspace_api_server_url as workspace_api_server_url,
+                )
+        except ImportError:
+
+            def workspace_api_server_url(value: str) -> str:
+                return value.rstrip("/")
+
+        server = workspace_api_server_url(server)
         _ensure_databricks_server_auth(server)
         with runner_startup_progress(initial_message=STARTUP_PHASE_CONNECTING_REMOTE):
             _ensure_host_daemon(server)
@@ -516,4 +563,3 @@ def _assert_server_port_bindable(host: str, port: int) -> None:
             raise click.ClickException(
                 f"Cannot start server on {host}:{port}: port is unavailable ({reason})."
             ) from exc
-

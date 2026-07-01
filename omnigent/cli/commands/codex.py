@@ -3,6 +3,13 @@ from __future__ import annotations
 import click
 
 from .._core import cli
+from .resume import _split_resume_value as _resume_split_resume_value
+
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
 
 def _import_package_bindings() -> None:
     from .. import _constants as _pkg_constants
@@ -131,7 +138,7 @@ def codex(
       omnigent codex --resume                  # interactive picker
       omnigent codex --server https://<app>.databricksapps.com
     """
-    choice = _split_resume_value(resume)
+    choice = __facade_binding("_split_resume_value", _resume_split_resume_value)(resume)
     if session_id is not None and (choice.picker or choice.conversation_id is not None):
         raise click.UsageError(
             "--session and --resume are mutually exclusive; "
@@ -140,19 +147,22 @@ def codex(
 
     from omnigent.codex_native import run_codex_native
 
-    cfg = _load_effective_config()
+    cfg = __facade_binding("_load_effective_config", _load_effective_config)()
     if server is None:
         server = cfg.get("server")
     if model is None:
         model = cfg.get("model")
-    auto_open_conversation = _resolve_auto_open_conversation_from_config(cfg)
+    auto_open_conversation = __facade_binding(
+        "_resolve_auto_open_conversation_from_config",
+        _resolve_auto_open_conversation_from_config,
+    )(cfg)
 
     # Validate option combinations before any side effects — see
     # the same comment in the claude command. _ensure_backend can
     # spawn the daemon and take the full local-server-discover
     # timeout to fail, which would make a bad arg pair look like
     # a backend outage instead of a usage error.
-    choice = _split_resume_value(resume)
+    choice = __facade_binding("_split_resume_value", _resume_split_resume_value)(resume)
     if session_id is not None and (choice.picker or choice.conversation_id is not None):
         raise click.UsageError(
             "--session and --resume are mutually exclusive; "
@@ -163,7 +173,7 @@ def codex(
     # remote otherwise) and resolve the concrete Omnigent server URL. Codex follows
     # the same ownership model as attach/run/claude: the daemon-spawned runner
     # owns the app-server and TUI; the CLI attaches to the tmux terminal.
-    server = _ensure_backend(server)
+    server = __facade_binding("_ensure_backend", _ensure_backend)(server)
 
     resolved_session_id = (
         choice.conversation_id if choice.conversation_id is not None else session_id
@@ -178,5 +188,3 @@ def codex(
         prompt=prompt,
         auto_open_conversation=auto_open_conversation,
     )
-
-

@@ -7,6 +7,7 @@ import sys
 
 import click
 
+from ._constants import _CLICK_SUBCOMMANDS
 from ._helpers import _migrate_legacy_state_dir
 from ._version import _print_version_callback, _should_skip_update_check
 
@@ -36,37 +37,6 @@ _import_package_bindings()
 )
 def cli() -> None:
     """Omnigent CLI."""
-
-
-# Names of every subcommand the click group owns. Used by
-# :func:`main` to reject the removed top-level ad-hoc chat path
-# before click reports an opaque "no such command" error.
-# Keep in sync with ``@cli.command()`` decorations below.
-_CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
-    {
-        "attach",
-        "claude",
-        "codex",
-        "config",
-        "debby",
-        "debug",
-        "host",
-        "lakebox",
-        "login",
-        "pane-picker",
-        "pane-split",
-        "pi",
-        "polly",
-        "resume",
-        "run",
-        "sandbox",
-        "server",
-        "setup",
-        "stop",
-        "upgrade",
-        "version",
-    }
-)
 
 
 def main() -> None:

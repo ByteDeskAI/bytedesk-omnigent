@@ -81,6 +81,34 @@ _GLOBAL_CONFIG_KEYS: frozenset[str] = frozenset(
 _BOOLEAN_CONFIG_KEYS: frozenset[str] = frozenset({_AUTO_OPEN_CONVERSATION_CONFIG_KEY})
 _CONFIG_TRUE_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 _CONFIG_FALSE_VALUES: frozenset[str] = frozenset({"0", "false", "no", "off"})
+# Names of every subcommand the click group owns. Used by the console-script
+# entrypoint to reject removed top-level ad-hoc chat before click reports an
+# opaque "no such command" error. Keep in sync with command registration.
+_CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
+    {
+        "attach",
+        "claude",
+        "codex",
+        "config",
+        "debby",
+        "debug",
+        "host",
+        "lakebox",
+        "login",
+        "pane-picker",
+        "pane-split",
+        "pi",
+        "polly",
+        "resume",
+        "run",
+        "sandbox",
+        "server",
+        "setup",
+        "stop",
+        "upgrade",
+        "version",
+    }
+)
 _ConfigValue: TypeAlias = (
     str | int | float | bool | None | list["_ConfigValue"] | dict[str, "_ConfigValue"]
 )
@@ -186,4 +214,3 @@ _OS_ENV_HARNESSES: frozenset[str] = frozenset({"claude-sdk", "codex", "pi"})
 _NODE_MIN_VERSION_HINT = "Node.js 22 LTS or newer (a 22.10+ API is required)"
 _CLI_LOGIN_TIMEOUT_SECONDS = 300  # 5 minutes
 _PANE_SPLIT_DIRECTIONS = ("v", "h", "w")
-
