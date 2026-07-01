@@ -346,6 +346,29 @@ def _session_list_accessible_by(user_id: str | None, *, is_admin: bool) -> str |
     """
     return None if is_admin else user_id
 
+async def _comments_fingerprints_for(
+    conv_ids: list[str],
+    comment_store: CommentStore | None,
+) -> dict[str, CommentsFingerprint]:
+    """
+    Batch-fetch comment change fingerprints for the given sessions.
+
+    Shared by the ``GET /v1/sessions`` page builder and
+    ``WS /v1/sessions/updates`` so both emit the same
+    ``comments_count`` / ``comments_updated_at`` values and the
+    stream's diff fires when a comment is added, edited, addressed,
+    or deleted.
+
+    :param conv_ids: Session ids to summarize, e.g. ``["conv_abc123"]``.
+    :param comment_store: Optional backing comment store.
+    :returns: Map from session id to its :class:`CommentsFingerprint`;
+        empty when no comment store is wired. Sessions without comments
+        are absent.
+    """
+    if comment_store is None or not conv_ids:
+        return {}
+    return await asyncio.to_thread(comment_store.get_comments_fingerprints, conv_ids)
+
 def _build_session_list_item(
     conv: Conversation,
     *,
@@ -465,4 +488,3 @@ async def _apply_liveness_to_items(
         result = liveness[item.id]
         item.runner_online = result.runner_online
         item.host_online = result.host_online
-
