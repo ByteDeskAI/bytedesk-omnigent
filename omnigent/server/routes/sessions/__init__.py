@@ -16,6 +16,7 @@ _SUBMODULES = (
     "_mcp",
     "_native",
     "_policy",
+    "_projector",
     "_publish",
     "_resources",
     "_runner",
