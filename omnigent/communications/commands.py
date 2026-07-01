@@ -62,6 +62,7 @@ class DelegateToAgentCommand:
     agent_id: str | None = None
     agent_name: str | None = None
     title: str | None = None
+    labels: Mapping[str, str] = field(default_factory=dict)
     reuse_existing: bool = True
     metadata: Mapping[str, object] = field(default_factory=dict)
 
