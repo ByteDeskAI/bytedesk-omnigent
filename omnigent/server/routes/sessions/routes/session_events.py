@@ -67,7 +67,6 @@ from omnigent.codex_native_elicitation import codex_elicitation_id
 from omnigent.communications import (
     ChatActor,
     ChatActorKind,
-    ChatApplicationService,
     ChildSessionDelegationService,
     DelegateToAgentCommand,
     PostSessionEventCommand,
@@ -294,7 +293,6 @@ from omnigent.stores.conversation_store import (
 from omnigent.stores.file_store import FileStore
 from omnigent.stores.host_store import Host, HostStore
 from omnigent.stores.permission_store import PermissionStore
-from omnigent.tools.client_specified import parse_client_side_tool_specs
 
 _logger = logging.getLogger(__name__)
 from .._constants import *
@@ -334,32 +332,10 @@ def register_session_events(
     runner_exit_reports,
 
 ):
-        chat_application_service = ChatApplicationService(
-            allowed_event_types=_ALLOWED_EVENT_TYPES,
-            payload_validation_exempt_event_types=frozenset(
-                {
-                    _INTERRUPT_TYPE,
-                    _APPROVAL_TYPE,
-                    _MCP_ELICITATION_TYPE,
-                    _COMPACT_TYPE,
-                    _SLASH_COMMAND_TYPE,
-                    _STOP_SESSION_TYPE,
-                    _EXTERNAL_ASSISTANT_MESSAGE_TYPE,
-                    _EXTERNAL_CONVERSATION_ITEM_TYPE,
-                    _EXTERNAL_OUTPUT_TEXT_DELTA_TYPE,
-                    _EXTERNAL_SESSION_INTERRUPTED_TYPE,
-                    _EXTERNAL_ELICITATION_RESOLVED_TYPE,
-                    _EXTERNAL_SESSION_STATUS_TYPE,
-                    _EXTERNAL_SESSION_USAGE_TYPE,
-                    _EXTERNAL_COMPACTION_STATUS_TYPE,
-                    _EXTERNAL_MODEL_CHANGE_TYPE,
-                    _EXTERNAL_SESSION_TODOS_TYPE,
-                    _EXTERNAL_SUBAGENT_START_TYPE,
-                    _EXTERNAL_CODEX_SUBAGENT_START_TYPE,
-                }
-            ),
-            item_payload_validator=parse_item_data,
-            tool_spec_validator=parse_client_side_tool_specs,
+        from omnigent.server.communication_composition import get_server_communication_services
+
+        chat_application_service = (
+            get_server_communication_services().chat_application_service
         )
         # ── POST /sessions/{session_id}/events ───────────────────────
 

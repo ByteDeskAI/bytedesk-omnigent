@@ -291,25 +291,13 @@ from omnigent.tools.client_specified import parse_client_side_tool_specs
 
 _logger = logging.getLogger(__name__)
 from ._constants import *
-from ._projector import ChatEventProjector
 from ._state import *
 
 
-def _sessions_facade():
-    from omnigent.server.routes import sessions
+def _chat_event_projector():
+    from omnigent.server.communication_composition import get_server_communication_services
 
-    return sessions
-
-
-def _chat_event_projector() -> ChatEventProjector:
-    from omnigent.server.push.service import get_push_service
-
-    return ChatEventProjector(
-        publish=session_stream.publish,
-        status_cache=_session_status_cache,
-        sandbox_status_cache=_sessions_facade()._session_sandbox_status_cache,
-        push_service_factory=get_push_service,
-    )
+    return get_server_communication_services().chat_event_projector()
 
 
 def _publish_and_persist_resource_event(

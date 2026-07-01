@@ -98,7 +98,7 @@ CORE and import the orchestration primitives **from** `omnigent.kernel.*`:
 | File | Why it stays CORE (facade) |
 |---|---|
 | `omnigent/server/app.py` | Only the `create_app()` composition-root fragment is kernel-shaped; the file imports domain code and still owns non-core composition concerns (auth, peer/runner tunnel, hosts, caller-provided extra routers, SPA/static). Already excluded from the guard test's pure-kernel set. |
-| `omnigent/server/container.py` | DI composition root by ROLE but NOT import-safe: imports six domain types at module scope + the `dependency_injector` Cython C-ext. Promotable only after those imports are deferred into `build_core_container` / provider factories (the `lifespan_phases.py` pattern). Until then it stays CORE behind `OMNIGENT_USE_DI_CONTAINER` (default-OFF). |
+| `omnigent/server/container.py` | DI composition root by ROLE but NOT import-safe: imports domain/server types at module scope + the `dependency_injector` Cython C-ext. It is the always-on server composition root, but remains CORE, not KERNEL. Promotable only after those imports are deferred into `build_core_container` / provider factories (the `lifespan_phases.py` pattern). |
 
 ### 2.3 Kernel invariants (the executable rules)
 

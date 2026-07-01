@@ -562,10 +562,10 @@ assert isinstance(tool_obj.store, S3ArtifactStore)
 *Module:* `omnigent.sdk.di` · re-exported from `omnigent.sdk`.
 
 The **extension-author-facing** dependency-injection container. It is intentionally
-separate from the internal `omnigent.server.container` core container (gated behind
-`OMNIGENT_USE_DI_CONTAINER`, serving the composition root). The SDK container is a
-small, stdlib-only, general-purpose resolver an extension uses to wire its **own**
-services and have its seam factories (`@tool`, `@harness`, …) method-injected.
+separate from the internal `omnigent.server.container` core container, which is the
+always-on server composition root. The SDK container is a small, stdlib-only,
+general-purpose resolver an extension uses to wire its **own** services and have
+its seam factories (`@tool`, `@harness`, …) method-injected.
 
 Resolution **keys** are *types* (the idiomatic DI form) or plain strings (for
 config-ish values).

@@ -288,12 +288,7 @@ from omnigent.stores.host_store import Host, HostStore
 from omnigent.stores.permission_store import PermissionStore
 from omnigent.tools.client_specified import parse_client_side_tool_specs
 
-from ._dispatch_strategies import (
-    DefaultRunnerEventDispatchStrategy,
-    NativeTerminalMessageDispatchStrategy,
-    SessionEventDispatchContext,
-    SessionEventDispatcher,
-)
+from ._dispatch_strategies import SessionEventDispatchContext, SessionEventDispatcher
 
 _logger = logging.getLogger(__name__)
 
@@ -319,25 +314,10 @@ def _sessions_facade():
 
 
 def _session_event_dispatcher() -> SessionEventDispatcher:
-    """Build the runner-event dispatcher with route-boundary dependencies."""
-    sessions = _sessions_facade()
-    return SessionEventDispatcher(
-        strategies=(
-            NativeTerminalMessageDispatchStrategy(
-                is_native_terminal_session=sessions._is_native_terminal_session,
-                build_native_terminal_message_event=sessions._build_native_terminal_message_event,
-                ensure_native_terminal_ready=sessions._ensure_native_terminal_ready,
-                persist_native_terminal_failure=sessions._persist_native_terminal_failure,
-                persist_native_policy_notice=sessions._persist_native_policy_notice,
-                record_pending_input=pending_inputs.record,
-                resolve_pending_input=pending_inputs.resolve,
-                forward_native_terminal_message=sessions._forward_native_terminal_message,
-            ),
-            DefaultRunnerEventDispatchStrategy(
-                forward_event=sessions._forward_event_to_runner,
-            ),
-        )
-    )
+    """Return the server-composed runner-event dispatcher."""
+    from omnigent.server.communication_composition import get_server_communication_services
+
+    return get_server_communication_services().session_event_dispatcher()
 
 
 async def _forward_event_to_runner(

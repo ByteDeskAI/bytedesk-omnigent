@@ -101,8 +101,8 @@ dependencies = [
     # Singleton/Scoped/Transient lifetimes for omnigent.server.container.
     # Cython C-extension, but ships abi3 manylinux + musllinux wheels for
     # both x86_64 and aarch64, so the multi-arch image build resolves
-    # prebuilt wheels on amd64 and arm64 (no in-image compile). Gated
-    # behind OMNIGENT_USE_DI_CONTAINER (default OFF) at the call site.
+    # prebuilt wheels on amd64 and arm64 (no in-image compile). Used by
+    # the always-on server composition root.
     "dependency-injector>=4.49,<5",
 ]
 
