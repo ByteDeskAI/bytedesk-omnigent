@@ -15,25 +15,9 @@ from omnigent.runner.tool_dispatcher_registry import (
     _FunctionalDispatcher,
     build_default_registry,
     register_default_dispatchers,
-    use_tool_dispatcher_registry,
 )
 from omnigent.runner.tool_execution_context import ToolExecutionContext
 from omnigent.spec.types import AgentSpec, BuiltinToolConfig, ToolsConfig
-
-
-def test_flag_defaults_off(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the env var unset, the Phase 5 flag reads false (default OFF)."""
-    monkeypatch.delenv("OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY", raising=False)
-    assert use_tool_dispatcher_registry() is False
-
-
-def test_flag_reads_truthy(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The flag uses the shared truthy convention (1/true/yes)."""
-    for value in ("1", "true", "YES"):
-        monkeypatch.setenv("OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY", value)
-        assert use_tool_dispatcher_registry() is True
-    monkeypatch.setenv("OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY", "0")
-    assert use_tool_dispatcher_registry() is False
 
 
 def test_functional_dispatcher_satisfies_protocol() -> None:
@@ -51,7 +35,7 @@ async def _noop_run(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
 
 
 def test_default_registry_registers_all_branches() -> None:
-    """The default registry mirrors the MCP guard plus 20 routing branches."""
+    """The default registry mirrors the MCP guard plus 21 routing branches."""
     registry = build_default_registry()
     names = [d.name for d in registry.dispatchers]
     assert names == [
@@ -72,6 +56,7 @@ def test_default_registry_registers_all_branches() -> None:
         "comment",
         "agent",
         "policy",
+        "skill_acq",
         "spec_builtin",
         "local_python",
         "uc_function",
@@ -139,12 +124,8 @@ async def test_dispatch_parses_arguments_once() -> None:
         seen["args"] = args
         return "done"
 
-    registry.register(
-        _FunctionalDispatcher(name="t", match=lambda _c, _a: True, run=_run)
-    )
-    await registry.dispatch(
-        ToolExecutionContext(tool_name="t", arguments='{"k": "v", "n": 1}')
-    )
+    registry.register(_FunctionalDispatcher(name="t", match=lambda _c, _a: True, run=_run))
+    await registry.dispatch(ToolExecutionContext(tool_name="t", arguments='{"k": "v", "n": 1}'))
     assert seen["args"] == {"k": "v", "n": 1}
 
 
@@ -158,9 +139,7 @@ async def test_dispatch_tolerates_invalid_json_arguments() -> None:
         seen["args"] = args
         return "done"
 
-    registry.register(
-        _FunctionalDispatcher(name="t", match=lambda _c, _a: True, run=_run)
-    )
+    registry.register(_FunctionalDispatcher(name="t", match=lambda _c, _a: True, run=_run))
     await registry.dispatch(ToolExecutionContext(tool_name="t", arguments="not json"))
     assert seen["args"] == {}
 
@@ -173,9 +152,7 @@ async def test_dispatch_renders_exceptions_to_error_string() -> None:
     async def _boom(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
         raise ValueError("kaboom")
 
-    registry.register(
-        _FunctionalDispatcher(name="boom", match=lambda _c, _a: True, run=_boom)
-    )
+    registry.register(_FunctionalDispatcher(name="boom", match=lambda _c, _a: True, run=_boom))
     out = await registry.dispatch(ToolExecutionContext(tool_name="t", arguments="{}"))
     assert out == "Error: ValueError: kaboom"
 
@@ -257,35 +234,52 @@ async def test_registry_dispatches_spec_declared_builtin(monkeypatch: pytest.Mon
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_flag_off_skips_registry(monkeypatch: pytest.MonkeyPatch) -> None:
-    """With the flag OFF, execute_tool never calls the registry seam."""
-    monkeypatch.delenv("OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY", raising=False)
-    monkeypatch.delenv("OMNIGENT_USE_TOOL_EXECUTION_CONTEXT", raising=False)
-    called = {"n": 0}
+async def test_registry_dispatches_skill_acq_before_spec_builtin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """sys_skill_* tools are runner-dispatched even when declared as builtins."""
+    received: dict[str, Any] = {}
 
-    async def _fake_via_registry(ctx: ToolExecutionContext) -> str:
-        called["n"] += 1
-        return "should-not-run"
+    async def _fake_skill_acq(tool_name: str, args: dict[str, Any], server_client: Any) -> str:
+        received.update(tool_name=tool_name, args=args, server_client=server_client)
+        return "skill-acq-output"
 
-    monkeypatch.setattr(reg, "dispatch_via_registry", _fake_via_registry)
+    async def _unexpected_spec_builtin(*_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("sys_skill_* must not fall through to spec_builtin")
 
-    out = await tool_dispatch.execute_tool(
-        tool_name="definitely_not_a_real_tool",
-        arguments="{}",
+    monkeypatch.setattr(tool_dispatch, "_execute_skill_acq_tool", _fake_skill_acq)
+    monkeypatch.setattr(tool_dispatch, "_execute_spec_builtin_tool", _unexpected_spec_builtin)
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(builtins=[BuiltinToolConfig(name="sys_skill_installed")]),
     )
-    assert called["n"] == 0
-    assert "should-not-run" not in out
+    server_client = object()
+
+    out = await build_default_registry().dispatch(
+        ToolExecutionContext(
+            tool_name="sys_skill_installed",
+            arguments='{"agent_id": "ag1"}',
+            agent_spec=spec,
+            server_client=server_client,
+        )
+    )
+
+    assert out == "skill-acq-output"
+    assert received == {
+        "tool_name": "sys_skill_installed",
+        "args": {"agent_id": "ag1"},
+        "server_client": server_client,
+    }
 
 
 @pytest.mark.asyncio
-async def test_execute_tool_flag_on_routes_through_registry(
+async def test_execute_tool_routes_through_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    With the flag ON, ``execute_tool`` dispatches through the registry seam,
-    carrying the SAME inbox object by reference end-to-end.
+    ``execute_tool`` dispatches through the registry seam, carrying the SAME
+    inbox object by reference end-to-end.
     """
-    monkeypatch.setenv("OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY", "1")
     inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
     captured: dict[str, ToolExecutionContext] = {}
 
@@ -304,10 +298,30 @@ async def test_execute_tool_flag_on_routes_through_registry(
     assert captured["ctx"].session_inbox is inbox
 
 
+@pytest.mark.asyncio
+async def test_execute_tool_legacy_tool_dispatch_envs_do_not_gate_registry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Retired tool-dispatch env switches no longer control the registry path."""
+    monkeypatch.setenv("OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY", "0")
+    monkeypatch.setenv("OMNIGENT_USE_TOOL_EXECUTION_CONTEXT", "0")
+
+    async def _fake_via_registry(ctx: ToolExecutionContext) -> str:
+        return f"registry:{ctx.tool_name}"
+
+    monkeypatch.setattr(reg, "dispatch_via_registry", _fake_via_registry)
+
+    out = await tool_dispatch.execute_tool(
+        tool_name="sys_read_inbox",
+        arguments="{}",
+    )
+    assert out == "registry:sys_read_inbox"
+
+
 def test_register_default_dispatchers_is_idempotent_into_fresh_registry() -> None:
     """register_default_dispatchers populates a caller-owned registry."""
     registry = DispatcherRegistry()
     assert registry.dispatchers == ()
     register_default_dispatchers(registry)
-    assert len(registry.dispatchers) == 21
+    assert len(registry.dispatchers) == 22
     assert registry.dispatchers[0].name == "mcp"

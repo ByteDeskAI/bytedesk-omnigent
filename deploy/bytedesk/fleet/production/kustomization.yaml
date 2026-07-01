@@ -163,10 +163,3 @@ patches:
                 env:
                   - name: OMNIGENT_INFISICAL_ENV
                     value: production
-                  # ADR-0145 spine flag (BDP-2343): flip ON in prod per the
-                  # phased cutover plan — see Jira BDP-2343/BDP-2368 for bake
-                  # criteria and rollback (git revert this env var + a new
-                  # release, since this is a GitOps-reconciled value, not an
-                  # instant Infisical toggle).
-                  - name: OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY
-                    value: "1"

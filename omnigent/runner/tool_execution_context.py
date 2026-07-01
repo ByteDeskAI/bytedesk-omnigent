@@ -7,18 +7,14 @@ per-dispatch dependencies of a runner-local tool call into one value
 ``agent_spec``, ``conversation_id``, ``task_id``, ``agent_id``,
 ``agent_name``, ``runner_workspace``, ``mcp_manager``, ``session_inbox``,
 ``session_async_tasks``, ``harness_client``, ``publish_event``,
-``filesystem_registry``). One value carries those dependencies instead of
-a long parameter list, so a new per-dispatch dependency is a new field
-rather than a wider signature.
+``filesystem_registry``, ``acting_identity``). One value carries those
+dependencies instead of a long parameter list, so a new per-dispatch
+dependency is a new field rather than a wider signature.
 
-It supersedes the prior per-kwarg dispatch signature behind
-``OMNIGENT_USE_TOOL_EXECUTION_CONTEXT`` (default OFF, strangler-fig): with
-the flag off the legacy per-kwarg ``execute_tool`` signature stays
-authoritative and behaves byte-identically to today; with the flag on,
-``execute_tool`` builds a context from those same args and dispatches
-through the context-consuming path. Both paths thread the identical values
-to the same per-tool ``_execute_*`` helpers — the context is a carrier, not
-a behavior change.
+``execute_tool`` builds this carrier for every dispatch and sends it through
+the registry. The context is a carrier, not a behavior change: dispatchers
+thread the identical values to the same per-tool ``_execute_*`` helpers the
+old per-kwarg path used.
 
 **Reference semantics are the whole point.** The mutable coordination
 objects — ``session_inbox`` (the per-session :class:`asyncio.Queue` that
@@ -48,6 +44,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     import httpx
 
+    from omnigent.identity.identity import ActingIdentity
     from omnigent.runner.mcp_manager import McpManager
     from omnigent.runner.resource_registry import SessionResourceRegistry
     from omnigent.runner.tool_dispatch import AgentSpecLike
@@ -90,6 +87,8 @@ class ToolExecutionContext:
     :param harness_client: httpx client pointed at the harness, or ``None``.
     :param publish_event: Per-session SSE emit callback, or ``None``.
     :param filesystem_registry: Registry tracking agent file mods, or ``None``.
+    :param acting_identity: Caller identity propagated across the
+        server-to-runner boundary, or ``None`` for spawn-safe anonymous calls.
     """
 
     tool_name: str
@@ -109,3 +108,4 @@ class ToolExecutionContext:
     harness_client: httpx.AsyncClient | None = None
     publish_event: Callable[[str, dict[str, Any]], None] | None = None
     filesystem_registry: FilesystemRegistry | None = None
+    acting_identity: ActingIdentity | None = None

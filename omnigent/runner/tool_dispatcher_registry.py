@@ -21,13 +21,9 @@ membership tracks ``tool_dispatch`` by construction;
 ``register_default_dispatchers`` builds the strategies in that precedence
 order.
 
-It supersedes the prior inline dispatch path behind
-``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` (default OFF, strangler-fig): with
-the flag off the legacy ``execute_tool`` path stays authoritative and
-behaves byte-identically to today; with the flag on, ``execute_tool``
-builds a :class:`ToolExecutionContext` (the Phase 4 carrier) and dispatches
-through the registry. The routing decision and the helper called are
-identical either way.
+``execute_tool`` builds a :class:`ToolExecutionContext` and dispatches
+through this registry. The registry is now the canonical runner-local
+dispatch path; there is no feature-flagged inline fallback.
 
 **Reference semantics carry through.** The mutable coordination objects
 (``session_inbox``, ``session_async_tasks``) ride inside the
@@ -55,28 +51,6 @@ if TYPE_CHECKING:
     from omnigent.runner.tool_execution_context import ToolExecutionContext
 
 _logger = logging.getLogger(__name__)
-
-# Spine Phase 5 (BDP-2327): when truthy, ``execute_tool`` routes its
-# dispatch through the :class:`DispatcherRegistry` (Strategy + Registry)
-# instead of the inline elif chain. Default OFF — with the flag unset the
-# existing elif chain is the live path and behavior is unchanged.
-USE_TOOL_DISPATCHER_REGISTRY_ENV = "OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY"
-
-
-def use_tool_dispatcher_registry() -> bool:
-    """Return whether the Phase 5 registry path is enabled (default OFF).
-
-    Reads ``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` via the same
-    ``env_var_is_truthy`` helper the rest of the runner uses, so the
-    truthy convention (``1`` / ``true`` / ``yes``) and the default-OFF
-    posture match every other spine flag. The import is lazy to keep this
-    module free of an ``omnigent.server`` import at load time.
-
-    :returns: ``True`` only when the env var is explicitly truthy.
-    """
-    from omnigent.server.auth import env_var_is_truthy
-
-    return env_var_is_truthy(USE_TOOL_DISPATCHER_REGISTRY_ENV)
 
 
 # A dispatcher's match predicate and async body both receive the bundled
@@ -217,10 +191,11 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
     15. ``_COMMENT_TOOLS`` → ``_execute_comment_tool``
     16. ``_AGENT_TOOLS`` → ``_execute_agent_tool``
     17. ``_POLICY_TOOLS`` → ``_execute_policy_tool``
-    18. ``_is_spec_builtin_tool`` → ``_execute_spec_builtin_tool``
-    19. ``_is_spec_local_python_tool`` → ``_execute_local_python_tool``
-    20. ``_is_uc_function_tool`` → ``_execute_uc_function_tool``
-    21. catch-all → ``_execute_spec_callable_tool``
+    18. ``_SKILL_ACQ_TOOLS`` → ``_execute_skill_acq_tool``
+    19. ``_is_spec_builtin_tool`` → ``_execute_spec_builtin_tool``
+    20. ``_is_spec_local_python_tool`` → ``_execute_local_python_tool``
+    21. ``_is_uc_function_tool`` → ``_execute_uc_function_tool``
+    22. catch-all → ``_execute_spec_callable_tool``
 
     Helpers and tool sets are imported lazily from ``tool_dispatch`` (the
     sets are imported, never re-declared, so they cannot drift). The
@@ -306,6 +281,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         return await td._execute_terminal_tool(
             ctx.tool_name,
             args,
+            acting_identity=ctx.acting_identity,
             terminal_registry=ctx.terminal_registry,
             resource_registry=ctx.resource_registry,
             agent_spec=ctx.agent_spec,
@@ -489,6 +465,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         return td._execute_skill_tool(
             ctx.tool_name,
             args,
+            acting_identity=ctx.acting_identity,
             agent_spec=ctx.agent_spec,
             runner_workspace=ctx.runner_workspace,
         )
@@ -554,12 +531,29 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 18. Spec-declared builtin tool (predicate branch). ``ctx.arguments`` is
+    # 18. Skill acquisition tools.
+    async def _run_skill_acq(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
+        return await td._execute_skill_acq_tool(
+            ctx.tool_name,
+            args,
+            ctx.server_client,
+        )
+
+    registry.register(
+        _FunctionalDispatcher(
+            name="skill_acq",
+            match=lambda ctx, _args: ctx.tool_name in td._SKILL_ACQ_TOOLS,
+            run=_run_skill_acq,
+        )
+    )
+
+    # 19. Spec-declared builtin tool (predicate branch). ``ctx.arguments`` is
     # the raw JSON string, matching the elif branch.
     async def _run_spec_builtin(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_spec_builtin_tool(
             ctx.tool_name,
             ctx.arguments,
+            acting_identity=ctx.acting_identity,
             agent_spec=ctx.agent_spec,
             conversation_id=ctx.conversation_id,
             task_id=ctx.task_id,
@@ -575,12 +569,13 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 19. Spec-defined local Python tool (predicate branch). ``ctx.arguments``
+    # 20. Spec-defined local Python tool (predicate branch). ``ctx.arguments``
     # is the raw JSON string here, matching the elif branch.
     async def _run_local_python(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
         return await td._execute_local_python_tool(
             ctx.tool_name,
             ctx.arguments,
+            acting_identity=ctx.acting_identity,
             agent_spec=ctx.agent_spec,
             conversation_id=ctx.conversation_id,
             task_id=ctx.task_id,
@@ -596,7 +591,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 20. Unity Catalog function tool (predicate branch).
+    # 21. Unity Catalog function tool (predicate branch).
     async def _run_uc_function(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
         return await td._execute_uc_function_tool(ctx.tool_name, args, agent_spec=ctx.agent_spec)
 
@@ -608,7 +603,7 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 21. Catch-all (the elif chain's ``else``) — spec callable tool. Always
+    # 22. Catch-all (the elif chain's ``else``) — spec callable tool. Always
     # matches, so the registry is total: every tool name resolves to exactly
     # one dispatch, mirroring the elif chain's final ``else`` arm.
     async def _run_spec_callable(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
@@ -640,12 +635,11 @@ def build_default_registry() -> DispatcherRegistry:
 async def dispatch_via_registry(ctx: ToolExecutionContext) -> str:
     """Dispatch a tool through a fresh default :class:`DispatcherRegistry`.
 
-    The Phase 5 entry point ``execute_tool`` calls when
-    ``OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY`` is on. Builds the default
-    registry and routes ``ctx`` through it. A fresh registry per call keeps
-    the seam stateless (dispatchers close over nothing mutable, so there is
-    no per-call cost beyond list construction) and avoids any module-level
-    singleton that would couple test isolation to import order.
+    ``execute_tool`` calls this canonical registry entry point. A fresh
+    registry per call keeps the seam stateless (dispatchers close over
+    nothing mutable, so there is no per-call cost beyond list construction)
+    and avoids any module-level singleton that would couple test isolation to
+    import order.
 
     :param ctx: The bundled per-dispatch dependencies.
     :returns: Tool output string.
