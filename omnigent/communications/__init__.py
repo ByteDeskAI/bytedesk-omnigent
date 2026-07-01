@@ -22,6 +22,14 @@ from omnigent.communications.results import (
     DelegationResult,
     DispatchDisposition,
 )
+from omnigent.communications.runner_tools import (
+    CommunicationServiceProvider,
+    DelegationService,
+    InboxService,
+    RunnerCommunicationScope,
+    SessionQueryToolService,
+)
+from omnigent.communications.session_query import SessionQueryService
 from omnigent.communications.state import (
     InvalidSessionStatusTransition,
     SessionStatus,
@@ -37,14 +45,20 @@ __all__ = [
     "ChatActorKind",
     "ChatCommandResult",
     "ChildSessionUpdated",
+    "CommunicationServiceProvider",
     "DelegateToAgentCommand",
     "DelegationResult",
+    "DelegationService",
     "DispatchDisposition",
+    "InboxService",
     "InputAccepted",
     "InvalidSessionStatusTransition",
     "PostSessionEventCommand",
+    "RunnerCommunicationScope",
     "SessionStatus",
     "SessionStatusChanged",
+    "SessionQueryService",
+    "SessionQueryToolService",
     "StartSessionCommand",
     "UnknownSessionStatus",
     "is_status_transition_allowed",
