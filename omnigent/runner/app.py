@@ -4457,6 +4457,32 @@ def create_runner_app(
 
     app.state.has_active_work = _has_active_work
 
+    def _ensure_session_coordination_state(
+        session_id: str,
+        *,
+        agent_id: str | None = None,
+        sub_agent_name: str | None = None,
+    ) -> None:
+        """
+        Create idempotent per-session coordination state.
+
+        ``POST /v1/sessions`` normally initializes these maps, but a tunneled
+        MCP tool call can race ahead of that handshake. Do not replace existing
+        queues: they may already contain undrained async/sub-agent inbox
+        payloads.
+        """
+
+        if agent_id is not None:
+            _session_agent_ids[session_id] = agent_id
+        if session_id not in _session_event_queues:
+            _session_event_queues[session_id] = asyncio.Queue()
+        if session_id not in _session_inboxes:
+            _session_inboxes[session_id] = asyncio.Queue()
+        if session_id not in _session_async_tasks:
+            _session_async_tasks[session_id] = {}
+        if sub_agent_name:
+            _session_sub_agent_names[session_id] = sub_agent_name
+
     def _publish_event(session_id: str, event: dict[str, Any]) -> None:
         """Put an event on the session's queue for GET /stream.
 
@@ -5247,22 +5273,15 @@ def create_runner_app(
             )
 
         _session_start_cache[session_id] = time.time()
-        _session_agent_ids[session_id] = agent_id
-        # Don't replace a queue ``stream_session`` may have already lazily
-        # created: the Omnigent relay's ``GET /stream`` can race ahead of this
-        # init, and replacing it orphans the relay on the dead queue so
-        # later events never reach the server (see ``stream_session``).
-        if session_id not in _session_event_queues:
-            _session_event_queues[session_id] = asyncio.Queue()
-        # Same guard: a reconnect re-POST must not wipe an already-delivered
-        # sub-agent payload (its work entry is latched delivered → never re-sent).
-        if session_id not in _session_inboxes:
-            _session_inboxes[session_id] = asyncio.Queue()
-        if session_id not in _session_async_tasks:
-            _session_async_tasks[session_id] = {}
+        # Don't replace queues ``stream_session`` or sub-agent delivery may have
+        # already lazily created; that would orphan relays or undrained inbox
+        # payloads.
         _sa_name = body.get("sub_agent_name")
-        if _sa_name:
-            _session_sub_agent_names[session_id] = _sa_name
+        _ensure_session_coordination_state(
+            session_id,
+            agent_id=agent_id,
+            sub_agent_name=_sa_name,
+        )
 
         # Auto-bootstrap: if this is a claude-native session and no
         # terminal exists yet, create one. This handles the case
@@ -12203,6 +12222,10 @@ def create_runner_app(
                         except Exception:  # noqa: BLE001
                             pass
                 _agent_id_local = _session_agent_ids.get(session_id)
+                _ensure_session_coordination_state(
+                    session_id,
+                    agent_id=_agent_id_local,
+                )
                 try:
                     output = await execute_tool(
                         tool_name=tool_name,

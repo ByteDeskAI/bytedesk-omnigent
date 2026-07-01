@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
@@ -12,11 +13,13 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
+from omnigent.runner import app as runner_app_mod
 from omnigent.runner import create_runner_app, tool_dispatch
 from omnigent.runner.app import (
     _session_agent_ids_ref,
     _session_event_queues_ref,
     _session_histories_ref,
+    _session_inboxes_ref,
 )
 from omnigent.runner.mcp_manager import McpSchemasResult
 from omnigent.runtime.compaction import CompactionResult, SummaryMetadata
@@ -386,6 +389,206 @@ async def test_mcp_execute_tools_call_runner_local_dispatch_error() -> None:
 
     assert resp.status_code == 200
     assert resp.json()["error"]["code"] == -32000
+
+
+@pytest.mark.asyncio
+async def test_mcp_execute_runner_local_send_lazily_creates_parent_inbox() -> None:
+    """
+    ``/mcp/execute`` can be the first runner touch after a relay/init race.
+
+    A registered-agent delegation uses ``sys_session_create`` followed by
+    ``sys_session_send(session_id=...)``. If the runner has not yet seen
+    ``POST /v1/sessions`` for the parent, the MCP bridge must still create the
+    parent inbox before dispatching the runner-local tool; otherwise production
+    returns ``sys_session_send requires parent session inbox`` and the child
+    never receives its task.
+    """
+
+    parent_id = "conv_mcp_lazy_parent_inbox"
+    child_id = "conv_mcp_lazy_child_inbox"
+    event_posts: list[dict[str, Any]] = []
+
+    async def _server_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == f"/v1/sessions/{child_id}":
+            return httpx.Response(
+                200,
+                json={
+                    "id": child_id,
+                    "parent_session_id": parent_id,
+                    "title": "product-ops-director:demo",
+                    "busy": False,
+                    "labels": {},
+                },
+            )
+        if request.method == "POST" and request.url.path == f"/v1/sessions/{child_id}/events":
+            event_posts.append(json.loads(request.content))
+            return httpx.Response(202, json={"queued": True})
+        return httpx.Response(404, json={"error": str(request.url)})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_server_handler),
+        base_url="http://server",
+    ) as server_client:
+        app = create_runner_app(server_client=server_client)  # type: ignore[arg-type]
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+                resp = await client.post(
+                    f"/v1/sessions/{parent_id}/mcp/execute",
+                    json={
+                        "method": "tools/call",
+                        "params": {
+                            "name": "sys_session_send",
+                            "arguments": {"session_id": child_id, "args": "scope the demo"},
+                        },
+                    },
+                )
+        finally:
+            _session_inboxes_ref.pop(parent_id, None)
+            runner_app_mod.unregister_subagent_work(child_id)
+
+    assert resp.status_code == 200
+    output = resp.json()["result"]["output"]
+    assert "requires parent session inbox" not in output
+    handle = json.loads(output)
+    assert handle["conversation_id"] == child_id
+
+
+@pytest.mark.asyncio
+async def test_mcp_execute_existing_session_apis_support_nested_child_chain() -> None:
+    """
+    A child session can create and drive its own child through existing APIs.
+
+    This is the registered-agent chain the UI/runtime uses:
+    root ``sys_session_create`` -> child ``sys_session_create`` ->
+    child ``sys_session_send(session_id=grandchild)``. The runner MCP bridge
+    must treat the child as a normal parent session, including its inbox.
+    """
+
+    root_id = "conv_mcp_nested_root"
+    child_id = "conv_mcp_nested_child"
+    grandchild_id = "conv_mcp_nested_grandchild"
+    create_requests: list[dict[str, Any]] = []
+    event_posts: list[dict[str, Any]] = []
+
+    async def _server_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1/sessions":
+            body = json.loads(request.content)
+            create_requests.append(body)
+            if body.get("parent_session_id") == root_id:
+                return httpx.Response(
+                    201,
+                    json={"id": child_id, "agent_name": "child-agent", "status": "created"},
+                )
+            if body.get("parent_session_id") == child_id:
+                return httpx.Response(
+                    201,
+                    json={
+                        "id": grandchild_id,
+                        "agent_name": "grandchild-agent",
+                        "status": "created",
+                    },
+                )
+            return httpx.Response(400, json={"error": "wrong parent", "body": body})
+        if request.method == "GET" and request.url.path == f"/v1/sessions/{grandchild_id}":
+            return httpx.Response(
+                200,
+                json={
+                    "id": grandchild_id,
+                    "parent_session_id": child_id,
+                    "title": "grandchild-agent:analysis",
+                    "busy": False,
+                    "labels": {},
+                },
+            )
+        if request.method == "POST" and request.url.path.endswith("/events"):
+            event_posts.append(
+                {
+                    "path": request.url.path,
+                    "body": json.loads(request.content),
+                }
+            )
+            return httpx.Response(202, json={"queued": True})
+        return httpx.Response(404, json={"error": str(request.url)})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_server_handler),
+        base_url="http://server",
+    ) as server_client:
+        app = create_runner_app(server_client=server_client)  # type: ignore[arg-type]
+        transport = httpx.ASGITransport(app=app)
+        try:
+            async with httpx.AsyncClient(transport=transport, base_url="http://runner") as client:
+                child_resp = await client.post(
+                    f"/v1/sessions/{root_id}/mcp/execute",
+                    json={
+                        "method": "tools/call",
+                        "params": {
+                            "name": "sys_session_create",
+                            "arguments": {
+                                "agent_id": "ag_child",
+                                "title": "child analysis",
+                                "message": "start child work",
+                            },
+                        },
+                    },
+                )
+                grandchild_resp = await client.post(
+                    f"/v1/sessions/{child_id}/mcp/execute",
+                    json={
+                        "method": "tools/call",
+                        "params": {
+                            "name": "sys_session_create",
+                            "arguments": {
+                                "agent_id": "ag_grandchild",
+                                "title": "grandchild analysis",
+                            },
+                        },
+                    },
+                )
+                send_resp = await client.post(
+                    f"/v1/sessions/{child_id}/mcp/execute",
+                    json={
+                        "method": "tools/call",
+                        "params": {
+                            "name": "sys_session_send",
+                            "arguments": {
+                                "session_id": grandchild_id,
+                                "args": "scope the nested work",
+                            },
+                        },
+                    },
+                )
+        finally:
+            for session_id in (root_id, child_id):
+                _session_event_queues_ref.pop(session_id, None)
+                _session_inboxes_ref.pop(session_id, None)
+            for session_id in (child_id, grandchild_id):
+                runner_app_mod.unregister_child_session(session_id)
+                runner_app_mod.unregister_subagent_work(session_id)
+
+    assert child_resp.status_code == 200
+    child_handle = json.loads(child_resp.json()["result"]["output"])
+    assert child_handle["conversation_id"] == child_id
+
+    assert grandchild_resp.status_code == 200
+    grandchild_handle = json.loads(grandchild_resp.json()["result"]["output"])
+    assert grandchild_handle["conversation_id"] == grandchild_id
+
+    assert send_resp.status_code == 200
+    send_output = send_resp.json()["result"]["output"]
+    assert "requires parent session inbox" not in send_output
+    send_handle = json.loads(send_output)
+    assert send_handle["conversation_id"] == grandchild_id
+
+    assert [body["parent_session_id"] for body in create_requests] == [root_id, child_id]
+    grandchild_event = next(
+        entry for entry in event_posts if entry["path"] == f"/v1/sessions/{grandchild_id}/events"
+    )
+    assert create_requests[0]["initial_items"][0]["data"]["content"][0]["text"] == (
+        "start child work"
+    )
+    assert grandchild_event["body"]["data"]["content"][0]["text"] == "scope the nested work"
 
 
 @pytest.mark.asyncio
