@@ -1,4 +1,5 @@
 """Sessions runner relay/heal/launch helpers — thin re-export facade."""
+
 from __future__ import annotations
 
 import importlib
@@ -6,6 +7,7 @@ import importlib
 _SUBMODULES = (
     "_bundled",
     "_client",
+    "_dispatch_strategies",
     "_heal",
     "_helpers",
     "_keepalive",
@@ -16,7 +18,6 @@ _SUBMODULES = (
     "_skills",
     "_stop",
 )
-
 
 
 _FACADE_SKIP = frozenset({"_SUBMODULES", "_export_submodule", "importlib", "_FACADE_SKIP"})
