@@ -142,6 +142,12 @@ Supported v1 node kinds are `task`, `tool`, `agent`, `blueprint`, `approval`,
 session's inbox-style result path. Loops must be bounded with
 `max_iterations`, an `until` condition, and an `on_exhausted` policy.
 
+Child `agent` and `blueprint` nodes can declare `metadata.expect_json: true`
+when downstream conditions need a structured object. The server parses the
+child's latest assistant message as raw JSON or a JSON fenced code block; a
+malformed or non-object response fails the child node instead of falling back
+to free text.
+
 ### `tools.builtins`
 
 Enables built-in tools provided by omnigent. Each entry is either a plain

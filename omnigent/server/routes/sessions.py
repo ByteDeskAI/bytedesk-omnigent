@@ -18351,18 +18351,20 @@ def create_sessions_router(
                     output={"prompt": prompt},
                 )
             raise
-        output = await _latest_assistant_text(child.id)
+        raw_output = await _latest_assistant_text(child.id)
         await _append_blueprint_child_return(
             parent_session_id,
             node=node,
             child_session_id=child.id,
             target=target_agent.name,
-            output=output,
+            output=raw_output,
         )
+        status, output, error = _blueprint_child_output(node, raw_output)
         return ChildDispatchResult(
-            status="completed",
+            status=status,
             child_session_id=child.id,
             output=output,
+            error=error,
         )
 
     async def _append_blueprint_child_return(
@@ -18446,6 +18448,54 @@ def create_sessions_router(
         if isinstance(value, str):
             return value
         return json.dumps(value if value is not None else {}, indent=2, sort_keys=True)
+
+    def _blueprint_child_output(
+        node: BlueprintNode,
+        raw_output: str,
+    ) -> tuple[Literal["completed", "failed"], Any, str | None]:
+        """
+        Apply optional strict output parsing for child blueprint/agent nodes.
+
+        ``metadata.expect_json: true`` is deliberately opt-in so existing
+        child-session blueprint behavior stays text-compatible.
+        """
+        if not _blueprint_metadata_flag(node, "expect_json"):
+            return "completed", raw_output, None
+        parsed = _parse_blueprint_child_json_object(raw_output)
+        if parsed is None:
+            return (
+                "failed",
+                {
+                    "approved": False,
+                    "error": "invalid_child_json",
+                    "raw_text": raw_output,
+                },
+                f"Blueprint node {node.id!r} expected a JSON object from child output",
+            )
+        return "completed", parsed, None
+
+    def _blueprint_metadata_flag(node: BlueprintNode, key: str) -> bool:
+        value = node.metadata.get(key)
+        if value is True:
+            return True
+        return isinstance(value, str) and value.strip().lower() == "true"
+
+    _BLUEPRINT_JSON_FENCE_RE = re.compile(
+        r"^```(?:json)?\s*(.*?)\s*```$",
+        re.IGNORECASE | re.DOTALL,
+    )
+
+    def _parse_blueprint_child_json_object(raw_output: str) -> dict[str, Any] | None:
+        """Parse raw or fenced JSON object text returned by a child node."""
+        candidate = raw_output.strip()
+        match = _BLUEPRINT_JSON_FENCE_RE.fullmatch(candidate)
+        if match:
+            candidate = match.group(1).strip()
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            return None
+        return value if isinstance(value, dict) else None
 
     def _blueprint_output_to_text(value: Any) -> str:
         """Serialize a blueprint output into assistant message text."""

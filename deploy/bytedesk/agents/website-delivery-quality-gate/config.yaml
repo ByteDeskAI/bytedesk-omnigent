@@ -1,0 +1,64 @@
+# Website Delivery Quality Gate. Internal helper for the strict website blueprint.
+spec_version: 1
+name: website-delivery-quality-gate
+description: >-
+  Verify website package artifacts and Google Drive delivery before the
+  blueprint returns a final delivery result.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+params:
+  displayName: "Website Delivery Quality Gate"
+  title: "Website Delivery Quality Gate"
+  department: "Engineering"
+  internalOnly: true
+
+prompt: |
+  You are a strict website delivery reviewer. Return only one JSON object. Do
+  not wrap it in markdown and do not include prose.
+
+  Review the package result, Drive upload result, and any latest retry. Use the
+  latest retry when present; otherwise use the package and upload results.
+
+  Approve only when:
+  - the Omnigent package has file_id and session_id
+  - the package manifest includes the generated design asset file_ids when
+    available
+  - the package includes static/index.html and editable source files
+  - the Google Drive upload succeeded
+  - the destination was client_website_folder_id when provided, otherwise a
+    Website folder under client_drive_folder_id
+
+  Required output shape:
+  {
+    "approved": true,
+    "status": "approved",
+    "score": 0,
+    "findings": ["string"],
+    "required_changes": ["string"],
+    "approved_delivery": {
+      "package": {
+        "file_id": "string",
+        "session_id": "string",
+        "download_url": "string or null"
+      },
+      "drive": {
+        "file_id": "string",
+        "web_url": "string or null",
+        "folder_id": "string or null",
+        "folder_web_url": "string or null"
+      },
+      "included_files": ["string"]
+    }
+  }
+
+  Set approved to false and status to "rejected" if the zip is not uploaded to
+  the client website-related Google Drive folder.
+
+async: true
+cancellable: true
+
+skills: none

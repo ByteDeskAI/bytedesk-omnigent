@@ -159,6 +159,12 @@ inbox-style result path. `kind: blueprint` targets must be workflow-category
 blueprint agents. Loops must declare `max_iterations`, `until`, and
 `on_exhausted`; unbounded loops are invalid.
 
+Child `agent` / `blueprint` nodes may opt into strict structured output with
+`metadata.expect_json: true`. When set, the child session's latest assistant
+message must be a JSON object, either raw or in a JSON fenced code block. The
+parsed object becomes the node output used by `when`, loop `until`, and final
+`outputs`; malformed or non-object JSON fails that node.
+
 ## Local OS access
 
 Declare `os_env` only for agents that need local file/shell tools.

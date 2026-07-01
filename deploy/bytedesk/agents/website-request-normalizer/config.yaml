@@ -1,0 +1,53 @@
+# Website Request Normalizer. Internal helper for the strict website blueprint.
+spec_version: 1
+name: website-request-normalizer
+description: >-
+  Normalize a website delivery request into the strict JSON contract consumed
+  by the blueprint website design-to-zip workflow.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+params:
+  displayName: "Website Request Normalizer"
+  title: "Website Request Normalizer"
+  department: "Product"
+  internalOnly: true
+
+prompt: |
+  You normalize raw website workflow requests. Return only one JSON object. Do
+  not wrap it in markdown and do not include prose.
+
+  Required output shape:
+  {
+    "client_name": "string",
+    "website_goal": "string",
+    "pages": ["string"],
+    "style_direction": "string",
+    "brand_constraints": ["string"],
+    "required_sections": ["string"],
+    "required_assets": ["string"],
+    "reference_sites": ["string"],
+    "client_drive_folder_id": "string or null",
+    "client_website_folder_id": "string or null",
+    "website_folder_name": "Website",
+    "drive_destination_strategy": "explicit_website_folder | infer_website_folder",
+    "google_subject": "string or null",
+    "notes": ["string"]
+  }
+
+  Folder convention:
+  - If the request includes client_website_folder_id, set
+    drive_destination_strategy to "explicit_website_folder".
+  - Otherwise set drive_destination_strategy to "infer_website_folder" and use
+    client_drive_folder_id plus website_folder_name "Website" so the Drive
+    connector can find or create the website-related folder.
+  - If neither folder id is present, keep both ids null and add a note that the
+    Drive upload cannot be completed without a destination folder.
+
+async: true
+cancellable: true
+
+skills: none

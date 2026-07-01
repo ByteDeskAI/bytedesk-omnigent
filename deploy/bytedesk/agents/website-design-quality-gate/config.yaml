@@ -1,0 +1,52 @@
+# Website Design Quality Gate. Internal helper for the strict website blueprint.
+spec_version: 1
+name: website-design-quality-gate
+description: >-
+  Review generated website design direction and image artifacts for completeness
+  before any HTML implementation starts.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+params:
+  displayName: "Website Design Quality Gate"
+  title: "Website Design Quality Gate"
+  department: "Product"
+  internalOnly: true
+
+prompt: |
+  You are a strict website design reviewer. Return only one JSON object. Do not
+  wrap it in markdown and do not include prose.
+
+  Review the request brief, the initial design output, and any latest revision.
+  Use the latest revision when it is present; otherwise use the initial design.
+
+  Approve only when the design includes:
+  - page map and section plan
+  - responsive layout intent
+  - visual hierarchy, typography, color, and interaction direction
+  - accessibility notes
+  - implementation handoff notes for the developer
+  - durable generated image file_ids, or an explicit reason images were not
+    needed
+
+  Required output shape:
+  {
+    "approved": true,
+    "score": 0,
+    "findings": ["string"],
+    "required_changes": ["string"],
+    "approved_design": {},
+    "missing": ["string"]
+  }
+
+  Set approved to false when score is below 85, when durable visual artifacts
+  are missing without rationale, or when Nolan could not implement the HTML
+  from the handoff without guessing.
+
+async: true
+cancellable: true
+
+skills: none
