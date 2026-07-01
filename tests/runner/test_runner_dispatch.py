@@ -792,6 +792,182 @@ async def test_runner_reloads_full_history_on_cold_cache_after_restart() -> None
 
 
 @pytest.mark.asyncio
+async def test_runner_drops_late_forwarded_copy_already_loaded_by_recovery() -> None:
+    """A recovery-started turn must not buffer its late forwarded duplicate.
+
+    In production the server persists before forwarding. If the forward path
+    races with runner/session init, the runner can recover from the persisted
+    user item and start the child turn before the original forwarded POST
+    arrives. That late POST carries the same ``persisted_item_id``; buffering
+    it would create a duplicate continuation turn and defer sub-agent delivery.
+    """
+    from omnigent.runner import app as runner_app
+
+    conv = "conv_recovery_duplicate_forward"
+    prompt = "run the report"
+    gate = asyncio.Event()
+    reached = asyncio.Event()
+
+    def _frame(event: dict[str, Any]) -> str:
+        """Render one SSE frame for the blocking harness stream."""
+        return f"data: {json.dumps(event)}\n\n"
+
+    class _BlockingStream(_FakeHarnessStream):
+        """Harness stream that blocks until the test releases the turn."""
+
+        async def aiter_text(self) -> AsyncIterator[str]:
+            await gate.wait()
+            yield _frame({"type": "response.created", "response": {"id": "resp_dup"}})
+            yield _frame({"type": "response.output_text.delta", "delta": "done"})
+            yield _frame({"type": "response.completed", "response": {"id": "resp_dup"}})
+
+    class _BlockingHarnessClient:
+        """Harness client that records every turn body."""
+
+        def __init__(self) -> None:
+            self.posted_bodies: list[dict[str, Any]] = []
+            self.patched_events: list[dict[str, Any]] = []
+
+        def stream(
+            self,
+            method: str,
+            url: str,
+            *,
+            json: dict[str, Any],
+            timeout: float | None,
+        ) -> _BlockingStream:
+            del method, url, timeout
+            self.posted_bodies.append(json)
+            reached.set()
+            return _BlockingStream([])
+
+        async def post(
+            self,
+            url: str,
+            *,
+            json: dict[str, Any],
+            timeout: float | None = None,
+        ) -> httpx.Response:
+            del url, timeout
+            self.patched_events.append(json)
+            return httpx.Response(200, json={})
+
+    class _BlockingProcessManager:
+        """Process manager stub for the blocking harness client."""
+
+        handles_tool_dispatch = True
+
+        def __init__(self, harness_client: _BlockingHarnessClient) -> None:
+            self._harness_client = harness_client
+
+        async def get_client(
+            self,
+            conversation_id: str,
+            harness_name: str,
+            *,
+            env: dict[str, str] | None = None,
+        ) -> _BlockingHarnessClient:
+            del conversation_id, harness_name, env
+            return self._harness_client
+
+        def has_active_turn(self, conversation_id: str) -> bool:
+            del conversation_id
+            return False
+
+        async def forward_cancel(self, conversation_id: str) -> bool:
+            del conversation_id
+            return True
+
+        async def release(self, conversation_id: str) -> None:
+            del conversation_id
+
+    def _server_handler(request: httpx.Request) -> httpx.Response:
+        """Serve the session snapshot and the unanswered persisted user item."""
+        if request.method == "GET" and request.url.path == f"/v1/sessions/{conv}":
+            return httpx.Response(200, json={"id": conv, "agent_id": "ag_dup"})
+        if request.method == "GET" and request.url.path.endswith("/items"):
+            return httpx.Response(
+                200,
+                json={
+                    "object": "list",
+                    "data": [
+                        {
+                            "id": "item_1",
+                            "type": "message",
+                            "role": "user",
+                            "content": [{"type": "input_text", "text": prompt}],
+                        }
+                    ],
+                    "first_id": "item_1",
+                    "last_id": "item_1",
+                    "has_more": False,
+                },
+            )
+        return httpx.Response(200, json={})
+
+    async def _spec_resolver(agent_id: str, session_id: str | None = None) -> AgentSpec:
+        del agent_id, session_id
+        return AgentSpec(
+            spec_version=1,
+            name="dup-agent",
+            executor=ExecutorSpec(
+                type="omnigent",
+                config={"harness": "runner-test-resolved"},
+            ),
+        )
+
+    harness_client = _BlockingHarnessClient()
+    server_client = httpx.AsyncClient(
+        transport=httpx.MockTransport(_server_handler),
+        base_url="http://server",
+    )
+    app = create_runner_app(
+        process_manager=cast(
+            HarnessProcessManager,
+            _BlockingProcessManager(harness_client),
+        ),
+        spec_resolver=_spec_resolver,
+        server_client=server_client,
+    )
+    runner_app._session_histories_ref.pop(conv, None)
+    try:
+        async with _runner_test_client(app) as http:
+            create = await http.post(
+                "/v1/sessions",
+                json={"session_id": conv, "agent_id": "ag_dup"},
+            )
+            assert create.status_code == 201
+            assert create.json()["status"] == "running"
+            await asyncio.wait_for(reached.wait(), timeout=10.0)
+
+            duplicate = await http.post(
+                f"/v1/sessions/{conv}/events",
+                json={
+                    "type": "message",
+                    "role": "user",
+                    "model": "x",
+                    "persisted_item_id": "item_1",
+                    "content": [{"type": "input_text", "text": prompt}],
+                },
+            )
+            assert duplicate.status_code == 202
+            assert duplicate.json()["status"] == "duplicate"
+
+            gate.set()
+            for _ in range(50):
+                if len(harness_client.posted_bodies) > 1:
+                    break
+                await asyncio.sleep(0.01)
+    finally:
+        await server_client.aclose()
+        runner_app._session_histories_ref.pop(conv, None)
+
+    assert len(harness_client.posted_bodies) == 1, (
+        "late forwarded copy must not start a duplicate continuation turn"
+    )
+
+
+@pytest.mark.asyncio
 async def test_runner_cold_cache_appends_message_when_store_lacks_it() -> None:
     """A cold-cache message NOT yet in the store is appended, not dropped.
 
