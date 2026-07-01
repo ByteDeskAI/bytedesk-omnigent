@@ -1,79 +1,29 @@
 /**
  * The sign-in page for the ``accounts`` auth provider.
- *
- * Reached when:
- *
- * - An unauthed user lands on any SPA route → ``resolveIdentity()``
- *   in ``identity.ts`` hits ``GET /v1/me``, the server returns 401
- *   with ``login_url: "/login"``, the browser navigates here.
- * - The user clicks "Sign out" anywhere in the chrome.
- * - The magic-redeem URL fails or expires — accounts_auth.py's
- *   ``/auth/magic/redeem`` handler 302s here with
- *   ``?magic=expired``.
- *
- * On successful login the cookie is set by the server's
- * ``POST /auth/login`` Set-Cookie header; we just navigate the
- * browser back to the ``return_to`` path (or ``/``) and let
- * ``resolveIdentity()`` re-run.
- *
- * Username defaults to whatever the last successful sign-in used on
- * this browser (cached in localStorage). On a fresh browser / private
- * window the field is empty — we don't hardcode "admin" because the
- * bootstrap admin's name now follows the host OS user
- * (``getpass.getuser()``), not a fixed string. Surfacing it via an
- * unauth endpoint would leak the admin's username to anyone who can
- * reach the deploy.
  */
 
 import { useEffect, useState, type FormEvent } from "react";
 import { useSearchParams } from "@/lib/routing";
+import {
+  magicErrorMessage,
+  readLastUsername,
+  rememberUsername,
+  sanitizeReturnTo,
+} from "@/components/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { getMe, login as loginRequest } from "@/lib/accountsApi";
 
-const DEFAULT_RETURN_TO = "/";
-const LAST_USERNAME_KEY = "omnigent.lastLoginUsername";
-
-function readLastUsername(): string {
-  try {
-    return window.localStorage.getItem(LAST_USERNAME_KEY) ?? "";
-  } catch {
-    // localStorage can throw in sandboxed iframes / blocked-cookies mode.
-    return "";
-  }
-}
-
-function rememberUsername(value: string): void {
-  try {
-    window.localStorage.setItem(LAST_USERNAME_KEY, value);
-  } catch {
-    // Best-effort — see readLastUsername.
-  }
-}
-
 export function LoginPage() {
   const [params] = useSearchParams();
-  // `return_to` is set by both identity.ts (on 401 redirect) and the
-  // server-side magic-redeem 302 fallback. Trust only same-origin
-  // paths — never a fully-qualified URL — to prevent open-redirect.
   const returnTo = sanitizeReturnTo(params.get("return_to"));
-  const magicError = params.get("magic"); // "expired" | "missing" | null
+  const magicError = params.get("magic");
 
   const [username, setUsername] = useState(readLastUsername);
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(
-    magicError === "expired"
-      ? "That sign-in link has expired. Enter your password to sign in."
-      : magicError === "missing"
-        ? "That sign-in link is no longer valid. Enter your password to sign in."
-        : null,
-  );
+  const [error, setError] = useState<string | null>(magicErrorMessage(magicError));
 
-  // Already signed in? Don't show a login form to an authenticated
-  // user — bounce them to where they were headed (or home). Covers
-  // someone hitting /login directly, a bookmarked /login, or a
-  // back-button after auth. Hard-navigate so identity.ts re-runs.
   useEffect(() => {
     void (async () => {
       const account = await getMe();
@@ -81,21 +31,15 @@ export function LoginPage() {
         window.location.href = returnTo;
       }
     })();
-    // returnTo is derived from the URL once; re-checking on change isn't
-    // meaningful for a one-shot "am I already authed?" probe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Focus the empty field on mount: username when no remembered value,
-  // password when the username is pre-filled from localStorage.
   useEffect(() => {
     const targetId = username ? "login-password" : "login-username";
     const el = document.getElementById(targetId);
     if (el instanceof HTMLInputElement) {
       el.focus();
     }
-    // Run only on mount — re-running on `username` changes would
-    // steal focus while the user is typing.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -108,8 +52,6 @@ export function LoginPage() {
     const result = await loginRequest({ username, password });
     if (result.ok) {
       rememberUsername(username);
-      // Hard-navigate so identity.ts re-runs and every cached
-      // query is rebuilt against the new session.
       window.location.href = returnTo;
       return;
     }
@@ -185,41 +127,4 @@ export function LoginPage() {
       </div>
     </div>
   );
-}
-
-/**
- * Reject anything that isn't a relative path on the same origin.
- *
- * Defense against an open-redirect via crafted ``?return_to=`` —
- * an attacker who can get a victim to click a link to
- * ``/login?return_to=https://evil.com`` would otherwise have us
- * land them on the attacker's page after auth.
- *
- * Prefix checks alone are not enough: the value reaches us already
- * URL-decoded, so ``%2F%5Cevil.com`` becomes ``/\evil.com`` — which
- * passes a naive ``startsWith("/")`` + ``!startsWith("//")`` pair but
- * resolves to ``https://evil.com/`` because WHATWG URL parsing treats
- * backslashes as path separators for special schemes. So we require a
- * leading ``/`` (not ``//`` or ``/\``) and then resolve against the
- * current origin and confirm the result stays same-origin before
- * trusting it.
- */
-function sanitizeReturnTo(raw: string | null): string {
-  if (raw === null || raw === "") return DEFAULT_RETURN_TO;
-  // Must be an absolute path, not protocol-relative (`//host`) or a
-  // backslash variant (`/\host`) the URL parser rewrites to one.
-  if (!raw.startsWith("/") || raw.startsWith("//") || raw.startsWith("/\\")) {
-    return DEFAULT_RETURN_TO;
-  }
-  try {
-    const resolved = new URL(raw, window.location.origin);
-    if (resolved.origin !== window.location.origin) return DEFAULT_RETURN_TO;
-    // Re-serialize so the sink gets the parser's normalized path, never
-    // the raw backslash-laden input.
-    return resolved.pathname + resolved.search + resolved.hash;
-  } catch {
-    // `new URL` throws on malformed input — treat anything unparseable
-    // as untrusted and fall back to the safe default.
-    return DEFAULT_RETURN_TO;
-  }
 }

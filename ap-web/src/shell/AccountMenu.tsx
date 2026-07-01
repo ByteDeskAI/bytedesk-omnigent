@@ -18,42 +18,11 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Link } from "@/lib/routing";
-import {
-  CalendarClockIcon,
-  GaugeIcon,
-  KeyRoundIcon,
-  LogOutIcon,
-  BotIcon,
-  PlugIcon,
-  PuzzleIcon,
-  SettingsIcon,
-  ShieldCheckIcon,
-  SquareTerminalIcon,
-  TargetIcon,
-  UserCogIcon,
-  UsersIcon,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
 import { changePassword, type CurrentAccount, getMe, logout } from "@/lib/accountsApi";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { AccountChangePasswordDialog } from "./components/account-menu/AccountChangePasswordDialog";
+import { AccountsMenuDropdown } from "./components/account-menu/AccountsMenuDropdown";
+import { LocalOperatorMenu } from "./components/account-menu/LocalOperatorMenu";
 
 export function AccountMenu() {
   const info = useServerInfo();
@@ -63,7 +32,6 @@ export function AccountMenu() {
 
   const [me, setMe] = useState<CurrentAccount | null | "unknown">("unknown");
 
-  // Change-password dialog state.
   const [pwOpen, setPwOpen] = useState(false);
   const [oldPw, setOldPw] = useState("");
   const [newPw, setNewPw] = useState("");
@@ -73,8 +41,6 @@ export function AccountMenu() {
   const [pwDone, setPwDone] = useState(false);
 
   useEffect(() => {
-    // Don't even hit /auth/me when accounts is off — saves a
-    // request on every page load for the internal hosted product.
     if (!accountsEnabled) return;
     void (async () => {
       const account = await getMe();
@@ -84,7 +50,6 @@ export function AccountMenu() {
 
   const onSignOut = useCallback(async () => {
     await logout();
-    // Hard navigation so the chat store / react-query cache reset.
     window.location.href = "/login";
   }, []);
 
@@ -116,264 +81,40 @@ export function AccountMenu() {
     }
   }, [oldPw, newPw, confirmPw]);
 
-  // First gate: not in accounts mode. Account actions stay off, but the
-  // standalone Omni CLI terminal can still be exposed in local/header deploys.
   if (!accountsEnabled) {
     return <LocalOperatorMenu terminalEnabled={terminalEnabled} />;
   }
-  // Second gate: probe in flight or failed → render nothing
-  // (matches the pre-context-aware behavior).
   if (me === "unknown") return null;
   if (me === null) return null;
 
-  // Footer block at the bottom of the sidebar. No padding — the
-  // full-width button reaches the sidebar edges, and its own padding
-  // supplies the click target. This wrapper lives behind the same gates
-  // as the menu, so the whole footer vanishes when accounts is off.
-  // `shrink-0` keeps it at full height so a long conversation list
-  // scrolls in the flex-1 <nav> above instead of compressing the footer.
   return (
-    <div className="shrink-0">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button
-            variant="ghost"
-            size="sm"
-            // Full-width row that mirrors the "New session" button so the
-            // footer reads as part of the sidebar rather than a bolted-on
-            // control. `h-auto py-2` overrides the size's fixed height to
-            // give a larger click target; truncate keeps long account ids
-            // from blowing out the fixed-width panel.
-            className="h-auto w-full justify-start gap-2 px-3 py-2"
-          >
-            {/* Bordered box around the icon — an avatar-style frame that
-                anchors the account row visually. */}
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border">
-              <UserCogIcon className="size-3.5" />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-left">{me.id}</span>
-          </Button>
-        </DropdownMenuTrigger>
-        {/* The footer sits at the bottom of the viewport, so open the menu
-            upward and align it to the start edge. `w-auto` overrides the
-            base trigger-width binding (the trigger is the full-width 256px
-            row) so the popover sizes to its content down to the min-w-48
-            floor; `mx-2` insets it from the sidebar edges. */}
-        <DropdownMenuContent align="start" side="top" className="mx-2 w-auto min-w-48">
-          <DropdownMenuLabel>
-            {me.id}
-            {me.is_admin && (
-              <span className="ml-1 text-xs font-normal text-muted-foreground">(admin)</span>
-            )}
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem asChild>
-            <Link to="/skills" className="flex items-center gap-2">
-              <PuzzleIcon /> Skills
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/goals" className="flex items-center gap-2">
-              <TargetIcon /> Goals
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/command-center" className="flex items-center gap-2">
-              <GaugeIcon /> Command Center
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/schedules" className="flex items-center gap-2">
-              <CalendarClockIcon /> Schedules
-            </Link>
-          </DropdownMenuItem>
-          {me.is_admin && (
-            <>
-              <DropdownMenuItem asChild>
-                <Link to="/work-force" className="flex items-center gap-2">
-                  <BotIcon /> Work Force
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/connectors" className="flex items-center gap-2">
-                  <PlugIcon /> Connectors
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/members" className="flex items-center gap-2">
-                  <UsersIcon /> Members
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/policies" className="flex items-center gap-2">
-                  <ShieldCheckIcon /> Policies
-                </Link>
-              </DropdownMenuItem>
-              <DropdownMenuItem asChild>
-                <Link to="/config" className="flex items-center gap-2">
-                  <SettingsIcon /> Configuration
-                </Link>
-              </DropdownMenuItem>
-              {terminalEnabled && (
-                <DropdownMenuItem asChild>
-                  <Link to="/terminal" className="flex items-center gap-2">
-                    <SquareTerminalIcon /> Terminal
-                  </Link>
-                </DropdownMenuItem>
-              )}
-            </>
-          )}
-          <DropdownMenuItem
-            onClick={() => {
-              resetPwForm();
-              setPwOpen(true);
-            }}
-            className="flex items-center gap-2"
-          >
-            <KeyRoundIcon /> Change password
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => void onSignOut()} className="flex items-center gap-2">
-            <LogOutIcon /> Sign out
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-
-      <Dialog
+    <>
+      <AccountsMenuDropdown
+        me={me}
+        terminalEnabled={terminalEnabled}
+        onOpenChangePassword={() => {
+          resetPwForm();
+          setPwOpen(true);
+        }}
+        onSignOut={() => void onSignOut()}
+      />
+      <AccountChangePasswordDialog
         open={pwOpen}
         onOpenChange={(open) => {
           setPwOpen(open);
           if (!open) resetPwForm();
         }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Change password</DialogTitle>
-            <DialogDescription>
-              {pwDone
-                ? "Your password has been changed."
-                : "Enter your current password and choose a new one."}
-            </DialogDescription>
-          </DialogHeader>
-
-          {!pwDone && (
-            <form
-              className="space-y-3"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void onSubmitPassword();
-              }}
-            >
-              <Input
-                type="password"
-                autoComplete="current-password"
-                placeholder="Current password"
-                value={oldPw}
-                onChange={(e) => setOldPw(e.target.value)}
-                disabled={pwBusy}
-                required
-              />
-              <Input
-                type="password"
-                autoComplete="new-password"
-                placeholder="New password"
-                value={newPw}
-                onChange={(e) => setNewPw(e.target.value)}
-                disabled={pwBusy}
-                required
-              />
-              <Input
-                type="password"
-                autoComplete="new-password"
-                placeholder="Confirm new password"
-                value={confirmPw}
-                onChange={(e) => setConfirmPw(e.target.value)}
-                disabled={pwBusy}
-                required
-              />
-              {pwError !== null && (
-                <div
-                  role="alert"
-                  className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-                >
-                  {pwError}
-                </div>
-              )}
-              <DialogFooter>
-                <Button
-                  type="submit"
-                  disabled={
-                    pwBusy || oldPw.length === 0 || newPw.length === 0 || confirmPw.length === 0
-                  }
-                >
-                  {pwBusy ? "Changing…" : "Change password"}
-                </Button>
-              </DialogFooter>
-            </form>
-          )}
-
-          {pwDone && (
-            <DialogFooter>
-              <Button onClick={() => setPwOpen(false)}>Done</Button>
-            </DialogFooter>
-          )}
-        </DialogContent>
-      </Dialog>
-    </div>
-  );
-}
-
-function LocalOperatorMenu({ terminalEnabled }: { terminalEnabled: boolean }) {
-  return (
-    <div className="shrink-0">
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <Button variant="ghost" size="sm" className="h-auto w-full justify-start gap-2 px-3 py-2">
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md border border-border">
-              <UserCogIcon className="size-3.5" />
-            </span>
-            <span className="min-w-0 flex-1 truncate text-left">Omnigent</span>
-          </Button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" side="top" className="mx-2 w-auto min-w-48">
-          <DropdownMenuItem asChild>
-            <Link to="/skills" className="flex items-center gap-2">
-              <PuzzleIcon /> Skills
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/work-force" className="flex items-center gap-2">
-              <BotIcon /> Work Force
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/connectors" className="flex items-center gap-2">
-              <PlugIcon /> Connectors
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/goals" className="flex items-center gap-2">
-              <TargetIcon /> Goals
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/command-center" className="flex items-center gap-2">
-              <GaugeIcon /> Command Center
-            </Link>
-          </DropdownMenuItem>
-          <DropdownMenuItem asChild>
-            <Link to="/schedules" className="flex items-center gap-2">
-              <CalendarClockIcon /> Schedules
-            </Link>
-          </DropdownMenuItem>
-          {terminalEnabled && (
-            <DropdownMenuItem asChild>
-              <Link to="/terminal" className="flex items-center gap-2">
-                <SquareTerminalIcon /> Terminal
-              </Link>
-            </DropdownMenuItem>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+        oldPw={oldPw}
+        newPw={newPw}
+        confirmPw={confirmPw}
+        busy={pwBusy}
+        error={pwError}
+        done={pwDone}
+        onOldPwChange={setOldPw}
+        onNewPwChange={setNewPw}
+        onConfirmPwChange={setConfirmPw}
+        onSubmit={() => void onSubmitPassword()}
+      />
+    </>
   );
 }

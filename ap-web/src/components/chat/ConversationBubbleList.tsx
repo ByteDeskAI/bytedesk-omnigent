@@ -2,7 +2,9 @@ import type { ReactNode } from "react";
 import { Message, MessageContent } from "@/components/ai-elements/message";
 import { Shimmer } from "@/components/ai-elements/shimmer";
 import { AgentMascotEyes } from "@/components/AgentMascotEyes";
-import { BubbleView, RunnerStartingIndicator, bubbleKey } from "@/pages/ChatPage";
+import { BubbleView } from "./BubbleView";
+import { RunnerStartingIndicator } from "./RunnerStartingIndicator";
+import { bubbleKey } from "./chat-utils";
 import type { Bubble } from "@/lib/renderItems";
 
 interface ConversationBubbleListProps {

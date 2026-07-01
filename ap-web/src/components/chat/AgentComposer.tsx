@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Composer } from "@/pages/ChatPage";
+import { Composer } from "./Composer";
 import { useChatStore } from "@/store/chatStore";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 

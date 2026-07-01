@@ -23,9 +23,8 @@
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { setup as setupRequest } from "@/lib/accountsApi";
+import { SetupPageShell } from "./organisms/SetupPageShell";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -58,12 +57,10 @@ export function SetupPage() {
     setSubmitting(true);
     const result = await setupRequest({ username, password });
     if (result.ok) {
-      // Hard-navigate so identity.ts re-runs against the new session.
       window.location.href = "/";
       return;
     }
     setSubmitting(false);
-    // A 409 means someone else just claimed the admin — send them to login.
     if (result.status === 409) {
       window.location.href = "/login";
       return;
@@ -72,87 +69,16 @@ export function SetupPage() {
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="space-y-1 text-center">
-          <h1 className="text-2xl font-semibold tracking-tight">Create the admin account</h1>
-          <p className="text-sm text-muted-foreground">
-            First run — pick the username and password for this server's admin. You can invite
-            others once you're in.
-          </p>
-        </div>
-
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label htmlFor="setup-username" className="text-sm font-medium leading-none">
-              Username
-            </label>
-            <Input
-              id="setup-username"
-              type="text"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value.toLowerCase())}
-              disabled={submitting}
-              required
-              pattern="[a-z0-9][a-z0-9._\-]{0,63}(@[a-z0-9.\-]+\.[a-z]{2,})?"
-              title="Lowercase letters, digits, dots, hyphens, underscores (or a lowercase email)"
-            />
-            <p className="text-xs text-muted-foreground">
-              Lowercase letters, digits, dots, hyphens, underscores — or a lowercase email.
-            </p>
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="setup-password" className="text-sm font-medium leading-none">
-              Password
-            </label>
-            <Input
-              id="setup-password"
-              type="password"
-              autoComplete="new-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              disabled={submitting}
-              required
-              minLength={MIN_PASSWORD_LENGTH}
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label htmlFor="setup-confirm" className="text-sm font-medium leading-none">
-              Confirm password
-            </label>
-            <Input
-              id="setup-confirm"
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              disabled={submitting}
-              required
-              minLength={MIN_PASSWORD_LENGTH}
-            />
-          </div>
-
-          {error !== null && (
-            <div
-              role="alert"
-              className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive"
-            >
-              {error}
-            </div>
-          )}
-
-          <Button
-            type="submit"
-            className="w-full"
-            disabled={submitting || password.length < MIN_PASSWORD_LENGTH || username.length === 0}
-          >
-            {submitting ? "Creating…" : "Create admin"}
-          </Button>
-        </form>
-      </div>
-    </div>
+    <SetupPageShell
+      username={username}
+      password={password}
+      confirm={confirm}
+      submitting={submitting}
+      error={error}
+      onUsernameChange={setUsername}
+      onPasswordChange={setPassword}
+      onConfirmChange={setConfirm}
+      onSubmit={(e) => void onSubmit(e)}
+    />
   );
 }
