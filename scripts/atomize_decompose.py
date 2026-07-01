@@ -71,6 +71,21 @@ def thin_facade_init(pkg_name: str, submodules: list[str], extra_imports: list[s
     return "".join(lines)
 
 
+def fix_preamble_relative_imports(preamble: str, pkg_dir: Path) -> str:
+    """Rewrite ``from ._sibling`` imports that now live in the parent package."""
+    parent_pkg = pkg_dir.parent
+
+    def replacer(match: re.Match[str]) -> str:
+        mod = match.group(1)
+        if (pkg_dir / f"{mod}.py").exists() or (pkg_dir / mod).is_dir():
+            return match.group(0)
+        if (parent_pkg / f"{mod}.py").exists() or (parent_pkg / mod).is_dir():
+            return f"from ..{mod}"
+        return match.group(0)
+
+    return re.sub(r"from \.([\w]+)", replacer, preamble)
+
+
 def preamble_end(lines: list[str]) -> int:
     for i, line in enumerate(lines):
         if line.startswith("_logger = "):
@@ -96,10 +111,115 @@ def ast_top_level_chunks(
         if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             continue
         name = node.name
+        start = node.lineno
+        if node.decorator_list:
+            start = node.decorator_list[0].lineno
         end = getattr(node, "end_lineno", node.lineno)
-        chunk = lines[node.lineno - 1 : end]
+        chunk = lines[start - 1 : end]
         chunks.append((name, chunk))
     return chunks
+
+
+def fix_orphaned_dataclass_decorators(path: Path) -> int:
+    """Drop ``@dataclass`` decorators stranded without a following ``class`` in the same file."""
+    lines = read_lines(path)
+    new_lines: list[str] = []
+    fixed = 0
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped.startswith("@dataclass"):
+            j = i + 1
+            while j < len(lines) and lines[j].strip() == "":
+                j += 1
+            if j >= len(lines) or not lines[j].lstrip().startswith("class "):
+                fixed += 1
+                i += 1
+                continue
+        new_lines.append(lines[i])
+        i += 1
+    if fixed:
+        write(path, "".join(new_lines))
+    return fixed
+
+
+PKG_BINDING_IMPORT = (
+    "def _import_package_bindings() -> None:\n"
+    "    from . import _constants as _pkg_constants\n"
+    "    from . import _state as _pkg_state\n"
+    "    g = globals()\n"
+    "    for _mod in (_pkg_constants, _pkg_state):\n"
+    "        for _key, _value in _mod.__dict__.items():\n"
+    "            if not _key.startswith(\"__\"):\n"
+    "                g[_key] = _value\n\n\n"
+    "_import_package_bindings()\n"
+)
+
+HELPER_BINDING_IMPORT = (
+    "def _import_helper_bindings() -> None:\n"
+    "    from . import _helpers as _pkg_helpers\n"
+    "    g = globals()\n"
+    "    for _key, _value in _pkg_helpers.__dict__.items():\n"
+    "        if not _key.startswith(\"__\"):\n"
+    "            g[_key] = _value\n\n\n"
+    "_import_helper_bindings()\n"
+)
+
+API_BINDING_IMPORT = (
+    "def _import_api_bindings() -> None:\n"
+    "    from . import _api as _pkg_api\n"
+    "    g = globals()\n"
+    "    for _key, _value in _pkg_api.__dict__.items():\n"
+    "        if not _key.startswith(\"__\"):\n"
+    "            g[_key] = _value\n\n\n"
+    "_import_api_bindings()\n"
+)
+
+
+def sibling_wire_block(submodules: list[str], self_mod: str) -> str:
+    """Late-bind names from sibling helper submodules (avoids ``import *`` underscore drop)."""
+    others = [m for m in submodules if m != self_mod and m != "__init__" and m != "_bootstrap"]
+    if not others:
+        return ""
+    imports = "".join(
+        f"    from . import {m} as _sib_{m.lstrip('_')}\n" for m in others
+    )
+    copies = ""
+    for m in others:
+        alias = f"_sib_{m.lstrip('_')}"
+        copies += (
+            f"    for _key, _value in {alias}.__dict__.items():\n"
+            f"        if not _key.startswith(\"__\"):\n"
+            f"            g.setdefault(_key, _value)\n"
+        )
+    return (
+        "\ndef _wire_sibling_modules() -> None:\n"
+        "    g = globals()\n"
+        f"{imports}"
+        f"{copies}\n"
+        "_wire_sibling_modules()\n"
+    )
+
+
+def append_sibling_wiring(pkg_dir: Path, submodules: list[str]) -> None:
+    submodules = [m for m in submodules if m != "_bootstrap"]
+    for mod in submodules:
+        path = pkg_dir / f"{mod}.py"
+        text = read_lines(path)
+        if isinstance(text, list):
+            content = "".join(text)
+        else:
+            content = text
+        if "_wire_sibling_modules" in content:
+            continue
+        write(path, content + sibling_wire_block(submodules, mod))
+
+
+def fix_dataclass_decorators_in_tree(pkg_dir: Path) -> int:
+    total = 0
+    for py in sorted(pkg_dir.rglob("*.py")):
+        total += fix_orphaned_dataclass_decorators(py)
+    return total
 
 
 def classify(name: str, groups: list[tuple[str, str]]) -> str:
@@ -109,24 +229,90 @@ def classify(name: str, groups: list[tuple[str, str]]) -> str:
     return "helpers"
 
 
+def _assign_target_names(node: ast.Assign | ast.AnnAssign) -> list[str]:
+    if isinstance(node, ast.AnnAssign):
+        return [node.target.id] if isinstance(node.target, ast.Name) else []
+    names: list[str] = []
+    for target in node.targets:
+        if isinstance(target, ast.Name):
+            names.append(target.id)
+    return names
+
+
+def _assign_value_name_refs(node: ast.Assign | ast.AnnAssign) -> set[str]:
+    refs: set[str] = set()
+    value = node.value
+    if value is None:
+        return refs
+    for child in ast.walk(value):
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load):
+            refs.add(child.id)
+    return refs
+
+
 def collect_module_level_assigns(
     source: str, lines: list[str], pre: int, end_line: int
 ) -> tuple[list[str], list[str]]:
     mod = ast.parse(source)
-    constants: list[str] = []
-    state: list[str] = []
+    top_level_names = {
+        node.name
+        for node in mod.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        and hasattr(node, "lineno")
+        and pre < node.lineno <= end_line
+    }
+    assign_nodes: list[ast.Assign | ast.AnnAssign] = []
     for node in mod.body:
         if not isinstance(node, ast.Assign | ast.AnnAssign):
             continue
         if not hasattr(node, "lineno") or node.lineno <= pre or node.lineno > end_line:
             continue
+        assign_nodes.append(node)
+
+    constants: list[str] = []
+    state: list[str] = []
+    bootstrap: list[str] = []
+    defined: set[str] = set()
+    for node in assign_nodes:
+        defined.update(_assign_target_names(node))
+
+    for node in assign_nodes:
         end = getattr(node, "end_lineno", node.lineno)
         text = "".join(lines[node.lineno - 1 : end])
-        if any(x in text for x in (": dict", ": set", "LRUCache", "weakref", "Task[", "Lock", "None = None")):
-            state.append(text + ("\n" if not text.endswith("\n") else ""))
+        if not text.endswith("\n"):
+            text += "\n"
+        targets = _assign_target_names(node)
+        refs = _assign_value_name_refs(node)
+        module_refs = refs - {"True", "False", "None"}
+        is_subscript_target = isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Subscript) for target in node.targets
+        )
+        needs_bootstrap = (
+            is_subscript_target
+            or bool(module_refs & defined)
+            or bool(module_refs & top_level_names)
+        )
+        if needs_bootstrap:
+            bootstrap.append(text)
+            defined.update(targets)
+            continue
+        if any(
+            x in text
+            for x in (": dict", ": set", "LRUCache", "weakref", "Task[", "Lock", "None = None")
+        ):
+            state.append(text)
         else:
-            constants.append(text + ("\n" if not text.endswith("\n") else ""))
-    return constants, state
+            constants.append(text)
+        defined.update(targets)
+
+    return constants, state, bootstrap
+
+
+def _helper_module_name(group: str) -> str:
+    """Avoid helper groups clobbering reserved ``_constants`` / ``_state`` slots."""
+    if group in {"constants", "state"}:
+        return f"{group}_helpers"
+    return group
 
 
 def split_helper_module(
@@ -248,7 +434,7 @@ def decompose_sessions() -> dict:
     router_line = 13040
     post_router_line = 19665
 
-    constants, state = collect_module_level_assigns(source, lines, pre, router_line - 1)
+    constants, state, _bootstrap = collect_module_level_assigns(source, lines, pre, router_line - 1)
 
     helper_groups: dict[str, list[str]] = {}
     for name, chunk in ast_top_level_chunks(source, lines, start_line=pre + 1, end_line=router_line - 1):
@@ -396,7 +582,7 @@ def decompose_runner() -> dict:
     factory_start = 4233
     factory_end = 12693
 
-    constants, state = collect_module_level_assigns(source, lines, pre, factory_start - 1)
+    constants, state, _bootstrap = collect_module_level_assigns(source, lines, pre, factory_start - 1)
 
     helper_groups: dict[str, list[str]] = {}
     for name, chunk in ast_top_level_chunks(source, lines, start_line=pre + 1, end_line=factory_start - 1):
@@ -502,7 +688,7 @@ def decompose_cli() -> dict:
     cli_group_line = 1111
     commands_start = CLI_COMMAND_MARKERS[0][0]
 
-    constants, state = collect_module_level_assigns(source, lines, pre, cli_group_line - 1)
+    constants, state, _bootstrap = collect_module_level_assigns(source, lines, pre, cli_group_line - 1)
 
     helper_groups: dict[str, list[str]] = {}
     for name, chunk in ast_top_level_chunks(source, lines, start_line=pre + 1, end_line=cli_group_line - 1):
@@ -747,7 +933,7 @@ def decompose_tool_dispatch() -> dict:
         helper_groups.setdefault(group, []).extend(chunk)
         helper_groups[group].append("\n")
 
-    constants, state = collect_module_level_assigns(source, lines, pre, len(lines))
+    constants, state, _bootstrap = collect_module_level_assigns(source, lines, pre, len(lines))
 
     helper_modules = sorted(helper_groups)
     write(pkg / "_constants.py", preamble + "".join(constants) + "\n")
@@ -826,11 +1012,634 @@ def run_phase2() -> dict[str, dict]:
     return results
 
 
+# ---------------------------------------------------------------------------
+# Phase 3 decompositions (schemas, chat, parser, delete_session, sqlalchemy_store)
+# ---------------------------------------------------------------------------
+
+
+def decompose_ast_monolith(
+    src: Path,
+    facade_doc: str,
+    helper_groups: list[tuple[str, str]],
+    extra_init_imports: list[str] | None = None,
+    start_line: int | None = None,
+    end_line: int | None = None,
+) -> dict:
+    """Generic AST split: _constants, _state, grouped _*.py helpers, thin __init__ facade."""
+    lines = read_lines(src)
+    before = len(lines)
+    source = "".join(lines)
+    pre = preamble_end(lines)
+    pkg_dir = src.parent / src.stem
+    preamble = fix_preamble_relative_imports("".join(lines[:pre]), pkg_dir)
+    body_start = start_line or (pre + 1)
+    body_end = end_line or len(lines)
+
+    constants, state, bootstrap = collect_module_level_assigns(source, lines, pre, body_end)
+
+    helper_groups_map: dict[str, list[str]] = {}
+    for name, chunk in ast_top_level_chunks(source, lines, start_line=body_start, end_line=body_end):
+        group = classify(name, helper_groups)
+        helper_groups_map.setdefault(group, []).extend(chunk)
+        helper_groups_map[group].append("\n")
+
+    if pkg_dir.exists():
+        shutil.rmtree(pkg_dir)
+    pkg_dir.mkdir()
+
+    write(pkg_dir / "_constants.py", preamble + "".join(constants) + "\n")
+    write(pkg_dir / "_state.py", preamble + "from ._constants import *\n\n" + "".join(state) + "\n")
+
+    helper_modules = sorted(helper_groups_map)
+    helper_module_names = [_helper_module_name(g) for g in helper_modules]
+    for group, mod_name in zip(helper_modules, helper_module_names, strict=True):
+        write(
+            pkg_dir / f"_{mod_name}.py",
+            preamble + PKG_BINDING_IMPORT + "\n" + "".join(helper_groups_map[group]),
+        )
+
+    if bootstrap:
+        name_to_module: dict[str, str] = {}
+        for group, chunks in helper_groups_map.items():
+            mod_name = _helper_module_name(group)
+            for text in chunks:
+                for match in re.finditer(r"^(?:async )?def (\w+)|^class (\w+)", text, re.M):
+                    name = match.group(1) or match.group(2)
+                    if name:
+                        name_to_module[name] = mod_name
+        bootstrap_text = "".join(bootstrap)
+        bootstrap_refs = set(re.findall(r"\b([A-Za-z_]\w*)\b", bootstrap_text))
+        helper_imports = sorted(
+            {
+                f"from . import _{mod} as _boot_{mod}"
+                for name, mod in name_to_module.items()
+                if name in bootstrap_refs
+            }
+        )
+        promote = []
+        for name, mod in sorted(name_to_module.items()):
+            if name not in bootstrap_refs:
+                continue
+            promote.append(
+                f"    for _key, _value in _boot_{mod}.__dict__.items():\n"
+                f"        if _key == {name!r}:\n"
+                f"            g[_key] = _value\n"
+            )
+        bootstrap_body = (
+            PKG_BINDING_IMPORT
+            + "\n"
+            + "\n".join(helper_imports)
+            + "\n\n"
+            + "def _promote_bootstrap_bindings() -> None:\n"
+            + "    g = globals()\n"
+            + "".join(promote)
+            + "\n\n_promote_bootstrap_bindings()\n\n"
+            + bootstrap_text
+        )
+        if not bootstrap_body.endswith("\n"):
+            bootstrap_body += "\n"
+        write(pkg_dir / "_bootstrap.py", preamble + bootstrap_body)
+
+    init = facade_init(facade_doc, helper_module_names, extra_init_imports or [])
+    if bootstrap:
+        init += (
+            "from . import _bootstrap\n\n"
+            "for _key, _value in _bootstrap.__dict__.items():\n"
+            "    if _key.startswith(\"__\") or _key in _FACADE_SKIP:\n"
+            "        continue\n"
+            "    globals()[_key] = _value\n"
+        )
+    write(pkg_dir / "__init__.py", init)
+
+    submodule_names = [f"_{m}" for m in helper_module_names]
+    append_sibling_wiring(pkg_dir, submodule_names)
+
+    for py in sorted(pkg_dir.rglob("*.py")):
+        text = py.read_text()
+        fixed = fix_preamble_relative_imports(text, pkg_dir)
+        if fixed != text:
+            write(py, fixed)
+
+    if src.exists():
+        src.unlink()
+
+    fix_dataclass_decorators_in_tree(pkg_dir)
+
+    return {
+        "before": before,
+        "after": len(read_lines(pkg_dir / "__init__.py")),
+        "modules": len(list(pkg_dir.rglob("*.py"))),
+        "files": {str(p.relative_to(ROOT)): len(read_lines(p)) for p in sorted(pkg_dir.rglob("*.py"))},
+    }
+
+
+def decompose_schemas() -> dict:
+    """Split REST API schemas and SSE event models into submodules."""
+    src = ROOT / "omnigent/server/schemas.py"
+    lines = read_lines(src)
+    before = len(lines)
+    pre = preamble_end(lines)
+    preamble = "".join(lines[:pre])
+    sse_start = next(i for i, line in enumerate(lines) if "STREAM EVENTS" in line and line.startswith("#"))
+
+    pkg = ROOT / "omnigent/server/schemas"
+    if pkg.exists():
+        shutil.rmtree(pkg)
+    pkg.mkdir()
+
+    write(pkg / "_api.py", preamble + "".join(lines[pre:sse_start]))
+    write(
+        pkg / "_sse.py",
+        preamble + API_BINDING_IMPORT + "\n" + "".join(lines[sse_start:]),
+    )
+    init = thin_facade_init(
+        "Pydantic models for the API layer and SSE stream events",
+        ["_api", "_sse"],
+    )
+    write(pkg / "__init__.py", init)
+    src.unlink()
+    fix_dataclass_decorators_in_tree(pkg)
+
+    return {
+        "before": before,
+        "after": len(read_lines(pkg / "__init__.py")),
+        "modules": len(list(pkg.rglob("*.py"))),
+        "files": {str(p.relative_to(ROOT)): len(read_lines(p)) for p in sorted(pkg.rglob("*.py"))},
+    }
+
+
+CHAT_HELPER_GROUPS: list[tuple[str, str]] = [
+    ("entry", r"^run_chat|^run_prompt|^run_attach|^_default_cli_model"),
+    ("types", r"^ChatOverrides|^LocalServer|^_SessionToolAdapter|^_AttachSessionInfo|^_DaemonChatSession|^_DatabricksTokenAuth"),
+    ("remote", r"^_is_url|^_remote_headers|^_stored_databricks|^_server_headers|^_server_auth|^_chat_with_server"),
+    ("native", r"^_is_claude_native|^_redirect_native|^_finish_native|^_run_.*native|^_wrapper_label"),
+    ("daemon", r"^_await_accounts|^_prepare_chat_session|^_chat_via_daemon|^_wait_for_remote|^_poll_remote"),
+    ("local", r"^_bundle_agent|^_chat_local|^_run_local_headless|^_run_headless"),
+    ("sessions", r"^_query_sessions|^_sessions_tool|^_response_output|^_persisted_turn|^_resolve_resume|^_assert_resume|^_run_picker|^_resolve_latest|^_attach_session|^_pick_agent"),
+    ("overrides", r"^_materialize_override|^_cleanup_materialized|^_load_yaml|^_spec_declares|^_should_materialize|^_effective_openai|^_inject_openai|^_apply_overrides|^_apply_harness|^_validate_agent|^_extract_agent|^_merge_host|^_fallback_label|^_canonicalize"),
+    ("server_proc", r"^_find_free_port|^_omnigent_log|^_omnigent_persistent|^_start_local_server|^_wait_for_server|^_raise_server_failed|^_stop_server|^_stop_local"),
+    ("repl", r"^_spec_used_families|^_run_repl|^_run_one_shot|^_load_tool_handler"),
+]
+
+
+def decompose_chat() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/chat.py",
+        "Implementation of the ``omnigent chat`` command",
+        CHAT_HELPER_GROUPS,
+    )
+
+
+PARSER_HELPER_GROUPS: list[tuple[str, str]] = [
+    ("core", r"^parse$|^_ConfigYamlLoader|^expand_env|^check_unresolved"),
+    ("llm", r"^_parse_llm|^_parse_interaction|^_parse_compaction|^parse_server_llm"),
+    ("tools", r"^_parse_tools|^_parse_sandbox|^_parse_builtin|^_parse_retry|^_parse_executor|^_parse_blueprint|^_parse_supervisor"),
+    ("os_env", r"^_parse_os_env|^_parse_terminals|^_parse_os_env_sandbox|^_parse_cwd|^_parse_env_passthrough|^_parse_egress"),
+    ("credentials", r"^_Credential|^_parse_credential|^_normalize|^_resolve_credential|^_format_validation"),
+    ("skills", r"^discover_host|^_discover_skills|^_parse_skill|^_parse_skills_filter|^_read_contained|^_resolve_instructions"),
+    ("mcp", r"^_parse_inline_mcp|^_discover_mcp|^_parse_http_mcp|^_parse_stdio_mcp|^_reject_wrong|^_parse_tool_allowlist"),
+    ("discover", r"^_discover_local|^_discover_sub"),
+    ("guardrails", r"^_parse_guardrails|^_parse_label|^_coerce_label|^_validate_label"),
+    ("policies", r"^_parse_policies|^_parse_policy|^parse_default_policies|^_parse_function|^_parse_on|^_parse_condition|^_parse_action|^_parse_writable|^_parse_phase"),
+    ("capabilities", r"^_parse_capabilities"),
+]
+
+
+def decompose_parser() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/spec/parser.py",
+        "Parse an agent image directory into an AgentSpec",
+        PARSER_HELPER_GROUPS,
+    )
+
+
+DELETE_SESSION_GROUPS: list[tuple[str, str]] = [
+    ("history", r"_load_history|_convert_raw|_extract_last|_serialize_messages"),
+    ("compact", r"_proactive_compact"),
+    ("cancellation", r"_append_cancellation|_persist_cancellation"),
+    ("native", r"_handle_.*native|_is_native|_wake_parent|_teardown_session|_inject_codex|_native_cost|_repop_pending"),
+    ("turn_lifecycle", r"_on_proxy_stream_end|_cancel_active|_cancel_inprocess|_check_and_start|_publish_turn_status|_session_harness_name"),
+    ("subagent", r"_post_subagent|_schedule_subagent|_rewake_parent|_mark_subagent|_recover_sub_agent"),
+    ("advisor", r"_run_turn_advisor|_apply_advisor|_advisor_spec"),
+    ("comment_relay", r"_ensure_comment_relay"),
+    ("turn_execution", r"_run_turn_bg|_drain_streaming|_stream_message"),
+]
+
+
+def _closure_def_chunks(lines: list[str]) -> list[tuple[str, list[str]]]:
+    """Split indented closure definitions (runner factory exec chunks)."""
+    pat = re.compile(r"^    (?:@app\.\w+\(|async def (\w+)|def (\w+))")
+    starts: list[tuple[int, str]] = []
+    for i, line in enumerate(lines):
+        m = pat.match(line)
+        if not m:
+            continue
+        name = m.group(1) or m.group(2) or "delete_session"
+        starts.append((i, name))
+    chunks: list[tuple[str, list[str]]] = []
+    for idx, (start, name) in enumerate(starts):
+        end = starts[idx + 1][0] if idx + 1 < len(starts) else len(lines)
+        chunks.append((name, lines[start:end]))
+    return chunks
+
+
+def decompose_delete_session() -> dict:
+    """Split runner delete_session route chunk into helper submodules."""
+    src = ROOT / "omnigent/runner/app/routes/delete_session.py"
+    lines = read_lines(src)
+    before = len(lines)
+
+    pkg = src.parent / "delete_session"
+    if pkg.exists():
+        shutil.rmtree(pkg)
+    pkg.mkdir()
+
+    groups: dict[str, list[str]] = {}
+    route_chunk: list[str] | None = None
+    for name, chunk in _closure_def_chunks(lines):
+        if name == "delete_session":
+            route_chunk = chunk
+            continue
+        group = classify(name, DELETE_SESSION_GROUPS)
+        groups.setdefault(group, []).extend(chunk)
+        groups[group].append("\n")
+
+    submodules = sorted(groups)
+    for group in submodules:
+        write(pkg / f"_{group}.py", "".join(groups[group]))
+
+    if route_chunk is None:
+        raise RuntimeError("delete_session route chunk not found")
+    write(pkg / "_route.py", "".join(route_chunk))
+    write(pkg / "__init__.py", '"""Runner session-turn helpers split from delete_session route chunk."""\n')
+
+    src.unlink()
+
+    factory = ROOT / "omnigent/runner/app/factory.py"
+    factory_lines = read_lines(factory)
+    new_factory: list[str] = []
+    i = 0
+    while i < len(factory_lines):
+        line = factory_lines[i]
+        if line.strip() == '"delete_session.py",':
+            for group in submodules:
+                new_factory.append(f'        "delete_session/_{group}.py",\n')
+            new_factory.append('        "delete_session/_route.py",\n')
+            i += 1
+            continue
+        new_factory.append(line)
+        i += 1
+    write(factory, "".join(new_factory))
+
+    return {
+        "before": before,
+        "after": len(read_lines(pkg / "__init__.py")),
+        "modules": len(list(pkg.rglob("*.py"))),
+        "files": {str(p.relative_to(ROOT)): len(read_lines(p)) for p in sorted(pkg.rglob("*.py"))},
+    }
+
+
+def decompose_sqlalchemy_store() -> dict:
+    """Split conversation store helpers and SqlAlchemyConversationStore class."""
+    src = ROOT / "omnigent/stores/conversation_store/sqlalchemy_store.py"
+    lines = read_lines(src)
+    before = len(lines)
+    source = "".join(lines)
+    pre = preamble_end(lines)
+    preamble = "".join(lines[:pre])
+
+    pkg = src.parent / "sqlalchemy_store"
+    if pkg.exists():
+        shutil.rmtree(pkg)
+    pkg.mkdir()
+
+    helper_chunks: list[str] = []
+    store_chunk: list[str] | None = None
+    for name, chunk in ast_top_level_chunks(source, lines, start_line=pre + 1):
+        if name == "SqlAlchemyConversationStore":
+            store_chunk = chunk
+        else:
+            helper_chunks.extend(chunk)
+            helper_chunks.append("\n")
+
+    write(pkg / "_helpers.py", preamble + "".join(helper_chunks))
+    write(
+        pkg / "_store.py",
+        preamble + HELPER_BINDING_IMPORT + "\n" + "".join(store_chunk or []),
+    )
+    init = thin_facade_init(
+        "SQLAlchemy-backed conversation store",
+        ["_helpers", "_store"],
+    )
+    write(pkg / "__init__.py", init)
+    src.unlink()
+    fix_dataclass_decorators_in_tree(pkg)
+
+    return {
+        "before": before,
+        "after": len(read_lines(pkg / "__init__.py")),
+        "modules": len(list(pkg.rglob("*.py"))),
+        "files": {str(p.relative_to(ROOT)): len(read_lines(p)) for p in sorted(pkg.rglob("*.py"))},
+    }
+
+
+def run_phase3() -> dict[str, dict]:
+    results = {}
+    results["schemas"] = decompose_schemas()
+    results["chat"] = decompose_chat()
+    results["parser"] = decompose_parser()
+    results["delete_session"] = decompose_delete_session()
+    results["sqlalchemy_store"] = decompose_sqlalchemy_store()
+    return results
+
+
+# ---------------------------------------------------------------------------
+# Phase 4 decompositions (repl, native bridges/forwarders, claude_sdk_executor)
+# ---------------------------------------------------------------------------
+
+REPL_HELPER_GROUPS: list[tuple[str, str]] = [
+    ("adapter", r"_SessionsChatReplAdapter|_server_event_to_sdk_event|_elicitation_resolve"),
+    ("entry", r"^run_repl$"),
+    (
+        "commands",
+        r"^_cmd_|^handle_slash_command$|^register_skill|^unregister_skill|^_SlashCommandCompleter|^_consume_pending_local_skill|^_cmd$",
+    ),
+    (
+        "overview",
+        r"overview|_TerminalInfo|_terminal_|_tmux_|_parse_sub_agent|_collect_overview|_open_terminal|_reconstruct_terminal|_build_terminal|_list_all_conversation",
+    ),
+    ("approval", r"Approval|elicitation|_make_elicitation|_build_elicitation"),
+    (
+        "render",
+        r"render|history|_plan_output|_TurnProseTracker|_OutputItemRenderPlan|_extract_message|_extract_function|TimedFormatter|_failed_status",
+    ),
+    (
+        "context",
+        r"context|_refresh_session|_update_context|_items_for_context|_fetch_context|_ContextItems|compact|_start_new_conversation|_attach_to_conversation|switch",
+    ),
+    (
+        "startup",
+        r"startup|_load_startup|_StartupHeader|_build_startup|_render_startup|_display_cwd|_summarize|_header_glyph|_humanize_agent|_is_remote_server|_maybe_write_session|_clear_screen",
+    ),
+    ("model", r"model|effort|_set_session_reasoning"),
+]
+
+
+CODEX_FORWARDER_GROUPS: list[tuple[str, str]] = [
+    (
+        "fwd_state",
+        r"^_CodexForwarderState|^_CodexToolCall|^_PartialTextBuffer|^_ForwarderTarget|^_CodexTurnStatusEdge|^_Delta|^_SessionUsageCoalescer|^_PendingCodexElicitation|^_CodexElicitationTaskTracker",
+    ),
+    (
+        "supervisor",
+        r"^supervise_forwarder|^_maybe_rotate|^_create_thread_replacement|^_fetch_session_snapshot|^_subscribe_until_ready|^_event_indicates|^_is_thread_not_ready",
+    ),
+    (
+        "events",
+        r"^_handle_event|^_resolve_event|^_event_targets|^_maybe_handle_codex_request|^_maybe_handle_turn|^_maybe_handle_delta|^_handle_completed_event|^_handle_terminal_turn|^_handle_collab|^_handle_agent_message|^_handle_plan_delta|^_handle_usage|^_handle_turn_plan|^_handle_turn_started|^_handle_terminal_turn_event|^_handle_completed_item|^_claim_completed",
+    ),
+    (
+        "elicitation",
+        r"elicitation|plan_implementation|^_pending_elicitation|^_codex_elicitation|^_post_codex_elicitation|^_post_external_elicitation|^_note_native_plan",
+    ),
+    (
+        "collab",
+        r"collab|_child_session|_ensure_child|_register_child|_extract_child|_backfill_child|_resume_child|_codex_child|_thread_spawn|_post_collab",
+    ),
+    ("posting", r"^_post_|^_log_post|^_should_retry_post|^_post_retry|^_log_failed"),
+    (
+        "resume",
+        r"resume|_replay_resume|_refresh_model|_sync_model|_wait_for_thread|_thread_started|_thread_id|_parent_thread|_find_turn_user",
+    ),
+    (
+        "deltas",
+        r"delta|_OutputTextDelta|_record_partial|_claim_partial|_try_recover_active|_is_active_turn_delta|_streaming_message|_item_id_from_delta|_maybe_persist_interrupted",
+    ),
+    (
+        "turn",
+        r"^_turn_|^_params_with|^_user_message|^_plan_|^_json_string|^_is_codex_skill|^_response_id|^_source_id|^_completed_item|^_command_execution|^_file_change|^_web_search|^_codex_tool_call|^_sleep$|^_ensure_user_message",
+    ),
+]
+
+
+CLAUDE_BRIDGE_GROUPS: list[tuple[str, str]] = [
+    (
+        "types",
+        r"^ClaudeTranscriptItem|^TranscriptReadResult|^ClaudeHookRecord|^HookReadResult|^_Jsonl|ClaudeMessageDelta|^MessageDeltaReadResult|^ClaudeNativeToolRelay",
+    ),
+    (
+        "bridge_io",
+        r"^bridge_dir|^prepare_bridge|^build_claude_native_spawn|^ensure_claude|^read_active|^read_launch|^read_bridge|^write_active|^read_permission|^build_mcp_config|^build_hook_settings|^_atomic_write|^read_transcript_path|^read_claude_session|^read_seen|^write_tmux|^_ensure_secure|^_absolute_syntactic|^_trusted_parent",
+    ),
+    (
+        "transcript_read",
+        r"^read_transcript|^read_assistant|^count_transcript|^transcript_has|^_transcript_timestamp|^_sample_transcript|^_local_command_name",
+    ),
+    (
+        "transcript_convert",
+        r"^_user_transcript|^_assistant_transcript|^_attachment_transcript|^_local_command_transcript|^_terminal_command|^_transcript_items_from|^_SlashCommandPayload|^_parse_slash_command|^_assistant_message_item|^_tool_result_output|^_transcript_source|^_parent_or_record|^_response_id_from_source|^_source_id",
+    ),
+    ("hooks", r"^read_hook|^count_hook|^stop_hook|^_hook_record|^_read_complete_jsonl|^record_hook"),
+    ("inject", r"^inject_|^kill_session|^display_cost|^post_tools"),
+    (
+        "tmux",
+        r"^_run_tmux|^_capture_pane|^_claude_prompt|^_submit_needle|^_draft_in|^_wait_for_claude_prompt|^_paste_payload|^_wait_for_tmux",
+    ),
+    (
+        "mcp",
+        r"^_mcp_|^_call_mcp|^_call_relay|^_build_tools|^_write_jsonrpc|^_stdio_jsonrpc|^_handle_mcp|^_tool_relay|^_run_relay|^_notification_writer|^main$|^_parse_args|^_serve_mcp|^_start_http|^_handler_factory|start_tool_relay|^_mcp_error|^_normalize_relay|^_empty_object",
+    ),
+    (
+        "cost",
+        r"^_transcript_model_pricing|^compute_transcript_cumulative|^_usage_from_transcript|^_model_from_transcript|^read_claude_context|^read_claude_status|^read_user_status|^read_user_effort|^_assistant_text_from",
+    ),
+    (
+        "args",
+        r"^augment_claude|^url_component|^_merge_disallowed|^_wait_for_server_info|^_read_json_file|^_write_json_file",
+    ),
+]
+
+
+CLAUDE_NATIVE_GROUPS: list[tuple[str, str]] = [
+    ("entry", r"^run_claude_native$|^resolve_native_claude_config|^build_native_claude_terminal_env"),
+    ("types", r"^PreparedClaudeTerminal|^ClaudeNativeUcodeConfig|^_ResumeWorkspace|^_AttachOutcome|^_ClaudeTerminalTmux"),
+    (
+        "resume_ui",
+        r"resume_workspace|^_prompt_resume|^_pick_resume|^_bind_resume|^_append_resume|^_resume_workspace|^_has_running_event_loop|^_stream_is_tty",
+    ),
+    (
+        "transcript",
+        r"transcript|^_claude_transcript|^_synthetic_claude|^_claude_user_content|^_claude_assistant|^_claude_text_blocks|^_json_object_from_string|^_redirect_claude|^_copy_transcript|^_clone_claude|^_find_claude|^_claude_project|^_sanitize_claude|^_fetch_external",
+    ),
+    ("config", r"^_ucode_config|^_provider_config|^_native_claude_config|^_materialize_claude"),
+    ("local_server", r"^_run_with_local_server|^_mark_startup"),
+    ("remote_server", r"^_run_with_remote_server"),
+    (
+        "terminal",
+        r"^_prepare_claude_terminal|^_launch_claude|^_create_claude_session|^_ensure_claude_terminal|^_wait_for_claude|^_close_claude|^_find_running_claude|^_read_claude_terminal|^_claude_terminal_request|^_merge_default_model|attach_local_terminal|^_tmux_profile|^_can_attach_direct|^_attach_direct|^_attach_with_transcript|^_attach_with_reconnect|^_is_terminal|^_close_ws|^_sleep$",
+    ),
+    (
+        "cwd",
+        r"^_align_working_directory|^_switch_to_recorded|^_resolve_session_id_for_resume|^_record_launch|^_strip_resume|^_preflight_local",
+    ),
+    (
+        "cold_resume",
+        r"^_resolve_cold_resume|^_ensure_local_claude_resume|^_fetch_all_session_items_for_claude|^_fetch_claude_session_labels",
+    ),
+]
+
+
+CODEX_NATIVE_GROUPS: list[tuple[str, str]] = [
+    ("entry", r"^run_codex_native$|^codex_terminal_resource_id$"),
+    ("types", r"^LaunchedCodexTerminal|^PreparedCodexTerminal|^_ResumeWorkspaceActionOption"),
+    (
+        "resume_ui",
+        r"resume_workspace|^_prompt_codex_resume|^_codex_resume_workspace|^_switch_to_recorded|^_resolve_session_id_for_resume|^_align_working_directory|^_record_launch|^_update_startup",
+    ),
+    (
+        "rollout",
+        r"rollout|^_codex_rollout|^_codex_event_msg|^_codex_response|^_codex_message_payload|^_codex_function_call|^_codex_content_blocks|^_codex_turn_id|^_copy_rollout|^_clone_codex|^_find_codex_rollout|^_ensure_local_codex_resume|^_interrupted_response|^_codex_rollout_timestamp",
+    ),
+    ("local_server", r"^_run_with_local_server|^_materialize_codex"),
+    ("remote_server", r"^_run_with_remote_server"),
+    (
+        "terminal",
+        r"^_prepare_codex_terminal|^_launch_codex|^_create_codex_session|^_ensure_codex_terminal|^_wait_for_codex|^_close_codex|^_find_running_codex|^_attach_|^_can_attach_direct|^_direct_tmux|^_start_codex_forwarder|^_initialize_fresh|^_attach_terminal|^_post_initial_prompt|^_wait_for_thread|^_start_initial_turn|^_patch_external|^_launched_codex_terminal|^_codex_terminal_lookup|^_response_error|^_runner_offline|^_preflight_local|^_active_codex_session|^_mint_codex_thread",
+    ),
+    ("session_items", r"^_fetch_all_session_items_for_codex|^_fetch_codex_session|^_session_item_response"),
+]
+
+
+CLAUDE_SDK_EXECUTOR_GROUPS: list[tuple[str, str]] = [
+    (
+        "protocols",
+        r"^_[A-Z].*Obj$|^_ClaudeSDK$|^_ClaudeQuery$|^_Stream$|^_ClaudeTransport$|^_ClaudeClient$|^_Process$|^_CancelScope$|^_TaskGroup$|^_TaskHandle$",
+    ),
+    ("types", r"^_ClaudeClientState|^PreparedClaudeCli|^_ResolvedSkills"),
+    ("executor", r"^ClaudeSDKExecutor$"),
+    (
+        "mcp",
+        r"mcp|^_build_mcp|^_omnigent_mcp|^_generated_sdk_mcp|^_build_sdk_mcp|^_sanitize_claude_mcp|^_claude_sdk_relay|^_build_stdio_bridge|^_claude_sdk_visible|^_omnigent_tool",
+    ),
+    (
+        "cli",
+        r"^prepare_claude_cli_path|^prepare_tight_cli|^prepare_claude|^_find_system_claude|^_resolve_gateway|^_databricks_claude|^_parse_optional_int|^_claude_internal",
+    ),
+    ("content", r"^_parse_data_uri|^_to_anthropic|^_multimodal_message"),
+    (
+        "process",
+        r"^_sandbox_disabled|^_terminate_process|^_kill_process|^_unset_env_var|^_call_optional_method|^_best_effort_close|^_ensure_sdk|^_resolve_skills",
+    ),
+]
+
+
+def decompose_repl() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/repl/_repl.py",
+        "Rich-based REPL for omnigent",
+        REPL_HELPER_GROUPS,
+    )
+
+
+def decompose_codex_native_forwarder() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/codex_native_forwarder.py",
+        "Codex native event forwarder",
+        CODEX_FORWARDER_GROUPS,
+    )
+
+
+CLAUDE_FORWARDER_GROUPS: list[tuple[str, str]] = [
+    (
+        "fwd_state",
+        r"^HookForwardState|^SubagentEntry|^SubagentForwardState|^TranscriptForwardState|^DeltaForwardState|^_ForwardDedupeState|^_TranscriptCostCacheEntry|^_PostRetry",
+    ),
+    (
+        "subagent",
+        r"subagent|_subagents_dir|_read_subagent|_write_subagent|_post_external_subagent|_forward_available_subagents",
+    ),
+    (
+        "cost",
+        r"cost|_cumulative_cost|_transcript_cost|_session_cost|_forward_session_cost",
+    ),
+    (
+        "supervisor",
+        r"^supervise_forwarder|^_supervisor_|^_maybe_rotate|^_seed_fork|^_create_clear|^_create_fork",
+    ),
+    (
+        "transcript",
+        r"^forward_claude_transcript|transcript|_forward_transcript|_read_transcript|_parse_transcript|_emit_transcript|delta|_forward_delta|_handle_transcript",
+    ),
+    (
+        "hooks",
+        r"hook|_forward_hook|_process_hook|_emit_hook",
+    ),
+]
+
+
+def decompose_claude_native_forwarder() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/claude_native_forwarder.py",
+        "Claude native transcript forwarder",
+        CLAUDE_FORWARDER_GROUPS,
+    )
+
+
+def decompose_claude_native_bridge() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/claude_native_bridge.py",
+        "Claude Code native bridge helpers",
+        CLAUDE_BRIDGE_GROUPS,
+    )
+
+
+def decompose_claude_native() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/claude_native.py",
+        "Claude Code native terminal launcher",
+        CLAUDE_NATIVE_GROUPS,
+    )
+
+
+def decompose_codex_native() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/codex_native.py",
+        "Codex native terminal launcher",
+        CODEX_NATIVE_GROUPS,
+    )
+
+
+def decompose_claude_sdk_executor() -> dict:
+    return decompose_ast_monolith(
+        ROOT / "omnigent/inner/claude_sdk_executor.py",
+        "ClaudeSDKExecutor harness",
+        CLAUDE_SDK_EXECUTOR_GROUPS,
+    )
+
+
+def run_phase4() -> dict[str, dict]:
+    results = {}
+    results["repl"] = decompose_repl()
+    results["codex_native_forwarder"] = decompose_codex_native_forwarder()
+    results["claude_native_forwarder"] = decompose_claude_native_forwarder()
+    results["claude_native_bridge"] = decompose_claude_native_bridge()
+    results["claude_native"] = decompose_claude_native()
+    results["codex_native"] = decompose_codex_native()
+    results["claude_sdk_executor"] = decompose_claude_sdk_executor()
+    return results
+
+
 if __name__ == "__main__":
     import sys
 
     if len(sys.argv) > 1 and sys.argv[1] == "phase2":
         for name, stats in run_phase2().items():
+            print(f"{name}:", stats)
+    elif len(sys.argv) > 1 and sys.argv[1] == "phase3":
+        for name, stats in run_phase3().items():
+            print(f"{name}:", stats)
+    elif len(sys.argv) > 1 and sys.argv[1] == "phase4":
+        for name, stats in run_phase4().items():
             print(f"{name}:", stats)
     else:
         print("sessions:", decompose_sessions())

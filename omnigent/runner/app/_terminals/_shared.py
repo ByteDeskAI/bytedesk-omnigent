@@ -90,10 +90,34 @@ from omnigent.tools.builtins.load_skill import (
 
 _logger = logging.getLogger(__name__)
 def _import_parent_bindings() -> None:
-    from .. import _constants as _parent_constants
-    from .. import _state as _parent_state
+    from .. import (
+        _constants as _parent_constants,
+        _dispatch as _parent_dispatch,
+        _forwarders as _parent_forwarders,
+        _harness as _parent_harness,
+        _helpers as _parent_helpers,
+        _policy as _parent_policy,
+        _state as _parent_state,
+        _streaming as _parent_streaming,
+        _subagents as _parent_subagents,
+        _timers as _parent_timers,
+        _tools as _parent_tools,
+    )
+
     g = globals()
-    for _mod in (_parent_constants, _parent_state):
+    for _mod in (
+        _parent_constants,
+        _parent_state,
+        _parent_dispatch,
+        _parent_forwarders,
+        _parent_harness,
+        _parent_helpers,
+        _parent_policy,
+        _parent_streaming,
+        _parent_subagents,
+        _parent_timers,
+        _parent_tools,
+    ):
         for _key, _value in _mod.__dict__.items():
             if not _key.startswith("__"):
                 g[_key] = _value
