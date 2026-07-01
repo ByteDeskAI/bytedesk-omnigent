@@ -6187,14 +6187,15 @@ async def test_sys_session_create_spawns_child_under_caller() -> None:
     """
     ``sys_session_create`` POSTs a JSON create with
     ``parent_session_id`` forced to the caller (child-only), passes the
-    agent_id, title, and a queued initial message, and returns a handle
-    carrying the new child's id. If parent_session_id weren't forced to
-    the caller, an orchestrator could create top-level/sibling sessions —
-    so the asserted request body is the security-critical check.
+    agent_id and title, then queues the first message via the normal child
+    event path. If parent_session_id weren't forced to the caller, an
+    orchestrator could create top-level/sibling sessions — so the asserted
+    request body is the security-critical check.
     """
     from omnigent.runner.tool_dispatch import execute_tool
 
     captured: dict[str, Any] = {}
+    event_posts: list[dict[str, Any]] = []
 
     async def _server_handler(request: httpx.Request) -> httpx.Response:
         if request.method == "POST" and request.url.path == "/v1/sessions":
@@ -6208,6 +6209,9 @@ async def test_sys_session_create_spawns_child_under_caller() -> None:
                     "status": "idle",
                 },
             )
+        if request.method == "POST" and request.url.path == "/v1/sessions/conv_child/events":
+            event_posts.append(json.loads(request.content))
+            return httpx.Response(202, json={"queued": True})
         return httpx.Response(404, json={"error": str(request.url)})
 
     async with httpx.AsyncClient(
@@ -6226,11 +6230,78 @@ async def test_sys_session_create_spawns_child_under_caller() -> None:
     assert captured["parent_session_id"] == "conv_caller"
     assert captured["agent_id"] == "ag_x"
     assert captured["title"] == "auth"
-    assert captured["initial_items"][0]["data"]["content"][0]["text"] == "start"
+    assert "initial_items" not in captured
+    assert event_posts[0]["data"]["content"][0]["text"] == "start"
     handle = json.loads(output)
     assert handle["conversation_id"] == "conv_child"
     assert handle["agent_id"] == "ag_x"
     assert handle["agent_name"] == "researcher"
+
+
+@pytest.mark.asyncio
+async def test_sys_session_create_retries_first_message_relay_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``sys_session_create(message=...)`` queues the first turn through the
+    child event path, so a transient runner-relay 503 is retried without
+    duplicating the child session.
+    """
+    from omnigent.runner.tool_dispatch import execute_tool
+
+    retry_sleeps: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        retry_sleeps.append(delay)
+
+    monkeypatch.setattr("omnigent.runner.tool_dispatch.asyncio.sleep", _record_sleep)
+    create_posts: list[dict[str, Any]] = []
+    event_posts: list[dict[str, Any]] = []
+
+    async def _server_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/v1/sessions":
+            create_posts.append(json.loads(request.content))
+            return httpx.Response(
+                201,
+                json={
+                    "id": "conv_child",
+                    "agent_id": "ag_x",
+                    "agent_name": "researcher",
+                    "status": "idle",
+                },
+            )
+        if request.method == "POST" and request.url.path == "/v1/sessions/conv_child/events":
+            event_posts.append(json.loads(request.content))
+            if len(event_posts) == 1:
+                return httpx.Response(
+                    503,
+                    json={
+                        "error": {
+                            "code": "runner_unavailable",
+                            "message": "Timed out waiting for runner stream relay to subscribe",
+                        }
+                    },
+                )
+            return httpx.Response(202, json={"queued": True})
+        return httpx.Response(404, json={"error": str(request.url)})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_server_handler),
+        base_url="http://server",
+    ) as server_client:
+        output = await execute_tool(
+            tool_name="sys_session_create",
+            arguments=json.dumps({"agent_id": "ag_x", "title": "auth", "message": "start"}),
+            server_client=server_client,
+            conversation_id="conv_caller",
+        )
+
+    assert len(create_posts) == 1
+    assert len(event_posts) == 2
+    assert retry_sleeps == [0.5]
+    assert event_posts[1]["data"]["content"][0]["text"] == "start"
+    handle = json.loads(output)
+    assert handle["conversation_id"] == "conv_child"
 
 
 @pytest.mark.asyncio

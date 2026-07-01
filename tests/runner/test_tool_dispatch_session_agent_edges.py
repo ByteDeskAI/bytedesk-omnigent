@@ -25,31 +25,21 @@ from omnigent.runner.tool_dispatch import (
 from omnigent.session_lifecycle import CLOSED_LABEL_KEY, CLOSED_LABEL_VALUE
 
 
-def test_build_session_create_body_forces_parent_and_optional_fields() -> None:
+def test_build_session_create_body_forces_parent_and_optional_title() -> None:
     body = _build_session_create_body(
         "ag_child",
         "conv_parent",
         title="researcher:auth",
-        message="start here",
     )
     assert body == {
         "agent_id": "ag_child",
         "parent_session_id": "conv_parent",
         "title": "researcher:auth",
-        "initial_items": [
-            {
-                "type": "message",
-                "data": {
-                    "role": "user",
-                    "content": [{"type": "input_text", "text": "start here"}],
-                },
-            }
-        ],
     }
 
 
-def test_build_session_create_body_omits_empty_title_and_message() -> None:
-    body = _build_session_create_body("ag_child", "conv_parent", title="", message=None)
+def test_build_session_create_body_omits_empty_title() -> None:
+    body = _build_session_create_body("ag_child", "conv_parent", title="")
     assert body == {"agent_id": "ag_child", "parent_session_id": "conv_parent"}
 
 

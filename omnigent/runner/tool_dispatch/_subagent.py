@@ -57,6 +57,10 @@ from omnigent.runner.subagent_status import (
 from omnigent.runner.subagent_status import (
     SubagentWorkStatus,
 )
+from omnigent.runner.tool_dispatch._session_api import (
+    _parse_session_title,
+    _session_wrapper_label,
+)
 from omnigent.runner.tool_execution_context import ToolExecutionContext
 from omnigent.runtime import pending_elicitations
 from omnigent.session_lifecycle import (
@@ -918,24 +922,21 @@ def _build_session_create_body(
     agent_id: str,
     conversation_id: str,
     title: Any,
-    message: Any,
 ) -> dict[str, Any]:
     """
     Build the JSON ``POST /v1/sessions`` body for ``sys_session_create``.
 
     ``parent_session_id`` is hard-forced to ``conversation_id`` — this is
-    what makes the write child-only (an orchestrator cannot create a
-    top-level or sibling session). A non-empty ``title`` and ``message``
-    are included when provided; the message becomes the child's first
-    queued user turn via ``initial_items``.
+    what makes the write child-only (an orchestrator cannot create a top-level
+    or sibling session). A non-empty ``title`` is included when provided. The
+    optional first message is posted after the child row exists so it can use
+    the same child-message retry path as ``sys_session_send``.
 
     :param agent_id: The existing agent id or template name to launch,
         e.g. ``"ag_abc123"`` or ``"chief-of-staff"``.
     :param conversation_id: The caller's session id — the forced parent.
     :param title: Optional session label; included only when a non-empty
         string.
-    :param message: Optional first user message; included only when a
-        non-empty string.
     :returns: The JSON request body.
     """
     body: dict[str, Any] = {
@@ -944,13 +945,6 @@ def _build_session_create_body(
     }
     if isinstance(title, str) and title:
         body["title"] = title
-    if isinstance(message, str) and message:
-        body["initial_items"] = [
-            {
-                "type": "message",
-                "data": {"role": "user", "content": [{"type": "input_text", "text": message}]},
-            }
-        ]
     return body
 
 def _finalize_created_session(
@@ -1086,9 +1080,7 @@ async def _execute_session_create(
             agent_spec=agent_spec,
             runner_workspace=runner_workspace,
         )
-    body = _build_session_create_body(
-        str(agent_id), conversation_id, args.get("title"), args.get("message")
-    )
+    body = _build_session_create_body(str(agent_id), conversation_id, args.get("title"))
     try:
         resp = await server_client.post("/v1/sessions", json=body, timeout=30.0)
     except Exception as exc:  # noqa: BLE001
@@ -1107,13 +1099,20 @@ async def _execute_session_create(
     launched_agent_id = (
         data.get("agent_id") if isinstance(data.get("agent_id"), str) else str(agent_id)
     )
-    return _finalize_created_session(
+    handle = _finalize_created_session(
         data,
         conversation_id=conversation_id,
         agent_id=launched_agent_id,
         title=args.get("title"),
         publish_event=publish_event,
     )
+    child_session_id = data["id"]
+    message = args.get("message")
+    if isinstance(message, str) and message:
+        message_error = await _post_child_first_message(child_session_id, message, server_client)
+        if message_error is not None:
+            return message_error
+    return handle
 
 def _bundle_local_agent_source(source: Path) -> bytes:
     """
