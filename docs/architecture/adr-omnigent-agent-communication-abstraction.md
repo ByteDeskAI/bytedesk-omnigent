@@ -1,6 +1,6 @@
 # ADR: Agent communication abstraction
 
-**Status:** Accepted (2026-07-01)  
+**Status:** Accepted (2026-07-01)
 **Scope:** `bytedesk-omnigent` session chat, delegation, stream projection, and blueprint child dispatch. Public REST/SSE schemas and tool schemas are unchanged.
 
 ## Context
