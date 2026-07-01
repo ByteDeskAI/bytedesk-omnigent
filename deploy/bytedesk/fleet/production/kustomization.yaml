@@ -113,6 +113,17 @@ patches:
                 env:
                   - name: OMNIGENT_INFISICAL_ENV
                     value: production
+                  # ADR-0145 spine flags (BDP-2343): flip ON in prod per the
+                  # phased cutover plan — see Jira BDP-2343/BDP-2368 for bake
+                  # criteria and rollback (git revert these env vars + a new
+                  # release, since this is a GitOps-reconciled value, not an
+                  # instant Infisical toggle).
+                  - name: OMNIGENT_USE_LIFESPAN_PHASES
+                    value: "1"
+                  - name: OMNIGENT_STORE_LIFECYCLE_HOOKS
+                    value: "1"
+                  - name: OMNIGENT_USE_DI_CONTAINER
+                    value: "1"
   - target:
       kind: Deployment
       name: github-mcp
@@ -152,3 +163,10 @@ patches:
                 env:
                   - name: OMNIGENT_INFISICAL_ENV
                     value: production
+                  # ADR-0145 spine flag (BDP-2343): flip ON in prod per the
+                  # phased cutover plan — see Jira BDP-2343/BDP-2368 for bake
+                  # criteria and rollback (git revert this env var + a new
+                  # release, since this is a GitOps-reconciled value, not an
+                  # instant Infisical toggle).
+                  - name: OMNIGENT_USE_TOOL_DISPATCHER_REGISTRY
+                    value: "1"
