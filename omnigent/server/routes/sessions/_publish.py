@@ -293,6 +293,13 @@ _logger = logging.getLogger(__name__)
 from ._constants import *
 from ._state import *
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 def _publish_and_persist_resource_event(
     session_id: str,
     event_type: str,
@@ -420,6 +427,7 @@ def _parse_last_event_id(request: Request) -> int | None:
     except (TypeError, ValueError):
         return None
 
+@dataclass
 class SessionLiveness:
     """
     The two honest liveness signals for a single session.
@@ -816,10 +824,11 @@ def _publish_sandbox_status(session_id: str, stage: str, error: str | None = Non
     # host-bound session and the snapshot carries no launch state.
     # Failures stay cached (mirroring ManagedLaunchTracker retention)
     # so a reload after a dead launch still shows the reason.
+    cache = _sessions_facade()._session_sandbox_status_cache
     if stage == "ready":
-        _session_sandbox_status_cache.pop(session_id, None)
+        cache.pop(session_id, None)
     else:
-        _session_sandbox_status_cache[session_id] = SandboxStatus(stage=stage, error=error)
+        cache[session_id] = SandboxStatus(stage=stage, error=error)
     event = SessionSandboxStatusEvent(
         type="session.sandbox_status",
         conversation_id=session_id,
@@ -1030,4 +1039,3 @@ async def _stream_live_events(
         ):
             presence.disconnect(presence_root_id, viewer_user_id, presence_token)
         yield "data: [DONE]\n\n"
-

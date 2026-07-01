@@ -1289,6 +1289,58 @@ def test_build_session_list_item_projects_permissions_and_comments() -> None:
     assert item.git_branch == "feature/x"
 
 
+def test_session_liveness_accepts_keyword_construction() -> None:
+    liveness = SessionLiveness(runner_online=False, host_online=True)
+
+    assert liveness.runner_online is False
+    assert liveness.host_online is True
+
+
+@pytest.mark.asyncio
+async def test_session_route_value_objects_accept_keyword_construction() -> None:
+    async def _noop() -> None:
+        return None
+
+    task = asyncio.create_task(_noop())
+    try:
+        assert sessions_mod._HostLaunchAttempt(runner_id="runner_1").runner_id == "runner_1"
+        assert (
+            sessions_mod._SessionEventDispatchResult(item_id="item_1", pending_id=None).item_id
+            == "item_1"
+        )
+        assert (
+            sessions_mod._MirroredToolCall(
+                tool_name="Bash",
+                tool_input={"command": "pwd"},
+                response_id="resp_1",
+            ).tool_name
+            == "Bash"
+        )
+        assert (
+            sessions_mod._NativeTerminalEnsureOutcome(error=None, policy_notice=None).error
+            is None
+        )
+        assert (
+            sessions_mod._PendingPolicyAskWrites(
+                state_updates=None,
+                set_labels={"approved": "true"},
+            ).set_labels
+            == {"approved": "true"}
+        )
+        assert sessions_mod._RunnerForwardResult(status_code=204, body="").status_code == 204
+        assert (
+            sessions_mod._RelayHandle(
+                runner_id="runner_1",
+                task=task,
+                ready=asyncio.Event(),
+            ).task
+            is task
+        )
+        assert sessions_mod._KeepaliveHandle(refcount=1, task=task).refcount == 1
+    finally:
+        await task
+
+
 @pytest.mark.asyncio
 async def test_apply_liveness_to_items_mutates_runner_and_host_fields() -> None:
     from omnigent.server.schemas import SessionListItem

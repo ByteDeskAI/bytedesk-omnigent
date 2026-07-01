@@ -301,6 +301,7 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+@dataclass
 class _RunnerForwardResult:
     """
     HTTP result from forwarding a session-control event to the runner.
@@ -312,4 +313,3 @@ class _RunnerForwardResult:
 
     status_code: int
     body: str
-

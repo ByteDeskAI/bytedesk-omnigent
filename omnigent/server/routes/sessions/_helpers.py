@@ -292,6 +292,13 @@ _logger = logging.getLogger(__name__)
 from ._constants import *
 from ._state import *
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
+
 def _allow_all_edits_eligible(tool_name: str, permission_mode: str | None) -> bool:
     """
     Whether a claude-native PermissionRequest may offer / honor the
@@ -961,7 +968,7 @@ async def _record_host_cooldown(host_id: str, cooldown_s: float) -> None:
                 "registry", f"host-cooldown.{host_id}", {"expires_at": expires_at}
             )
             return
-    _host_cooldowns[host_id] = expires_at
+    _sessions_facade()._host_cooldowns[host_id] = expires_at
 
 async def _hosts_in_cooldown() -> set[str]:
     """Set of host ids still within their circuit-breaker cooldown window."""
@@ -983,11 +990,12 @@ async def _hosts_in_cooldown() -> set[str]:
                 if isinstance(exp, int) and exp > now:
                     out.add(key[len("host-cooldown.") :])
             return out
-    for host_id, exp in list(_host_cooldowns.items()):
+    cooldowns = _sessions_facade()._host_cooldowns
+    for host_id, exp in list(cooldowns.items()):
         if exp > now:
             out.add(host_id)
         else:
-            _host_cooldowns.pop(host_id, None)
+            cooldowns.pop(host_id, None)
     return out
 
 async def _failover_to_new_host(
@@ -1052,7 +1060,7 @@ async def _failover_to_new_host(
 
         if host_registry is None:
             return False
-        attempt = await _launch_runner_on_host_id(
+        attempt = await _sessions_facade()._launch_runner_on_host_id(
             conv,
             conversation_store,
             host_registry,
@@ -1063,7 +1071,7 @@ async def _failover_to_new_host(
             repin=_repin,
         )
         if not attempt.repinned:
-            client = await _wait_for_runner_client(
+            client = await _sessions_facade()._wait_for_runner_client(
                 session_id=conv.id,
                 runner_router=runner_router,
                 runner_control_registry=runner_control_registry,
@@ -1085,7 +1093,7 @@ async def _failover_to_new_host(
                         host_registry.evict(tconn)
             excluded = {bad_host_id, target.host_id} | await _hosts_in_cooldown()
             continue
-        client = await _wait_for_runner_client(
+        client = await _sessions_facade()._wait_for_runner_client(
             session_id=conv.id,
             runner_router=runner_router,
             runner_control_registry=runner_control_registry,
@@ -1251,6 +1259,7 @@ async def _persist_session_event(
     _publish_external_conversation_item(session_id, persisted_items[0])
     return item_id
 
+@dataclass
 class _SessionEventDispatchResult:
     """
     Outcome of forwarding one item-event to the runner.
@@ -1950,4 +1959,3 @@ def _latest_message_preview(
     return None
 
 _UI_ADDED_AGENT_TITLE_PREFIX = "ui"
-

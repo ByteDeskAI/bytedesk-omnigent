@@ -301,6 +301,12 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+
+def _sessions_facade():
+    from omnigent.server.routes import sessions
+
+    return sessions
+
 async def _launch_runner_on_host(
     conv: Conversation,
     conversation_store: ConversationStore,
@@ -521,18 +527,18 @@ async def _bind_and_launch_managed_runner(
         if host is not None:
             await terminate_managed_host(host, host_store, sandbox_config)
         tracker.fail(session_id, "session was deleted while its sandbox was provisioning")
-        _publish_sandbox_status(
+        _sessions_facade()._publish_sandbox_status(
             session_id, "failed", "session was deleted while its sandbox was provisioning"
         )
         return
     # Host bound; what remains is launching the runner and waiting
     # for its tunnel.
-    _publish_sandbox_status(session_id, "connecting")
+    _sessions_facade()._publish_sandbox_status(session_id, "connecting")
     runner_id: str | None = None
     if host_registry is not None:
         host_conn = host_registry.get(managed.host_id)
         if host_conn is not None:
-            launch_attempt = await _launch_runner_on_host(
+            launch_attempt = await _sessions_facade()._launch_runner_on_host(
                 conv,
                 conversation_store,
                 host_registry,
@@ -542,7 +548,7 @@ async def _bind_and_launch_managed_runner(
                 runner_credential_store=runner_credential_store,
             )
         else:
-            launch_attempt = await _launch_runner_on_host_id(
+            launch_attempt = await _sessions_facade()._launch_runner_on_host_id(
                 conv,
                 conversation_store,
                 host_registry,
@@ -558,7 +564,7 @@ async def _bind_and_launch_managed_runner(
             # the connect timeout for a runner that will never appear.
             reason = launch_attempt.error or "harness not configured on the sandbox host"
             tracker.fail(session_id, reason)
-            _publish_sandbox_status(session_id, "failed", reason)
+            _sessions_facade()._publish_sandbox_status(session_id, "failed", reason)
             return
         runner_id = launch_attempt.runner_id
     if runner_id is not None and runner_router is not None:
@@ -566,7 +572,7 @@ async def _bind_and_launch_managed_runner(
         # message POST resolves its runner client on the first try. A timeout
         # still settles successfully — the host is bound, and post_event's
         # normal host-relaunch path owns dead runners.
-        await _wait_for_runner_client(
+        await _sessions_facade()._wait_for_runner_client(
             session_id,
             runner_router,
             runner_control_registry,
@@ -574,7 +580,7 @@ async def _bind_and_launch_managed_runner(
             timeout_s=_HOST_RELAUNCH_RUNNER_CONNECT_TIMEOUT_S,
         )
     tracker.finish(session_id)
-    _publish_sandbox_status(session_id, "ready")
+    _sessions_facade()._publish_sandbox_status(session_id, "ready")
 
 async def _ensure_runner_session_initialized(
     session_id: str,
@@ -643,4 +649,3 @@ async def _ensure_runner_session_initialized(
             session_id,
             exc_info=True,
         )
-
