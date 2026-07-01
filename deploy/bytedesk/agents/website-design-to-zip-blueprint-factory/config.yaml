@@ -1,0 +1,253 @@
+# Strict Website Design-To-Zip Blueprint Factory.
+spec_version: 1
+name: website-design-to-zip-blueprint-factory
+description: >-
+  Strict Website Design-To-Zip Blueprint Factory - generate visual design
+  assets, implement static HTML, package a zip, and deliver it to the client's
+  Google Drive Website folder through bounded blueprint review loops.
+
+executor:
+  type: blueprint
+
+params:
+  workflow: true
+  orchestrator: product-ops-director
+  department: "product"
+  cadence: event
+  internalOnly: true
+
+async: true
+cancellable: true
+
+prompt: |
+  Deterministic blueprint workflow for website delivery. Input may be a natural
+  language request or a JSON object with client_name, website_goal, pages,
+  style_direction, client_drive_folder_id, optional client_website_folder_id,
+  and optional google_subject. The blueprint normalizes the request, generates
+  design assets, gates the design, builds HTML, gates the implementation,
+  packages a zip, uploads it to Drive, and gates delivery.
+
+blueprint:
+  name: "Strict Website Design-To-Zip Blueprint Factory"
+  description: "Blueprint-gated website design, HTML, zip, and Drive delivery."
+  version: 1
+  nodes:
+    - id: normalize_request
+      kind: agent
+      target: website-request-normalizer
+      metadata:
+        expect_json: true
+      input:
+        raw_request: "{{ $.input.text }}"
+
+    - id: generate_designs
+      kind: agent
+      target: web-design-director
+      depends_on: [normalize_request]
+      metadata:
+        expect_json: true
+      input:
+        task: "Generate website visual direction and durable image assets. Return only JSON."
+        brief: "{{ $.nodes.normalize_request.output }}"
+        required_output:
+          design_spec: "implementation-ready design direction"
+          image_file_ids: ["durable Omnigent file_id values for generated design assets"]
+          image_rationale: "why images were or were not generated"
+          handoff_notes: "notes Nolan needs to implement the site faithfully"
+
+    - id: design_feedback_loop
+      kind: loop
+      depends_on: [generate_designs]
+      loop:
+        max_iterations: 3
+        until:
+          path: "$.nodes.review_designs.output.approved"
+          equals: true
+        on_exhausted: fail
+        reuse_session: true
+        body:
+          - id: review_designs
+            kind: agent
+            target: website-design-quality-gate
+            metadata:
+              expect_json: true
+            input:
+              brief: "{{ $.nodes.normalize_request.output }}"
+              initial_design: "{{ $.nodes.generate_designs.output }}"
+              latest_revision: "{{ $.nodes.revise_designs.output }}"
+          - id: revise_designs
+            kind: agent
+            target: web-design-director
+            depends_on: [review_designs]
+            when:
+              path: "$.nodes.review_designs.output.approved"
+              not_equals: true
+            metadata:
+              expect_json: true
+            input:
+              task: "Revise the website design to satisfy the gate findings. Return only JSON."
+              brief: "{{ $.nodes.normalize_request.output }}"
+              initial_design: "{{ $.nodes.generate_designs.output }}"
+              latest_revision: "{{ $.nodes.revise_designs.output }}"
+              review: "{{ $.nodes.review_designs.output }}"
+
+    - id: build_html
+      kind: agent
+      target: web-development-lead
+      depends_on: [design_feedback_loop]
+      metadata:
+        expect_json: true
+      input:
+        task: "Build the approved website as static HTML/CSS/JS. Do not package or upload yet. Return only JSON."
+        brief: "{{ $.nodes.normalize_request.output }}"
+        approved_design: "{{ $.nodes.review_designs.output.approved_design }}"
+        design_asset_file_ids: "{{ $.nodes.generate_designs.output.image_file_ids }}"
+        required_output:
+          static_dir: "path containing static/index.html"
+          source_dir: "path containing editable source files"
+          files: ["important files created"]
+          notes: ["implementation notes"]
+
+    - id: html_feedback_loop
+      kind: loop
+      depends_on: [build_html]
+      loop:
+        max_iterations: 3
+        until:
+          path: "$.nodes.review_html.output.approved"
+          equals: true
+        on_exhausted: fail
+        reuse_session: true
+        body:
+          - id: review_html
+            kind: agent
+            target: website-html-quality-gate
+            metadata:
+              expect_json: true
+            input:
+              brief: "{{ $.nodes.normalize_request.output }}"
+              approved_design: "{{ $.nodes.review_designs.output.approved_design }}"
+              initial_html: "{{ $.nodes.build_html.output }}"
+              latest_revision: "{{ $.nodes.revise_html.output }}"
+          - id: revise_html
+            kind: agent
+            target: web-development-lead
+            depends_on: [review_html]
+            when:
+              path: "$.nodes.review_html.output.approved"
+              not_equals: true
+            metadata:
+              expect_json: true
+            input:
+              task: "Revise the static site to satisfy the HTML quality gate. Do not package or upload yet. Return only JSON."
+              brief: "{{ $.nodes.normalize_request.output }}"
+              approved_design: "{{ $.nodes.review_designs.output.approved_design }}"
+              initial_html: "{{ $.nodes.build_html.output }}"
+              latest_revision: "{{ $.nodes.revise_html.output }}"
+              review: "{{ $.nodes.review_html.output }}"
+
+    - id: package_zip
+      kind: agent
+      target: web-development-lead
+      depends_on: [html_feedback_loop]
+      metadata:
+        expect_json: true
+      input:
+        task: "Call bytedesk_package_website_zip for the approved static site. Do not upload to Drive in this step. Return only JSON."
+        brief: "{{ $.nodes.normalize_request.output }}"
+        approved_artifacts: "{{ $.nodes.review_html.output.approved_artifacts }}"
+        design_asset_file_ids: "{{ $.nodes.generate_designs.output.image_file_ids }}"
+        required_output:
+          file_id: "Omnigent zip file_id"
+          session_id: "Omnigent session_id for the package"
+          download_url: "download URL when available"
+          manifest: "package manifest summary"
+          included_files: ["files included in the zip"]
+
+    - id: upload_to_drive
+      kind: agent
+      target: web-development-lead
+      depends_on: [package_zip]
+      metadata:
+        expect_json: true
+      input:
+        task: "Upload the packaged zip to the client's Google Drive Website folder. Return only JSON."
+        package: "{{ $.nodes.package_zip.output }}"
+        client_website_folder_id: "{{ $.nodes.normalize_request.output.client_website_folder_id }}"
+        client_drive_folder_id: "{{ $.nodes.normalize_request.output.client_drive_folder_id }}"
+        folder_name: "{{ $.nodes.normalize_request.output.website_folder_name }}"
+        google_subject: "{{ $.nodes.normalize_request.output.google_subject }}"
+        folder_rule: "Prefer client_website_folder_id. Otherwise use client_drive_folder_id as parent_folder_id plus folder_name Website."
+        required_output:
+          uploaded: true
+          drive_file_id: "Google Drive file id"
+          drive_web_url: "Google Drive file URL when available"
+          drive_folder_id: "Google Drive folder id used"
+          drive_folder_web_url: "Google Drive folder URL when available"
+
+    - id: delivery_feedback_loop
+      kind: loop
+      depends_on: [upload_to_drive]
+      loop:
+        max_iterations: 3
+        until:
+          path: "$.nodes.review_delivery.output.approved"
+          equals: true
+        on_exhausted: fail
+        reuse_session: true
+        body:
+          - id: review_delivery
+            kind: agent
+            target: website-delivery-quality-gate
+            metadata:
+              expect_json: true
+            input:
+              brief: "{{ $.nodes.normalize_request.output }}"
+              package: "{{ $.nodes.package_zip.output }}"
+              drive_upload: "{{ $.nodes.upload_to_drive.output }}"
+              latest_retry: "{{ $.nodes.retry_delivery.output }}"
+          - id: retry_delivery
+            kind: agent
+            target: web-development-lead
+            depends_on: [review_delivery]
+            when:
+              path: "$.nodes.review_delivery.output.approved"
+              not_equals: true
+            metadata:
+              expect_json: true
+            input:
+              task: "Fix the package or Drive upload issues from the delivery gate. Return only JSON."
+              brief: "{{ $.nodes.normalize_request.output }}"
+              approved_artifacts: "{{ $.nodes.review_html.output.approved_artifacts }}"
+              package: "{{ $.nodes.package_zip.output }}"
+              drive_upload: "{{ $.nodes.upload_to_drive.output }}"
+              review: "{{ $.nodes.review_delivery.output }}"
+
+    - id: final_output
+      kind: output
+      depends_on: [delivery_feedback_loop]
+      output:
+        status: "{{ $.nodes.review_delivery.output.status }}"
+        package_file_id: "{{ $.nodes.review_delivery.output.approved_delivery.package.file_id }}"
+        package_session_id: "{{ $.nodes.review_delivery.output.approved_delivery.package.session_id }}"
+        package_download_url: "{{ $.nodes.review_delivery.output.approved_delivery.package.download_url }}"
+        drive_file_id: "{{ $.nodes.review_delivery.output.approved_delivery.drive.file_id }}"
+        drive_web_url: "{{ $.nodes.review_delivery.output.approved_delivery.drive.web_url }}"
+        drive_folder_id: "{{ $.nodes.review_delivery.output.approved_delivery.drive.folder_id }}"
+        drive_folder_web_url: "{{ $.nodes.review_delivery.output.approved_delivery.drive.folder_web_url }}"
+        included_files: "{{ $.nodes.review_delivery.output.approved_delivery.included_files }}"
+        design_review: "{{ $.nodes.review_designs.output }}"
+        html_review: "{{ $.nodes.review_html.output }}"
+        delivery_review: "{{ $.nodes.review_delivery.output }}"
+  outputs:
+    status: "{{ $.nodes.final_output.output.status }}"
+    package_file_id: "{{ $.nodes.final_output.output.package_file_id }}"
+    package_session_id: "{{ $.nodes.final_output.output.package_session_id }}"
+    package_download_url: "{{ $.nodes.final_output.output.package_download_url }}"
+    drive_file_id: "{{ $.nodes.final_output.output.drive_file_id }}"
+    drive_web_url: "{{ $.nodes.final_output.output.drive_web_url }}"
+    drive_folder_id: "{{ $.nodes.final_output.output.drive_folder_id }}"
+    drive_folder_web_url: "{{ $.nodes.final_output.output.drive_folder_web_url }}"
+    included_files: "{{ $.nodes.final_output.output.included_files }}"
+
+skills: none

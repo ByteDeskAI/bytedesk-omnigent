@@ -146,3 +146,20 @@ def test_blueprint_playground_bundles_parse_and_validate() -> None:
         assert spec.executor.type == "blueprint"
         assert spec.blueprint is not None
         assert result.valid, [f"{err.path}: {err.message}" for err in result.errors]
+
+
+def test_website_blueprint_factory_parses_and_validates() -> None:
+    spec = parse(
+        Path("deploy/bytedesk/agents/website-design-to-zip-blueprint-factory"),
+        expand_env=False,
+    )
+    result = validate(spec)
+
+    assert spec.executor.type == "blueprint"
+    assert spec.blueprint is not None
+    assert [node.id for node in spec.blueprint.nodes][:3] == [
+        "normalize_request",
+        "generate_designs",
+        "design_feedback_loop",
+    ]
+    assert result.valid, [f"{err.path}: {err.message}" for err in result.errors]

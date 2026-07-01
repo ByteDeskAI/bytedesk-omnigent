@@ -124,5 +124,56 @@ def test_website_design_to_zip_workflow_delegates_design_and_development() -> No
     assert "session_id" in cfg["prompt"]
 
 
+def test_website_blueprint_factory_has_strict_review_loops() -> None:
+    cfg = _yaml("website-design-to-zip-blueprint-factory")
+
+    assert cfg["executor"]["type"] == "blueprint"
+    assert str(cfg["params"]["workflow"]).lower() == "true"
+    assert cfg["params"]["orchestrator"] == "product-ops-director"
+
+    nodes = {node["id"]: node for node in cfg["blueprint"]["nodes"]}
+    assert {
+        "normalize_request",
+        "generate_designs",
+        "design_feedback_loop",
+        "build_html",
+        "html_feedback_loop",
+        "package_zip",
+        "upload_to_drive",
+        "delivery_feedback_loop",
+        "final_output",
+    } <= set(nodes)
+
+    assert str(nodes["normalize_request"]["metadata"]["expect_json"]).lower() == "true"
+    assert nodes["generate_designs"]["target"] == "web-design-director"
+    assert nodes["build_html"]["target"] == "web-development-lead"
+    assert nodes["upload_to_drive"]["input"]["folder_rule"].startswith(
+        "Prefer client_website_folder_id"
+    )
+
+    design_loop = nodes["design_feedback_loop"]["loop"]
+    html_loop = nodes["html_feedback_loop"]["loop"]
+    delivery_loop = nodes["delivery_feedback_loop"]["loop"]
+    assert design_loop["max_iterations"] == 3
+    assert html_loop["max_iterations"] == 3
+    assert delivery_loop["max_iterations"] == 3
+    assert design_loop["until"]["path"] == "$.nodes.review_designs.output.approved"
+    assert html_loop["until"]["path"] == "$.nodes.review_html.output.approved"
+    assert delivery_loop["until"]["path"] == "$.nodes.review_delivery.output.approved"
+
+    loop_nodes = {
+        child["id"]: child
+        for loop in [design_loop, html_loop, delivery_loop]
+        for child in loop["body"]
+    }
+    assert loop_nodes["review_designs"]["target"] == "website-design-quality-gate"
+    assert loop_nodes["review_html"]["target"] == "website-html-quality-gate"
+    assert loop_nodes["review_delivery"]["target"] == "website-delivery-quality-gate"
+    assert all(
+        str(child["metadata"]["expect_json"]).lower() == "true"
+        for child in loop_nodes.values()
+    )
+
+
 def test_nested_platform_developer_child_removed() -> None:
     assert not (_AGENTS / "chief-of-staff" / "agents").exists()

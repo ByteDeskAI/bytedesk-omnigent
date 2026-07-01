@@ -1,8 +1,8 @@
 """Seed the workflow orchestrators as first-class Tasks (BDP-2337, ADR-0142).
 
-The 45 ``params.workflow: true`` agent bundles (BDP-2180/2181) are orchestrators:
-each decomposes a recurring piece of org work and delegates it to a specialist
-roster. BDP-2337 represents each one as a durable :class:`~bytedesk_omnigent.tasks.store.Task`
+The ``params.workflow: true`` agent bundles are orchestrators: each decomposes
+a recurring piece of org work and delegates it to a specialist roster. BDP-2337
+represents each one as a durable :class:`~bytedesk_omnigent.tasks.store.Task`
 so the automation suite is visible + assignable on the task substrate.
 
 **ADDITIVE / DUAL-PRESENCE (hard rule).** The workflow agents stay in the roster
@@ -106,7 +106,8 @@ def parse_workflow_bundle(bundle_dir: Path) -> WorkflowBundle | None:
     department = params.get("department")
     if not orchestrator or not department:
         logger.warning(
-            "workflow-task seed: %s is workflow:true but missing orchestrator/department; skipping",
+            "workflow-task seed: %s is workflow:true but missing "
+            "orchestrator/department; skipping",
             bundle_dir.name,
         )
         return None

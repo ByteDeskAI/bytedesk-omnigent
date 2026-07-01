@@ -219,6 +219,136 @@ async def test_parent_blueprint_calls_child_blueprint_once(
     assert collect["status"] == "completed"
 
 
+async def test_blueprint_child_expect_json_drives_loop_condition(
+    client: httpx.AsyncClient,
+) -> None:
+    _register_agent(
+        agent_id="ag_json_gate_child",
+        config=_blueprint_config(
+            "json-gate-child",
+            [
+                {
+                    "id": "gate_output",
+                    "kind": "output",
+                    "output": {"approved": True, "score": 97},
+                }
+            ],
+            {
+                "approved": "{{ $.nodes.gate_output.output.approved }}",
+                "score": "{{ $.nodes.gate_output.output.score }}",
+            },
+        ),
+    )
+    _register_agent(
+        agent_id="ag_json_gate_parent",
+        config=_blueprint_config(
+            "json-gate-parent",
+            [
+                {
+                    "id": "review_loop",
+                    "kind": "loop",
+                    "loop": {
+                        "max_iterations": 2,
+                        "until": {
+                            "path": "$.nodes.gate.output.approved",
+                            "equals": True,
+                        },
+                        "on_exhausted": "fail",
+                        "body": [
+                            {
+                                "id": "gate",
+                                "kind": "blueprint",
+                                "target": "json-gate-child",
+                                "metadata": {"expect_json": True},
+                                "input": "Review {{ $.input.text }}",
+                            }
+                        ],
+                    },
+                },
+                {
+                    "id": "final",
+                    "kind": "output",
+                    "depends_on": ["review_loop"],
+                    "output": {"approved": "{{ $.nodes.gate.output.approved }}"},
+                },
+            ],
+            {"approved": "{{ $.nodes.final.output.approved }}"},
+        ),
+    )
+    parent = (
+        await client.post("/v1/sessions", json={"agent_id": "ag_json_gate_parent"})
+    ).json()
+
+    resp = await client.post(
+        f"/v1/sessions/{parent['id']}/events",
+        json={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Website QA"}],
+            },
+        },
+    )
+
+    assert resp.status_code == 202, resp.text
+    run = (await client.get(f"/v1/sessions/{parent['id']}/blueprint-run")).json()
+    assert run["status"] == "completed"
+    gate = next(node for node in run["nodes"] if node["id"] == "gate")
+    assert gate["status"] == "completed"
+    assert gate["payload"]["output"]["approved"] is True
+    assert gate["payload"]["output"]["score"] == 97
+
+
+async def test_blueprint_child_expect_json_fails_malformed_output(
+    client: httpx.AsyncClient,
+) -> None:
+    _register_agent(
+        agent_id="ag_bad_json_child",
+        config=_blueprint_config(
+            "bad-json-child",
+            [{"id": "plain_text", "kind": "output", "output": "not json"}],
+            {},
+        ),
+    )
+    _register_agent(
+        agent_id="ag_bad_json_parent",
+        config=_blueprint_config(
+            "bad-json-parent",
+            [
+                {
+                    "id": "gate",
+                    "kind": "blueprint",
+                    "target": "bad-json-child",
+                    "metadata": {"expect_json": True},
+                }
+            ],
+            {"text": "{{ $.nodes.gate.output.error }}"},
+        ),
+    )
+    parent = (
+        await client.post("/v1/sessions", json={"agent_id": "ag_bad_json_parent"})
+    ).json()
+
+    resp = await client.post(
+        f"/v1/sessions/{parent['id']}/events",
+        json={
+            "type": "message",
+            "data": {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Website QA"}],
+            },
+        },
+    )
+
+    assert resp.status_code == 202, resp.text
+    run = (await client.get(f"/v1/sessions/{parent['id']}/blueprint-run")).json()
+    assert run["status"] == "failed"
+    gate = next(node for node in run["nodes"] if node["id"] == "gate")
+    assert gate["status"] == "failed"
+    assert gate["payload"]["output"]["error"] == "invalid_child_json"
+    assert "expected a JSON object" in gate["payload"]["error"]
+
+
 def _item_text(item: dict[str, Any]) -> str:
     payload = item.get("data") if isinstance(item.get("data"), dict) else item
     return "\n".join(
