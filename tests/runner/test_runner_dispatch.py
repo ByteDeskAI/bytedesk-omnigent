@@ -6516,6 +6516,83 @@ async def test_sys_session_send_session_id_posts_to_direct_child(
 
 
 @pytest.mark.asyncio
+async def test_sys_session_send_session_id_retries_relay_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A child-session send retries the transient runner-relay 503.
+
+    This reproduces the live delegation failure where ``sys_session_create``
+    succeeded, but the immediate ``sys_session_send`` by ``session_id`` hit
+    ``runner_unavailable`` before the child's runner relay finished subscribing.
+    """
+    from omnigent.runner import app as runner_app
+    from omnigent.runner.tool_dispatch import execute_tool
+
+    monkeypatch.setattr(runner_app, "register_child_session", lambda *a, **k: None)
+    retry_sleeps: list[float] = []
+
+    async def _record_sleep(delay: float) -> None:
+        retry_sleeps.append(delay)
+
+    monkeypatch.setattr("omnigent.runner.tool_dispatch.asyncio.sleep", _record_sleep)
+    session_inbox: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+
+    event_posts: list[dict[str, Any]] = []
+
+    async def _server_handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/v1/sessions/conv_child":
+            return httpx.Response(
+                200,
+                json={
+                    "id": "conv_child",
+                    "parent_session_id": "conv_caller",
+                    "title": "seo-geo-growth-lead:viking audit",
+                },
+            )
+        if request.method == "POST" and request.url.path == "/v1/sessions/conv_child/events":
+            event_posts.append(json.loads(request.content))
+            if len(event_posts) == 1:
+                return httpx.Response(
+                    503,
+                    json={
+                        "error": {
+                            "code": "runner_unavailable",
+                            "message": "runner unavailable for message relay",
+                        }
+                    },
+                )
+            return httpx.Response(202, json={"queued": True})
+        return httpx.Response(404, json={"error": str(request.url)})
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(_server_handler),
+        base_url="http://server",
+    ) as server_client:
+        try:
+            output = await execute_tool(
+                tool_name="sys_session_send",
+                arguments=json.dumps({"session_id": "conv_child", "args": "run the SEO report"}),
+                server_client=server_client,
+                conversation_id="conv_caller",
+                agent_spec=SimpleNamespace(
+                    sub_agents=[SimpleNamespace(name="seo-geo-growth-lead")]
+                ),
+                session_inbox=session_inbox,
+            )
+        finally:
+            runner_app.unregister_subagent_work("conv_child")
+            runner_app._session_inboxes_ref.pop("conv_caller", None)
+
+    assert len(event_posts) == 2
+    assert retry_sleeps == [0.5]
+    assert event_posts[1]["data"]["content"][0]["text"] == "run the SEO report"
+    handle = json.loads(output)
+    assert handle["conversation_id"] == "conv_child"
+    assert handle["status"] == "launching"
+
+
+@pytest.mark.asyncio
 async def test_sys_session_send_session_id_rejects_non_child() -> None:
     """
     By-session-id send refuses a target that is NOT a direct child of the
