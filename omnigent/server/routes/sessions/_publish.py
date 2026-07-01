@@ -291,6 +291,7 @@ from omnigent.tools.client_specified import parse_client_side_tool_specs
 
 _logger = logging.getLogger(__name__)
 from ._constants import *
+from ._projector import ChatEventProjector
 from ._state import *
 
 
@@ -298,6 +299,17 @@ def _sessions_facade():
     from omnigent.server.routes import sessions
 
     return sessions
+
+
+def _chat_event_projector() -> ChatEventProjector:
+    from omnigent.server.push.service import get_push_service
+
+    return ChatEventProjector(
+        publish=session_stream.publish,
+        status_cache=_session_status_cache,
+        sandbox_status_cache=_sessions_facade()._session_sandbox_status_cache,
+        push_service_factory=get_push_service,
+    )
 
 
 def _publish_and_persist_resource_event(
@@ -529,19 +541,11 @@ def _publish_input_consumed(
         id, e.g. ``"pending_a1b2c3"`` — so clients drop the optimistic
         bubble by id. ``None`` when nothing was drained.
     """
-    if item.type == "message" and isinstance(item.data, MessageData) and item.data.is_meta:
-        return
-    event = SessionInputConsumedEvent(
-        type="session.input.consumed",
-        data=SessionInputConsumedPayload(
-            item_id=item.id,
-            type=item.type,
-            data=item.data.model_dump() if item.data is not None else {},
-            created_by=item.created_by,
-            cleared_pending_id=cleared_pending_id,
-        ),
+    _chat_event_projector().publish_input_consumed(
+        session_id,
+        item,
+        cleared_pending_id=cleared_pending_id,
     )
-    session_stream.publish(session_id, event.model_dump())
 
 def _publish_compaction_in_progress(session_id: str) -> None:
     """
@@ -550,10 +554,7 @@ def _publish_compaction_in_progress(session_id: str) -> None:
     :param session_id: Session/conversation identifier,
         e.g. ``"conv_abc123"``.
     """
-    session_stream.publish(
-        session_id,
-        {"type": "response.compaction.in_progress"},
-    )
+    _chat_event_projector().publish_compaction_in_progress(session_id)
 
 def _publish_compaction_completed(session_id: str, total_tokens: int | None) -> None:
     """
@@ -569,10 +570,7 @@ def _publish_compaction_completed(session_id: str, total_tokens: int | None) -> 
     :param total_tokens: Tiktoken estimate of the post-compaction
         context size, e.g. ``8421``. ``None`` when unavailable.
     """
-    payload: dict[str, object] = {"type": "response.compaction.completed"}
-    if total_tokens is not None:
-        payload["total_tokens"] = total_tokens
-    session_stream.publish(session_id, payload)
+    _chat_event_projector().publish_compaction_completed(session_id, total_tokens)
 
 def _publish_compaction_failed(session_id: str) -> None:
     """
@@ -587,7 +585,7 @@ def _publish_compaction_failed(session_id: str) -> None:
     :param session_id: Session/conversation identifier,
         e.g. ``"conv_abc123"``.
     """
-    session_stream.publish(session_id, {"type": "response.compaction.failed"})
+    _chat_event_projector().publish_compaction_failed(session_id)
 
 def _publish_external_assistant_message(
     session_id: str,
@@ -616,10 +614,12 @@ def _publish_external_assistant_message(
         persisted item already carries this value.
     :returns: None.
     """
-    del response_id, agent_name
-    api_item = item.to_api_dict()
-    event = OutputItemDoneEvent(type="response.output_item.done", item=api_item)
-    session_stream.publish(session_id, event.model_dump())
+    _chat_event_projector().publish_external_assistant_message(
+        session_id,
+        item,
+        response_id=response_id,
+        agent_name=agent_name,
+    )
 
 def _publish_external_conversation_item(
     session_id: str,
@@ -645,13 +645,11 @@ def _publish_external_conversation_item(
         item before append.
     :returns: None.
     """
-    if item.type == "message" and isinstance(item.data, MessageData) and item.data.is_meta:
-        return
-    if item.type == "message" and isinstance(item.data, MessageData) and item.data.role == "user":
-        _publish_input_consumed(session_id, item, cleared_pending_id=cleared_pending_id)
-        return
-    event = OutputItemDoneEvent(type="response.output_item.done", item=item.to_api_dict())
-    session_stream.publish(session_id, event.model_dump())
+    _chat_event_projector().publish_external_conversation_item(
+        session_id,
+        item,
+        cleared_pending_id=cleared_pending_id,
+    )
 
 def _publish_external_output_text_delta(session_id: str, body: SessionEventInput) -> None:
     """
@@ -676,40 +674,7 @@ def _publish_external_output_text_delta(session_id: str, body: SessionEventInput
         provided ``message_id`` / ``index`` / ``final`` has the wrong
         type.
     """
-    delta = body.data.get("delta")
-    if not isinstance(delta, str):
-        raise OmnigentError(
-            "external_output_text_delta requires string data.delta",
-            code=ErrorCode.INVALID_INPUT,
-        )
-    message_id = body.data.get("message_id")
-    if message_id is not None and not isinstance(message_id, str):
-        raise OmnigentError(
-            "external_output_text_delta data.message_id must be a string",
-            code=ErrorCode.INVALID_INPUT,
-        )
-    index = body.data.get("index")
-    # ``bool`` is an ``int`` subclass; reject it explicitly so a stray
-    # boolean index is a loud error rather than a silent 0/1.
-    if index is not None and (not isinstance(index, int) or isinstance(index, bool)):
-        raise OmnigentError(
-            "external_output_text_delta data.index must be an integer",
-            code=ErrorCode.INVALID_INPUT,
-        )
-    final = body.data.get("final")
-    if final is not None and not isinstance(final, bool):
-        raise OmnigentError(
-            "external_output_text_delta data.final must be a boolean",
-            code=ErrorCode.INVALID_INPUT,
-        )
-    event = OutputTextDeltaEvent(
-        type="response.output_text.delta",
-        delta=delta,
-        message_id=message_id,
-        index=index,
-        final=final,
-    )
-    session_stream.publish(session_id, event.model_dump(exclude_none=True))
+    _chat_event_projector().publish_external_output_text_delta(session_id, body.data)
 
 def _publish_session_created(
     parent_id: str,
@@ -730,14 +695,7 @@ def _publish_session_created(
         agent), e.g. ``"ag_abc123"``. ``None`` only for legacy parents
         without one.
     """
-    event = SessionCreatedEvent(
-        type="session.created",
-        conversation_id=parent_id,
-        child_session_id=child_session_id,
-        agent_id=agent_id,
-        parent_session_id=parent_id,
-    )
-    session_stream.publish(parent_id, event.model_dump())
+    _chat_event_projector().publish_session_created(parent_id, child_session_id, agent_id)
 
 def _publish_status(
     session_id: str,
@@ -772,29 +730,12 @@ def _publish_status(
     :param response_id: Optional response id for terminal-backed status
         edges, e.g. ``"codex_turn_abc123"``.
     """
-    previous_status = _session_status_cache.get(session_id)
-    if not should_publish_status(previous_status, status):
-        return
-    _session_status_cache[session_id] = status
-    try:
-        from omnigent.server.push.service import get_push_service
-
-        push_service = get_push_service()
-        if push_service is not None:
-            push_service.on_status_change(session_id, previous_status, status)
-    except Exception:  # noqa: BLE001 - push fanout is best-effort.
-        pass
-    event = SessionStatusEvent(
-        type="session.status",
-        conversation_id=session_id,
-        status=status,  # type: ignore[arg-type]
-        response_id=response_id,
+    _chat_event_projector().publish_status(
+        session_id,
+        status,
         error=error,
+        response_id=response_id,
     )
-    payload = event.model_dump()
-    if response_id is None:
-        payload.pop("response_id", None)
-    session_stream.publish(session_id, payload)
 
 def _publish_sandbox_status(session_id: str, stage: str, error: str | None = None) -> None:
     """
@@ -824,18 +765,7 @@ def _publish_sandbox_status(session_id: str, stage: str, error: str | None = Non
     # host-bound session and the snapshot carries no launch state.
     # Failures stay cached (mirroring ManagedLaunchTracker retention)
     # so a reload after a dead launch still shows the reason.
-    cache = _sessions_facade()._session_sandbox_status_cache
-    if stage == "ready":
-        cache.pop(session_id, None)
-    else:
-        cache[session_id] = SandboxStatus(stage=stage, error=error)
-    event = SessionSandboxStatusEvent(
-        type="session.sandbox_status",
-        conversation_id=session_id,
-        stage=stage,
-        error=error,
-    )
-    session_stream.publish(session_id, event.model_dump())
+    _chat_event_projector().publish_sandbox_status(session_id, stage, error=error)
 
 def _publish_changed_files_invalidated(session_id: str, environment_id: str = "default") -> None:
     """
@@ -852,13 +782,9 @@ def _publish_changed_files_invalidated(session_id: str, environment_id: str = "d
     :param environment_id: Environment resource id,
         e.g. ``"default"``.
     """
-    session_stream.publish(
+    _chat_event_projector().publish_changed_files_invalidated(
         session_id,
-        {
-            "type": "session.changed_files.invalidated",
-            "session_id": session_id,
-            "environment_id": environment_id,
-        },
+        environment_id=environment_id,
     )
 
 def _publish_interrupted(session_id: str, response_id: str | None = None) -> None:
@@ -876,19 +802,7 @@ def _publish_interrupted(session_id: str, response_id: str | None = None) -> Non
     :param response_id: Optional response id for terminal-backed
         interrupted turns, e.g. ``"codex_turn_abc123"``.
     """
-    event = SessionInterruptedEvent(
-        type="session.interrupted",
-        data=SessionInterruptedPayload(
-            requested_at=int(time.time()),
-            response_id=response_id,
-        ),
-    )
-    payload = event.model_dump()
-    if response_id is None:
-        data = payload.get("data")
-        if isinstance(data, dict):
-            data.pop("response_id", None)
-    session_stream.publish(session_id, payload)
+    _chat_event_projector().publish_interrupted(session_id, response_id=response_id)
 
 def _publish_error_event(session_id: str, error: ErrorData) -> None:
     """
@@ -899,12 +813,7 @@ def _publish_error_event(session_id: str, error: ErrorData) -> None:
     :param error: Durable error payload to mirror into SSE.
     :returns: None.
     """
-    event = ErrorEvent(
-        type="response.error",
-        source=error.source,
-        error={"code": error.code, "message": error.message},
-    )
-    session_stream.publish(session_id, event.model_dump())
+    _chat_event_projector().publish_error_event(session_id, error)
 
 async def _stream_live_events(
     request: Request,
