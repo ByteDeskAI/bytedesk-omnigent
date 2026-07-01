@@ -125,6 +125,7 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+@dataclasses.dataclass
 class _CodexNativeLaunchConfig:
     """
     Persisted launch config needed for runner-owned Codex terminal setup.
@@ -1037,4 +1038,3 @@ def _codex_ensure_response_with_policy_notice(
         body["policy_hook_disabled_reason"] = app_server.policy_hook_disabled_reason
         app_server.policy_notice_pending = False
     return JSONResponse(status_code=200, content=body)
-
