@@ -18,9 +18,12 @@ the consumer reconciles via the REST snapshots on (re)connect. Kept free of
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 from collections.abc import AsyncIterator, Iterable
 from typing import Any
+
+_logger = logging.getLogger(__name__)
 
 # Subscriber registry: user_key -> set of (queue, event_loop) pairs. The loop
 # reference lets a producer on another thread deliver into the queue's owning
@@ -44,6 +47,57 @@ def publish(user_key: str, event: dict[str, Any]) -> None:
         the shared single-user sentinel.
     :param event: The event dict, e.g.
         ``{"type": "session.created", "session_id": "conv_abc123"}``.
+    """
+    with _lock:
+        subs = list(_subscribers.get(user_key, ()))
+    for queue, loop in subs:
+        loop.call_soon_threadsafe(queue.put_nowait, event)
+    # Cross-replica fan-out (BDP-2621, ADR-0158): omnigent-server runs multiple
+    # replicas with no sessionAffinity, so a ``GET /v1/events`` stream can be
+    # connected to a different replica than the one emitting this event. Mirror
+    # it onto the coordination backplane so a peer replica holding the
+    # subscriber can deliver it.
+    _fanout_remote(user_key, event)
+
+
+def _fanout_remote(user_key: str, event: dict[str, Any]) -> None:
+    """
+    Best-effort mirror of a published event to peer replicas.
+
+    Deferred import of the coordination producer (matches
+    :mod:`omnigent.runtime.pending_elicitations`) so this module stays free of
+    a load-time coordination import (and any cycle). A no-op when no
+    coordination backplane is active, and defensively swallows any error so the
+    local publish hot path can never be broken by the fan-out side-channel.
+
+    :param user_key: The user key the event was published under.
+    :param event: The event dict, forwarded verbatim.
+    """
+    try:
+        from omnigent.coordination.lifecycle import fanout_userevents_publish
+
+        fanout_userevents_publish(user_key, event)
+    except Exception:  # fan-out must never break local delivery
+        _logger.debug("event_hub remote fan-out failed for %s", user_key, exc_info=True)
+
+
+def apply_remote_publish(user_key: str, event: dict[str, Any]) -> None:
+    """
+    Deliver an event that originated on a PEER replica to local subscribers.
+
+    Called ONLY by the coordination user-event fan-out listener (see
+    :func:`omnigent.coordination.lifecycle._userevents_fanout_listener`), never
+    by application code. Unlike the session stream this hub has no seq/replay
+    concept (by design — live-tail only), so delivery is UNCONDITIONAL: the
+    listener is responsible for dropping this replica's own echo (by comparing
+    ``origin`` to the backplane ``replica_id``) BEFORE calling here. This
+    function must NOT call :func:`publish` — that would re-mirror onto the
+    backplane and loop forever.
+
+    No-op when ``user_key`` has no local stream connected (the common case).
+
+    :param user_key: The user key the peer published under.
+    :param event: The event dict to deliver verbatim.
     """
     with _lock:
         subs = list(_subscribers.get(user_key, ()))
