@@ -15,6 +15,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from omnigent.inner.datamodel import OSEnvSpec, TerminalEnvSpec
+from omnigent.runtime import _globals
 from omnigent.spec.types import (
     AgentSpec,
     BuiltinToolConfig,
@@ -23,17 +24,16 @@ from omnigent.spec.types import (
     ToolRuntime,
     ToolsConfig,
 )
+from omnigent.terminals.registry import TerminalRegistry
 from omnigent.tools import ToolManager
 from omnigent.tools.base import Tool, ToolContext, is_valid_tool_name
 from omnigent.tools.builtins import SysTimerSetTool
 from omnigent.tools.builtins.os_env import SysOsReadTool
-from omnigent.runtime import _globals
-from omnigent.terminals.registry import TerminalRegistry
 from omnigent.tools.builtins.sys_terminal import SysTerminalLaunchTool
 from omnigent.tools.manager import (
     BuildContext,
-    _UCFunctionSchemaTool,
     _build_web_search,
+    _UCFunctionSchemaTool,
 )
 
 _TEST_CTX = ToolContext(task_id="task_test", agent_id="agent_test")
@@ -179,7 +179,7 @@ def test_timer_collision_raises(monkeypatch: pytest.MonkeyPatch) -> None:
             return "load_skill"
 
     monkeypatch.setattr("omnigent.tools.manager.SysTimerSetTool", CollidingTimerSet)
-    with pytest.raises(ValueError, match="sys_timer_\\* tool .* collides"):
+    with pytest.raises(ValueError, match=r"sys_timer_\* tool .* collides"):
         ToolManager(AgentSpec(spec_version=1, timers=True))
 
 
@@ -233,7 +233,7 @@ def test_os_env_collision_raises(monkeypatch: pytest.MonkeyPatch) -> None:
         "omnigent.tools.builtins.os_env.build_os_env_tools",
         lambda _env: [CollidingOsRead(MagicMock())],
     )
-    with pytest.raises(ValueError, match="sys_os_\\* tool .* collides"):
+    with pytest.raises(ValueError, match=r"sys_os_\* tool .* collides"):
         ToolManager(
             AgentSpec(spec_version=1, os_env=OSEnvSpec(type="caller_process"))
         )
@@ -259,6 +259,35 @@ def test_terminals_block_registers_sys_terminal_tools(
     assert "sys_terminal_close" in names
 
 
+def test_managed_tool_permissions_filter_registered_tools(
+    terminal_registry: TerminalRegistry,
+) -> None:
+    del terminal_registry
+    spec = AgentSpec(
+        spec_version=1,
+        tools=ToolsConfig(builtins=[BuiltinToolConfig(name="web_search")]),
+        os_env=OSEnvSpec(type="caller_process"),
+        terminals={"bash": TerminalEnvSpec(command="bash")},
+        params={
+            "managed_tool_permissions": {
+                "managed": [
+                    "web_search",
+                    "sys_os_write",
+                    "sys_os_shell",
+                    "sys_terminal_launch",
+                ],
+                "enabled": ["web_search", "sys_os_write"],
+            }
+        },
+    )
+    names = set(ToolManager(spec).get_tool_names())
+
+    assert "web_search" in names
+    assert "sys_os_write" in names
+    assert "sys_os_shell" not in names
+    assert "sys_terminal_launch" not in names
+
+
 def test_terminal_collision_raises(
     terminal_registry: TerminalRegistry,
     monkeypatch: pytest.MonkeyPatch,
@@ -272,7 +301,7 @@ def test_terminal_collision_raises(
         "omnigent.tools.builtins.sys_terminal.SysTerminalLaunchTool",
         CollidingLaunch,
     )
-    with pytest.raises(ValueError, match="sys_terminal_\\* tool .* collides"):
+    with pytest.raises(ValueError, match=r"sys_terminal_\* tool .* collides"):
         ToolManager(
             AgentSpec(
                 spec_version=1,
@@ -310,7 +339,7 @@ def test_client_local_collision_raises() -> None:
         runtime=ToolRuntime.CLIENT,
         parameters={"type": "object", "properties": {}},
     )
-    with pytest.raises(ValueError, match="client local tool .* collides"):
+    with pytest.raises(ValueError, match=r"client local tool .* collides"):
         ToolManager(AgentSpec(spec_version=1, local_tools=[info]))
 
 
@@ -370,7 +399,7 @@ def test_uc_function_collision_raises() -> None:
         language="omnigent-python-callable",
         runtime=ToolRuntime.UC_FUNCTION,
     )
-    with pytest.raises(ValueError, match="UC function tool .* collides"):
+    with pytest.raises(ValueError, match=r"UC function tool .* collides"):
         ToolManager(AgentSpec(spec_version=1, local_tools=[info]))
 
 
@@ -459,7 +488,7 @@ def test_callable_local_collision_raises(monkeypatch: pytest.MonkeyPatch) -> Non
         "omnigent.tools.local_callable.load_local_callable_tools",
         lambda _tools: [_NamedTool("load_skill")],
     )
-    with pytest.raises(ValueError, match="omnigent callable tool .* collides"):
+    with pytest.raises(ValueError, match=r"omnigent callable tool .* collides"):
         ToolManager(AgentSpec(spec_version=1, local_tools=[info]))
 
 

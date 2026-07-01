@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
+import shutil
+import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal
 
+import yaml
 from sqlalchemy import select
 
 from bytedesk_omnigent.db_models import (
@@ -19,6 +24,7 @@ from bytedesk_omnigent.db_models import (
     SqlWorkforceInstruction,
     SqlWorkforceRevision,
     SqlWorkforceSkillAssignment,
+    SqlWorkforceToolAssignment,
 )
 from omnigent.db.utils import get_or_create_engine, make_managed_session_maker, now_epoch
 
@@ -26,11 +32,378 @@ logger = logging.getLogger(__name__)
 
 ScopeKind = Literal["organization", "department", "agent"]
 InheritedScopeKind = Literal["organization", "department"]
-ItemKind = Literal["connector", "skill"]
+ItemKind = Literal["connector", "skill", "tool"]
 
 ORG_SCOPE_ID = "organization"
 REVISION_ID = "workforce"
+MANAGED_TOOL_PERMISSIONS_PARAM = "managed_tool_permissions"
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
+
+_OS_ENV_TOOL_KEYS = frozenset(
+    {
+        "sys_os_read",
+        "sys_os_write",
+        "sys_os_edit",
+        "sys_os_shell",
+    }
+)
+_TERMINAL_TOOL_KEYS = frozenset(
+    {
+        "sys_terminal_launch",
+        "sys_terminal_send",
+        "sys_terminal_read",
+        "sys_terminal_list",
+        "sys_terminal_close",
+    }
+)
+_TIMER_TOOL_KEYS = frozenset({"sys_timer_set", "sys_timer_cancel"})
+_SPAWN_TOOL_KEYS = frozenset(
+    {
+        "sys_session_create",
+        "sys_session_send",
+        "sys_session_close",
+        "sys_list_models",
+    }
+)
+
+_STATIC_TOOL_CATALOG: tuple[dict[str, str], ...] = (
+    {
+        "toolKey": "web_search",
+        "label": "Web search",
+        "description": "Search the web through the configured model/provider search backend.",
+        "group": "Web",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "web_fetch",
+        "label": "Web fetch",
+        "description": "Fetch and summarize a specific URL.",
+        "group": "Web",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "upload_file",
+        "label": "Upload file",
+        "description": "Store a file artifact for the active session.",
+        "group": "Files",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "list_files",
+        "label": "List files",
+        "description": "List session file artifacts.",
+        "group": "Files",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "download_file",
+        "label": "Download file",
+        "description": "Read a stored session file artifact.",
+        "group": "Files",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "search_conversations",
+        "label": "Search conversations",
+        "description": "Search available Omnigent conversations.",
+        "group": "Knowledge",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "export_agent",
+        "label": "Export agent",
+        "description": "Export an agent image bundle.",
+        "group": "Agents",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "memory_append",
+        "label": "Memory append",
+        "description": "Write to the Omnigent agent memory plane.",
+        "group": "Memory",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "memory_query",
+        "label": "Memory query",
+        "description": "Query the Omnigent agent memory plane.",
+        "group": "Memory",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "memory_compartments_list",
+        "label": "List memory compartments",
+        "description": "List available memory compartments.",
+        "group": "Memory",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_search",
+        "label": "Search skills",
+        "description": "Search available skills.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_sources",
+        "label": "Skill sources",
+        "description": "List configured skill sources.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_installed",
+        "label": "Installed skills",
+        "description": "List installed skills on target agents.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_resolve_targets",
+        "label": "Resolve skill targets",
+        "description": "Resolve skill install/remove target agents.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_stage_preview",
+        "label": "Stage skill preview",
+        "description": "Create a preview for skill installation or removal.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_apply",
+        "label": "Apply skills",
+        "description": "Apply a staged skill installation or removal preview.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_skill_remove",
+        "label": "Remove skills",
+        "description": "Remove skills from target agents.",
+        "group": "Skills",
+        "mechanism": "builtin",
+    },
+    {
+        "toolKey": "sys_os_read",
+        "label": "Read files",
+        "description": "Read from the agent's configured OS environment.",
+        "group": "Local OS",
+        "mechanism": "os_env",
+    },
+    {
+        "toolKey": "sys_os_write",
+        "label": "Write files",
+        "description": "Write files in the agent's configured OS environment.",
+        "group": "Local OS",
+        "mechanism": "os_env",
+    },
+    {
+        "toolKey": "sys_os_edit",
+        "label": "Edit files",
+        "description": "Patch files in the agent's configured OS environment.",
+        "group": "Local OS",
+        "mechanism": "os_env",
+    },
+    {
+        "toolKey": "sys_os_shell",
+        "label": "Shell commands",
+        "description": "Run one-shot shell commands in the agent's configured OS environment.",
+        "group": "Local OS",
+        "mechanism": "os_env",
+    },
+    {
+        "toolKey": "sys_terminal_launch",
+        "label": "Launch bash terminal",
+        "description": "Launch an interactive bash terminal.",
+        "group": "Terminal",
+        "mechanism": "terminal",
+    },
+    {
+        "toolKey": "sys_terminal_send",
+        "label": "Send terminal input",
+        "description": "Send input to an interactive terminal.",
+        "group": "Terminal",
+        "mechanism": "terminal",
+    },
+    {
+        "toolKey": "sys_terminal_read",
+        "label": "Read terminal output",
+        "description": "Read output from an interactive terminal.",
+        "group": "Terminal",
+        "mechanism": "terminal",
+    },
+    {
+        "toolKey": "sys_terminal_list",
+        "label": "List terminals",
+        "description": "List active interactive terminals.",
+        "group": "Terminal",
+        "mechanism": "terminal",
+    },
+    {
+        "toolKey": "sys_terminal_close",
+        "label": "Close terminal",
+        "description": "Close an interactive terminal.",
+        "group": "Terminal",
+        "mechanism": "terminal",
+    },
+    {
+        "toolKey": "sys_timer_set",
+        "label": "Set timer",
+        "description": "Schedule a timer for future agent work.",
+        "group": "Scheduling",
+        "mechanism": "timer",
+    },
+    {
+        "toolKey": "sys_timer_cancel",
+        "label": "Cancel timer",
+        "description": "Cancel a scheduled timer.",
+        "group": "Scheduling",
+        "mechanism": "timer",
+    },
+    {
+        "toolKey": "sys_session_create",
+        "label": "Create child session",
+        "description": "Spawn a child agent session.",
+        "group": "Agents",
+        "mechanism": "spawn",
+    },
+    {
+        "toolKey": "sys_session_send",
+        "label": "Send to child session",
+        "description": "Send work to a child session.",
+        "group": "Agents",
+        "mechanism": "spawn",
+    },
+    {
+        "toolKey": "sys_session_close",
+        "label": "Close child session",
+        "description": "Close a child session.",
+        "group": "Agents",
+        "mechanism": "spawn",
+    },
+    {
+        "toolKey": "sys_list_models",
+        "label": "List models",
+        "description": "List models available to spawned workers.",
+        "group": "Agents",
+        "mechanism": "spawn",
+    },
+    {
+        "toolKey": "load_skill",
+        "label": "Load skill",
+        "description": "Load skill instructions available to the agent.",
+        "group": "Skills",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "read_skill_file",
+        "label": "Read skill file",
+        "description": "Read bundled resource files from an available skill.",
+        "group": "Skills",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_session_list",
+        "label": "List sessions",
+        "description": "List visible sibling and child sessions.",
+        "group": "Agents",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_session_get_history",
+        "label": "Read session history",
+        "description": "Read history for a visible session.",
+        "group": "Agents",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_session_get_info",
+        "label": "Read session info",
+        "description": "Read metadata for a visible session.",
+        "group": "Agents",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_agent_get",
+        "label": "Read agent",
+        "description": "Read an agent definition.",
+        "group": "Agents",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_agent_download",
+        "label": "Download agent",
+        "description": "Download an agent image.",
+        "group": "Agents",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_agent_list",
+        "label": "List agents",
+        "description": "List visible agents.",
+        "group": "Agents",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_call_async",
+        "label": "Call async tool",
+        "description": "Dispatch async work through the tool inbox.",
+        "group": "Async",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_read_inbox",
+        "label": "Read async inbox",
+        "description": "Read completed async work from the inbox.",
+        "group": "Async",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_cancel_async",
+        "label": "Cancel async work",
+        "description": "Cancel async work by handle.",
+        "group": "Async",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_cancel_task",
+        "label": "Cancel task",
+        "description": "Cancel a background task by handle.",
+        "group": "Async",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "list_comments",
+        "label": "List comments",
+        "description": "Read comments in the active session.",
+        "group": "Comments",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "update_comment",
+        "label": "Update comment",
+        "description": "Update a comment in the active session.",
+        "group": "Comments",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_add_policy",
+        "label": "Add policy",
+        "description": "Add a runtime policy to the active session.",
+        "group": "Policy",
+        "mechanism": "managed",
+    },
+    {
+        "toolKey": "sys_policy_registry",
+        "label": "Policy registry",
+        "description": "List available runtime policy templates.",
+        "group": "Policy",
+        "mechanism": "managed",
+    },
+)
 
 
 def _new_id(prefix: str) -> str:
@@ -81,6 +454,34 @@ def parse_connector_item_key(item_key: str) -> tuple[str, str, str] | None:
     if len(parts) != 3 or not all(parts):
         return None
     return parts[0], parts[1], parts[2]
+
+
+def workforce_tool_catalog() -> list[dict[str, str]]:
+    """Return builtin/runtime tools that Work Force can manage."""
+    catalog = [dict(item) for item in _STATIC_TOOL_CATALOG]
+    known = {item["toolKey"] for item in catalog}
+    try:
+        from omnigent.tools.builtins import INSTANTIABLE_BUILTINS
+
+        builtin_names = set(INSTANTIABLE_BUILTINS) | {"web_fetch"}
+    except Exception:  # noqa: BLE001 - catalog should not break admin pages
+        logger.debug("failed to load builtin tool registry for Work Force catalog", exc_info=True)
+        builtin_names = {"web_fetch"}
+    for name in sorted(builtin_names - known):
+        catalog.append(
+            {
+                "toolKey": name,
+                "label": name.replace("_", " ").title(),
+                "description": "Extension-contributed built-in tool.",
+                "group": "Built-in",
+                "mechanism": "builtin",
+            }
+        )
+    return catalog
+
+
+def _tool_catalog_by_key() -> dict[str, dict[str, str]]:
+    return {item["toolKey"]: item for item in workforce_tool_catalog()}
 
 
 @dataclass(frozen=True)
@@ -170,6 +571,37 @@ class WorkforceSkillAssignment:
             "skillName": self.skill_name,
             "source": self.source,
             "sourceRef": self.source_ref,
+            "itemKey": self.item_key,
+            "enabled": self.enabled,
+            "createdAt": self.created_at,
+            "updatedAt": self.updated_at,
+            "version": self.version,
+            "metadata": dict(self.metadata),
+        }
+
+
+@dataclass(frozen=True)
+class WorkforceToolAssignment:
+    id: str
+    scope_kind: InheritedScopeKind
+    scope_id: str
+    tool_key: str
+    enabled: bool
+    created_at: int
+    updated_at: int
+    version: int
+    metadata: dict[str, Any]
+
+    @property
+    def item_key(self) -> str:
+        return self.tool_key
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "scopeKind": self.scope_kind,
+            "scopeId": self.scope_id,
+            "toolKey": self.tool_key,
             "itemKey": self.item_key,
             "enabled": self.enabled,
             "createdAt": self.created_at,
@@ -281,6 +713,20 @@ def _skill(row: SqlWorkforceSkillAssignment) -> WorkforceSkillAssignment:
         skill_name=row.skill_name,
         source=row.source,
         source_ref=row.source_ref,
+        enabled=row.enabled,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        version=row.version,
+        metadata=_json_loads(row.meta, {}),
+    )
+
+
+def _tool(row: SqlWorkforceToolAssignment) -> WorkforceToolAssignment:
+    return WorkforceToolAssignment(
+        id=row.id,
+        scope_kind=row.scope_kind,  # type: ignore[arg-type]
+        scope_id=row.scope_id,
+        tool_key=row.tool_key,
         enabled=row.enabled,
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -550,6 +996,77 @@ class SqlAlchemyWorkforceStore:
             session.flush()
             return _skill(row)
 
+    def list_tool_assignments(
+        self,
+        *,
+        scope_kind: str | None = None,
+        scope_id: str | None = None,
+        enabled: bool | None = None,
+    ) -> list[WorkforceToolAssignment]:
+        stmt = select(SqlWorkforceToolAssignment)
+        if scope_kind is not None:
+            kind, sid = normalize_scope(scope_kind, scope_id)
+            if kind == "agent":
+                raise ValueError("tool assignments do not support agent scope")
+            stmt = stmt.where(
+                SqlWorkforceToolAssignment.scope_kind == kind,
+                SqlWorkforceToolAssignment.scope_id == sid,
+            )
+        if enabled is not None:
+            stmt = stmt.where(SqlWorkforceToolAssignment.enabled == enabled)
+        stmt = stmt.order_by(
+            SqlWorkforceToolAssignment.scope_kind,
+            SqlWorkforceToolAssignment.scope_id,
+            SqlWorkforceToolAssignment.tool_key,
+        )
+        with self._session() as session:
+            return [_tool(row) for row in session.execute(stmt).scalars().all()]
+
+    def upsert_tool_assignment(
+        self,
+        *,
+        scope_kind: str,
+        scope_id: str | None,
+        tool_key: str,
+        enabled: bool,
+        metadata: dict[str, Any] | None = None,
+    ) -> WorkforceToolAssignment:
+        kind, sid = normalize_scope(scope_kind, scope_id)
+        if kind == "agent":
+            raise ValueError("tool assignments do not support agent scope")
+        if tool_key not in _tool_catalog_by_key():
+            raise ValueError(f"unsupported workforce tool: {tool_key!r}")
+        now = now_epoch()
+        with self._write_session() as session:
+            row = session.execute(
+                select(SqlWorkforceToolAssignment).where(
+                    SqlWorkforceToolAssignment.scope_kind == kind,
+                    SqlWorkforceToolAssignment.scope_id == sid,
+                    SqlWorkforceToolAssignment.tool_key == tool_key,
+                )
+            ).scalar_one_or_none()
+            if row is None:
+                row = SqlWorkforceToolAssignment(
+                    id=_new_id("wftool"),
+                    scope_kind=kind,
+                    scope_id=sid,
+                    tool_key=tool_key,
+                    enabled=enabled,
+                    created_at=now,
+                    updated_at=now,
+                    version=1,
+                    meta=_json_dumps(metadata or {}),
+                )
+                session.add(row)
+            else:
+                row.enabled = enabled
+                row.updated_at = now
+                row.version += 1
+                row.meta = _json_dumps(metadata or _json_loads(row.meta, {}))
+            self._bump_revision(session, now)
+            session.flush()
+            return _tool(row)
+
     def list_agent_overrides(
         self,
         *,
@@ -578,8 +1095,10 @@ class SqlAlchemyWorkforceStore:
         enabled: bool,
         metadata: dict[str, Any] | None = None,
     ) -> WorkforceAgentOverride:
-        if item_kind not in {"connector", "skill"}:
+        if item_kind not in {"connector", "skill", "tool"}:
             raise ValueError(f"unsupported override item kind: {item_kind!r}")
+        if item_kind == "tool" and item_key not in _tool_catalog_by_key():
+            raise ValueError(f"unsupported workforce tool: {item_key!r}")
         now = now_epoch()
         with self._write_session() as session:
             row = session.execute(
@@ -641,7 +1160,7 @@ class SqlAlchemyWorkforceStore:
         active: bool,
         metadata: dict[str, Any] | None = None,
     ) -> WorkforceAgentMaterialization:
-        if item_kind not in {"connector", "skill"}:
+        if item_kind not in {"connector", "skill", "tool"}:
             raise ValueError(f"unsupported materialization item kind: {item_kind!r}")
         now = now_epoch()
         with self._write_session() as session:
@@ -877,6 +1396,74 @@ def inherited_skill_assignments_for_agent(
     return by_key
 
 
+def inherited_tool_assignments_for_agent(
+    ctx: AgentWorkforceContext,
+    *,
+    store: SqlAlchemyWorkforceStore | None = None,
+) -> dict[str, list[WorkforceToolAssignment]]:
+    store = store or get_workforce_store()
+    if not ctx.inheritable:
+        return {}
+    by_key: dict[str, list[WorkforceToolAssignment]] = {}
+    for scope_kind, scope_id in scopes_for_agent(ctx):
+        for assignment in store.list_tool_assignments(
+            scope_kind=scope_kind,
+            scope_id=scope_id,
+        ):
+            by_key.setdefault(assignment.item_key, []).append(assignment)
+    return by_key
+
+
+def _effective_tool_items(
+    ctx: AgentWorkforceContext,
+    *,
+    store: SqlAlchemyWorkforceStore,
+    overrides: dict[tuple[str, str], WorkforceAgentOverride],
+) -> list[dict[str, Any]]:
+    catalog = _tool_catalog_by_key()
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item_key, assignments in inherited_tool_assignments_for_agent(ctx, store=store).items():
+        override = overrides.get(("tool", item_key))
+        inherited_enabled = assignments[-1].enabled
+        enabled = override.enabled if override is not None else inherited_enabled
+        catalog_item = catalog.get(item_key, {})
+        items.append(
+            {
+                "itemKey": item_key,
+                "toolKey": item_key,
+                "label": catalog_item.get("label", item_key),
+                "description": catalog_item.get("description", ""),
+                "group": catalog_item.get("group", "Built-in"),
+                "mechanism": catalog_item.get("mechanism", "managed"),
+                "enabled": enabled,
+                "inherited": True,
+                "inheritedFrom": [a.to_dict() for a in assignments],
+                "override": override.to_dict() if override else None,
+            }
+        )
+        seen.add(item_key)
+    for override in overrides.values():
+        if override.item_kind != "tool" or override.item_key in seen:
+            continue
+        catalog_item = catalog.get(override.item_key, {})
+        items.append(
+            {
+                "itemKey": override.item_key,
+                "toolKey": override.item_key,
+                "label": catalog_item.get("label", override.item_key),
+                "description": catalog_item.get("description", ""),
+                "group": catalog_item.get("group", "Built-in"),
+                "mechanism": catalog_item.get("mechanism", "managed"),
+                "enabled": override.enabled,
+                "inherited": False,
+                "inheritedFrom": [],
+                "override": override.to_dict(),
+            }
+        )
+    return sorted(items, key=lambda item: (str(item["group"]).lower(), str(item["label"]).lower()))
+
+
 def effective_workforce_for_agent(
     agent_id: str,
     *,
@@ -929,6 +1516,7 @@ def effective_workforce_for_agent(
                 "override": override.to_dict() if override else None,
             }
         )
+    tool_items = _effective_tool_items(ctx, store=store, overrides=overrides)
     return {
         "agentId": agent_id,
         "found": True,
@@ -947,6 +1535,7 @@ def effective_workforce_for_agent(
         ],
         "connectors": connector_items,
         "skills": skill_items,
+        "tools": tool_items,
         "overrides": [item.to_dict() for item in overrides.values()],
         "materializations": [
             item.to_dict() for item in store.list_materializations(agent_id=agent_id)
@@ -1246,9 +1835,263 @@ def reconcile_skills_for_agent(
             )
 
 
-def reconcile_workforce_for_agent(agent_id: str, **kwargs: Any) -> None:
-    reconcile_connectors_for_agent(agent_id, **kwargs)
-    reconcile_skills_for_agent(agent_id, **kwargs)
+def _mapping(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _builtin_entry_name(entry: Any) -> str | None:
+    if isinstance(entry, str):
+        return entry
+    if isinstance(entry, dict) and isinstance(entry.get("name"), str):
+        return str(entry["name"])
+    return None
+
+
+def _default_os_env_config() -> dict[str, Any]:
+    return {
+        "type": "caller_process",
+        "cwd": ".",
+        "sandbox": {"type": "none"},
+    }
+
+
+def _ensure_os_env_config(config: dict[str, Any]) -> None:
+    if isinstance(config.get("os_env"), dict):
+        return
+    config["os_env"] = _default_os_env_config()
+
+
+def _ensure_bash_terminal_config(config: dict[str, Any]) -> None:
+    _ensure_os_env_config(config)
+    terminals = _mapping(config.get("terminals"))
+    terminals.setdefault(
+        "bash",
+        {
+            "command": "bash",
+            "args": ["-l"],
+            "os_env": "inherit",
+            "allow_cwd_override": True,
+            "allow_sandbox_override": False,
+            "scrollback": 10000,
+        },
+    )
+    config["terminals"] = terminals
+
+
+def _tool_keys_by_mechanism(tool_keys: set[str], mechanism: str) -> set[str]:
+    catalog = _tool_catalog_by_key()
+    return {
+        key
+        for key in tool_keys
+        if catalog.get(key, {}).get("mechanism") == mechanism
+        or (mechanism == "builtin" and key not in catalog)
+    }
+
+
+def _materialize_tool_config(
+    config: dict[str, Any],
+    *,
+    managed_keys: set[str],
+    enabled_keys: set[str],
+) -> dict[str, Any]:
+    next_config = copy.deepcopy(config)
+    tools = _mapping(next_config.get("tools"))
+    existing_builtins = (
+        list(tools.get("builtins")) if isinstance(tools.get("builtins"), list) else []
+    )
+    builtin_managed = _tool_keys_by_mechanism(managed_keys, "builtin")
+    builtin_enabled = _tool_keys_by_mechanism(enabled_keys, "builtin")
+    builtins = [
+        entry
+        for entry in existing_builtins
+        if not (
+            (name := _builtin_entry_name(entry)) is not None
+            and name in builtin_managed
+            and name not in builtin_enabled
+        )
+    ]
+    present = {name for entry in builtins if (name := _builtin_entry_name(entry)) is not None}
+    for key in sorted(builtin_enabled - present):
+        builtins.append(key)
+    if builtins or "builtins" in tools:
+        tools["builtins"] = builtins
+    if tools:
+        next_config["tools"] = tools
+
+    if enabled_keys & _OS_ENV_TOOL_KEYS:
+        _ensure_os_env_config(next_config)
+    if enabled_keys & _TERMINAL_TOOL_KEYS:
+        _ensure_bash_terminal_config(next_config)
+    if enabled_keys & _TIMER_TOOL_KEYS:
+        next_config["timers"] = True
+    if enabled_keys & _SPAWN_TOOL_KEYS:
+        next_config["spawn"] = True
+
+    params = _mapping(next_config.get("params"))
+    if managed_keys:
+        params[MANAGED_TOOL_PERMISSIONS_PARAM] = {
+            "managed": sorted(managed_keys),
+            "enabled": sorted(enabled_keys & managed_keys),
+        }
+    else:
+        params.pop(MANAGED_TOOL_PERMISSIONS_PARAM, None)
+    if params:
+        next_config["params"] = params
+    elif "params" in next_config:
+        del next_config["params"]
+    return next_config
+
+
+def _load_config_from_workdir(workdir: Path) -> dict[str, Any]:
+    path = workdir / "config.yaml"
+    loaded = yaml.safe_load(path.read_text()) if path.is_file() else {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def _bundle_with_config(src_workdir: Path, config: dict[str, Any]) -> bytes:
+    from omnigent.spec.tar_utils import build_bundle_bytes
+
+    staging = Path(tempfile.mkdtemp(prefix="workforce_tools_"))
+    try:
+        shutil.copytree(src_workdir, staging, dirs_exist_ok=True)
+        (staging / ".omnigent-bundle-location").unlink(missing_ok=True)
+        (staging / "config.yaml").write_text(yaml.safe_dump(config, sort_keys=False))
+        return build_bundle_bytes(staging)
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+
+
+def reconcile_tools_for_agent(
+    agent_id: str,
+    *,
+    store: SqlAlchemyWorkforceStore | None = None,
+    agent_store=None,
+    agent_cache=None,
+    artifact_store=None,
+) -> None:
+    """Compile inherited builtin-tool permissions into an agent image."""
+    store = store or get_workforce_store()
+    if agent_store is None or agent_cache is None or artifact_store is None:
+        from omnigent.runtime import get_agent_cache, get_agent_store, get_artifact_store
+
+        agent_store = agent_store or get_agent_store()
+        agent_cache = agent_cache or get_agent_cache()
+        artifact_store = artifact_store or get_artifact_store()
+    ctx = agent_workforce_context(agent_id, agent_store=agent_store, agent_cache=agent_cache)
+    if ctx is None or not ctx.inheritable:
+        return
+    agent = agent_store.get(agent_id)
+    if agent is None or agent.session_id is not None:
+        return
+    overrides = {
+        (item.item_kind, item.item_key): item
+        for item in store.list_agent_overrides(agent_id=agent_id)
+    }
+    tool_items = _effective_tool_items(ctx, store=store, overrides=overrides)
+    managed_keys = {str(item["toolKey"]) for item in tool_items}
+    enabled_keys = {str(item["toolKey"]) for item in tool_items if item["enabled"]}
+
+    for item in tool_items:
+        tool_key = str(item["toolKey"])
+        store.set_materialization(
+            agent_id=agent_id,
+            item_kind="tool",
+            item_key=tool_key,
+            active=tool_key in enabled_keys,
+            metadata={
+                "workforceManaged": True,
+                "inherited": bool(item["inherited"]),
+                "mechanism": str(item["mechanism"]),
+            },
+        )
+    for materialization in store.list_materializations(agent_id=agent_id, item_kind="tool"):
+        if materialization.item_key in managed_keys or not materialization.active:
+            continue
+        store.set_materialization(
+            agent_id=agent_id,
+            item_kind="tool",
+            item_key=materialization.item_key,
+            active=False,
+            metadata={"workforceManaged": True, "staleToolPermission": True},
+        )
+
+    loaded = agent_cache.load(agent.id, agent.bundle_location, expand_env=False)
+    current_config = _load_config_from_workdir(loaded.workdir)
+    next_config = _materialize_tool_config(
+        current_config,
+        managed_keys=managed_keys,
+        enabled_keys=enabled_keys,
+    )
+    if next_config == current_config:
+        return
+
+    from omnigent.server.agent_write import apply_bundle_update
+    from omnigent.server.auth import local_single_user_enabled
+    from omnigent.server.bundles import validate_agent_bundle
+
+    bundle_bytes = _bundle_with_config(loaded.workdir, next_config)
+    spec = validate_agent_bundle(
+        bundle_bytes,
+        enforce_handler_allowlist=not local_single_user_enabled(),
+    )
+    if spec.name is not None and spec.name != agent.name:
+        raise RuntimeError(
+            "Work Force tool materialization changed spec name "
+            f"from {agent.name!r} to {spec.name!r}"
+        )
+    updated = apply_bundle_update(
+        agent,
+        bundle_bytes,
+        artifact_store=artifact_store,
+        agent_store=agent_store,
+        agent_cache=agent_cache,
+        expand_env=True,
+    )
+    try:
+        agent_store.set_sot_tier(updated.id, "migrated")
+        agent_store.set_capabilities(updated.id, spec.capabilities)
+    except AttributeError:
+        pass
+
+
+def reconcile_workforce_for_agent(
+    agent_id: str,
+    *,
+    store: SqlAlchemyWorkforceStore | None = None,
+    agent_store=None,
+    agent_cache=None,
+    artifact_store=None,
+    service=None,
+    connectors: bool = True,
+    skills: bool = True,
+    tools: bool = True,
+    materialize_connectors: bool = True,
+) -> None:
+    if connectors:
+        reconcile_connectors_for_agent(
+            agent_id,
+            store=store,
+            agent_store=agent_store,
+            agent_cache=agent_cache,
+            materialize=materialize_connectors,
+        )
+    if skills:
+        reconcile_skills_for_agent(
+            agent_id,
+            store=store,
+            agent_store=agent_store,
+            agent_cache=agent_cache,
+            artifact_store=artifact_store,
+            service=service,
+        )
+    if tools:
+        reconcile_tools_for_agent(
+            agent_id,
+            store=store,
+            agent_store=agent_store,
+            agent_cache=agent_cache,
+            artifact_store=artifact_store,
+        )
 
 
 def reconcile_workforce_for_scope(
@@ -1258,8 +2101,10 @@ def reconcile_workforce_for_scope(
     store: SqlAlchemyWorkforceStore | None = None,
     agent_store=None,
     agent_cache=None,
+    artifact_store=None,
     connectors: bool = True,
     skills: bool = True,
+    tools: bool = True,
     materialize_connectors: bool = True,
 ) -> list[str]:
     store = store or get_workforce_store()
@@ -1285,6 +2130,14 @@ def reconcile_workforce_for_scope(
                 store=store,
                 agent_store=agent_store,
                 agent_cache=agent_cache,
+            )
+        if tools:
+            reconcile_tools_for_agent(
+                ctx.agent_id,
+                store=store,
+                agent_store=agent_store,
+                agent_cache=agent_cache,
+                artifact_store=artifact_store,
             )
         reconciled.append(ctx.agent_id)
     return reconciled

@@ -1,7 +1,7 @@
 import { authenticatedFetch } from "@/lib/identity";
 
 export type WorkforceScopeKind = "organization" | "department";
-export type WorkforceItemKind = "connector" | "skill";
+export type WorkforceItemKind = "connector" | "skill" | "tool";
 
 export interface WorkforceScopeSummary {
   scopeKind: WorkforceScopeKind;
@@ -52,6 +52,27 @@ export interface WorkforceSkillAssignment {
   metadata: Record<string, unknown>;
 }
 
+export interface WorkforceToolCatalogItem {
+  toolKey: string;
+  label: string;
+  description: string;
+  group: string;
+  mechanism: string;
+}
+
+export interface WorkforceToolAssignment {
+  id: string;
+  scopeKind: WorkforceScopeKind;
+  scopeId: string;
+  toolKey: string;
+  itemKey: string;
+  enabled: boolean;
+  createdAt: number;
+  updatedAt: number;
+  version: number;
+  metadata: Record<string, unknown>;
+}
+
 export interface WorkforceAgentOverride {
   id: string;
   agentId: string;
@@ -81,6 +102,7 @@ export interface WorkforceScopeDetail {
   instruction: WorkforceInstruction | null;
   connectors: WorkforceConnectorAssignment[];
   skills: WorkforceSkillAssignment[];
+  tools: WorkforceToolAssignment[];
   revision: number;
 }
 
@@ -111,6 +133,19 @@ export interface WorkforceEffectiveSkill {
   override: WorkforceAgentOverride | null;
 }
 
+export interface WorkforceEffectiveTool {
+  itemKey: string;
+  toolKey: string;
+  label: string;
+  description: string;
+  group: string;
+  mechanism: string;
+  enabled: boolean;
+  inherited: boolean;
+  inheritedFrom: WorkforceToolAssignment[];
+  override: WorkforceAgentOverride | null;
+}
+
 export interface WorkforceEffectiveAgent {
   agentId: string;
   found: boolean;
@@ -121,6 +156,7 @@ export interface WorkforceEffectiveAgent {
   instructions?: WorkforceInstruction[];
   connectors?: WorkforceEffectiveConnector[];
   skills?: WorkforceEffectiveSkill[];
+  tools?: WorkforceEffectiveTool[];
   overrides?: WorkforceAgentOverride[];
   materializations?: WorkforceAgentMaterialization[];
 }
@@ -138,6 +174,12 @@ export interface UpsertWorkforceSkillPayload {
   skillName: string;
   source?: string;
   sourceRef?: string | null;
+  enabled?: boolean;
+  reconcile?: boolean;
+}
+
+export interface UpsertWorkforceToolPayload {
+  toolKey: string;
   enabled?: boolean;
   reconcile?: boolean;
 }
@@ -168,6 +210,11 @@ function scopePath(scopeKind: WorkforceScopeKind, scopeId?: string | null): stri
 export async function fetchWorkforceScopes(): Promise<WorkforceScopesResponse> {
   const res = await authenticatedFetch("/v1/workforce/scopes");
   return jsonOrThrow<WorkforceScopesResponse>(res);
+}
+
+export async function fetchWorkforceToolCatalog(): Promise<{ tools: WorkforceToolCatalogItem[] }> {
+  const res = await authenticatedFetch("/v1/workforce/tools/catalog");
+  return jsonOrThrow<{ tools: WorkforceToolCatalogItem[] }>(res);
 }
 
 export async function fetchWorkforceScope(
@@ -228,6 +275,27 @@ export async function upsertWorkforceSkill(
   });
   return jsonOrThrow<{
     assignment: WorkforceSkillAssignment;
+    reconciledAgentIds: string[];
+    scope: WorkforceScopeDetail;
+  }>(res);
+}
+
+export async function upsertWorkforceTool(
+  scopeKind: WorkforceScopeKind,
+  scopeId: string | null,
+  payload: UpsertWorkforceToolPayload,
+): Promise<{
+  assignment: WorkforceToolAssignment;
+  reconciledAgentIds: string[];
+  scope: WorkforceScopeDetail;
+}> {
+  const res = await authenticatedFetch(`${scopePath(scopeKind, scopeId)}/tools`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  return jsonOrThrow<{
+    assignment: WorkforceToolAssignment;
     reconciledAgentIds: string[];
     scope: WorkforceScopeDetail;
   }>(res);

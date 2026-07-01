@@ -739,6 +739,46 @@ class SqlWorkforceSkillAssignment(Base):
     )
 
 
+class SqlWorkforceToolAssignment(Base):
+    """Organization/department builtin-tool desired state.
+
+    These rows are the editable inheritance source for Omnigent runtime
+    tools such as web_search, sys_os_write, and sys_terminal_launch.
+    Reconciliation compiles them into the agent image config.
+    """
+
+    __tablename__ = "workforce_tool_assignments"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    scope_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    scope_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    tool_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=true())
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1", default=1)
+    meta: Mapped[str | None] = mapped_column("metadata", Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint(
+            "scope_kind",
+            "scope_id",
+            "tool_key",
+            name="uq_workforce_tool_assignment_tool",
+        ),
+        Index(
+            "ix_workforce_tool_assignments_scope",
+            "scope_kind",
+            "scope_id",
+            "enabled",
+        ),
+        CheckConstraint(
+            "scope_kind in ('organization', 'department')",
+            name="ck_workforce_tool_assignments_scope_kind",
+        ),
+    )
+
+
 class SqlWorkforceAgentOverride(Base):
     """Per-agent override for inherited Work Force items."""
 
@@ -763,7 +803,7 @@ class SqlWorkforceAgentOverride(Base):
         ),
         Index("ix_workforce_agent_overrides_agent", "agent_id", "item_kind"),
         CheckConstraint(
-            "item_kind in ('connector', 'skill')",
+            "item_kind in ('connector', 'skill', 'tool')",
             name="ck_workforce_agent_overrides_item_kind",
         ),
     )
@@ -797,7 +837,7 @@ class SqlWorkforceAgentMaterialization(Base):
         ),
         Index("ix_workforce_agent_materializations_agent", "agent_id", "item_kind", "active"),
         CheckConstraint(
-            "item_kind in ('connector', 'skill')",
+            "item_kind in ('connector', 'skill', 'tool')",
             name="ck_workforce_agent_materializations_item_kind",
         ),
     )

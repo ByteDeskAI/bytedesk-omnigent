@@ -31,12 +31,14 @@ vi.mock("@/hooks/useSkills", () => ({
 }));
 vi.mock("@/hooks/useWorkforce", () => ({
   useWorkforceScopes: vi.fn(),
+  useWorkforceToolCatalog: vi.fn(),
   useWorkforceScope: vi.fn(),
   useWorkforceAgentEffective: vi.fn(),
   useUpdateWorkforceInstructions: vi.fn(),
   useUpdateWorkforceAgentInstructions: vi.fn(),
   useUpsertWorkforceConnector: vi.fn(),
   useUpsertWorkforceSkill: vi.fn(),
+  useUpsertWorkforceTool: vi.fn(),
   useUpsertWorkforceAgentOverride: vi.fn(),
 }));
 vi.mock("@/lib/accountsApi", () => ({ getMe: vi.fn() }));
@@ -120,6 +122,7 @@ const updateWorkforceInstructions = vi.fn();
 const updateWorkforceAgentInstructions = vi.fn();
 const upsertWorkforceConnector = vi.fn();
 const upsertWorkforceSkill = vi.fn();
+const upsertWorkforceTool = vi.fn();
 const upsertWorkforceOverride = vi.fn();
 
 function renderPage() {
@@ -230,6 +233,7 @@ beforeEach(() => {
   updateWorkforceAgentInstructions.mockResolvedValue({});
   upsertWorkforceConnector.mockResolvedValue({});
   upsertWorkforceSkill.mockResolvedValue({});
+  upsertWorkforceTool.mockResolvedValue({});
   upsertWorkforceOverride.mockResolvedValue({});
   vi.mocked(workforceHooks.useWorkforceScopes).mockReturnValue({
     data: {
@@ -251,6 +255,27 @@ beforeEach(() => {
     },
     isLoading: false,
   } as never);
+  vi.mocked(workforceHooks.useWorkforceToolCatalog).mockReturnValue({
+    data: {
+      tools: [
+        {
+          toolKey: "web_search",
+          label: "Web search",
+          description: "Search the web.",
+          group: "Web",
+          mechanism: "builtin",
+        },
+        {
+          toolKey: "sys_os_write",
+          label: "Write files",
+          description: "Write local files.",
+          group: "Local OS",
+          mechanism: "os_env",
+        },
+      ],
+    },
+    isLoading: false,
+  } as never);
   vi.mocked(workforceHooks.useWorkforceScope).mockImplementation(
     (scopeKind, scopeId) =>
       ({
@@ -269,6 +294,20 @@ beforeEach(() => {
             metadata: {},
           },
           connectors: [],
+          tools: [
+            {
+              id: "wftool_department",
+              scopeKind: "department",
+              scopeId: "engineering",
+              toolKey: "web_search",
+              itemKey: "web_search",
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              version: 1,
+              metadata: {},
+            },
+          ],
           skills: [
             {
               id: "wfskill_department",
@@ -312,6 +351,33 @@ beforeEach(() => {
         },
       ],
       connectors: [],
+      tools: [
+        {
+          itemKey: "web_search",
+          toolKey: "web_search",
+          label: "Web search",
+          description: "Search the web.",
+          group: "Web",
+          mechanism: "builtin",
+          enabled: true,
+          inherited: true,
+          inheritedFrom: [
+            {
+              id: "wftool_department",
+              scopeKind: "department",
+              scopeId: "engineering",
+              toolKey: "web_search",
+              itemKey: "web_search",
+              enabled: true,
+              createdAt: 1,
+              updatedAt: 2,
+              version: 1,
+              metadata: {},
+            },
+          ],
+          override: null,
+        },
+      ],
       skills: [
         {
           itemKey: "customer-research",
@@ -358,6 +424,10 @@ beforeEach(() => {
   } as never);
   vi.mocked(workforceHooks.useUpsertWorkforceSkill).mockReturnValue({
     mutateAsync: upsertWorkforceSkill,
+    isPending: false,
+  } as never);
+  vi.mocked(workforceHooks.useUpsertWorkforceTool).mockReturnValue({
+    mutateAsync: upsertWorkforceTool,
     isPending: false,
   } as never);
   vi.mocked(workforceHooks.useUpsertWorkforceAgentOverride).mockReturnValue({
@@ -599,10 +669,10 @@ describe("WorkForcePage", () => {
     );
   });
 
-  it("edits department inheritance and agent overrides", async () => {
+  it("edits department permissions and agent overrides", async () => {
     renderPage();
 
-    await activateTab(/Inheritance/);
+    await activateTab(/Permissions/);
 
     const instructions = await screen.findByLabelText("Engineering instructions");
     fireEvent.change(instructions, { target: { value: "Follow department policy." } });
@@ -631,8 +701,48 @@ describe("WorkForcePage", () => {
       }),
     );
 
+    const toolSection = screen.getByText("Engineering Builtin Tools").closest("section");
+    expect(toolSection).not.toBeNull();
+    fireEvent.click(
+      within(toolSection as HTMLElement).getAllByRole("button", { name: "Deny here" })[0],
+    );
+
+    await waitFor(() =>
+      expect(upsertWorkforceTool).toHaveBeenCalledWith({
+        scopeKind: "department",
+        scopeId: "engineering",
+        toolKey: "sys_os_write",
+        enabled: false,
+        reconcile: true,
+      }),
+    );
+
+    const effectiveToolsSection = screen.getByText("Effective Agent Tools").closest("section");
+    expect(effectiveToolsSection).not.toBeNull();
+    fireEvent.click(
+      within(effectiveToolsSection as HTMLElement).getByRole("button", {
+        name: "Disable for agent",
+      }),
+    );
+
+    await waitFor(() =>
+      expect(upsertWorkforceOverride).toHaveBeenCalledWith({
+        agentId: "ag_employee",
+        itemKind: "tool",
+        itemKey: "web_search",
+        enabled: false,
+        reconcile: true,
+      }),
+    );
+
     expect(screen.getAllByText("customer-research").length).toBeGreaterThan(0);
-    fireEvent.click(screen.getByRole("button", { name: "Disable for agent" }));
+    const effectiveSkillsSection = screen.getByText("Effective Skills").closest("section");
+    expect(effectiveSkillsSection).not.toBeNull();
+    fireEvent.click(
+      within(effectiveSkillsSection as HTMLElement).getByRole("button", {
+        name: "Disable for agent",
+      }),
+    );
 
     await waitFor(() =>
       expect(upsertWorkforceOverride).toHaveBeenCalledWith({
