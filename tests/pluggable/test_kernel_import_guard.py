@@ -53,7 +53,6 @@ _KERNEL_PURE_FILES = (
     "omnigent/kernel/pluggable/manifest.py",
     "omnigent/kernel/pluggable/errors.py",
     "omnigent/kernel/lifespan_phases.py",
-    "omnigent/kernel/service_registry.py",
 )
 
 # The omnigent modules a kernel file MAY import at module scope: the kernel set
@@ -68,7 +67,6 @@ _ALLOWED_KERNEL_MODULES = frozenset(
         "omnigent.kernel.pluggable.manifest",
         "omnigent.kernel.pluggable.errors",
         "omnigent.kernel.lifespan_phases",
-        "omnigent.kernel.service_registry",
         # The bare ``omnigent.server`` package anchor (e.g. ``import
         # omnigent.server`` for a submodule reference). The pre-BDP-2515 flat
         # strangler shims were deleted in Stage 2 (BDP-2516); kernel modules now
@@ -134,7 +132,6 @@ def test_kernel_file_has_no_nonkernel_module_scope_import(rel_path: str) -> None
         "omnigent.kernel.pluggable.manifest",
         "omnigent.kernel.pluggable.errors",
         "omnigent.kernel.lifespan_phases",
-        "omnigent.kernel.service_registry",
     ],
 )
 def test_importing_kernel_module_adds_no_nonkernel_omnigent(module: str) -> None:
