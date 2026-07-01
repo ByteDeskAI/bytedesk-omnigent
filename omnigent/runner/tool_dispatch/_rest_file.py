@@ -101,6 +101,8 @@ from omnigent.tools.builtins.sys_terminal import (
 from omnigent.tools.builtins.update_comment import UpdateCommentTool
 from omnigent.tools.builtins.upload_file import UploadFileTool, safe_resolve
 
+from ._os_env import _effective_runner_os_env_spec
+
 _logger = logging.getLogger(__name__)
 def _import_package_bindings() -> None:
     from . import _constants as _pkg_constants
@@ -319,4 +321,3 @@ async def _execute_file_tool(
             return f"Error: list_files failed: {exc}"
 
     return f"Error: {tool_name} not implemented in file dispatch"
-
