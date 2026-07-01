@@ -4425,6 +4425,9 @@ def create_runner_app(
     # Last server-persisted item ID per session — cursor for
     # incremental catch-up scans (Step 8.5 Scenario B).
     _last_server_item_id: dict[str, str] = {}
+    # Server item ids already loaded into runner history. Used to drop a late
+    # forwarded copy of a message the recovery/catch-up path is already using.
+    _loaded_server_item_ids: dict[str, set[str]] = {}
     # Per-session SSE event queue. proxy_stream and turn lifecycle
     # helpers put events here; GET /stream reads and removes them.
     # Events accumulate while no subscriber is reading, so tunnel
@@ -4456,6 +4459,41 @@ def create_runner_app(
         return any(process_manager.has_active_turn(session_id) for session_id in session_ids)
 
     app.state.has_active_work = _has_active_work
+
+    def _remember_loaded_server_item_ids(session_id: str, items: list[dict[str, Any]]) -> None:
+        """
+        Record server item ids that have been loaded into runner history.
+
+        :param session_id: Session/conversation identifier.
+        :param items: Raw item objects returned by the Omnigent server.
+        :returns: None.
+        """
+        ids = _loaded_server_item_ids.setdefault(session_id, set())
+        for item in items:
+            item_id = item.get("id")
+            if isinstance(item_id, str) and item_id:
+                ids.add(item_id)
+
+    def _active_turn_already_loaded_persisted_message(
+        session_id: str,
+        message_body: dict[str, Any],
+    ) -> bool:
+        """
+        Return whether an active turn already loaded this persisted message.
+
+        Server-side persist-before-forward can race with runner recovery:
+        recovery/catch-up may start the turn from stored history, then the
+        original forwarded POST arrives late. In that case buffering the late
+        copy starts a duplicate continuation turn and strands sub-agent
+        completion. A real new message has a new persisted item id and will not
+        match this loaded-id set.
+        """
+        persisted_item_id = message_body.get("persisted_item_id")
+        return (
+            isinstance(persisted_item_id, str)
+            and bool(persisted_item_id)
+            and persisted_item_id in _loaded_server_item_ids.get(session_id, set())
+        )
 
     def _ensure_session_coordination_state(
         session_id: str,
@@ -5864,6 +5902,7 @@ def create_runner_app(
         _session_histories.pop(session_id, None)
         _compaction_contexts.pop(session_id, None)
         _last_server_item_id.pop(session_id, None)
+        _loaded_server_item_ids.pop(session_id, None)
         _session_event_queues.pop(session_id, None)
         _session_inboxes.pop(session_id, None)
         _subagent_wake_pending.discard(session_id)
@@ -5957,6 +5996,7 @@ def create_runner_app(
             page_items = page.get("data", [])
             if not page_items:
                 break
+            _remember_loaded_server_item_ids(session_id, page_items)
             all_items.extend(page_items)
             # Track last item ID for incremental catch-up.
             last_id = page_items[-1].get("id")
@@ -9598,6 +9638,25 @@ def create_runner_app(
 
                 # Turn sequencing gate (invariant I2: single active turn).
                 if conversation_id in _active_turns:
+                    if _active_turn_already_loaded_persisted_message(
+                        conversation_id,
+                        message_body,
+                    ):
+                        _logger.info(
+                            "post_session_events: dropping duplicate forwarded "
+                            "persisted message conv=%s item=%s",
+                            conversation_id,
+                            message_body.get("persisted_item_id"),
+                        )
+                        return JSONResponse(
+                            status_code=202,
+                            content={
+                                "status": "duplicate",
+                                "detail": (
+                                    "Message already loaded into active turn history."
+                                ),
+                            },
+                        )
                     _native = _is_native_harness(conversation_id)
                     # A turn parked on a human approval must not be steered
                     # past its gate by an incoming message. The non-native
@@ -12584,6 +12643,7 @@ def create_runner_app(
                     page_items = page.get("data", [])
                     if not page_items:
                         break
+                    _remember_loaded_server_item_ids(session_id, page_items)
                     all_new.extend(page_items)
                     last_id = page_items[-1].get("id")
                     if last_id:
