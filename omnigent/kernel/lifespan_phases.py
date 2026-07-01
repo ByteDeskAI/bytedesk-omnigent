@@ -13,13 +13,9 @@ ordering an explicit, declared dependency graph. A dependency cycle is a
 wiring bug, so the orchestrator **fails loudly** (raises
 :class:`LifespanCycleError`) instead of guessing an order.
 
-These phases supersede the prior inline server-lifespan path behind
-``OMNIGENT_USE_LIFESPAN_PHASES`` (default OFF, strangler-fig): with the flag
-off the legacy ``create_app`` lifespan stays the authoritative live path and
-a running server behaves byte-identically to today; with the flag on,
-``create_app`` builds an equivalent lifespan from these phases. The phases
-mirror the legacy startup/shutdown body exactly — same imports, same calls,
-same effective order.
+These phases are the authoritative ``create_app`` lifespan path. They mirror
+the legacy startup/shutdown body exactly — same imports, same calls, same
+effective order — but make the dependency graph explicit and testable.
 
 Phases read and write a shared :class:`LifespanContext`: the immutable wiring
 captured by ``create_app`` (stores, the runner router, the tunnel registry,
@@ -80,6 +76,8 @@ class LifespanContext:
         ``None``), gating the post-bind browser auto-open.
     :param policy_modules: Extra dotted module paths for the policy registry
         (or ``None``).
+    :param di_container: Server composition root. Used for startup discovery
+        so the DI root owns extension discovery.
     """
 
     app: FastAPI
@@ -94,6 +92,7 @@ class LifespanContext:
     server_metrics_otel: Any
     bootstrap_result: Any
     policy_modules: list[str] | None
+    di_container: Any | None = None
     state: dict[str, Any] = field(default_factory=dict)
 
 
@@ -122,14 +121,14 @@ class LifespanPhase(ABC):
         :param ctx: The shared lifespan context.
         """
 
-    async def shutdown(self, ctx: LifespanContext) -> None:
+    async def shutdown(self, _ctx: LifespanContext) -> None:
         """Run this phase's shutdown step (default: no-op).
 
         Phases with no teardown leave this as the inherited no-op.
 
         :param ctx: The shared lifespan context.
         """
-        return None
+        return
 
 
 class LifespanCycleError(RuntimeError):
@@ -168,8 +167,7 @@ def topological_order(phases: Iterable[LifespanPhase]) -> list[LifespanPhase]:
         unknown = set(phase.depends_on) - by_name.keys()
         if unknown:
             raise LifespanCycleError(
-                f"lifespan phase {phase.name!r} depends on unknown phase(s) "
-                f"{sorted(unknown)!r}"
+                f"lifespan phase {phase.name!r} depends on unknown phase(s) {sorted(unknown)!r}"
             )
 
     ordered: list[LifespanPhase] = []
@@ -265,7 +263,7 @@ class AnyioThreadLimiterPhase(LifespanPhase):
 
     name = "anyio_thread_limiter"
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """Raise the shared thread limiter so sync routes don't starve.
 
         :param ctx: The shared lifespan context (unused).
@@ -280,7 +278,7 @@ class LogLevelPhase(LifespanPhase):
 
     name = "log_level"
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """Set the omnigent logger level after uvicorn's dictConfig runs.
 
         :param ctx: The shared lifespan context (unused).
@@ -288,9 +286,7 @@ class LogLevelPhase(LifespanPhase):
         import os as _os
 
         _log_level_name = _os.environ.get("OMNIGENT_LOG_LEVEL", "INFO").upper()
-        logging.getLogger("omnigent").setLevel(
-            getattr(logging, _log_level_name, logging.INFO)
-        )
+        logging.getLogger("omnigent").setLevel(getattr(logging, _log_level_name, logging.INFO))
 
 
 class HarnessProcessManagerPhase(LifespanPhase):
@@ -383,7 +379,7 @@ class ResourceRegistryPhase(LifespanPhase):
 
     name = "resource_registry"
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """Construct + install the session resource registry.
 
         :param ctx: The shared lifespan context.
@@ -396,7 +392,7 @@ class ResourceRegistryPhase(LifespanPhase):
         )
         set_resource_registry(resource_reg)
 
-    async def shutdown(self, ctx: LifespanContext) -> None:
+    async def shutdown(self, _ctx: LifespanContext) -> None:
         """Clear the resource registry runtime global.
 
         :param ctx: The shared lifespan context (unused).
@@ -412,17 +408,16 @@ class RunnerWsFactoryPhase(LifespanPhase):
     name = "runner_ws_factory"
     depends_on = ("runner_router",)
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """Clear the runner WS factory.
 
         :param ctx: The shared lifespan context.
         """
         from omnigent.runtime import set_runner_ws_factory
 
-        del ctx
         set_runner_ws_factory(None)
 
-    async def shutdown(self, ctx: LifespanContext) -> None:
+    async def shutdown(self, _ctx: LifespanContext) -> None:
         """Clear the WS factory runtime global.
 
         :param ctx: The shared lifespan context (unused).
@@ -436,6 +431,7 @@ class DefaultAgentsPhase(LifespanPhase):
     """Seed the built-in default agents (no teardown)."""
 
     name = "default_agents"
+    depends_on = ("coordination",)
 
     async def startup(self, ctx: LifespanContext) -> None:
         """Register/refresh the always-available built-in agents.
@@ -445,6 +441,67 @@ class DefaultAgentsPhase(LifespanPhase):
         from omnigent.server.app import _ensure_default_agents
 
         _ensure_default_agents(ctx.agent_store, ctx.artifact_store, ctx.agent_cache)
+
+
+class ExtensionDiscoveryPhase(LifespanPhase):
+    """Run pluggable-seam extension discovery once through the composition root."""
+
+    name = "extension_discovery"
+
+    async def startup(self, ctx: LifespanContext) -> None:
+        """Discover extension-backed seam providers.
+
+        The server DI container owns this startup hook. Tests that construct a
+        bare :class:`LifespanContext` without a container fall back to the same
+        helper the container calls.
+
+        :param ctx: The shared lifespan context.
+        """
+        if ctx.di_container is not None:
+            ctx.di_container.run_startup_discovery()
+            return
+
+        from omnigent.kernel.pluggable.manifest import discover_all_extensions
+
+        discover_all_extensions()
+
+
+class BuiltinToolRegistrationPhase(LifespanPhase):
+    """Merge extension-provided builtin tools after extension discovery."""
+
+    name = "builtin_tool_registration"
+    depends_on = ("extension_discovery",)
+
+    async def startup(self, _ctx: LifespanContext) -> None:
+        """Register extension-provided builtin tools.
+
+        :param ctx: The shared lifespan context (unused).
+        """
+        from omnigent.tools.builtins import register_extension_tools
+
+        register_extension_tools()
+
+
+class FirstpartySeamsPhase(LifespanPhase):
+    """Register first-party seam contributions through the extension registries."""
+
+    name = "firstparty_seams"
+    depends_on = ("builtin_tool_registration",)
+
+    async def startup(self, ctx: LifespanContext) -> None:
+        """Register first-party seam contributions and retain extension objects.
+
+        ``ExtensionBackgroundTasksPhase`` needs the same first-party extension
+        instances to start any non-metrics background loops, matching the
+        monolithic lifespan path.
+
+        :param ctx: The shared lifespan context.
+        """
+        from omnigent.core import default_extensions, register_firstparty_seams
+
+        firstparty_extensions = default_extensions()
+        register_firstparty_seams(firstparty_extensions)
+        ctx.state["firstparty_extensions"] = firstparty_extensions
 
 
 class PolicyRegistryPhase(LifespanPhase):
@@ -533,9 +590,7 @@ class MemoryMaintenancePhase(LifespanPhase):
         """
         from omnigent.runtime.memory_maintenance import memory_maintenance_loop
 
-        ctx.state["memory_maintenance_task"] = asyncio.create_task(
-            memory_maintenance_loop()
-        )
+        ctx.state["memory_maintenance_task"] = asyncio.create_task(memory_maintenance_loop())
 
     async def shutdown(self, ctx: LifespanContext) -> None:
         """Cancel and await the memory-maintenance task.
@@ -553,22 +608,22 @@ class CoordinationPhase(LifespanPhase):
     """Start the cross-replica coordination backplane; stop it on shutdown.
 
     BDP-2571: the monolithic ``_lifespan`` calls
-    :func:`omnigent.coordination.lifecycle.start_coordination` (and stops it in
-    its ``finally``), but the **deployed** phase lifespan
-    (``OMNIGENT_USE_LIFESPAN_PHASES=1``) was missing it. Without the active
-    backplane ``claim_resource`` / ``resolve_resource`` are no-ops, so BDP-2556
-    cross-replica host control fails with "host is offline" on any server replica
-    that does not own the host tunnel (the "runner didn't come online" symptom at
-    2+ replicas). Self-contained: ``start_coordination`` resolves the backplane
-    from ``OMNIGENT_NATS_URL`` + the inline coordination registry, so this phase
-    has no ``depends_on``. It is ordered before
-    :class:`ExtensionBackgroundTasksPhase` / :class:`DefaultAgentsPhase` so the
-    backplane is live before any phase creates tasks/agents that use it.
+    :func:`omnigent.coordination.lifecycle.start_coordination` and stops it in
+    its ``finally``. Without the active backplane ``claim_resource`` /
+    ``resolve_resource`` are no-ops, so BDP-2556 cross-replica host control fails
+    with "host is offline" on any server replica that does not own the host
+    tunnel (the "runner didn't come online" symptom at 2+ replicas).
+    Self-contained: ``start_coordination`` resolves the backplane from
+    ``OMNIGENT_NATS_URL`` + the inline coordination registry. It is ordered
+    before :class:`ExtensionBackgroundTasksPhase` /
+    :class:`DefaultAgentsPhase` so the backplane is live before any phase
+    creates tasks/agents that use it.
     """
 
     name = "coordination"
+    depends_on = ("firstparty_seams",)
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """Connect the active coordination backplane.
 
         :param ctx: The shared lifespan context (unused).
@@ -577,7 +632,7 @@ class CoordinationPhase(LifespanPhase):
 
         await start_coordination()
 
-    async def shutdown(self, ctx: LifespanContext) -> None:
+    async def shutdown(self, _ctx: LifespanContext) -> None:
         """Disconnect the coordination backplane.
 
         :param ctx: The shared lifespan context (unused).
@@ -591,6 +646,7 @@ class ExtensionBackgroundTasksPhase(LifespanPhase):
     """Run (and cancel) the first-party extension background loops."""
 
     name = "extension_background_tasks"
+    depends_on = ("coordination", "firstparty_seams")
 
     async def startup(self, ctx: LifespanContext) -> None:
         """Start every extension background loop via the extensions seam.
@@ -612,10 +668,7 @@ class ExtensionBackgroundTasksPhase(LifespanPhase):
         )
         from omnigent.kernel.extensions import extension_background_factories
 
-        tasks = [
-            asyncio.create_task(factory())
-            for factory in extension_background_factories()
-        ]
+        tasks = [asyncio.create_task(factory()) for factory in extension_background_factories()]
         _bg_task_extensions = firstparty_background_task_extensions(
             server_metrics=ctx.server_metrics,
             server_metrics_otel=ctx.server_metrics_otel,
@@ -624,6 +677,12 @@ class ExtensionBackgroundTasksPhase(LifespanPhase):
             asyncio.create_task(factory())
             for factory in firstparty_background_factories(_bg_task_extensions)
         )
+        firstparty_extensions = ctx.state.get("firstparty_extensions", [])
+        if firstparty_extensions:
+            tasks.extend(
+                asyncio.create_task(factory())
+                for factory in firstparty_background_factories(firstparty_extensions)
+            )
         ctx.state["ext_bg_tasks"] = tasks
 
     async def shutdown(self, ctx: LifespanContext) -> None:
@@ -642,14 +701,14 @@ class ManagedLaunchCancelPhase(LifespanPhase):
 
     name = "managed_launch_cancel"
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """No startup work — this phase only contributes teardown.
 
         :param ctx: The shared lifespan context (unused).
         """
-        return None
+        return
 
-    async def shutdown(self, ctx: LifespanContext) -> None:
+    async def shutdown(self, _ctx: LifespanContext) -> None:
         """Stop pending managed-sandbox launch tasks.
 
         :param ctx: The shared lifespan context (unused).
@@ -664,14 +723,14 @@ class TerminalRegistryPhase(LifespanPhase):
 
     name = "terminal_registry"
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """No startup work — this phase only contributes teardown.
 
         :param ctx: The shared lifespan context (unused).
         """
-        return None
+        return
 
-    async def shutdown(self, ctx: LifespanContext) -> None:
+    async def shutdown(self, _ctx: LifespanContext) -> None:
         """Close every live terminal in the registry.
 
         :param ctx: The shared lifespan context (unused).
@@ -686,12 +745,12 @@ class McpPoolPhase(LifespanPhase):
 
     name = "mcp_pool"
 
-    async def startup(self, ctx: LifespanContext) -> None:
+    async def startup(self, _ctx: LifespanContext) -> None:
         """No startup work — this phase only contributes teardown.
 
         :param ctx: The shared lifespan context (unused).
         """
-        return None
+        return
 
     async def shutdown(self, ctx: LifespanContext) -> None:
         """Shut down every AP-side MCP connection opened by the proxy.
@@ -738,6 +797,9 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
         ResourceRegistryPhase(),
         SubagentBlockNotifierPhase(),
         ManagedLaunchCancelPhase(),
+        ExtensionDiscoveryPhase(),
+        BuiltinToolRegistrationPhase(),
+        FirstpartySeamsPhase(),
         # BDP-2516: ExtensionBackgroundTasksPhase now also starts the
         # authoritative omnigent.metrics + omnigent.memory_maintenance loops, so
         # the standalone MetricsPublishPhase / MemoryMaintenancePhase are no
@@ -760,9 +822,12 @@ def build_default_lifespan_phases() -> list[LifespanPhase]:
 __all__ = [
     "AccountsAutoOpenPhase",
     "AnyioThreadLimiterPhase",
+    "BuiltinToolRegistrationPhase",
     "CoordinationPhase",
     "DefaultAgentsPhase",
     "ExtensionBackgroundTasksPhase",
+    "ExtensionDiscoveryPhase",
+    "FirstpartySeamsPhase",
     "HarnessProcessManagerPhase",
     "LifespanContext",
     "LifespanCycleError",

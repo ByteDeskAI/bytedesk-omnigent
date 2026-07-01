@@ -1,20 +1,15 @@
 #!/usr/bin/env bash
-# Combined-flags parity harness (BDP-2343, ADR-0145 §parity).
+# Remaining-strangler parity harness (BDP-2343, ADR-0145 §parity).
 #
-# scripts/test_parity.sh diffs ONE abstraction-spine flag OFF vs ON at a
-# time. BDP-2343 plans to ship the remaining spine flags ON together in
-# production, and no existing test covers that exact configuration. This
-# driver runs a representative slice TWICE — once with the flags OFF
-# (the legacy baseline) and once with the flags ON (the production target) —
-# then diffs the two JUnit reports. Exit 0 iff every test has the SAME
-# per-nodeid outcome under both configurations.
+# scripts/test_parity.sh diffs one strangler flag OFF vs ON at a time. This
+# driver runs a representative slice TWICE — once with the remaining gate OFF
+# and once with it ON — then diffs the two JUnit reports. Exit 0 iff every test
+# has the SAME per-nodeid outcome under both configurations.
 #
-# The remaining flags (all default OFF, strangler-fig — see ADR-0145):
-#   OMNIGENT_USE_SERVICE_REGISTRY        (Phase 1)
-#   OMNIGENT_STORE_LIFECYCLE_HOOKS       (Phase 2)
-#   OMNIGENT_USE_LIFESPAN_PHASES         (Phase 3)
-# ToolExecutionContext and ToolDispatcher-registry are canonical runtime
-# code paths now, so their former flags are intentionally absent here.
+# Server DI and lifespan phases are canonical code paths now. ServiceRegistry,
+# ToolExecutionContext, and ToolDispatcher-registry rollout flags are also
+# retired. The remaining gate covered by this harness is:
+#   OMNIGENT_STORE_LIFECYCLE_HOOKS
 #
 # Usage:
 #   scripts/test_parity_combined.sh [PYTEST_PATHS...]
@@ -32,11 +27,8 @@
 #                        deselect on both runs (appended to the built-in one).
 set -euo pipefail
 
-# The abstraction-spine flags still shipped together by BDP-2343.
 COMBINED_FLAGS=(
-  OMNIGENT_USE_SERVICE_REGISTRY
   OMNIGENT_STORE_LIFECYCLE_HOOKS
-  OMNIGENT_USE_LIFESPAN_PHASES
 )
 
 DESELECT=()
@@ -47,12 +39,11 @@ fi
 
 PYTEST_PATHS=("$@")
 if [[ ${#PYTEST_PATHS[@]} -eq 0 ]]; then
-  # Representative slice — one behavioral test group per spine flag seam:
+  # Representative slice — store lifecycle plus nearby canonical runtime seams:
   #   STORE_LIFECYCLE_HOOKS        → tests/stores
   #   canonical runner tool dispatch → tests/runner tool-dispatch
-  #   SERVICE_REGISTRY             → tests/server/test_service_registry.py
-  #   LIFESPAN_PHASES              → tests/server/test_lifespan_phases.py
-  #   (parity skeletons)           → tests/parity
+  #   canonical lifespan phases      → tests/server/test_lifespan_phases.py
+  #   retired-flag compatibility     → tests/parity
   # tests/extensions/test_abstraction_spine_contract.py is deliberately NOT
   # here: it is a pure source-AST scan of app.py (flag-independent — it never
   # reads any of the combined flags) so it exercises no runtime seam, and it is
@@ -64,7 +55,6 @@ if [[ ${#PYTEST_PATHS[@]} -eq 0 ]]; then
     tests/runner/test_tool_dispatcher_registry.py
     tests/runner/test_tool_dispatch_execution_errors.py
     tests/runner/test_tool_dispatch_parse_helpers.py
-    tests/server/test_service_registry.py
     tests/server/test_lifespan_phases.py
     tests/parity
   )
@@ -121,20 +111,20 @@ run_suite() {
   return 0
 }
 
-echo "==> Combined spine flags: ${COMBINED_FLAGS[*]}"
+echo "==> Remaining gate(s):    ${COMBINED_FLAGS[*]}"
 echo "==> Paths:                ${PYTEST_PATHS[*]}"
 echo "==> Deselected (both runs, superseded by registry precedence):"
 for nodeid in "${DESELECT[@]}"; do echo "      - ${nodeid}"; done
 echo
 
-echo "==> Run 1/2: combined flags OFF (legacy baseline)"
+echo "==> Run 1/2: remaining gate(s) OFF (baseline)"
 (
   for flag in "${COMBINED_FLAGS[@]}"; do unset "${flag}" || true; done
   run_suite "${OFF_REPORT}"
 )
 
 echo
-echo "==> Run 2/2: combined flags ON (BDP-2343 production target)"
+echo "==> Run 2/2: remaining gate(s) ON"
 (
   for flag in "${COMBINED_FLAGS[@]}"; do export "${flag}=1"; done
   run_suite "${ON_REPORT}"
@@ -175,13 +165,13 @@ outcomes "${ON_REPORT}" >"${ON_TABLE}"
 
 if diff -u "${OFF_TABLE}" "${ON_TABLE}"; then
   echo
-  echo "==> PARITY OK: combined spine flags ON produced identical per-test outcomes"
-  echo "    vs the flags-OFF baseline across $(wc -l <"${OFF_TABLE}") tests."
+  echo "==> PARITY OK: remaining gate(s) ON produced identical per-test outcomes"
+  echo "    vs the OFF baseline across $(wc -l <"${OFF_TABLE}") tests."
   exit 0
 fi
 
 echo
-echo "==> PARITY DIVERGENCE: the combined spine-flag config changed at least one" >&2
+echo "==> PARITY DIVERGENCE: the remaining gate config changed at least one" >&2
 echo "    test outcome (diff above)." >&2
 echo "    OFF report: ${OFF_REPORT}" >&2
 echo "    ON  report: ${ON_REPORT}" >&2
