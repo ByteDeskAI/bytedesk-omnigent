@@ -288,10 +288,20 @@ from omnigent.stores.host_store import Host, HostStore
 from omnigent.stores.permission_store import PermissionStore
 from omnigent.tools.client_specified import parse_client_side_tool_specs
 
+from ._dispatch_strategies import (
+    DefaultRunnerEventDispatchStrategy,
+    NativeTerminalMessageDispatchStrategy,
+    SessionEventDispatchContext,
+    SessionEventDispatcher,
+)
+
 _logger = logging.getLogger(__name__)
+
+
 def _import_parent_bindings() -> None:
     from .. import _constants as _parent_constants
     from .. import _state as _parent_state
+
     g = globals()
     for _mod in (_parent_constants, _parent_state):
         for _key, _value in _mod.__dict__.items():
@@ -306,6 +316,28 @@ def _sessions_facade():
     from omnigent.server.routes import sessions
 
     return sessions
+
+
+def _session_event_dispatcher() -> SessionEventDispatcher:
+    """Build the runner-event dispatcher with route-boundary dependencies."""
+    sessions = _sessions_facade()
+    return SessionEventDispatcher(
+        strategies=(
+            NativeTerminalMessageDispatchStrategy(
+                is_native_terminal_session=sessions._is_native_terminal_session,
+                build_native_terminal_message_event=sessions._build_native_terminal_message_event,
+                ensure_native_terminal_ready=sessions._ensure_native_terminal_ready,
+                persist_native_terminal_failure=sessions._persist_native_terminal_failure,
+                persist_native_policy_notice=sessions._persist_native_policy_notice,
+                record_pending_input=pending_inputs.record,
+                resolve_pending_input=pending_inputs.resolve,
+                forward_native_terminal_message=sessions._forward_native_terminal_message,
+            ),
+            DefaultRunnerEventDispatchStrategy(
+                forward_event=sessions._forward_event_to_runner,
+            ),
+        )
+    )
 
 
 async def _forward_event_to_runner(
@@ -471,6 +503,7 @@ async def _forward_event_to_runner(
 
     return persisted_items[0].id
 
+
 def _instruction_fragments_for_runner_event(
     *,
     agent_id: str | None,
@@ -487,6 +520,7 @@ def _instruction_fragments_for_runner_event(
         agent_id=agent_id,
         spec=SimpleNamespace(name=agent_name or agent_id),
     )
+
 
 async def _dispatch_session_event_to_runner(
     session_id: str,
@@ -570,73 +604,22 @@ async def _dispatch_session_event_to_runner(
         persisted item id (non-native) or the pending-input id
         (claude-native message bypass).
     """
-    if body.type == "message" and _is_native_terminal_session(conv):
-        # Validate before touching the runner. The ensure probe is only
-        # for syntactically valid user messages; assistant/system-shaped
-        # inputs should still fail locally without creating terminals.
-        _build_native_terminal_message_event(conv, body)
-        ensure_outcome = await _ensure_native_terminal_ready(
-            runner_client,
-            session_id,
-            conv,
+    return await _session_event_dispatcher().dispatch(
+        SessionEventDispatchContext(
+            session_id=session_id,
+            conversation=conv,
+            body=body,
+            conversation_store=conversation_store,
+            runner_client=runner_client,
+            agent_name=agent_name,
+            file_store=file_store,
+            artifact_store=artifact_store,
+            has_mcp_servers=has_mcp_servers,
+            created_by=created_by,
+            runner_router=runner_router,
         )
-        if ensure_outcome.error is not None:
-            item_id = await _persist_native_terminal_failure(
-                session_id,
-                conv,
-                body,
-                conversation_store,
-                ensure_outcome.error,
-                runner_router,
-                created_by=created_by,
-            )
-            return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
-        if ensure_outcome.policy_notice is not None:
-            # Terminal is up but policy enforcement is off (fail-open). Post
-            # a durable, non-fatal banner; the user message still forwards.
-            await _persist_native_policy_notice(
-                session_id,
-                conversation_store,
-                ensure_outcome.policy_notice,
-            )
-        # Record the optimistic bubble before forwarding so it's known
-        # server-side immediately (replayed into the snapshot). Roll it
-        # back on any failure/cancellation so a message the TUI never
-        # received doesn't replay as a ghost.
-        content = body.data.get("content")
-        pending_id: str | None = (
-            pending_inputs.record(session_id, content, created_by=created_by)
-            if isinstance(content, list) and content
-            else None
-        )
-        forwarded = False
-        try:
-            await _forward_native_terminal_message(
-                runner_client,
-                session_id,
-                conv,
-                body,
-                file_store=file_store,
-                artifact_store=artifact_store,
-            )
-            forwarded = True
-        finally:
-            if not forwarded and pending_id is not None:
-                pending_inputs.resolve(session_id, pending_id)
-        return _SessionEventDispatchResult(item_id=None, pending_id=pending_id)
-    item_id = await _forward_event_to_runner(
-        session_id,
-        conv,
-        body,
-        conversation_store,
-        runner_client,
-        agent_name=agent_name,
-        file_store=file_store,
-        artifact_store=artifact_store,
-        has_mcp_servers=has_mcp_servers,
-        created_by=created_by,
     )
-    return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
+
 
 async def _relay_persist_error_once(
     conversation_store: ConversationStore | None,
@@ -700,6 +683,7 @@ async def _relay_persist_error_once(
         )
         return "failed"
 
+
 async def _relay_persist(
     conversation_store: ConversationStore | None,
     session_id: str,
@@ -737,6 +721,7 @@ async def _relay_persist(
     persisted_items = [item for item in [result.persisted, *result.released] if item is not None]
     await _rescue_compaction_to_memory(conversation_store, session_id, persisted_items)
     return result
+
 
 async def _flush_relay_text(
     conversation_store: ConversationStore | None,
@@ -851,6 +836,7 @@ async def _flush_relay_text(
         item=result.persisted.to_api_dict(),
     )
     session_stream.publish(session_id, done_event.model_dump())
+
 
 async def _relay_runner_stream(
     session_id: str,
@@ -1307,6 +1293,7 @@ async def _relay_runner_stream(
         if inflight is not None:
             inflight.cancel()
 
+
 def _ensure_runner_relay(
     session_id: str,
     runner_id: str | None,
@@ -1378,6 +1365,7 @@ def _ensure_runner_relay(
 
     task.add_done_callback(_on_done)
     return handle
+
 
 async def _ensure_runner_relay_ready(
     session_id: str,
