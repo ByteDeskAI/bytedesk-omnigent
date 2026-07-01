@@ -1,0 +1,1 @@
+export { SpeechInput, type SpeechInputProps } from "./speech-input";

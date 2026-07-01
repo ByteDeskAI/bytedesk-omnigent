@@ -12,7 +12,7 @@ import {
   ToolPendingOutput,
   ToolTriggerRow,
   useElapsedDuration,
-} from "./ToolCardParts";
+} from "./parts";
 
 const FILE_PATH_TOOLS = new Set(["sys_os_read", "sys_os_write", "sys_os_edit"]);
 
