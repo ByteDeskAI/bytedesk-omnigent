@@ -977,49 +977,15 @@ class ClaudeSDKExecutor(Executor):
             if isinstance((name := s.get("name")), str) and name
         ]
 
-        # Build MCP tools from Omnigent tool schemas. Use the existing
-        # Omnigent stdio MCP bridge instead of many in-process SDK MCP
-        # servers: the bridge can advertise the full active turn surface,
-        # while calls still dispatch through ``self._tool_executor`` and
-        # therefore through Omnigent's policy-aware tool path.
+        # Build MCP tools from Omnigent tool schemas as chunked SDK MCP
+        # servers. Claude Code 2.1.x has a live discovery cliff around larger
+        # per-server manifests; chunking keeps built-ins like
+        # ``sys_session_send`` visible to orchestrator agents such as Maya.
         active_mcp_relay: Any | None = None  # type: ignore[explicit-any]
         if tools:
-            (
-                relay_tools,
-                sdk_mcp_tool_names,
-                generated_by_raw_name,
-                raw_by_visible_name,
-            ) = _build_stdio_bridge_mcp_tools(tools)
-            if relay_tools:
-                bridge_dir = self._bridge_dir_for_session(session_key)
-
-                async def _relay_tool_executor(
-                    visible_name: str,
-                    args: ToolArgs,
-                ) -> ToolResult:
-                    raw_name = raw_by_visible_name.get(visible_name, visible_name)
-                    if self._tool_executor is None:
-                        return {"error": f"No tool executor for '{raw_name}'"}
-                    raw = await self._tool_executor(raw_name, args)
-                    return raw if isinstance(raw, dict) else {"result": raw}
-
-                active_mcp_relay = start_tool_relay(
-                    bridge_dir=bridge_dir,
-                    tools=relay_tools,
-                    tool_executor=_relay_tool_executor,
-                    loop=asyncio.get_running_loop(),
-                )
-                mcp_config = build_mcp_config(
-                    bridge_dir,
-                    python_executable=sys.executable,
-                )
-                raw_mcp_servers = mcp_config.get("mcpServers")
-                mcp_servers = raw_mcp_servers if isinstance(raw_mcp_servers, dict) else {}
-                if session_key in self._clients:
-                    with suppress(Exception):
-                        post_tools_changed(bridge_dir, timeout_s=0.25)
-            else:
-                mcp_servers = {}
+            mcp_servers, sdk_mcp_tool_names, generated_by_raw_name = (
+                _build_sdk_mcp_servers(sdk, tools, self._tool_executor)
+            )
         else:
             mcp_servers = {}
             sdk_mcp_tool_names = []
