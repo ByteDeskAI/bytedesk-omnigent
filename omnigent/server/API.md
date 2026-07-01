@@ -68,6 +68,33 @@ GET /v1/integration-capabilities/{slug}
 404 Not Found — unknown slug
 ```
 
+### Get Integration Consent Manifest
+
+```
+GET /v1/integration-capabilities/{slug}/consent-manifest
+
+200 OK
+{
+  "object": "integration_consent_manifest",
+  "capability_slug": "google-workspace-operator",
+  "capability_name": "Google Workspace operator",
+  "provider_category": "knowledge",
+  "auth_model": "OAuth 2.0 with domain-wide delegation option",
+  "consent_summary": "Connect Google Workspace operator so Omnigent agents can execute the cataloged integration workflow.",
+  "operator_disclosure": "...",
+  "scope_rationales": [
+    {
+      "scope": "https://www.googleapis.com/auth/drive.file",
+      "rationale": "...",
+      "risk_level": "moderate"
+    }
+  ],
+  "risk_prompts": ["..."]
+}
+
+404 Not Found — unknown slug
+```
+
 ---
 
 ## Agent Management
