@@ -402,7 +402,7 @@ def register_session_updates_ws(
                     conversation_store.list_child_conversation_ids_by_parent,
                     conv_ids,
                 ),
-                _comments_fingerprints_for(conv_ids),
+                _comments_fingerprints_for(conv_ids, comment_store),
             )
             pending_counts = pending_elicitations.counts_for(conv_ids)
             agent_display_names_by_id = await asyncio.to_thread(
@@ -668,4 +668,3 @@ def register_session_updates_ws(
             finally:
                 with contextlib.suppress(RuntimeError):
                     await websocket.close()
-

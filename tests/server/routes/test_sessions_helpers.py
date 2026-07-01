@@ -1351,6 +1351,22 @@ def test_nested_session_route_modules_receive_facade_globals() -> None:
         session_updates_ws._SESSION_UPDATES_RESCAN_INTERVAL_S
         == sessions_mod._SESSION_UPDATES_RESCAN_INTERVAL_S
     )
+    assert session_updates_ws._comments_fingerprints_for is sessions_mod._comments_fingerprints_for
+
+
+@pytest.mark.asyncio
+async def test_comments_fingerprints_for_uses_optional_comment_store() -> None:
+    class _CommentStore:
+        def get_comments_fingerprints(
+            self, conv_ids: list[str]
+        ) -> dict[str, CommentsFingerprint]:
+            return {conv_ids[0]: CommentsFingerprint(count=2, last_updated_at=123)}
+
+    assert await sessions_mod._comments_fingerprints_for(["conv_1"], None) == {}
+
+    fingerprints = await sessions_mod._comments_fingerprints_for(["conv_1"], _CommentStore())
+
+    assert fingerprints["conv_1"].count == 2
 
 
 @pytest.mark.asyncio

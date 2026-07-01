@@ -482,7 +482,7 @@ def register_session_list(
             agent_display_names_by_id = await asyncio.to_thread(
                 _agent_display_names_for, unique_agent_ids, agent_store, agent_cache
             )
-            comments_fingerprints = await _comments_fingerprints_for(conv_ids)
+            comments_fingerprints = await _comments_fingerprints_for(conv_ids, comment_store)
             items: list[SessionListItem] = [
                 _build_session_list_item(
                     conv,
@@ -512,26 +512,3 @@ def register_session_list(
                 last_id=page.last_id,
                 has_more=page.has_more,
             )
-
-        async def _comments_fingerprints_for(
-            conv_ids: list[str],
-        ) -> dict[str, CommentsFingerprint]:
-            """
-            Batch-fetch comment change fingerprints for the given sessions.
-
-            Shared by the ``GET /v1/sessions`` page builder and
-            ``WS /v1/sessions/updates`` so both emit the same
-            ``comments_count`` / ``comments_updated_at`` values and the
-            stream's diff fires when a comment is added, edited, addressed,
-            or deleted.
-
-            :param conv_ids: Session ids to summarize,
-                e.g. ``["conv_abc123"]``.
-            :returns: Map from session id to its
-                :class:`CommentsFingerprint`; empty when no comment store
-                is wired. Sessions without comments are absent.
-            """
-            if comment_store is None or not conv_ids:
-                return {}
-            return await asyncio.to_thread(comment_store.get_comments_fingerprints, conv_ids)
-
