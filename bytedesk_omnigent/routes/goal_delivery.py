@@ -68,6 +68,40 @@ def create_goal_delivery_router() -> APIRouter:
         if not isinstance(payload, dict):
             return JSONResponse({"status": "bad_payload"}, status_code=400)
 
+        # Strangler cutover (ADR-0155, BDP-2565): when the flag is on, run the
+        # verified payload through the generic inbound pipeline instead of the
+        # legacy projector path below. Default OFF → fall through unchanged. The
+        # signature check above stays the auth boundary (the pipeline has none).
+        from bytedesk_omnigent.inbound.flags import (
+            INBOUND_CUTOVER_GOAL_DELIVERY,
+            evaluate_inbound_flag,
+        )
+
+        if await evaluate_inbound_flag(INBOUND_CUTOVER_GOAL_DELIVERY, source=source):
+            from bytedesk_omnigent.inbound.pipeline import ingest
+            from bytedesk_omnigent.inbound.processors import all_processors
+            from bytedesk_omnigent.inbound.store import get_inbound_event_store
+            from bytedesk_omnigent.inbound.translators import CHANNEL_GOAL_DELIVERY
+
+            result = ingest(
+                channel=CHANNEL_GOAL_DELIVERY,
+                source=source,
+                raw_payload=payload,
+                headers=headers,
+                store=get_inbound_event_store(),
+                processors=all_processors(),
+            )
+            return JSONResponse(
+                {
+                    "status": result.status,
+                    "idempotencyKey": result.idempotency_key,
+                    "eventType": result.event_type,
+                    "duplicate": result.duplicate,
+                    "detail": result.detail,
+                },
+                status_code=result.http_status,
+            )
+
         from bytedesk_omnigent.idempotency import get_idempotency_store
 
         projector = GoalDeliveryProjector(get_goal_store())
