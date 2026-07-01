@@ -1070,6 +1070,80 @@ def reconcile_connectors_for_agent(
         )
 
 
+def disable_connector_grants_for_agent(
+    agent_id: str,
+    *,
+    connector_store=None,
+    reason: str = "agent_deleted",
+) -> list[str]:
+    """Disable active connector grants for one agent id.
+
+    Used when an agent leaves the roster so connector access cannot outlive the
+    agent-store source of truth.
+    """
+    if connector_store is None:
+        from bytedesk_omnigent.connectors.store import get_connector_store
+
+        connector_store = get_connector_store()
+    disabled: list[str] = []
+    for grant in connector_store.list_agent_grants(agent_id=agent_id):
+        if not grant.enabled and grant.status == "disabled":
+            continue
+        connector_store.upsert_agent_grant(
+            connection_id=grant.connection_id,
+            agent_id=grant.agent_id,
+            service_key=grant.service_key,
+            tool_key=grant.tool_key,
+            enabled=False,
+            status="disabled",
+            metadata={
+                **grant.metadata,
+                "staleAgentGrant": True,
+                "staleReason": reason,
+            },
+        )
+        disabled.append(grant.agent_id)
+    return sorted(set(disabled))
+
+
+def disable_connector_grants_for_missing_agents(
+    *,
+    agent_store=None,
+    connector_store=None,
+) -> list[str]:
+    """Disable grants for agent ids no longer present in the template roster."""
+    if agent_store is None:
+        from omnigent.runtime import get_agent_store
+
+        agent_store = get_agent_store()
+    if connector_store is None:
+        from bytedesk_omnigent.connectors.store import get_connector_store
+
+        connector_store = get_connector_store()
+    active_agent_ids = {agent.id for agent in agent_store.list(limit=1000, order="asc").data}
+    disabled: list[str] = []
+    for grant in connector_store.list_agent_grants():
+        if grant.agent_id in active_agent_ids:
+            continue
+        if not grant.enabled and grant.status == "disabled":
+            continue
+        connector_store.upsert_agent_grant(
+            connection_id=grant.connection_id,
+            agent_id=grant.agent_id,
+            service_key=grant.service_key,
+            tool_key=grant.tool_key,
+            enabled=False,
+            status="disabled",
+            metadata={
+                **grant.metadata,
+                "staleAgentGrant": True,
+                "staleMissingAgent": True,
+            },
+        )
+        disabled.append(grant.agent_id)
+    return sorted(set(disabled))
+
+
 def _skill_service(agent_store=None, agent_cache=None, artifact_store=None):
     from omnigent.runtime import get_agent_cache, get_agent_store, get_artifact_store
     from omnigent.skills.acquisition import SkillAcquisitionService
@@ -1227,11 +1301,14 @@ def install_workforce_agent_bridge() -> None:
     from omnigent.stores.agent_store import events
 
     def _listener(event) -> None:
-        if event.action not in {"created", "updated"}:
+        if event.action not in {"created", "updated", "deleted"}:
             return
 
         def _run() -> None:
             try:
+                if event.action == "deleted":
+                    disable_connector_grants_for_agent(event.agent_id)
+                    return
                 reconcile_workforce_for_agent(event.agent_id)
             except Exception:  # noqa: BLE001 - inheritance bridge is best effort
                 logger.warning(
@@ -1247,3 +1324,16 @@ def install_workforce_agent_bridge() -> None:
         ).start()
 
     _agent_bridge_installed = events.subscribe(_listener)
+    if _agent_bridge_installed:
+
+        def _sweep() -> None:
+            try:
+                disable_connector_grants_for_missing_agents()
+            except Exception:  # noqa: BLE001 - cleanup must not block boot
+                logger.warning("workforce stale connector grant sweep failed", exc_info=True)
+
+        threading.Thread(
+            target=_sweep,
+            name="workforce-stale-connector-grant-sweep",
+            daemon=True,
+        ).start()

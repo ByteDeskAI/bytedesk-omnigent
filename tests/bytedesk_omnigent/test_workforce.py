@@ -16,6 +16,8 @@ from bytedesk_omnigent.connectors.store import SqlAlchemyConnectorStore
 from bytedesk_omnigent.routes.workforce import create_workforce_router
 from bytedesk_omnigent.workforce import (
     SqlAlchemyWorkforceStore,
+    disable_connector_grants_for_agent,
+    disable_connector_grants_for_missing_agents,
     effective_workforce_for_agent,
     instruction_fragments,
     reconcile_connectors_for_agent,
@@ -170,9 +172,7 @@ def test_instruction_fragments_skip_no_department_employee_artifacts(
 def test_instruction_fragments_skip_before_runtime_initialization(monkeypatch) -> None:
     monkeypatch.setattr(
         "bytedesk_omnigent.workforce.get_workforce_store",
-        lambda: (_ for _ in ()).throw(
-            RuntimeError("runtime not initialized — call init() first")
-        ),
+        lambda: (_ for _ in ()).throw(RuntimeError("runtime not initialized — call init() first")),
     )
 
     assert instruction_fragments(agent_id="ag_maya", spec=SimpleNamespace(name="maya")) == []
@@ -241,6 +241,62 @@ def test_connector_reconcile_materializes_inherited_grants_and_disable_override(
     disabled = connector_store.list_agent_grants(agent_id="ag_maya")[0]
     assert disabled.enabled is False
     assert disabled.metadata["override"]["enabled"] is False
+
+
+def test_disable_stale_connector_grants_for_deleted_and_missing_agents(
+    db_uri: str,
+) -> None:
+    connector_store = SqlAlchemyConnectorStore(db_uri)
+    conn = connector_store.upsert_connection(
+        provider="google_workspace",
+        display_name="Workspace",
+        auth_type="google_domain_wide_delegation",
+        scopes=[],
+    )
+    connector_store.upsert_agent_grant(
+        connection_id=conn.id,
+        agent_id="ag_missing",
+        service_key="drive",
+        tool_key="search",
+        enabled=True,
+        metadata={"source": "legacy-direct"},
+    )
+    connector_store.upsert_agent_grant(
+        connection_id=conn.id,
+        agent_id="ag_deleted",
+        service_key="drive",
+        tool_key="read",
+        enabled=True,
+    )
+    connector_store.upsert_agent_grant(
+        connection_id=conn.id,
+        agent_id="ag_maya",
+        service_key="drive",
+        tool_key="create",
+        enabled=True,
+    )
+    agent_store = _AgentStore([_employee("ag_maya")])
+
+    deleted = disable_connector_grants_for_agent(
+        "ag_deleted",
+        connector_store=connector_store,
+        reason="agent_deleted",
+    )
+    missing = disable_connector_grants_for_missing_agents(
+        agent_store=agent_store,
+        connector_store=connector_store,
+    )
+
+    assert deleted == ["ag_deleted"]
+    assert missing == ["ag_missing"]
+    grants = {grant.agent_id: grant for grant in connector_store.list_agent_grants()}
+    assert grants["ag_missing"].enabled is False
+    assert grants["ag_missing"].status == "disabled"
+    assert grants["ag_missing"].metadata["source"] == "legacy-direct"
+    assert grants["ag_missing"].metadata["staleMissingAgent"] is True
+    assert grants["ag_deleted"].enabled is False
+    assert grants["ag_deleted"].metadata["staleReason"] == "agent_deleted"
+    assert grants["ag_maya"].enabled is True
 
 
 def _app() -> FastAPI:

@@ -36,6 +36,11 @@ _SCOUT_GOAL_SEED_LOCK = 0x73636F75746C6F63
 #: (the three-tier keyed ``memory__*`` tools — BDP-2458 / BDP-2505).
 _MEMORY_TOOL_PREFIX = "memory__"
 
+#: Tool-name prefix for organization source-of-truth tools. The stdio front only
+#: advertises schemas; execution stays server-side so it can read AgentStore /
+#: Work Force / connector state with the verified caller identity.
+_ORG_TOOL_PREFIX = "org__"
+
 #: Tool-name prefixes for connector-managed MCP fronts. The stdio fronts
 #: advertise schemas; calls execute server-side against the extension connector
 #: store so provider configuration never has to be materialized into Kubernetes
@@ -87,6 +92,27 @@ def _connector_tool_interceptor(
     from bytedesk_omnigent.connectors.tool_intercept import execute_connector_tool
 
     return execute_connector_tool(
+        tool_name,
+        arguments,
+        caller_agent_id=caller_agent_id,
+        caller_department=caller_department,
+    )
+
+
+def _org_tool_interceptor(
+    tool_name: str,
+    arguments: dict | None,
+    *,
+    caller_agent_id: str | None = None,
+    caller_department: str | None = None,
+) -> str | None:
+    """Server-side handler for organization source-of-truth tools."""
+
+    from bytedesk_omnigent.org_tool_intercept import execute_org_tool, is_org_tool
+
+    if not is_org_tool(tool_name):
+        return None
+    return execute_org_tool(
         tool_name,
         arguments,
         caller_agent_id=caller_agent_id,
@@ -181,20 +207,15 @@ class BytedeskExtension:
 
     # ── default MCP servers (merged into EVERY agent spec, BDP-2459) ──
     def default_mcp_servers(self) -> list:
-        """The shared-memory stdio MCP front, mounted on EVERY agent.
+        """Shared stdio MCP fronts mounted on EVERY agent.
 
-        A stdio server (``python -m bytedesk_omnigent.memory_mcp``) that ADVERTISES
-        the ``memory__*`` tool schemas — one searchable + addressable shared-memory
-        store across org/dept/agent. Execution is handled SERVER-SIDE at the
-        ``tools/call`` choke point (``_handle_mcp_tools_call``), where the caller's
-        verified identity is known (BDP-2458); the front carries the schemas only,
-        not the identity, and never executes the tool bodies. ``env.PYTHONPATH=/build``
-        so the spawned subprocess can import ``bytedesk_omnigent`` (the SDK's minimal
-        stdio env omits PYTHONPATH; ``/build`` is the source mount in localDev and the
-        install root in the prod image). Model sees ``memory__search`` /
-        ``memory__get`` / ``memory__put`` / ``memory__append`` / ``memory__list`` /
-        ``memory__unset``. An agent that declares its own ``memory`` server wins
-        (merged by name in :func:`omnigent.spec.load`).
+        The ``memory`` and ``org`` MCP servers ADVERTISE schemas only. Execution
+        is handled SERVER-SIDE at the ``tools/call`` choke point where the
+        caller's verified identity is known. The fronts carry schemas, not
+        credentials or trusted identity. ``env.PYTHONPATH=/build`` lets the
+        subprocess import ``bytedesk_omnigent`` in localDev and prod images.
+        Agents that declare their own server with the same name win (merged by
+        name in :func:`omnigent.spec.load`).
         """
         from omnigent.spec.types import MCPServerConfig
 
@@ -206,7 +227,15 @@ class BytedeskExtension:
                 args=["-m", "bytedesk_omnigent.memory_mcp"],
                 env={"PYTHONPATH": "/build"},
                 tool_allowlist=["search", "get", "put", "append", "list", "unset"],
-            )
+            ),
+            MCPServerConfig(
+                name="org",
+                transport="stdio",
+                command="python",
+                args=["-m", "bytedesk_omnigent.org_mcp"],
+                env={"PYTHONPATH": "/build"},
+                tool_allowlist=["get_chart", "find_agent", "get_effective_access"],
+            ),
         ]
 
     # ── policy modules (scanned by the policy registry) ──────────────
@@ -429,7 +458,7 @@ class BytedeskExtension:
 
     # ── server-side tool interception (ADR-0143 §5 Step 1, BDP-2505) ────
     def tool_interceptors(self) -> dict[str, Callable[..., object]]:
-        """Claim the ``memory__*`` tool prefix for server-side execution.
+        """Claim ByteDesk-owned MCP prefixes for server-side execution.
 
         The three-tier keyed memory tools (``memory__*``) execute on the
         omnigent server itself, not on the runner: the server owns the memory
@@ -440,11 +469,14 @@ class BytedeskExtension:
         dispatches through the aggregated prefix table and never names
         ``bytedesk_omnigent`` (ADR-0143 §5 Step 1).
 
-        The handler returns the JSON result string for a handled ``memory__*``
-        op, or ``None`` to fall through to normal runner dispatch (e.g. a
-        ``memory__*`` name that is not one of the recognised ops).
+        The organization tools (``org__*``) use the same shape for live
+        AgentStore / Work Force reads. Connector fronts advertise schemas while
+        calls execute against the extension connector store.
         """
-        interceptors = {_MEMORY_TOOL_PREFIX: _memory_tool_interceptor}
+        interceptors = {
+            _MEMORY_TOOL_PREFIX: _memory_tool_interceptor,
+            _ORG_TOOL_PREFIX: _org_tool_interceptor,
+        }
         interceptors.update(dict.fromkeys(_CONNECTOR_TOOL_PREFIXES, _connector_tool_interceptor))
         return interceptors
 
