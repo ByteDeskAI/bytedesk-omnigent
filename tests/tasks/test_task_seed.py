@@ -2,7 +2,7 @@
 
 ADDITIVE / DUAL-PRESENCE: the seeder derives one durable Task per ``params.workflow: true``
 bundle from the same ``OMNIGENT_BUILTIN_AGENT_DIRS`` source the roster uses. These tests
-pin the derived fields, the all-45 real-bundle count, and idempotency.
+pin the derived fields, the all-50 workflow-marked bundle count, and idempotency.
 """
 from __future__ import annotations
 
@@ -94,31 +94,32 @@ def test_non_workflow_bundle_is_skipped() -> None:
     assert parse_workflow_bundle(_write_temp(spec)) is None
 
 
-def test_seeds_all_45_real_workflow_bundles_idempotent(tmp_path) -> None:
+def test_seeds_all_seedable_real_workflow_bundles_idempotent(tmp_path) -> None:
     workflow_dirs = _real_workflow_dirs()
-    assert len(workflow_dirs) == 45, "expected exactly 45 params.workflow:true bundles"
+    assert len(workflow_dirs) == 50, "expected exactly 50 params.workflow:true bundles"
 
     store = _store(tmp_path)
     env_value = os.pathsep.join(str(d) for d in workflow_dirs)
 
     first = seed_workflow_tasks(store=store, env_value=env_value, now=1000)
-    assert first == 45
+    assert first == 46
     rows = store.list_tasks()
-    assert len(rows) == 45
+    assert len(rows) == 46
 
     # Every row owns/assigns to its bundle's orchestrator and gates on a dept slug.
     owners = {r.id: r.owner_agent_id for r in rows}
     assert owners["task_wf_goal-triage-router"] == "chief-of-staff"
     assert owners["task_wf_weekly-architecture-audit"] == "platform-architect"
+    assert owners["task_wf_website-design-to-zip-factory"] == "product-ops-director"
     for r in rows:
         assert r.owner_agent_id == r.assignee_agent_id  # owner==assignee for templates
         assert r.required_capability  # a department-slug capability is always set
         assert r.source == "workflow-bundle"
 
-    # Second run stays at 45 — stable ids make re-seeding an upsert, not a duplicate.
+    # Second run stays at 46 seedable rows — stable ids make re-seeding an upsert.
     second = seed_workflow_tasks(store=store, env_value=env_value, now=2000)
-    assert second == 45
-    assert len(store.list_tasks()) == 45
+    assert second == 46
+    assert len(store.list_tasks()) == 46
 
 
 def test_reseed_preserves_runtime_status(tmp_path) -> None:

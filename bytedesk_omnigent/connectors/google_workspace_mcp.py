@@ -39,6 +39,8 @@ _base_token_cache: dict[str, tuple[str, int]] = {}
 _K8S_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 _K8S_NAMESPACE_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/namespace")
 _K8S_CA_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/ca.crt")
+_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder"
+_DRIVE_UPLOAD_BOUNDARY = "omnigent_drive_upload_boundary"
 
 
 def _connection() -> str:
@@ -529,7 +531,11 @@ def audit_query(
 
 
 @mcp.tool()
-def drive_search(query: str = "trashed=false", page_size: int = 10) -> dict[str, Any]:
+def drive_search(
+    query: str = "trashed=false",
+    page_size: int = 10,
+    subject: str | None = None,
+) -> dict[str, Any]:
     result = _request(
         "GET",
         "https://www.googleapis.com/drive/v3/files",
@@ -540,6 +546,7 @@ def drive_search(query: str = "trashed=false", page_size: int = 10) -> dict[str,
             "supportsAllDrives": "true",
             "includeItemsFromAllDrives": "true",
         },
+        subject=subject,
         scopes=_service_scopes("drive"),
     )
     data = _data(result)
@@ -550,7 +557,10 @@ def drive_search(query: str = "trashed=false", page_size: int = 10) -> dict[str,
 
 @mcp.tool()
 def drive_file_create(
-    name: str, mime_type: str | None = None, folder_id: str | None = None
+    name: str,
+    mime_type: str | None = None,
+    folder_id: str | None = None,
+    subject: str | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {"name": name}
     if mime_type:
@@ -562,9 +572,208 @@ def drive_file_create(
         "https://www.googleapis.com/drive/v3/files",
         params={"fields": "id,name,mimeType,webViewLink"},
         json_body=metadata,
+        subject=subject,
+        scopes=_service_scopes("drive"),
     )
     data = _data(result)
     return data if not result.get("ok") else {"ok": True, "file": data}
+
+
+@mcp.tool()
+def drive_file_upload_session(
+    file_id: str,
+    session_id: str,
+    name: str | None = None,
+    folder_id: str | None = None,
+    folder_name: str = "Website",
+    parent_folder_id: str | None = None,
+    create_folder_if_missing: bool = True,
+    subject: str | None = None,
+) -> dict[str, Any]:
+    """Upload an Omnigent session file artifact into Google Drive."""
+    loaded = _load_session_file(file_id=file_id, session_id=session_id)
+    if not loaded.get("ok"):
+        return loaded
+    record = loaded["record"]
+    data = loaded["data"]
+    resolved_folder = _resolve_drive_upload_folder(
+        folder_id=folder_id,
+        folder_name=folder_name,
+        parent_folder_id=parent_folder_id,
+        create_folder_if_missing=create_folder_if_missing,
+        subject=subject,
+    )
+    if not resolved_folder.get("ok"):
+        return resolved_folder
+    target_folder_id = resolved_folder.get("folder_id")
+    upload_name = str(name or record.filename or file_id).strip() or file_id
+    content_type = record.content_type or "application/octet-stream"
+    metadata: dict[str, Any] = {"name": upload_name, "mimeType": content_type}
+    if target_folder_id:
+        metadata["parents"] = [target_folder_id]
+    result = _drive_multipart_upload(
+        metadata=metadata,
+        data=data,
+        content_type=content_type,
+        subject=subject,
+    )
+    response = _data(result)
+    if not result.get("ok"):
+        return response
+    return {
+        "ok": True,
+        "file": response,
+        "folder": {
+            "id": target_folder_id,
+            "name": resolved_folder.get("folder_name"),
+            "created": bool(resolved_folder.get("created")),
+        },
+        "source": {
+            "file_id": file_id,
+            "session_id": session_id,
+            "filename": record.filename,
+            "bytes": record.bytes,
+            "content_type": record.content_type,
+        },
+    }
+
+
+def _load_session_file(*, file_id: str, session_id: str) -> dict[str, Any]:
+    from omnigent.runtime import get_artifact_store, get_file_store
+
+    clean_file_id = str(file_id or "").strip()
+    clean_session_id = str(session_id or "").strip()
+    if not clean_file_id:
+        return {"ok": False, "error": "missing_file_id"}
+    if not clean_session_id:
+        return {"ok": False, "error": "missing_session_id"}
+    file_store = get_file_store()
+    artifact_store = get_artifact_store()
+    if file_store is None or artifact_store is None:
+        return {"ok": False, "error": "file_store_not_available"}
+    record = file_store.get(clean_file_id, session_id=clean_session_id)
+    if record is None:
+        return {"ok": False, "error": "session_file_not_found"}
+    try:
+        data = artifact_store.get(record.id)
+    except KeyError:
+        return {"ok": False, "error": "session_file_content_not_found"}
+    return {"ok": True, "record": record, "data": data}
+
+
+def _resolve_drive_upload_folder(
+    *,
+    folder_id: str | None,
+    folder_name: str,
+    parent_folder_id: str | None,
+    create_folder_if_missing: bool,
+    subject: str | None,
+) -> dict[str, Any]:
+    clean_folder_id = str(folder_id or "").strip()
+    clean_folder_name = str(folder_name or "").strip() or "Website"
+    if clean_folder_id:
+        return {
+            "ok": True,
+            "folder_id": clean_folder_id,
+            "folder_name": clean_folder_name,
+            "created": False,
+        }
+
+    query = (
+        f"mimeType = {_drive_query_literal(_DRIVE_FOLDER_MIME)} "
+        f"and name = {_drive_query_literal(clean_folder_name)} and trashed = false"
+    )
+    clean_parent = str(parent_folder_id or "").strip()
+    if clean_parent:
+        query += f" and {_drive_query_literal(clean_parent)} in parents"
+    found = drive_search(query=query, page_size=1, subject=subject)
+    if not found.get("ok"):
+        return found
+    files = found.get("files") or []
+    if files:
+        first = files[0]
+        return {
+            "ok": True,
+            "folder_id": first.get("id"),
+            "folder_name": first.get("name", clean_folder_name),
+            "created": False,
+        }
+    if not create_folder_if_missing:
+        return {"ok": False, "error": "drive_website_folder_not_found"}
+    created = drive_file_create(
+        name=clean_folder_name,
+        mime_type=_DRIVE_FOLDER_MIME,
+        folder_id=clean_parent or None,
+        subject=subject,
+    )
+    if not created.get("ok"):
+        return created
+    file_payload = created.get("file") or {}
+    return {
+        "ok": True,
+        "folder_id": file_payload.get("id"),
+        "folder_name": file_payload.get("name", clean_folder_name),
+        "created": True,
+    }
+
+
+def _drive_query_literal(value: str) -> str:
+    return "'" + value.replace("\\", "\\\\").replace("'", "\\'") + "'"
+
+
+def _drive_multipart_upload(
+    *,
+    metadata: dict[str, Any],
+    data: bytes,
+    content_type: str,
+    subject: str | None,
+) -> dict[str, Any]:
+    metadata_bytes = json.dumps(metadata, separators=(",", ":")).encode("utf-8")
+    body = b"".join(
+        [
+            f"--{_DRIVE_UPLOAD_BOUNDARY}\r\n".encode("ascii"),
+            b"Content-Type: application/json; charset=UTF-8\r\n\r\n",
+            metadata_bytes,
+            b"\r\n",
+            f"--{_DRIVE_UPLOAD_BOUNDARY}\r\n".encode("ascii"),
+            f"Content-Type: {content_type}\r\n\r\n".encode("ascii"),
+            data,
+            b"\r\n",
+            f"--{_DRIVE_UPLOAD_BOUNDARY}--\r\n".encode("ascii"),
+        ]
+    )
+    try:
+        response = httpx.post(
+            "https://www.googleapis.com/upload/drive/v3/files",
+            params={
+                "uploadType": "multipart",
+                "supportsAllDrives": "true",
+                "fields": "id,name,mimeType,webViewLink,parents",
+            },
+            content=body,
+            headers={
+                "Authorization": f"Bearer {_token(subject, scopes=_service_scopes('drive'))}",
+                "Accept": "application/json",
+                "Content-Type": f"multipart/related; boundary={_DRIVE_UPLOAD_BOUNDARY}",
+            },
+            timeout=60.0,
+        )
+        response.raise_for_status()
+    except KeyError as exc:
+        return {"ok": False, "error": "google_workspace_not_configured", "detail": str(exc)}
+    except httpx.HTTPStatusError as exc:
+        return _http_error_result(exc, scopes=_service_scopes("drive"))
+    except httpx.HTTPError as exc:
+        return {
+            "ok": False,
+            "error": "google_workspace_request_failed",
+            "detail": type(exc).__name__,
+        }
+    if response.content:
+        with contextlib.suppress(ValueError):
+            return {"ok": True, "data": response.json()}
+        return {"ok": True, "text": response.text}
+    return {"ok": True, "data": {}}
 
 
 @mcp.tool()
