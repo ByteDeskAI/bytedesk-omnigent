@@ -235,4 +235,3 @@ async def _collect_global_sessions(
         }
         for r in rows
     ]
-
