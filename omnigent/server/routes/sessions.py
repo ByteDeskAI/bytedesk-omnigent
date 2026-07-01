@@ -9658,6 +9658,22 @@ async def _ensure_runner_relay_ready_with_heal(
         return conv, runner_client
 
 
+def _is_child_user_message_event(conv: Conversation, body: SessionEventInput) -> bool:
+    """
+    Return whether *body* is a user message posted into a child session.
+
+    Parent sessions keep the relay-before-forward guard so a fast reply cannot
+    complete before the server is listening. Child-session sends originate from
+    an already-running parent turn: blocking the first child message on a child
+    SSE relay can deadlock delegation when no UI has subscribed to that child.
+    """
+    return (
+        conv.parent_conversation_id is not None
+        and body.type == "message"
+        and body.data.get("role") == "user"
+    )
+
+
 # Per-session compaction locks so concurrent ``/compact`` POSTs
 # don't race.
 _COMPACT_LOCKS: dict[str, asyncio.Lock] = {}
@@ -18044,7 +18060,8 @@ def create_sessions_router(
                 code=ErrorCode.NOT_FOUND,
             )
         conv = refreshed_conv
-        if _runner_needs_session_init:
+        _child_user_message_event = _is_child_user_message_event(conv, body)
+        if _runner_needs_session_init or _child_user_message_event:
             # The runner was unavailable when this request began, so its
             # connect callback may still be racing us. Await the handshake
             # so the terminal + transcript forwarder are watching before we
@@ -18053,18 +18070,24 @@ def create_sessions_router(
             # round-trip never mirrors back, and the optimistic bubble
             # sticks with no reply (host-restart bug).
             await _ensure_runner_session_initialized(session_id, conv, runner_client)
-        # Self-heal a dead/ephemeral runner on the message path: relaunch +
-        # re-resolve conv/client + retry the relay handshake once, instead of
-        # 503-ing the user's message (BDP-2601). Internal callers have no
-        # ``request`` and keep the one-shot behavior.
-        conv, runner_client = await _ensure_runner_relay_ready_with_heal(
-            session_id,
-            request,
-            conv,
-            runner_client,
-            conversation_store,
-            runner_router,
-        )
+        if _child_user_message_event:
+            _logger.info(
+                "Skipping child session relay-ready wait before forwarding message session=%s",
+                session_id,
+            )
+        else:
+            # Self-heal a dead/ephemeral runner on the message path: relaunch +
+            # re-resolve conv/client + retry the relay handshake once, instead of
+            # 503-ing the user's message (BDP-2601). Internal callers have no
+            # ``request`` and keep the one-shot behavior.
+            conv, runner_client = await _ensure_runner_relay_ready_with_heal(
+                session_id,
+                request,
+                conv,
+                runner_client,
+                conversation_store,
+                runner_router,
+            )
         _agent = agent_store.get(conv.agent_id) if conv.agent_id else None
         # Determine whether the agent has MCP servers so the runner's
         # proxy_stream handler knows to initialise ProxyMcpManager.

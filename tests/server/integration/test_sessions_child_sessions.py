@@ -1636,6 +1636,92 @@ async def test_adopted_child_with_resource_event_still_receives_initial_task(
     assert event_posts[0]["body"]["content"][0]["text"] == "scope the retry demo"
 
 
+async def test_child_session_user_message_forwards_without_relay_ready(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``sys_session_create`` then ``sys_session_send(session_id=child)`` must not
+    fail just because the child's SSE relay is not ready yet.
+
+    The live failure created the child row, initialized the runner session, then
+    rejected the first child message with ``runner_unavailable`` while waiting
+    for a child stream relay that no viewer needed.
+    """
+    parent = await _create_parent_session(client, agent_name="relay-parent")
+    child_agent = await create_test_agent(client, name="relay-child")
+    conv_store = SqlAlchemyConversationStore(db_uri)
+    conv_store.set_runner_id(parent["id"], "runner_child_message")
+
+    forwarded: list[dict[str, Any]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            forwarded.append(
+                {
+                    "path": request.url.path,
+                    "body": json.loads(request.content),
+                }
+            )
+        if request.url.path.endswith("/events"):
+            return httpx.Response(202, json={"queued": True})
+        return httpx.Response(201, json={"ok": True})
+
+    fake_runner = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler),
+        base_url="http://runner",
+    )
+
+    async def _fake_get_runner_client(
+        session_id: str,
+        runner_router: object,
+    ) -> httpx.AsyncClient:
+        del session_id, runner_router
+        return fake_runner
+
+    async def _relay_ready_must_not_run(*_args: Any, **_kwargs: Any) -> NoReturn:
+        raise AssertionError("child user message should not require relay readiness")
+
+    monkeypatch.setattr(sessions_module, "_get_runner_client", _fake_get_runner_client)
+    monkeypatch.setattr(
+        sessions_module,
+        "_ensure_runner_relay_ready_with_heal",
+        _relay_ready_must_not_run,
+    )
+
+    child_resp = await client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": child_agent["id"],
+            "parent_session_id": parent["id"],
+            "title": "relay-child:audit",
+        },
+    )
+    assert child_resp.status_code == 201, child_resp.text
+    child_id = child_resp.json()["id"]
+
+    try:
+        message_resp = await client.post(
+            f"/v1/sessions/{child_id}/events",
+            json={
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "run the audit"}],
+                },
+            },
+        )
+    finally:
+        await fake_runner.aclose()
+
+    assert message_resp.status_code == 202, message_resp.text
+    event_path = f"/v1/sessions/{child_id}/events"
+    event_posts = [entry for entry in forwarded if entry["path"] == event_path]
+    assert event_posts
+    assert event_posts[0]["body"]["content"][0]["text"] == "run the audit"
+
+
 # ── Multipart (bundled) child creates ────────────────────
 
 
