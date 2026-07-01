@@ -62,6 +62,13 @@ def _import_helper_bindings() -> None:
 
 _import_helper_bindings()
 
+
+def __facade_binding(name: str, fallback):
+    import omnigent.cli as cli_facade
+
+    return getattr(cli_facade, name, fallback)
+
+
 @cli.group("debug")
 def debug() -> None:
     """Internal maintenance commands (advanced — not needed for normal use).
@@ -295,7 +302,7 @@ def _workspace_mount_probe_matches(candidate: str, probe: httpx.Response) -> boo
         the ``DatabricksRealm`` challenge).
     """
     return probe.status_code == 200 or (
-        _databricks_workspace_login_target(candidate, probe) is not None
+        _debug_databricks_workspace_login_target(candidate, probe) is not None
     )
 
 
@@ -315,7 +322,7 @@ def _cached_workspace_bearer(workspace_host: str) -> str | None:
 
     if not databricks_sdk_installed():
         return None
-    return _databricks_workspace_token(workspace_host)
+    return _debug_databricks_workspace_token(workspace_host)
 
 
 def _workspace_api_server_url(server: str) -> str:
@@ -364,7 +371,7 @@ def _workspace_api_server_url(server: str) -> str:
     # API proxy (the login-target detector recognizes both).
     if probe.status_code == 200:
         return server
-    if _databricks_workspace_login_target(server, probe) is not None:
+    if _debug_databricks_workspace_login_target(server, probe) is not None:
         return server
     server_header = probe.headers.get("server")
     if server_header is None or server_header.lower() != "databricks":
@@ -413,6 +420,14 @@ def _workspace_api_server_url(server: str) -> str:
         "retry, or pass the full mount URL."
     )
     return server
+
+
+def _debug_databricks_workspace_login_target(server: str, probe: httpx.Response) -> str | None:
+    databricks_workspace_login_target = __facade_binding(
+        "_databricks_workspace_login_target",
+        _databricks_workspace_login_target,
+    )
+    return databricks_workspace_login_target(server, probe)
 
 
 def _databricks_workspace_login_target(server: str, probe: httpx.Response) -> str | None:
@@ -499,16 +514,16 @@ def _databricks_login(server: str, workspace_host: str) -> None:
             f"{DATABRICKS_EXTRA_INSTALL_HINT}"
         )
 
-    token = _databricks_workspace_token(workspace_host)
+    token = _debug_databricks_workspace_token(workspace_host)
     fresh_login_done = False
     if token is None:
-        token = _login_and_mint_workspace_token(workspace_host)
+        token = _debug_login_and_mint_workspace_token(workspace_host)
         fresh_login_done = True
 
     # Verify the workspace token actually gets through the edge to THIS
     # server (the user may lack access to it), and learn our identity
     # for the success message.
-    verify = _verify_databricks_server_token(server, token)
+    verify = _debug_verify_databricks_server_token(server, token)
     if verify.status_code != 200 and not fresh_login_done:
         # A cached grant can be stale or minted for a different
         # workspace (the CLI token cache is host-keyed but not
@@ -518,8 +533,8 @@ def _databricks_login(server: str, workspace_host: str) -> None:
             f"The cached Databricks credentials were rejected by {server} "
             f"(HTTP {verify.status_code}) — refreshing the workspace login."
         )
-        token = _login_and_mint_workspace_token(workspace_host)
-        verify = _verify_databricks_server_token(server, token)
+        token = _debug_login_and_mint_workspace_token(workspace_host)
+        verify = _debug_verify_databricks_server_token(server, token)
     if verify.status_code != 200:
         raise click.ClickException(
             f"{workspace_host} accepted the login, but {server} rejected the token "
@@ -546,6 +561,14 @@ def _databricks_login(server: str, workspace_host: str) -> None:
     )
 
 
+def _debug_login_and_mint_workspace_token(workspace_host: str) -> str:
+    login_and_mint_workspace_token = __facade_binding(
+        "_login_and_mint_workspace_token",
+        _login_and_mint_workspace_token,
+    )
+    return login_and_mint_workspace_token(workspace_host)
+
+
 def _login_and_mint_workspace_token(workspace_host: str) -> str:
     """Run the browser login for a workspace and mint a bearer from it.
 
@@ -556,14 +579,22 @@ def _login_and_mint_workspace_token(workspace_host: str) -> str:
         missing, the login exits non-zero, or no token resolves after
         a successful login.
     """
-    _run_databricks_browser_login(workspace_host)
-    token = _databricks_workspace_token(workspace_host)
+    _debug_run_databricks_browser_login(workspace_host)
+    token = _debug_databricks_workspace_token(workspace_host)
     if token is None:
         raise click.ClickException(
             f"Workspace login completed but no token resolves for {workspace_host}. "
             f"Run `databricks auth token --host {workspace_host}` to debug."
         )
     return token
+
+
+def _debug_run_databricks_browser_login(workspace_host: str) -> None:
+    run_databricks_browser_login = __facade_binding(
+        "_run_databricks_browser_login",
+        _run_databricks_browser_login,
+    )
+    run_databricks_browser_login(workspace_host)
 
 
 def _run_databricks_browser_login(workspace_host: str) -> None:
@@ -593,6 +624,14 @@ def _run_databricks_browser_login(workspace_host: str) -> None:
         )
 
 
+def _debug_verify_databricks_server_token(server: str, token: str) -> httpx.Response:
+    verify_databricks_server_token = __facade_binding(
+        "_verify_databricks_server_token",
+        _verify_databricks_server_token,
+    )
+    return verify_databricks_server_token(server, token)
+
+
 def _verify_databricks_server_token(server: str, token: str) -> httpx.Response:
     """Probe ``GET /v1/me`` on *server* with a workspace bearer.
 
@@ -617,6 +656,14 @@ def _verify_databricks_server_token(server: str, token: str) -> httpx.Response:
         ) from exc
 
 
+def _debug_databricks_workspace_token(workspace_host: str) -> str | None:
+    databricks_workspace_token = __facade_binding(
+        "_databricks_workspace_token",
+        _databricks_workspace_token,
+    )
+    return databricks_workspace_token(workspace_host)
+
+
 def _databricks_workspace_token(workspace_host: str) -> str | None:
     """Mint a bearer for a workspace from the host-keyed OAuth cache.
 
@@ -635,5 +682,3 @@ def _databricks_workspace_token(workspace_host: str) -> str | None:
         return auth.current_token()
     except (DatabricksAuthError, ValueError):
         return None
-
-

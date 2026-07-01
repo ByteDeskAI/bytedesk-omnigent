@@ -76,7 +76,7 @@ from omnigent.runner.subagent_status import (
     SubagentWorkStatus,
     TerminalStatus,
 )
-from omnigent.runtime.harnesses.process_manager import HarnessProcessManager
+from omnigent.runtime.harnesses.process_manager import HarnessProcessManager, _model_env_key
 from omnigent.spec.parser import discover_host_skills
 from omnigent.spec.types import AgentSpec, LocalToolInfo, SkillSpec
 from omnigent.terminals.ws_bridge import (
@@ -262,9 +262,7 @@ def _build_spawn_env_from_spec(
     # into HARNESS_<H>_MODEL. Without this, `/model` is recorded in the
     # readout but the turn still uses the provider/catalog default.
     if model_override:
-        model_key = _HARNESS_MODEL_ENV_KEY.get(harness)
-        if model_key is not None:
-            env[model_key] = model_override
+        env[_model_env_key(harness)] = model_override
 
     # Routing visibility: log the resolved gateway target so operators can
     # confirm which provider a turn actually hits (api.anthropic.com /
@@ -281,7 +279,7 @@ def _build_spawn_env_from_spec(
             env.get(f"{prefix}_GATEWAY"),
             env.get(f"{prefix}_GATEWAY_BASE_URL"),
             env.get(f"{prefix}_DATABRICKS_PROFILE"),
-            env.get(_HARNESS_MODEL_ENV_KEY.get(harness, f"{prefix}_MODEL")),
+            env.get(_model_env_key(harness)),
         )
     return env
 
