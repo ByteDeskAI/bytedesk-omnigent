@@ -57,6 +57,7 @@ from omnigent.runner.subagent_status import (
 from omnigent.runner.subagent_status import (
     SubagentWorkStatus,
 )
+from omnigent.runner.tool_dispatch._constants import _AGENT_LIST_PAGE_LIMIT
 from omnigent.runner.tool_execution_context import ToolExecutionContext
 from omnigent.runtime import pending_elicitations
 from omnigent.session_lifecycle import (
@@ -291,6 +292,165 @@ async def _execute_session_query_tool(
         return await _session_get_info_via_rest(args, conversation_id, server_client)
     return await _session_close_via_rest(args, conversation_id, server_client)
 
+
+class SessionQueryService:
+    """
+    Session-query REST adapter for runner-local ``sys_session_*`` tools.
+
+    The runner dispatch layer is still function-shaped at the public seam,
+    but session listing needs a real owner for its REST dependency and helper
+    behavior. Keeping the ``server_client`` on this object avoids relying on
+    sibling-module globals injected through the package facade.
+    """
+
+    def __init__(self, server_client: httpx.AsyncClient) -> None:
+        self._server_client = server_client
+
+    async def runner_online_or_none(self, runner_id: str | None) -> bool | None:
+        """
+        Resolve a runner's live connectivity via ``GET /v1/runners/{id}/status``.
+        """
+        if not runner_id:
+            return None
+        try:
+            resp = await self._server_client.get(f"/v1/runners/{runner_id}/status", timeout=30.0)
+        except Exception:  # noqa: BLE001
+            return None
+        if resp.status_code != 200:
+            return None
+        online = resp.json().get("online")
+        return online if isinstance(online, bool) else None
+
+    async def session_parent_id(self, conversation_id: str) -> str | None:
+        """
+        Return a session's ``parent_session_id`` (None if top-level/unknown).
+        """
+        try:
+            snap = await self._server_client.get(f"/v1/sessions/{conversation_id}", timeout=30.0)
+        except Exception:  # noqa: BLE001
+            return None
+        if snap.status_code != 200:
+            return None
+        parent = snap.json().get("parent_session_id")
+        return parent if isinstance(parent, str) and parent else None
+
+    async def list_sessions(self, conversation_id: str, agent_name: Any = None) -> str:
+        """
+        Return the two-view session list: ``sub_agents`` + global ``sessions``.
+        """
+        sub_agents = await self.collect_sub_agents(conversation_id)
+        sessions = await self.collect_global_sessions(agent_name)
+        return json.dumps({"sub_agents": sub_agents, "sessions": sessions})
+
+    async def collect_sub_agents(
+        self,
+        conversation_id: str,
+    ) -> list[dict[str, str | None]]:
+        """
+        Collect the caller's named-sub-agent view via ``GET .../child_sessions``.
+        """
+        try:
+            resp = await self._server_client.get(
+                f"/v1/sessions/{conversation_id}/child_sessions",
+                params={"limit": 100},
+                timeout=30.0,
+            )
+        except Exception:  # noqa: BLE001
+            return []
+        if resp.status_code != 200:
+            return []
+        result = self._child_rows_to_entries(resp.json().get("data", []))
+
+        parent_id = await self.session_parent_id(conversation_id)
+        if parent_id is not None:
+            result.append({"agent": "main", "title": None, "conversation_id": parent_id})
+            try:
+                sib_resp = await self._server_client.get(
+                    f"/v1/sessions/{parent_id}/child_sessions",
+                    params={"limit": 100},
+                    timeout=30.0,
+                )
+                if sib_resp.status_code == 200:
+                    for entry in self._child_rows_to_entries(sib_resp.json().get("data", [])):
+                        if entry["conversation_id"] != conversation_id:
+                            result.append(entry)
+            except Exception:  # noqa: BLE001
+                _logger.debug(
+                    "sys_session_list sibling enrichment failed for parent %s",
+                    parent_id,
+                    exc_info=True,
+                )
+        return result
+
+    async def collect_global_sessions(self, agent_name: Any) -> list[dict[str, Any]]:
+        """
+        Fetch the global session list via ``GET /v1/sessions``, with connectivity.
+        """
+        params: dict[str, Any] = {"limit": _AGENT_LIST_PAGE_LIMIT, "order": "desc"}
+        if isinstance(agent_name, str) and agent_name:
+            params["agent_name"] = agent_name
+        try:
+            resp = await self._server_client.get("/v1/sessions", params=params, timeout=30.0)
+        except Exception:  # noqa: BLE001
+            return []
+        if resp.status_code != 200:
+            return []
+        rows = resp.json().get("data", [])
+        if not isinstance(rows, list):
+            return []
+        online = await self.resolve_runner_online_map(rows)
+        return [
+            {
+                "session_id": r.get("id"),
+                "agent_name": r.get("agent_name"),
+                "title": r.get("title"),
+                "status": r.get("status"),
+                "runner_id": r.get("runner_id"),
+                "runner_online": online.get(r.get("runner_id")),
+                "parent_session_id": r.get("parent_session_id"),
+            }
+            for r in rows
+        ]
+
+    async def resolve_runner_online_map(
+        self,
+        rows: list[dict[str, Any]],
+    ) -> dict[str, bool | None]:
+        """
+        Resolve live connectivity for the unique runners bound across rows.
+        """
+        unique_ids: list[str] = []
+        seen: set[str] = set()
+        for r in rows:
+            rid = r.get("runner_id")
+            if isinstance(rid, str) and rid and rid not in seen:
+                seen.add(rid)
+                unique_ids.append(rid)
+        results = await asyncio.gather(*(self.runner_online_or_none(rid) for rid in unique_ids))
+        return dict(zip(unique_ids, results, strict=True))
+
+    @staticmethod
+    def _child_rows_to_entries(
+        rows: list[dict[str, Any]],
+    ) -> list[dict[str, str | None]]:
+        """
+        Map ``child_sessions`` rows to ``sys_session_list`` entries.
+        """
+        entries: list[dict[str, str | None]] = []
+        for row in rows:
+            title = row.get("title")
+            if not title or ":" not in title or is_session_closed(row.get("labels"), title):
+                continue
+            entries.append(
+                {
+                    "agent": row.get("tool"),
+                    "title": row.get("session_name"),
+                    "conversation_id": row.get("id"),
+                }
+            )
+        return entries
+
+
 async def _runner_online_or_none(
     runner_id: str | None,
     server_client: httpx.AsyncClient,
@@ -307,16 +467,7 @@ async def _runner_online_or_none(
     :returns: ``True``/``False`` from the status endpoint, or ``None``
         when unbound or the lookup is inconclusive.
     """
-    if not runner_id:
-        return None
-    try:
-        resp = await server_client.get(f"/v1/runners/{runner_id}/status", timeout=30.0)
-    except Exception:  # noqa: BLE001
-        return None
-    if resp.status_code != 200:
-        return None
-    online = resp.json().get("online")
-    return online if isinstance(online, bool) else None
+    return await SessionQueryService(server_client).runner_online_or_none(runner_id)
 
 async def _session_get_info_via_rest(
     args: dict[str, Any],
@@ -372,7 +523,9 @@ async def _session_get_info_via_rest(
             "agent_id": snap.get("agent_id"),
             "agent_name": snap.get("agent_name"),
             "runner_id": snap.get("runner_id"),
-            "runner_online": await _runner_online_or_none(snap.get("runner_id"), server_client),
+            "runner_online": await SessionQueryService(server_client).runner_online_or_none(
+                snap.get("runner_id")
+            ),
             "host_id": snap.get("host_id"),
             "parent_session_id": snap.get("parent_session_id"),
             "sub_agent_name": snap.get("sub_agent_name"),
@@ -401,13 +554,11 @@ async def _session_list_via_rest(
     Return the two-view session list: ``sub_agents`` + global ``sessions``.
 
     ``sub_agents`` is the caller's named-sub-agent view (children, plus
-    parent/siblings when the caller is itself a child) — see
-    :func:`_collect_sub_agents`. ``sessions`` is the **global**,
-    permission-bounded list of every session the caller can access, each
-    annotated with status + runner connectivity, optionally filtered by
-    ``agent_name`` — see :func:`_collect_global_sessions`. Both are
-    best-effort: a failure in either view yields an empty list for it
-    rather than failing the whole call.
+    parent/siblings when the caller is itself a child). ``sessions`` is
+    the **global**, permission-bounded list of every session the caller can
+    access, each annotated with status + runner connectivity, optionally
+    filtered by ``agent_name``. Both are best-effort: a failure in either
+    view yields an empty list for it rather than failing the whole call.
 
     :param conversation_id: The caller session id, e.g. ``"conv_root1"``.
     :param server_client: HTTP client pointed at the Omnigent server.
@@ -415,9 +566,7 @@ async def _session_list_via_rest(
         ``sessions`` view; ignored for ``sub_agents``.
     :returns: JSON ``{"sub_agents": [...], "sessions": [...]}``.
     """
-    sub_agents = await _collect_sub_agents(conversation_id, server_client)
-    sessions = await _collect_global_sessions(server_client, agent_name)
-    return json.dumps({"sub_agents": sub_agents, "sessions": sessions})
+    return await SessionQueryService(server_client).list_sessions(conversation_id, agent_name)
 
 async def _resolve_runner_online_map(
     rows: list[dict[str, Any]],
@@ -436,19 +585,7 @@ async def _resolve_runner_online_map(
     :returns: Map of ``runner_id`` → online bool (or ``None`` if the
         lookup was inconclusive).
     """
-    unique_ids: list[str] = []
-    seen: set[str] = set()
-    for r in rows:
-        rid = r.get("runner_id")
-        if isinstance(rid, str) and rid and rid not in seen:
-            seen.add(rid)
-            unique_ids.append(rid)
-    results = await asyncio.gather(
-        *(_runner_online_or_none(rid, server_client) for rid in unique_ids)
-    )
-    # strict=True: results is gathered in unique_ids order, so lengths
-    # match by construction — assert it rather than silently truncating.
-    return dict(zip(unique_ids, results, strict=True))
+    return await SessionQueryService(server_client).resolve_runner_online_map(rows)
 
 async def _session_parent_id(
     conversation_id: str,
@@ -465,14 +602,7 @@ async def _session_parent_id(
     :param server_client: HTTP client pointed at the Omnigent server.
     :returns: The parent session id, or ``None``.
     """
-    try:
-        snap = await server_client.get(f"/v1/sessions/{conversation_id}", timeout=30.0)
-    except Exception:  # noqa: BLE001
-        return None
-    if snap.status_code != 200:
-        return None
-    parent = snap.json().get("parent_session_id")
-    return parent if isinstance(parent, str) and parent else None
+    return await SessionQueryService(server_client).session_parent_id(conversation_id)
 
 async def _session_get_history_via_rest(
     args: dict[str, Any],
@@ -738,4 +868,3 @@ async def _fetch_peek_meta(
         [e for e in raw_pending if isinstance(e, dict)] if isinstance(raw_pending, list) else []
     )
     return _PeekMeta(agent=parsed.agent, title=parsed.title, pending_elicitations=pending)
-
