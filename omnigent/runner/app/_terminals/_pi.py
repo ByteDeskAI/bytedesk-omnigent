@@ -125,6 +125,7 @@ def _import_parent_bindings() -> None:
 
 _import_parent_bindings()
 
+@dataclasses.dataclass
 class _PiNativeLaunchConfig:
     """
     Persisted launch config needed for runner-owned Pi terminal setup.
@@ -332,4 +333,3 @@ async def _auto_create_pi_terminal(
         pi_extension,
     )
     return terminal_view
-

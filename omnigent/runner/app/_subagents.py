@@ -119,6 +119,7 @@ _WAKE_POST_RETRY_MAX_DELAY_S = 4.0
 
 _WAKE_POST_TRANSIENT_4XX = frozenset({408, 409, 425, 429})
 
+@dataclasses.dataclass
 class _SubagentWorkEntry:
     """
     Runner-local state for one asynchronous ``sys_session_send`` dispatch.
@@ -158,6 +159,7 @@ class _SubagentWorkEntry:
     completed_at: float | None = None
     delivered: bool = False
 
+@dataclasses.dataclass
 class _SubagentDeliveryAck:
     """
     Result of attempting to deliver a terminal sub-agent payload.
@@ -532,6 +534,7 @@ def _format_subagent_wake_notice(*, agent: str, title: str, status: str, pending
         f"{pending} {noun} waiting in inbox. Call sys_read_inbox to collect.]"
     )
 
+@dataclasses.dataclass
 class _ChildParentMeta:
     """Fan-out metadata for one child sub-agent session.
 
@@ -594,4 +597,3 @@ def unregister_child_session(child_session_id: str) -> None:
     :param child_session_id: Child session id to forget.
     """
     _child_session_parents.pop(child_session_id, None)
-

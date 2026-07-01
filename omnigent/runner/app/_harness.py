@@ -138,6 +138,7 @@ def _forward_harness_response(resp: httpx.Response) -> Response:
         media_type=content_type or None,
     )
 
+@dataclasses.dataclass
 class ResolvedSpec:
     spec: Any
     workdir: Path
@@ -318,4 +319,3 @@ async def _evaluate_agent_start_gate(
             "sandbox": sandbox_dict,
         },
     )
-

@@ -101,6 +101,7 @@ def _import_package_bindings() -> None:
 
 _import_package_bindings()
 
+@dataclasses.dataclass
 class _SessionSnapshot:
     """One ``GET /v1/sessions/{id}`` projected for all runner readers.
 
@@ -151,6 +152,7 @@ def _spec_with_workdir_paths(spec: Any, workdir: Path | None) -> Any:
         return spec
     return dataclasses.replace(spec, local_tools=resolved_tools)
 
+@dataclasses.dataclass
 class TurnDispatch:
     """
     Runner-side dispatch context for a single turn.
@@ -414,4 +416,3 @@ async def _resolve_forwarded_message_content(
         changed = True
 
     return resolved if changed else content
-
