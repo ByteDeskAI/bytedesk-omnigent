@@ -44,6 +44,10 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
     {
         "runner_control_registry",
         "runner_router",
+        # BDP-2623: reconcile pre-existing drift — app.py writes
+        # ``app.state.runner_credential_store`` in the factory body but this pinned set
+        # had never been updated to include it (the anchor was already stale on HEAD).
+        "runner_credential_store",
         "auth_provider",
         "host_registry",
         "host_store",
@@ -68,10 +72,10 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         "assertion_signer",
         # DI composition root (flag-gated; AST scan sees the source-level assignment).
         "di_container",
-        # Phase 1 / ServiceRegistry: the dual-write sidecar key (flag-gated,
-        # OMNIGENT_USE_SERVICE_REGISTRY default OFF — never set at runtime when off,
-        # but the AST scan sees the source-level assignment).
-        "service_registry",
+        # BDP-2623: the Phase 1 / ServiceRegistry dual-write sidecar
+        # (OMNIGENT_USE_SERVICE_REGISTRY + omnigent/kernel/service_registry.py) was
+        # deleted — never flipped in prod, zero consumers — so "service_registry" is no
+        # longer written in the create_app body and is intentionally absent here.
     }
 )
 # ── Phase 3 anchor: the one app.state key set inside _lifespan (app.py:915). ──

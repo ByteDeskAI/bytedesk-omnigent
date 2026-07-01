@@ -6,8 +6,7 @@ minimum set required to bring up an **empty** system and host plugins:
 
 * the extension contract + discovery/install (:mod:`omnigent.kernel.extensions`),
 * the pluggable-seam machinery (:mod:`omnigent.kernel.pluggable`),
-* the lifecycle orchestrator (:mod:`omnigent.kernel.lifespan_phases`),
-* the typed service registry (:mod:`omnigent.kernel.service_registry`).
+* the lifecycle orchestrator (:mod:`omnigent.kernel.lifespan_phases`).
 
 **Invariant — domain-free + import-safe.** No kernel module imports a non-kernel
 ``omnigent.*`` module at module scope, and importing a kernel module must NOT drag
@@ -65,7 +64,6 @@ if TYPE_CHECKING:
         ProviderUnconfigured,
         RegistryConflict,
     )
-    from omnigent.kernel.service_registry import ServiceRegistry  # noqa: F401
 
 #: Public kernel surface. ``__getattr__`` resolves each name to its owning kernel
 #: submodule on first access, so the bare package import stays cheap.
@@ -102,8 +100,6 @@ _EXPORTS: dict[str, str] = {
     "LifespanCycleError": "omnigent.kernel.lifespan_phases",
     "topological_order": "omnigent.kernel.lifespan_phases",
     "build_default_lifespan_phases": "omnigent.kernel.lifespan_phases",
-    # typed service container
-    "ServiceRegistry": "omnigent.kernel.service_registry",
 }
 
 __all__ = list(_EXPORTS)

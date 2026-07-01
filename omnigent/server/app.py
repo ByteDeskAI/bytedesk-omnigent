@@ -1363,29 +1363,8 @@ def create_app(
     # BDP-2368: expose the DI container (or None) for diagnostics and the
     # boot-parity test; readers off ``app.state`` are unchanged regardless.
     app.state.di_container = _di_container
-    # BDP-2327 (core-refactor spine, Phase 1): behind
-    # OMNIGENT_USE_SERVICE_REGISTRY (default OFF), DUAL-WRITE the wired
-    # services into a typed ServiceRegistry alongside the app.state writes
-    # above. Nothing reads the registry yet; with the flag off it is never
-    # built and the app is byte-identical to today. Later phases migrate
-    # readers off app.state onto registry.get().
     from omnigent.server.auth import env_var_is_truthy
 
-    if env_var_is_truthy("OMNIGENT_USE_SERVICE_REGISTRY"):
-        from omnigent.kernel.service_registry import ServiceRegistry
-
-        _service_registry = ServiceRegistry()
-        _service_registry.register(runner_control_registry)
-        _service_registry.register(runner_router)
-        _service_registry.register(host_registry)
-        _service_registry.register(server_metrics)
-        _service_registry.register(server_metrics_otel)
-        _service_registry.register(app.state.managed_launches)
-        if host_store is not None:
-            _service_registry.register(host_store, as_type=HostStore)
-        if sandbox_config is not None:
-            _service_registry.register(sandbox_config)
-        app.state.service_registry = _service_registry
     app.add_middleware(_WebSocketMetricsMiddleware, metrics=server_metrics)
     # CSWSH guard: reject cross-origin WebSocket handshakes before any
     # route accepts them. Added after the metrics middleware so it is the
