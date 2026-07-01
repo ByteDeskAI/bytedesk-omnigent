@@ -29,7 +29,8 @@ import pytest
 import yaml
 
 from omnigent.entities import Conversation
-from omnigent.entities.conversation import MessageData, NewConversationItem
+from omnigent.entities.conversation import MessageData, NewConversationItem, ResourceEventData
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.routes import sessions as sessions_module
 from omnigent.session_lifecycle import CLOSED_LABEL_KEY, CLOSED_LABEL_VALUE
 from omnigent.stores.conversation_store.sqlalchemy_store import (
@@ -1522,6 +1523,117 @@ async def test_non_native_subagent_session_has_no_terminal_ui_labels(
     labels = resp.json()["labels"]
     assert "omnigent.wrapper" not in labels
     assert "omnigent.ui" not in labels
+
+
+async def test_adopted_child_with_resource_event_still_receives_initial_task(
+    client: httpx.AsyncClient,
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    Retrying create-with-initial-items must not mistake resource metadata for work.
+
+    The production failure created the child row, then relay readiness timed out
+    before the initial user task was forwarded. A terminal ``resource_event``
+    landed on the child before the retry, and the retry treated that single
+    metadata item as proof that the task had already been delivered.
+    """
+
+    parent = await _create_parent_session(client, agent_name="retry-parent")
+    child_agent = await create_test_agent(client, name="retry-child")
+    conv_store = SqlAlchemyConversationStore(db_uri)
+    conv_store.set_runner_id(parent["id"], "runner_retry")
+
+    forwarded: list[dict[str, Any]] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            forwarded.append(
+                {
+                    "path": request.url.path,
+                    "body": json.loads(request.content),
+                }
+            )
+        if request.url.path.endswith("/events"):
+            return httpx.Response(202, json={"queued": True})
+        return httpx.Response(200, json={})
+
+    fake_runner = httpx.AsyncClient(
+        transport=httpx.MockTransport(_handler),
+        base_url="http://runner",
+    )
+
+    async def _fake_get_runner_client(
+        session_id: str,
+        runner_router: object,
+    ) -> httpx.AsyncClient:
+        del session_id, runner_router
+        return fake_runner
+
+    relay_attempts = {"count": 0}
+
+    async def _flaky_relay_ready(*_args: Any, **_kwargs: Any) -> None:
+        relay_attempts["count"] += 1
+        if relay_attempts["count"] == 1:
+            raise OmnigentError(
+                "Timed out waiting for runner stream relay to subscribe",
+                code=ErrorCode.RUNNER_UNAVAILABLE,
+            )
+
+    monkeypatch.setattr(sessions_module, "_get_runner_client", _fake_get_runner_client)
+    monkeypatch.setattr(sessions_module, "_ensure_runner_relay_ready", _flaky_relay_ready)
+
+    payload = {
+        "agent_id": child_agent["id"],
+        "parent_session_id": parent["id"],
+        "title": "product-ops-director:retry-demo",
+        "initial_items": [
+            {
+                "type": "message",
+                "data": {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "scope the retry demo"}],
+                },
+            }
+        ],
+    }
+
+    try:
+        first = await client.post("/v1/sessions", json=payload)
+        assert first.status_code == 503, first.text
+
+        children = conv_store.list_conversations(
+            kind="sub_agent",
+            parent_conversation_id=parent["id"],
+            order="asc",
+        )
+        assert len(children.data) == 1
+        child_id = children.data[0].id
+        conv_store.append(
+            child_id,
+            [
+                NewConversationItem(
+                    type="resource_event",
+                    response_id="seed",
+                    data=ResourceEventData(
+                        event_type="session.resource.created",
+                        resource_id="terminal_tui_main",
+                        resource_type="terminal",
+                        resource={"id": "terminal_tui_main", "type": "terminal"},
+                    ),
+                )
+            ],
+        )
+
+        retry = await client.post("/v1/sessions", json=payload)
+    finally:
+        await fake_runner.aclose()
+
+    assert retry.status_code == 201, retry.text
+    event_path = f"/v1/sessions/{child_id}/events"
+    event_posts = [entry for entry in forwarded if entry["path"] == event_path]
+    assert event_posts
+    assert event_posts[0]["body"]["content"][0]["text"] == "scope the retry demo"
 
 
 # ── Multipart (bundled) child creates ────────────────────

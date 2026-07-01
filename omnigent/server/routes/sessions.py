@@ -84,6 +84,7 @@ from omnigent.entities import (
 )
 from omnigent.entities.conversation import (
     ITEM_TYPE_TO_DATA_CLS,
+    NON_CONTENT_ITEM_TYPES,
     FunctionCallData,
     FunctionCallOutputData,
     parse_item_data,
@@ -11679,12 +11680,23 @@ async def _create_session_from_existing_agent(
         await asyncio.to_thread(conversation_store.set_labels, conv.id, body.labels)
     initial_items = body.initial_items
     if initial_items and adopted_existing_child:
-        existing_items = await asyncio.to_thread(
-            conversation_store.list_items,
-            conv.id,
-            limit=1,
-        )
-        if existing_items.data:
+        existing_cursor: str | None = None
+        has_existing_content = False
+        while True:
+            existing_items = await asyncio.to_thread(
+                conversation_store.list_items,
+                conv.id,
+                limit=100,
+                after=existing_cursor,
+                order="asc",
+            )
+            if any(item.type not in NON_CONTENT_ITEM_TYPES for item in existing_items.data):
+                has_existing_content = True
+                break
+            if not existing_items.has_more or existing_items.last_id is None:
+                break
+            existing_cursor = existing_items.last_id
+        if has_existing_content:
             initial_items = []
     if initial_items:
         runner_client = await _get_runner_client(conv.id, runner_router)
@@ -11708,6 +11720,7 @@ async def _create_session_from_existing_agent(
             ]
             await asyncio.to_thread(conversation_store.append, conv.id, new_items)
         else:
+            await _ensure_runner_session_initialized(conv.id, conv, runner_client)
             await _ensure_runner_relay_ready(
                 conv.id,
                 conv.runner_id,
