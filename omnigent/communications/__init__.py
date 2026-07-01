@@ -4,6 +4,7 @@ This package is the narrow internal seam for session chat, delegation, and
 status projection. Public REST/SSE schemas remain in ``omnigent.server``.
 """
 
+from omnigent.communications.application import ChatApplicationService
 from omnigent.communications.commands import (
     ChatActor,
     ChatActorKind,
@@ -43,6 +44,7 @@ __all__ = [
     "BlueprintNodeUpdated",
     "ChatActor",
     "ChatActorKind",
+    "ChatApplicationService",
     "ChatCommandResult",
     "ChildSessionUpdated",
     "CommunicationServiceProvider",
@@ -55,10 +57,10 @@ __all__ = [
     "InvalidSessionStatusTransition",
     "PostSessionEventCommand",
     "RunnerCommunicationScope",
-    "SessionStatus",
-    "SessionStatusChanged",
     "SessionQueryService",
     "SessionQueryToolService",
+    "SessionStatus",
+    "SessionStatusChanged",
     "StartSessionCommand",
     "UnknownSessionStatus",
     "is_status_transition_allowed",
