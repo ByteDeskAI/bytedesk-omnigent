@@ -6,6 +6,12 @@
 @import "@fontsource/ibm-plex-sans/500.css";
 @import "@fontsource/ibm-plex-sans/600.css";
 @import "@fontsource/ibm-plex-sans/700.css";
+/* Real monospace for the Console "instrument" layer — telemetry readouts,
+   .mc-label/.mc-value control labels, code, terminal chrome, IDs, figures.
+   Same superfamily as the sans so the two stay cohesive. */
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
 @import "./styles/bytedesk-mission-control.css";
 @plugin "@tailwindcss/typography";
 
@@ -20,7 +26,13 @@
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: var(--font-plex-sans);
-  --font-mono: var(--font-plex-sans);
+  /* Console instrument face — a true monospace, not the sans alias. Drives
+     every `font-mono` utility plus .mc-label / .mc-value / code / terminal. */
+  --font-mono: var(--font-plex-mono);
+  /* Live-signal role: cyan means "something is happening right now" — the
+     telemetry strip, streaming cursors, active-runner glow. Exposed here so
+     `text-live` / `bg-live` / `border-live` utilities exist. */
+  --color-live: var(--color-accent-cyan);
   /* 13px/20px text step between text-xs (12px) and text-sm (14px) —
      * generates the `text-13` utility. Used for compact UI chrome like
      * the composer footer selectors and slash-command menu rows. */
@@ -96,6 +108,9 @@
 :root {
   /* Omnigent compatibility adapter: existing shadcn-style primitives keep
      their variable names, but every value resolves to Mission Control tokens. */
+  /* Instrument-layer monospace (the shared CSS only ships --font-plex-sans). */
+  --font-plex-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --color-live: var(--color-accent-cyan);
   --background: var(--color-bg-base);
   --foreground: var(--color-text-primary);
   --card: var(--color-bg-surface);
