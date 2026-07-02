@@ -9,10 +9,10 @@ can host every first-party router it can host anyone's, and core gains no
 privileged route set.
 
 This module declares a first-party :class:`RoutesExtension` whose ``post_init``
-hook mounts this subpackage's **existing** concrete router factories using the
-stores already built by ``create_app()`` and exposed on ``app.state``. It does
-**not** move or rewrite any factory — it only registers them through the same
-extension lifecycle the third-party route seam already uses.
+hook mounts this subpackage's **existing** concrete router factories from the
+typed server app context built by ``create_app()``. It does **not** move or
+rewrite any factory — it only registers them through the same extension
+lifecycle the third-party route seam already uses.
 
 Scope of this slice: the plugin must import cleanly with the kernel only (no
 store construction at import) and mount the documented store-backed route group
@@ -128,149 +128,21 @@ class RoutesExtension:
     A plain class the :func:`omnigent.sdk.extension` decorator compiles down to
     an :class:`omnigent.kernel.extensions.OmnigentExtension`. The synthesized
     ``routers()`` method returns ``[]``; the store-backed route group mounts in
-    ``post_init`` after ``create_app()`` has exposed the built stores on
-    ``app.state``.
+    ``post_init`` after ``create_app()`` has installed
+    :class:`~omnigent.server.app_context.ServerAppContext`.
     """
 
     def post_init(self, host: FastAPI) -> None:
         """Mount the first-party core route group from the app-host context."""
-        state = host.state
-        auth_provider = getattr(state, "auth_provider", None)
-        permission_store = getattr(state, "permission_store", None)
+        from omnigent.server.app_context import get_server_app_context
+        from omnigent.server.routes._mount import (
+            RouteMountContext,
+            mount_store_backed_routes,
+        )
 
-        from omnigent.server.routes.agents_write import create_agents_write_router
-        from omnigent.server.routes.builtin_agents import create_builtin_agents_router
-        from omnigent.server.routes.comments import create_comments_router
-        from omnigent.server.routes.data_surfaces import create_data_surfaces_router
-        from omnigent.server.routes.default_policies import create_default_policies_router
-        from omnigent.server.routes.policy_registry import create_policy_registry_router
-        from omnigent.server.routes.push import create_push_router
-        from omnigent.server.routes.runners import create_runners_router
-        from omnigent.server.routes.session_policies import create_session_policies_router
-        from omnigent.server.routes.sessions import create_sessions_router
-        from omnigent.server.routes.skills import create_skills_router
-        from omnigent.server.routes.terminal_attach import create_terminal_attach_router
-
-        host.include_router(
-            create_sessions_router(
-                state.conversation_store,
-                state.agent_store,
-                file_store=state.file_store,
-                artifact_store=state.artifact_store,
-                runner_router=state.runner_router,
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-                agent_cache=state.agent_cache,
-                mcp_pool=state.server_mcp_pool,
-                liveness_lookup=state.session_liveness_lookup,
-                comment_store=state.comment_store,
-                runner_tunnel_tokens=state.runner_tunnel_tokens,
-                runner_exit_reports=state.runner_exit_reports,
-            ),
-            prefix="/v1",
-            tags=["sessions"],
-        )
-        host.include_router(
-            create_runners_router(
-                state.runner_control_registry,
-                auth_provider=auth_provider,
-                runner_exit_reports=state.runner_exit_reports,
-            ),
-            prefix="/v1",
-            tags=["runners"],
-        )
-        host.include_router(
-            create_data_surfaces_router(
-                state.conversation_store,
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-                host_store=state.host_store,
-            ),
-            prefix="/v1",
-            tags=["data-surfaces"],
-        )
-        host.include_router(
-            create_builtin_agents_router(
-                state.agent_store,
-                state.agent_cache,
-                auth_provider=auth_provider,
-            ),
-            prefix="/v1",
-            tags=["agents"],
-        )
-        host.include_router(
-            create_agents_write_router(
-                state.agent_store,
-                state.agent_cache,
-                state.artifact_store,
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-            ),
-            prefix="/v1",
-            tags=["agents"],
-        )
-        host.include_router(
-            create_skills_router(
-                state.agent_store,
-                state.agent_cache,
-                state.artifact_store,
-                auth_provider=auth_provider,
-                conversation_store=state.conversation_store,
-                runner_router=state.runner_router,
-                permission_store=permission_store,
-            ),
-            prefix="/v1",
-            tags=["skills"],
-        )
-        host.include_router(
-            create_terminal_attach_router(
-                auth_provider=auth_provider,
-                permission_store=permission_store,
-                conversation_store=state.conversation_store,
-            ),
-            prefix="/v1",
-            tags=["terminals"],
-        )
-        if state.comment_store is not None:
-            host.include_router(
-                create_comments_router(
-                    state.comment_store,
-                    auth_provider=auth_provider,
-                    permission_store=permission_store,
-                    conversation_store=state.conversation_store,
-                ),
-                prefix="/v1",
-                tags=["comments"],
-            )
-        if state.policy_store is not None:
-            host.include_router(
-                create_session_policies_router(
-                    state.policy_store,
-                    state.conversation_store,
-                    auth_provider=auth_provider,
-                    permission_store=permission_store,
-                ),
-                prefix="/v1",
-                tags=["session_policies"],
-            )
-            host.include_router(
-                create_default_policies_router(
-                    state.policy_store,
-                    auth_provider=auth_provider,
-                    permission_store=permission_store,
-                ),
-                prefix="/v1",
-                tags=["default_policies"],
-            )
-        host.include_router(
-            create_policy_registry_router(auth_provider=auth_provider),
-            prefix="/v1",
-            tags=["policy_registry"],
-        )
-        host.include_router(
-            create_push_router(state.push_subscription_store, auth_provider),
-            prefix="/v1",
-            tags=["push"],
+        mount_store_backed_routes(
+            host,
+            RouteMountContext.from_server_context(get_server_app_context(host)),
         )
 
 

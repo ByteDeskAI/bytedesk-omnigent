@@ -942,9 +942,11 @@ def create_app(
     _mcp_pool = _di_container.mcp_pool()
     server_metrics = _di_container.server_metrics()
     server_metrics_otel = _di_container.server_metrics_otel()
-    from omnigent.server.communication_composition import set_server_communication_services
+    communication_services = _di_container.communication_services()
+    managed_launches = _di_container.managed_launches()
+    from omnigent.identity.signer import HmacAssertionSigner
 
-    set_server_communication_services(_di_container.communication_services())
+    assertion_signer = HmacAssertionSigner.from_env()
 
     # BDP-2437: assemble the principal composite now that the runner control
     # registry exists. The configured provider stays the ``_base`` (so
@@ -1016,45 +1018,6 @@ def create_app(
     from omnigent.runtime import telemetry
 
     telemetry.instrument_fastapi_app(app)
-    app.state.runner_control_registry = runner_control_registry
-    app.state.runner_credential_store = runner_credential_store
-    app.state.runner_router = runner_router
-    app.state.runner_exit_reports = runner_exit_reports
-    # The fully-assembled principal composite (BDP-2437) — the runner-token tail
-    # resolver is wired ahead of route registration. Exposed for diagnostics and
-    # tests that assert the configured accounts/OIDC provider still sits in the
-    # ``_base`` slot (``unwrap_auth_base`` / ``accounts_provider``), i.e. the tail
-    # resolver never displaced it.
-    app.state.auth_provider = auth_provider
-    # BDP-2424 P2: signer for the internal ``X-Omnigent-Acting-Identity`` carrier
-    # the MCP proxy attaches on runner dispatch (mirrors the runner's
-    # ``app.state.assertion_verifier``). Unset secret ⇒ no token ⇒ unchanged.
-    from omnigent.identity.signer import HmacAssertionSigner
-
-    app.state.assertion_signer = HmacAssertionSigner.from_env()
-    app.state.agent_store = agent_store
-    app.state.file_store = file_store
-    app.state.conversation_store = conversation_store
-    app.state.artifact_store = artifact_store
-    app.state.agent_cache = agent_cache
-    app.state.comment_store = comment_store
-    app.state.policy_store = policy_store
-    app.state.permission_store = permission_store
-    app.state.runner_tunnel_tokens = runner_tunnel_tokens
-    app.state.server_mcp_pool = _mcp_pool
-    app.state.host_registry = host_registry
-    app.state.host_store = host_store
-    app.state.sandbox_config = sandbox_config
-    # Tracks in-flight background managed-host launches (POST
-    # /v1/sessions returns before the sandbox exists) so a message
-    # racing the provision can rendezvous instead of failing with
-    # "no runner bound". Always wired — cheap, and post_event probes
-    # it regardless of whether managed hosts are configured.
-    app.state.managed_launches = _di_container.managed_launches()
-    app.state.server_metrics = server_metrics
-    app.state.server_metrics_otel = server_metrics_otel
-    # BDP-2368/Phase 2: expose the always-on DI container for diagnostics.
-    app.state.di_container = _di_container
     from omnigent.server.auth import env_var_is_truthy
 
     app.add_middleware(_WebSocketMetricsMiddleware, metrics=server_metrics)
@@ -1566,15 +1529,45 @@ def create_app(
             conversation_store=conversation_store,
         )
     )
-    app.state.push_subscription_store = push_subscription_store
-    app.state.session_liveness_lookup = _bulk_session_liveness
+    from omnigent.server.app_context import ServerAppContext, bind_server_app_context
+    from omnigent.server.communication_composition import set_server_communication_services
+
+    server_context = ServerAppContext(
+        runner_control_registry=runner_control_registry,
+        runner_credential_store=runner_credential_store,
+        runner_router=runner_router,
+        runner_exit_reports=runner_exit_reports,
+        auth_provider=auth_provider,
+        assertion_signer=assertion_signer,
+        agent_store=agent_store,
+        file_store=file_store,
+        conversation_store=conversation_store,
+        artifact_store=artifact_store,
+        agent_cache=agent_cache,
+        comment_store=comment_store,
+        policy_store=policy_store,
+        permission_store=permission_store,
+        runner_tunnel_tokens=runner_tunnel_tokens,
+        server_mcp_pool=_mcp_pool,
+        host_registry=host_registry,
+        host_store=host_store,
+        sandbox_config=sandbox_config,
+        managed_launches=managed_launches,
+        server_metrics=server_metrics,
+        server_metrics_otel=server_metrics_otel,
+        di_container=_di_container,
+        push_subscription_store=push_subscription_store,
+        session_liveness_lookup=_bulk_session_liveness,
+        communication_services=communication_services,
+    )
+    bind_server_app_context(app, server_context)
+    set_server_communication_services(server_context.communication_services)
 
     # BDP-2517: first-party core routes are now authoritative through the
-    # extension lifecycle. ``RoutesExtension.post_init`` reads the already-built
-    # route dependencies from ``app.state`` and mounts the documented core route
-    # group. Keep this BEFORE discovered extensions to preserve the historical
-    # precedence of core inline routes over extension routes with overlapping
-    # paths.
+    # extension lifecycle. ``RoutesExtension.post_init`` reads the typed server
+    # context and mounts the documented core route group. Keep this BEFORE
+    # discovered extensions to preserve the historical precedence of core inline
+    # routes over extension routes with overlapping paths.
     from omnigent.core import firstparty_route_extensions
     from omnigent.kernel.extensions import install_extensions
 

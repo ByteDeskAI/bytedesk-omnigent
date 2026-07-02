@@ -4,9 +4,9 @@ Complete API reference for the shipped **`omnigent.sdk`** facade (BDP-2508, part
 the BDP-2503 microkernel + extension-author SDK refactor).
 
 `omnigent.sdk` is the public, **semver-stable** surface an extension author writes
-against. Everything below the facade — the `omnigent.extensions` Protocol, the
-`omnigent.pluggable` registries, `omnigent.server.app.create_app` — is the
-implementation it hides. The SDK does **not** introduce a parallel discovery,
+against. Everything below the facade — the `omnigent.kernel.extensions` Protocol,
+the `omnigent.kernel.pluggable` registries, `omnigent.server.app.create_app` — is
+the implementation it hides. The SDK does **not** introduce a parallel discovery,
 plugin list, lifecycle, or registry: every decorator *compiles down* to the same
 kernel `OmnigentExtension` Protocol hook a hand-written extension would expose.
 
@@ -37,7 +37,7 @@ kernel `OmnigentExtension` Protocol hook a hand-written extension would expose.
   - [`DIResolutionError`](#diresolutionerror)
 - [The `Host` builder](#the-host-builder)
 - [Public type re-exports (`omnigent.sdk.types`)](#public-type-re-exports-omnigentsdktypes)
-- [Kernel symbols the SDK compiles to (`omnigent.extensions`)](#kernel-symbols-the-sdk-compiles-to-omnigentextensions)
+- [Kernel symbols the SDK compiles to (`omnigent.kernel.extensions`)](#kernel-symbols-the-sdk-compiles-to-omnigentkernelextensions)
 - [Versioning and stability contract (Section 12.8)](#versioning-and-stability-contract-section-128)
 - [Symbol index](#symbol-index)
 
@@ -84,7 +84,7 @@ my-extension = "mypackage.extension:MyExtension"
 A class decorated with `@extension` is **still a kernel Protocol object**:
 
 ```python
-from omnigent.extensions import OmnigentExtension
+from omnigent.sdk.types import OmnigentExtension
 assert isinstance(MyExtension(), OmnigentExtension)   # the Section 12.7 invariant
 ```
 
@@ -115,7 +115,7 @@ The SDK satisfies exactly one invariant: **it compiles down to the same kernel
 Protocol contract.** Two things must always hold:
 
 1. **`isinstance` conformance.** A `@extension`-decorated class's instances satisfy
-   `isinstance(obj, omnigent.extensions.OmnigentExtension)`. `OmnigentExtension` is
+   `isinstance(obj, omnigent.sdk.types.OmnigentExtension)`. `OmnigentExtension` is
    a `@runtime_checkable` Protocol, so `@extension` fills *every* declared Protocol
    member — synthesising the ones the author contributed, and adding
    behaviour-neutral empty/no-op defaults for the rest (an empty `{}`/`[]` hook is
@@ -129,7 +129,7 @@ Protocol contract.** Two things must always hold:
 
 ```python
 from omnigent.sdk import extension, tool
-from omnigent.extensions import OmnigentExtension
+from omnigent.sdk.types import OmnigentExtension
 
 class MyTool: ...
 
@@ -160,7 +160,7 @@ def extension(name: str, *, requires: tuple[str, ...] = ()) -> Callable[[type], 
 *Module:* `omnigent.sdk.extension` · re-exported as `omnigent.sdk.extension`.
 
 Turns a plain class into a class whose **instances** satisfy
-`omnigent.extensions.OmnigentExtension`. It scans the class for member-decorator
+`omnigent.kernel.extensions.OmnigentExtension`. It scans the class for member-decorator
 markers (the `@tool`/`@policy`/… markers stamped under
 `omnigent.sdk.contrib.CONTRIB_ATTR`) once at decoration time and **synthesises**
 the matching Protocol hook methods.
@@ -177,7 +177,7 @@ the collected contribs (`cls._omnigent_sdk_contribs`), and the synthesised Proto
 hooks attached.
 
 **Kernel hook/seam it compiles to.** It produces a class conforming to the
-`omnigent.extensions.OmnigentExtension` Protocol. Per the markers present, it
+`omnigent.kernel.extensions.OmnigentExtension` Protocol. Per the markers present, it
 synthesises (only when the class hasn't already hand-written that method — an
 author may override any single hook):
 
@@ -259,7 +259,7 @@ tool can depend on a `@provides` service.
 which returns `{name: factory(config) -> Tool}`. The kernel passes the per-tool
 config as the factory's first positional argument; the synthesised factory ignores
 it unless the method declares a matching parameter, and method-injects the rest from
-the container. Aggregated by `omnigent.extensions.extension_tool_factories()` into
+the container. Aggregated by `omnigent.kernel.extensions.extension_tool_factories()` into
 the core builtin tool registry.
 
 ```python
@@ -313,7 +313,7 @@ returns that module's dotted name. The existing
 `omnigent.policies.registry.load_registry` scan (`importlib.import_module` +
 `getattr(mod, "POLICY_REGISTRY")`) and the dotted-path handler resolution work
 against it **unchanged**. Aggregated by
-`omnigent.extensions.extension_policy_modules()`. Each registry entry is a
+`omnigent.kernel.extensions.extension_policy_modules()`. Each registry entry is a
 `PolicyRegistryEntry`-shaped dict (`handler`, `kind`, `name`, `description`,
 `params_schema`).
 
@@ -404,7 +404,7 @@ Mark a method as a **background-task factory**. Usable bare (`@background`) or c
 returning `[factory() -> Awaitable[None]]`. Each factory invokes the decorated
 coroutine to produce the awaitable the **server lifespan** starts as a task and
 cancels on shutdown. Aggregated by
-`omnigent.extensions.extension_background_factories()`.
+`omnigent.kernel.extensions.extension_background_factories()`.
 
 ```python
 import asyncio
@@ -446,7 +446,7 @@ parameters; the synthesised hook forwards them only if the method accepts them
 `routers(auth_provider=None, permission_store=None)`, which collects every
 `@router` method's output into one flat `list[APIRouter]`. `routers()` is the one
 **required** Protocol member, so `@extension` always synthesises it (returning `[]`
-when there are no `@router` methods). `omnigent.extensions.install_extensions`
+when there are no `@router` methods). `omnigent.kernel.extensions.install_extensions`
 mounts the returned routers under `/v1`.
 
 ```python
@@ -485,7 +485,7 @@ result, or `None` to fall through to normal runner dispatch.
 
 **Return shape / kernel seam.** Contributes to the synthesised `tool_interceptors()`,
 returning `{prefix: handler}`. Core consults the prefix table **before** runner
-dispatch. Aggregated by `omnigent.extensions.extension_tool_interceptors()` (which
+dispatch. Aggregated by `omnigent.kernel.extensions.extension_tool_interceptors()` (which
 isolates a misbehaving contributor — one extension whose `tool_interceptors()` raises
 is logged and skipped so the rest still register).
 
@@ -773,12 +773,12 @@ in the full FastAPI/domain stack), so importing `omnigent.sdk` stays kernel-ligh
 instances and `disable` names are fed through the **kernel's own seams**, not a
 parallel list, for the duration of the `create_app` call:
 
-- `with_extension` instances are **prepended** to `omnigent.extensions.discover_extensions()`'s
+- `with_extension` instances are **prepended** to `omnigent.kernel.extensions.discover_extensions()`'s
   result (via a temporary monkeypatch restored on exit), so `install_extensions` and
   every `PluggableRegistry.discover_extensions` sees them — deduped against the
   discovered set by `name`.
 - `disable(...)` names are **unioned** into the
-  `omnigent.extensions.DISABLED_ENV_VAR` (`OMNIGENT_DISABLED_EXTENSIONS`) environment
+  `omnigent.kernel.extensions.DISABLED_ENV_VAR` (`OMNIGENT_DISABLED_EXTENSIONS`) environment
   variable for the duration of the build, then restored.
 
 **Valid `create_app` parameter names** (the frozen allow-list `with_store` /
@@ -820,7 +820,7 @@ Annotation-only use under `TYPE_CHECKING` costs nothing.
 
 | Re-export | Resolves to | Use |
 |---|---|---|
-| `OmnigentExtension` | `omnigent.extensions.OmnigentExtension` | The kernel Protocol a `@extension` class conforms to; for `isinstance` checks and type hints. |
+| `OmnigentExtension` | `omnigent.sdk.types.OmnigentExtension` | Stable type re-export for the kernel Protocol a `@extension` class conforms to. |
 | `Tool` | `omnigent.tools.base.Tool` | The type a `@tool` factory returns. |
 | `ToolContext` | `omnigent.tools.base.ToolContext` | The context a tool's `run`/`execute` receives. |
 | `HarnessDescriptor` | `omnigent.runtime.harnesses.descriptors.HarnessDescriptor` | The descriptor a `@harness` synthesises; for type hints. |
@@ -840,7 +840,7 @@ dependency is absent raises `AttributeError` with the resolution failure attache
 
 ---
 
-## Kernel symbols the SDK compiles to (`omnigent.extensions`)
+## Kernel symbols the SDK compiles to (`omnigent.kernel.extensions`)
 
 These are **kernel** symbols (semi-stable, see Section 12.8), not part of the
 `omnigent.sdk` facade — but the SDK compiles directly onto them, and the
@@ -886,7 +886,7 @@ otherwise) so the structural `isinstance` check passes.
   extension authors depend on this surface and must not be broken by kernel
   refactors. **Any import from `omnigent.sdk.*` is stable.**
 
-- **Kernel (`omnigent.extensions`, `omnigent.pluggable`, `omnigent.server.lifespan_phases`)
+- **Kernel (`omnigent.kernel.extensions`, `omnigent.kernel.pluggable`, `omnigent.kernel.lifespan_phases`)
   — the implementation. Semi-stable.** It may churn between minors as seams are
   added or aggregators are generalised; a change that breaks the kernel's own
   Protocol shape is a breaking change to the SDK (it propagates up), so the kernel
@@ -900,7 +900,7 @@ otherwise) so the structural `isinstance` check passes.
   as the kernel seam contracts are preserved.
 
 **The practical rule:** import from `omnigent.sdk.*` and you are on the stable
-contract. Anything you reach through `omnigent.extensions` / `omnigent.pluggable` is
+contract. Anything you reach through `omnigent.kernel.extensions` / `omnigent.kernel.pluggable` is
 semi-stable. Anything under `omnigent.runtime.*` / `omnigent.inner.*` /
 `omnigent.server.routes.*` is internal and may move.
 
@@ -930,7 +930,7 @@ Importable from **`omnigent.sdk.types`** (lazy re-exports): `OmnigentExtension`,
 
 Also public in `omnigent.sdk.contrib`: `CONTRIB_ATTR` (`"__omnigent_contrib__"`).
 
-Kernel symbols the SDK compiles onto (`omnigent.extensions`, semi-stable):
+Kernel symbols the SDK compiles onto (`omnigent.kernel.extensions`, semi-stable):
 `OmnigentExtension` (+ optional Protocol methods `pre_init`, `post_init`,
 `after_init`, `tool_interceptors`), `DISABLED_ENV_VAR`, `get_extension`,
 `assert_extension`, `extension_tool_interceptors`.

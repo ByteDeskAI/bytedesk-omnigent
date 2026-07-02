@@ -3,6 +3,12 @@
 **Scope:** `bytedesk_omnigent/` (the first-party extension package) and `omnigent/` (the framework/runtime core).
 **Date:** 2026-06-25
 
+**Current-state note (2026-07-01):** the logical classification remains useful, but
+some mechanics below were historical. Canonical extension host code now lives under
+`omnigent.kernel.*`; extension authors should import the stable `omnigent.sdk`
+facade. The old `memory_tool_intercept` core→extension coupling is closed through
+the generic `tool_interceptors()` extension hook.
+
 ---
 
 ## 1. Inventory and Classification
@@ -44,7 +50,7 @@ Every module here is an extension. The `bytedesk_omnigent.extension.BytedeskExte
 | `maintenance.py` | EXTENSION — template method | `advisory_locked_loop` — shared scaffold for the three background maintenance loops. Delegates the PG advisory lock to `omnigent.runtime.memory_maintenance.advisory_lock`. |
 | `memory_access.py` | EXTENSION — access control | Three-tier memory compartment resolver (org/dept/agent scope). Pure function; no DB. |
 | `memory_mcp.py` | EXTENSION — MCP server | Stdio MCP advertisement front for `memory__*` tools (schema-only; bodies are intercepted server-side). |
-| `memory_tool_intercept.py` | EXTENSION — server-side hook | Server-side execution of `memory__*` tool calls. The ONE place where `bytedesk_omnigent` is imported directly inside `omnigent/server/routes/sessions.py` (a deferred local import inside the handler function, line 11832). |
+| `memory_tool_intercept.py` | EXTENSION — server-side hook | Server-side execution of `memory__*` tool calls. Registered through `BytedeskExtension.tool_interceptors()` under the `memory__` prefix; core no longer imports this module directly. |
 | `outcomes.py` | EXTENSION — domain store | Business Outcome Ledger (`business_outcomes` + `scoreboard_entries`). |
 | `peer.py` | EXTENSION — domain store | Durable peer-message store (`peer_messages` — lateral agent-to-agent messaging, C2). |
 | `policies/` | EXTENSION — policy builtins | Eight named policy modules (`budget`, `delegation`, `dry_run`, `forever_gate`, `outreach_compliance`, `spawn_governor`, `two_key`, `verify_gate`). Each declares a module-level `POLICY_REGISTRY: list[PolicyRegistryRaw]`. Contributed via `BytedeskExtension.policy_modules()`. |
@@ -68,7 +74,7 @@ These are the packages that form the extension host. An extension must not depen
 
 | Package | Classification | Justification |
 |---|---|---|
-| `extensions.py` | CORE — extension host / discovery | Defines `OmnigentExtension` Protocol. Owns `discover_extensions()` (entry-point + env-var), `install_extensions()` (router mounting), and the eight `extension_*()` aggregator functions that the rest of core consumes. This IS the plugin framework. |
+| `kernel/extensions.py` | CORE — extension host / discovery | Defines `OmnigentExtension` Protocol. Owns `discover_extensions()` (entry-point + env-var), `install_extensions()` (router mounting), and the `extension_*()` aggregator functions that the rest of core consumes. This IS the plugin framework; `omnigent.sdk` is the stable author-facing facade. |
 | `pluggable/` | CORE — pluggable registry | `PluggableRegistry[T]` — the generic 4-invariant seam (Protocol per seam, named-factory registry, entry-point discovery via hook, `OMNIGENT_USE_<SEAM>` strangler flag). `manifest.py` declares `SEAMS` and `discover_all_extensions()`. |
 | `server/app.py` | CORE — application factory | `create_app()` + `_lifespan`. Calls `install_extensions()`, `extension_principal_resolvers()`, `extension_background_factories()`. The app composition root. |
 | `kernel/lifespan_phases.py` | CORE — lifespan DAG | Dependency-sorted startup/shutdown phases. This is the authoritative `create_app` lifespan path. |
@@ -86,7 +92,7 @@ These are the packages that form the extension host. An extension must not depen
 | `config/` | CORE — config system | `ConfigDescriptor`, `ConfigRegistry`, `EnvConfigStore`, `runtime_store`. Extension contributes descriptors via `config_descriptors()`. |
 | `onboarding/secrets.py` | CORE — secret resolution | Calls `extension_secret_backends()` to populate the backend chain. |
 | `coordination/` | CORE — backplane | Pluggable coordination (in-process, NATS). |
-| `runner/` | CORE — runner process | Tool dispatch, MCP lifecycle, session stream. The deferred import of `bytedesk_omnigent.memory_tool_intercept` on line 11832 of `server/routes/sessions.py` is currently the only core→extension coupling that bypasses the Protocol seam. |
+| `runner/` | CORE — runner process | Tool dispatch, MCP lifecycle, session stream. Tool interception now flows through the extension Protocol, not a direct ByteDesk import. |
 | `inner/` | CORE — LLM harness adapters | Executor ABC + per-harness implementations (claude-sdk, codex, pi, grok-native, etc.). |
 | `llms/` | CORE — LLM client | Model catalog, LLM retry, context-window pricing. |
 | `environments/`, `sandbox/` | CORE — sandbox | Sandbox launcher abstractions. |
@@ -194,18 +200,20 @@ The `HARNESS_REGISTRY` is a `PluggableRegistry[HarnessDescriptor]` that exposes 
 - `outbound_credential` → hook `outbound_credential_providers`
 - `authorizer` → hook `authorization_providers`
 
-### 2.8 Memory tool interception — the one seam violation
+### 2.8 Tool interception — seam violation closed
 
-`omnigent/server/routes/sessions.py` line 11832 contains a deferred local import:
+The former direct import of `bytedesk_omnigent.memory_tool_intercept` from the
+session route was removed. Core now calls the generic
+`extension_tool_interceptors()` aggregator and dispatches by prefix. The ByteDesk
+extension contributes:
 
-```python
-from bytedesk_omnigent.memory_tool_intercept import (
-    execute_memory_tool,
-    is_memory_tool,
-)
-```
+- `memory__` → `bytedesk_omnigent.memory_tool_intercept`
+- `org__` → `bytedesk_omnigent.org_tool_intercept`
+- connector prefixes such as `atlassian__` and `google__`
 
-This is the only place core directly imports an extension module by name, outside the Protocol seam. It is isolated behind a deferred (function-body) import, but it is still a hard dependency on `bytedesk_omnigent`. The source note explains why: the intercept runs at the tool-dispatch choke point where the verified caller identity is already bound, making it impossible to route through a generic Protocol at that exact moment without significant refactoring.
+The intercept still runs at the server tool-dispatch choke point where caller
+identity is already bound, but the implementation is now extension-owned through
+the Protocol seam.
 
 ---
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -14,6 +15,13 @@ from omnigent.runner.communication_dispatchers import (
     SessionCreateDispatcher,
     SessionQueryDispatcher,
     SessionSendDispatcher,
+)
+from omnigent.runner.service_dispatchers import (
+    AgentDispatcher,
+    FileDispatcher,
+    PolicyDispatcher,
+    RestDispatcher,
+    SkillAcquisitionDispatcher,
 )
 from omnigent.runner.tool_dispatcher_registry import (
     DispatcherRegistry,
@@ -71,14 +79,19 @@ def test_default_registry_registers_all_branches() -> None:
 
 
 def test_default_registry_uses_class_backed_communication_dispatchers() -> None:
-    """Communication branches are concrete dispatchers backed by DI services."""
+    """Communication and server-backed branches are concrete dispatchers."""
     registry = build_default_registry()
     by_name = {dispatcher.name: dispatcher for dispatcher in registry.dispatchers}
 
+    assert isinstance(by_name["rest"], RestDispatcher)
+    assert isinstance(by_name["file"], FileDispatcher)
     assert isinstance(by_name["async_inbox"], InboxDispatcher)
     assert isinstance(by_name["subagent"], SessionSendDispatcher)
     assert isinstance(by_name["session_create"], SessionCreateDispatcher)
     assert isinstance(by_name["session_query"], SessionQueryDispatcher)
+    assert isinstance(by_name["agent"], AgentDispatcher)
+    assert isinstance(by_name["policy"], PolicyDispatcher)
+    assert isinstance(by_name["skill_acq"], SkillAcquisitionDispatcher)
 
 
 def test_mcp_dispatcher_is_first_and_unconditional() -> None:
@@ -98,6 +111,120 @@ def test_mcp_dispatcher_is_first_and_unconditional() -> None:
     # No mcp_manager → MCP does not match, so dispatch falls through.
     ctx_no_mcp = ToolExecutionContext(tool_name="sys_os_shell", arguments="{}")
     assert mcp.matches(ctx_no_mcp, {}) is False
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatches_file_tools_through_file_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FileDispatcher forwards the same parsed args and context values."""
+    received: dict[str, Any] = {}
+
+    async def _fake_file(
+        tool_name: str,
+        args: dict[str, Any],
+        server_client: Any,
+        **kwargs: Any,
+    ) -> str:
+        received.update(tool_name=tool_name, args=args, server_client=server_client, **kwargs)
+        return "file-output"
+
+    monkeypatch.setattr(tool_dispatch, "_execute_file_tool", _fake_file)
+    server_client = object()
+    spec = object()
+    workspace = Path("/tmp/work")
+
+    out = await build_default_registry().dispatch(
+        ToolExecutionContext(
+            tool_name="upload_file",
+            arguments='{"path": "a.txt"}',
+            server_client=server_client,
+            conversation_id="conv_1",
+            agent_spec=spec,
+            runner_workspace=workspace,
+        )
+    )
+
+    assert out == "file-output"
+    assert received == {
+        "tool_name": "upload_file",
+        "args": {"path": "a.txt"},
+        "server_client": server_client,
+        "conversation_id": "conv_1",
+        "agent_spec": spec,
+        "runner_workspace": workspace,
+    }
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatches_agent_tools_through_agent_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """AgentDispatcher forwards the same parsed args and context values."""
+    received: dict[str, Any] = {}
+
+    async def _fake_agent(tool_name: str, args: dict[str, Any], **kwargs: Any) -> str:
+        received.update(tool_name=tool_name, args=args, **kwargs)
+        return "agent-output"
+
+    monkeypatch.setattr(tool_dispatch, "_execute_agent_tool", _fake_agent)
+    server_client = object()
+    spec = object()
+    workspace = Path("/tmp/work")
+
+    out = await build_default_registry().dispatch(
+        ToolExecutionContext(
+            tool_name="sys_agent_get",
+            arguments='{"agent_id": "ag_1"}',
+            server_client=server_client,
+            conversation_id="conv_1",
+            agent_spec=spec,
+            runner_workspace=workspace,
+        )
+    )
+
+    assert out == "agent-output"
+    assert received == {
+        "tool_name": "sys_agent_get",
+        "args": {"agent_id": "ag_1"},
+        "server_client": server_client,
+        "agent_spec": spec,
+        "conversation_id": "conv_1",
+        "runner_workspace": workspace,
+    }
+
+
+@pytest.mark.asyncio
+async def test_registry_dispatches_policy_tools_through_policy_dispatcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PolicyDispatcher preserves the raw argument string contract."""
+    received: dict[str, Any] = {}
+
+    async def _fake_policy(tool_name: str, args: str, **kwargs: Any) -> str:
+        received.update(tool_name=tool_name, args=args, **kwargs)
+        return "policy-output"
+
+    monkeypatch.setattr(tool_dispatch, "_execute_policy_tool", _fake_policy)
+    server_client = object()
+    raw_args = '{"policy": "p"}'
+
+    out = await build_default_registry().dispatch(
+        ToolExecutionContext(
+            tool_name="sys_add_policy",
+            arguments=raw_args,
+            server_client=server_client,
+            conversation_id="conv_1",
+        )
+    )
+
+    assert out == "policy-output"
+    assert received == {
+        "tool_name": "sys_add_policy",
+        "args": raw_args,
+        "conversation_id": "conv_1",
+        "server_client": server_client,
+    }
 
 
 def test_catch_all_is_last_and_always_matches() -> None:

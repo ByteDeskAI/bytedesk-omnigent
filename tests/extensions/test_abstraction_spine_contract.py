@@ -28,6 +28,7 @@ from pathlib import Path
 # Repo root = three parents up from tests/extensions/<thisfile>.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _APP_PY = _REPO_ROOT / "omnigent" / "server" / "app.py"
+_APP_CONTEXT = _REPO_ROOT / "omnigent" / "server" / "app_context.py"
 _HARNESSES_INIT = _REPO_ROOT / "omnigent" / "runtime" / "harnesses" / "__init__.py"
 _OMNIGENT_COMPAT = _REPO_ROOT / "omnigent" / "spec" / "_omnigent_compat.py"
 _LIFESPAN_PHASES = _REPO_ROOT / "omnigent" / "kernel" / "lifespan_phases.py"
@@ -38,11 +39,11 @@ _TOOL_DISPATCHER_REGISTRY = _REPO_ROOT / "omnigent" / "runner" / "tool_dispatche
 _EXTENSIONS = _REPO_ROOT / "omnigent" / "kernel" / "extensions.py"
 _HANDOFF_DOC = _REPO_ROOT / "docs" / "architecture" / "abstraction-spine-handoff.md"
 
-# ── Phase 1 anchor: the create_app *body* app.state key set (app.py 1052–1066). ──
-# ServiceRegistry.bind(app) must reproduce exactly these keys (assigned via
-# ``app.state.<key> = ...`` in the synchronous factory body). A typo here silently
+# ── Phase 1 anchor: the typed app context's state projection. ──
+# ServerAppContext owns the app-wide graph; bind_server_app_context(app, context)
+# projects exactly these keys onto app.state for compatibility. A typo here silently
 # breaks any router that reads request.app.state.<key>.
-_EXPECTED_BODY_APP_STATE_KEYS = frozenset(
+_EXPECTED_LEGACY_APP_STATE_KEYS = frozenset(
     {
         "runner_control_registry",
         "runner_router",
@@ -80,6 +81,7 @@ _EXPECTED_BODY_APP_STATE_KEYS = frozenset(
         # longer written in the create_app body and is intentionally absent here.
     }
 )
+_EXPECTED_BODY_APP_STATE_KEYS = _EXPECTED_LEGACY_APP_STATE_KEYS | {"server_app_context"}
 # ── Phase 3 anchor: the one app.state key set inside _lifespan (app.py:915). ──
 # ``app_inst.state.harness_process_manager`` is assigned at lifespan-startup, NOT in
 # the factory body — so it belongs to Phase 3 (lifespan phases), not Phase 1
@@ -167,17 +169,57 @@ def _assigned_app_state_keys(source: str, *, root_names: set[str]) -> set[str]:
     return keys
 
 
+def _context_projected_app_state_keys(source: str) -> set[str]:
+    """Return the app.state keys projected by app_context.py."""
+    tree = ast.parse(source)
+    legacy_keys: set[str] = set()
+    context_key: str | None = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        if any(
+            isinstance(target, ast.Name) and target.id == "LEGACY_APP_STATE_KEYS"
+            for target in targets
+        ):
+            if isinstance(value, ast.Tuple):
+                legacy_keys = {
+                    elt.value
+                    for elt in value.elts
+                    if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+                }
+        if (
+            any(
+                isinstance(target, ast.Name) and target.id == "SERVER_APP_CONTEXT_STATE_KEY"
+                for target in targets
+            )
+            and isinstance(value, ast.Constant)
+            and isinstance(value.value, str)
+        ):
+            context_key = value.value
+    assert context_key is not None, "SERVER_APP_CONTEXT_STATE_KEY literal not found"
+    return legacy_keys | {context_key}
+
+
 # ── Phase 1: ServiceRegistry binds exactly the app.state singletons ──
 
 
 def test_app_state_body_singleton_key_set_is_pinned():
-    """Phase 1 anchor — the factory-body app.state writes ServiceRegistry.bind replaces."""
-    keys = _assigned_app_state_keys(_read(_APP_PY), root_names={"app"})
+    """Phase 1 anchor — ServerAppContext projects the legacy app.state surface."""
+    keys = _context_projected_app_state_keys(_read(_APP_CONTEXT))
     assert keys == _EXPECTED_BODY_APP_STATE_KEYS, (
-        "create_app body app.state keys drifted from the abstraction-spine plan "
-        "(Phase 1 / ServiceRegistry). Update _EXPECTED_BODY_APP_STATE_KEYS and the "
-        "'three abstractions' table in docs/architecture/abstraction-spine-handoff.md "
-        f"in the same PR. Got: {sorted(keys)}"
+        "ServerAppContext app.state projection drifted from the abstraction-spine "
+        "contract. Update _EXPECTED_BODY_APP_STATE_KEYS and the architecture doc in "
+        f"the same PR. Got: {sorted(keys)}"
+    )
+    assert _assigned_app_state_keys(_read(_APP_PY), root_names={"app"}) == set(), (
+        "create_app should bind app.state via ServerAppContext, not scatter direct "
+        "factory-body app.state writes."
     )
 
 
@@ -196,10 +238,11 @@ def test_app_state_lifespan_key_is_separate_from_body():
     # The two write sets are disjoint — the structural guarantee the plan relies on.
     assert _EXPECTED_BODY_APP_STATE_KEYS.isdisjoint(_EXPECTED_LIFESPAN_APP_STATE_KEYS)
     # And together they are the complete app.state surface (no third writer slipped in).
-    all_keys = _assigned_app_state_keys(_read(_APP_PY), root_names={"app", "app_inst"})
+    all_keys = _context_projected_app_state_keys(_read(_APP_CONTEXT))
+    all_keys |= _assigned_app_state_keys(_read(_APP_PY), root_names={"app_inst"})
     all_keys |= _assigned_app_state_keys(_read(_LIFESPAN_PHASES), root_names={"ctx"})
     assert all_keys == _EXPECTED_ALL_APP_STATE_KEYS, (
-        "an unexpected app.state writer appeared (neither the factory body nor the "
+        "an unexpected app.state writer appeared (neither ServerAppContext nor the "
         f"_lifespan closure). Got: {sorted(all_keys)}"
     )
 
@@ -273,10 +316,15 @@ def test_omnigent_compat_allowlist_consumes_the_same_harness_names():
 def test_dispatch_registry_order_is_pinned():
     src = _read(_TOOL_DISPATCHER_REGISTRY)
     communication_dispatchers = {
+        "RestDispatcher": "rest",
+        "FileDispatcher": "file",
         "InboxDispatcher": "async_inbox",
         "SessionSendDispatcher": "subagent",
         "SessionCreateDispatcher": "session_create",
         "SessionQueryDispatcher": "session_query",
+        "AgentDispatcher": "agent",
+        "PolicyDispatcher": "policy",
+        "SkillAcquisitionDispatcher": "skill_acq",
     }
     names: list[str] = []
     for match in re.finditer(

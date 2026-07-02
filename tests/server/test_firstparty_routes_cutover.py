@@ -8,6 +8,8 @@ from fastapi import FastAPI
 
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import create_app
+from omnigent.server.app_context import get_server_app_context
+from omnigent.server.routes._mount import RouteMountContext
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
@@ -73,6 +75,12 @@ def test_firstparty_routes_mount_without_legacy_flag(
         "push_subscription_store",
     }:
         assert hasattr(app.state, key), key
+
+    server_context = get_server_app_context(app)
+    route_context = RouteMountContext.from_server_context(server_context)
+    assert route_context.conversation_store is app.state.conversation_store
+    assert route_context.runner_router is app.state.runner_router
+    assert route_context.push_subscription_store is app.state.push_subscription_store
 
     entries = _route_entries(app)
     assert {
