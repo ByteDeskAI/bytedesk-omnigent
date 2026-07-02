@@ -1,7 +1,14 @@
 # Tier Migration Plan — physical kernel/core/extension hierarchy (BDP-2514)
 
-**Status:** proposed (2026-06-25). **Epic:** BDP-2514 (physical three-tier package reorg).
+**Status:** historical proposal (2026-06-25); partially landed and drifted. **Epic:** BDP-2514 (physical three-tier package reorg).
 **Branch:** `feature/BDP-2514-tier-reorg`.
+
+**Current-state note (2026-07-01):** `omnigent.kernel.extensions`,
+`omnigent.kernel.pluggable`, and `omnigent.kernel.lifespan_phases` are the current
+canonical kernel paths. The old `ServiceRegistry` path has been removed; server
+composition now uses `omnigent.server.container.Core` plus
+`omnigent.server.app_context.ServerAppContext`. Treat `server/container.py` and
+`server/app_context.py` as CORE composition facades, not kernel-pure files.
 
 This is the staged, ticketed program to turn the *logical* kernel/core/extension
 classification (already shipped in `docs/EXTENSION_FRAMEWORK_ANALYSIS.md` §8–13,
@@ -52,8 +59,7 @@ omnigent/
                                   #   topological_order, LifespanContext,
                                   #   LifespanCycleError
                                   #   (moved; shim at omnigent/server/lifespan_phases.py)
-    service_registry.py           # ServiceRegistry typed container
-                                  #   (moved; shim at omnigent/server/service_registry.py)
+    # No service_registry.py: retired after the DI container/AppContext cutover.
     # app.py is NOT moved. Its create_app composition-root fragment imports FROM
     # omnigent.kernel.* — the file stays in CORE as a facade (see §2/facade).
 
@@ -87,7 +93,7 @@ relocated. The verdicts below were each checked against the real code.
 |---|---|---|
 | `omnigent/pluggable/` (whole package) | **MOVABLE** → `omnigent/kernel/pluggable/` | 57 files reference `omnigent.pluggable`; `registry.py` defers the `omnigent.extensions` import (kept import-safe). Internal absolute imports rewrite `omnigent.pluggable.* → omnigent.kernel.pluggable.*`. |
 | `omnigent/extensions.py` | **MOVABLE** → `omnigent/kernel/extensions.py` | 17 importers; domain-free at module scope, FastAPI only under `TYPE_CHECKING` (confirmed line 24 `if TYPE_CHECKING:` / line 29 `from fastapi import APIRouter, FastAPI`). Mutually decoupled from `pluggable` since `registry.py` defers the extensions import. |
-| `omnigent/server/service_registry.py` | **MOVABLE** → `omnigent/kernel/service_registry.py` | **Zero** `omnigent` imports at module scope (confirmed: the only "omnigent" line is the docstring "deliberately holds no omnigent service imports"). 4 reference sites. |
+| `omnigent/server/service_registry.py` | **RETIRED** | The ServiceRegistry sidecar was removed. Server composition is now CORE-owned by `omnigent.server.container.Core` and `omnigent.server.app_context.ServerAppContext`; neither is kernel-pure today. |
 | `omnigent/server/lifespan_phases.py` | **MOVABLE** → `omnigent/kernel/lifespan_phases.py` | `LifespanContext` fields are typed `Any` (confirmed lines 85–92: `agent_store: Any`, `runner_router: Any`, …); concrete phases defer domain imports inside `startup()`/`shutdown()`. 5 reference sites. The default concrete-phase set is core wiring that stays co-located behind the shim. |
 | `omnigent/server/app.py` | **FACADE — cannot move** | Only the `create_app()` composition-root fragment is kernel; the file imports domain code and still owns non-core composition concerns (auth, hosts, caller-provided extra routers, SPA/static, extension installation). Already excluded from the guard test's `_KERNEL_PURE_FILES`. Stays CORE; imports orchestration primitives **from** `omnigent.kernel.*`. |
 | `omnigent/server/container.py` | **FACADE — cannot move yet** | DI composition root by ROLE but NOT import-safe: imports domain/server types at module scope (`RunnerRouter`, `RunnerControlRegistry`, `HostRegistry`/`RunnerExitReports`, `ManagedLaunchTracker`, `ServerMcpPool`, server metrics, communication composition) + the `dependency_injector` Cython C-ext. It is the always-on server composition root, but still not eligible for kernel promotion until those imports are deferred into `build_core_container`/provider factories the way `lifespan_phases.py` does. Keep as CORE. |
@@ -152,8 +158,7 @@ leaving a re-export shim at its old path:
 1. `omnigent/pluggable/` → `omnigent/kernel/pluggable/` (+ shim **package**:
    `omnigent/pluggable/{__init__,registry,manifest,errors}.py` each re-export).
 2. `omnigent/extensions.py` → `omnigent/kernel/extensions.py` (+ shim).
-3. `omnigent/server/service_registry.py` → `omnigent/kernel/service_registry.py` (+ shim).
-4. `omnigent/server/lifespan_phases.py` → `omnigent/kernel/lifespan_phases.py` (+ shim).
+3. `omnigent/server/lifespan_phases.py` → `omnigent/kernel/lifespan_phases.py` (+ shim).
 
 `app.py` and `container.py` are NOT moved — they stay CORE and import the
 orchestration primitives **from** `omnigent.kernel.*` (facade posture).
@@ -165,7 +170,7 @@ optional):
 - `tests/pluggable/test_kernel_import_guard.py` — update `_KERNEL_PURE_FILES`
   (new `omnigent/kernel/...` paths) **and** `_ALLOWED_KERNEL_MODULES` (add
   `omnigent.kernel`, `omnigent.kernel.pluggable*`, `omnigent.kernel.extensions`,
-  `omnigent.kernel.lifespan_phases`, `omnigent.kernel.service_registry`).
+  `omnigent.kernel.lifespan_phases`).
 - `tests/pluggable/test_registry.py` — repoint the `monkeypatch.setattr` target
   from `omnigent.pluggable.registry` to `omnigent.kernel.pluggable.registry`
   (two sites: `test_discover_extensions_registers_contributed`,
@@ -293,7 +298,7 @@ the §5 risk register tracks "shim rot" as a named risk.
 | **Circular imports.** `extensions ↔ pluggable` (or kernel ↔ core) re-couple during the move. | kernel | Preserve the existing decoupling: `registry.py` already defers the `omnigent.extensions` import. Never add a module-scope cross-import between the two. The AST guard catches module-scope leaks; the `sys.modules`-delta guard catches transitive ones. |
 | **Route double-mount.** Stage 3 runs the first-party plugin path *and* the inline `create_app()` wiring simultaneously, mounting the same routers twice. | core | Parity tests assert route-set *equality*, not superset. Retire inline blocks one subpackage at a time, each gated by the parity test, so a double-mount surfaces as a parity failure before merge. |
 | **Flag sprawl (BDP-2511).** Several provider-selection / optional-extension flags are still live (`_SPEC_SOURCE`, `_COORDINATION_BACKPLANE`, `_AGENT_MEMORY`, `_MEMORY_EMBEDDER`, `_BACKOFF_POLICY`, `_SCHEMA_VALIDATOR`, `_REMOTE_FUNCTION`, and `OMNIGENT_DISABLED_EXTENSIONS`). The service-registry, DI-container, tool-execution-context, tool-dispatcher-registry, lifespan-phase, and store-lifecycle gates have been retired. | core | Treat each remaining flag as a strangler only when it guards a migration path rather than provider selection: dual-run → parity → flip-default → delete-twin → remove-flag. Track migration flags under BDP-2511 so they don't outlive their cutover. |
-| **Shim rot.** Strangler shims outlive Stage 2 and become permanent indirection. | kernel/core | Stage 2 deletes each shim the moment its importer count hits zero (grep-verified). A CI check (Stage 5) can assert no `omnigent/pluggable/`, `omnigent/extensions.py`, `omnigent/server/{service_registry,lifespan_phases}.py` shim survives once Stage 2 closes. |
+| **Shim rot.** Strangler shims outlive Stage 2 and become permanent indirection. | kernel/core | Stage 2 deletes each shim the moment its importer count hits zero (grep-verified). A CI check (Stage 5) can assert no old `omnigent/pluggable/`, `omnigent/extensions.py`, or `omnigent/server/lifespan_phases.py` shim survives once Stage 2 closes. |
 | **Patchable-attribute breakage.** A `from X import *` shim silently doesn't forward `monkeypatch.setattr` on module attributes, so a test that patches a moved module's attribute via the old path no-ops and goes green-but-wrong. | tests | Audit every `monkeypatch.setattr(<moved-module>, ...)` in Stage 1 and repoint to the canonical kernel module (already enumerated for `test_registry.py`). |
 | **container.py premature promotion.** Someone moves `container.py` into the kernel before deferring its domain/server imports. | kernel | Documented as facade-for-now. Promotion is gated on refactoring the module-scope domain imports into `build_core_container`/provider factories (the `lifespan_phases.py` deferred-import pattern). Until then it stays CORE even though server boot uses it unconditionally. |
 
@@ -303,7 +308,7 @@ the §5 risk register tracks "shim rot" as a named risk.
 
 | Ticket | Stage | Scope |
 |---|---|---|
-| **BDP-2515** | 1 | Create `omnigent/kernel/`; move `pluggable/`, `extensions.py`, `service_registry.py`, `lifespan_phases.py` with strangler shims; rewrite internal absolute imports; update `_KERNEL_PURE_FILES` + `_ALLOWED_KERNEL_MODULES` + `test_registry.py` monkeypatch targets in lockstep. Exit: both guard tests + FastAPI hot-path test green; old & new paths share class identity. |
+| **BDP-2515** | 1 | Create `omnigent/kernel/`; move `pluggable/`, `extensions.py`, and `lifespan_phases.py` with strangler shims; rewrite internal absolute imports; update `_KERNEL_PURE_FILES` + `_ALLOWED_KERNEL_MODULES` + `test_registry.py` monkeypatch targets in lockstep. Exit: both guard tests + FastAPI hot-path test green; old & new paths share class identity. |
 | **BDP-2516** | 2 | Migrate the ~83 call sites off the kernel shims (per-subpackage batches); delete each shim at zero-importer. Exit: no kernel shim remains; full suite green. |
 | **BDP-2517** | 3 | First-party seams are authoritative; the core route group is mounted by `RoutesExtension.post_init` through `install_extensions()`; the route-shadow flag is gone from boot. Exit: first-party seam and route paths are authoritative. |
 | **BDP-2518** | 4 | Extract `google.py` → `google-workspace-policy` and `github.py` → `github-policy` entry-point extension packages via `policy_modules()`; confirm `bytedesk_omnigent` registers purely through seams. Exit: empty system boots with zero domain integrations installed. |

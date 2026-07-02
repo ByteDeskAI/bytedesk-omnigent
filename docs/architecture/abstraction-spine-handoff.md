@@ -1,10 +1,25 @@
 # Core-refactor "abstraction spine" — sequential handoff plan (Phases 1–5)
 
-**Status:** plan (handoff). **Owner stream:** A7. **Jira:** BDP-2327 → BDP-2331
-(one task per phase). **Authority:** ADR-0143 (generic `omnigent.extensions` seam),
-fork-discipline rule in `.claude/rules/worktree-lifecycle.md` (additive-only edits to
-shared/upstream files), dual-DB rule (`Text`-JSON, soft FKs, ABC + `SqlAlchemy*Store`
-impl + `sql_X_to_entity` converter).
+**Status:** historical handoff; the spine is now mostly landed and this document is
+kept as design history. **Owner stream:** A7. **Jira:** BDP-2327 → BDP-2331
+(one task per phase). **Current authority:** live source plus
+`tests/extensions/test_abstraction_spine_contract.py`.
+
+Current baseline (2026-07-01):
+
+- `create_app()` resolves process singletons through `omnigent.server.container.Core`.
+- `ServerAppContext` in `omnigent/server/app_context.py` owns the app-wide graph and
+  projects the legacy `app.state.*` compatibility keys.
+- Lifespan is always the phase-DAG path in `omnigent.kernel.lifespan_phases`.
+- Tool dispatch is always the registry path in
+  `omnigent.runner.tool_dispatcher_registry`; the old tool-context and
+  dispatcher-registry feature flags are retired.
+- First-party route mounting goes through `RoutesExtension` and a typed
+  `RouteMountContext`; the remaining direct route mounts in `create_app()` are
+  composition-root concerns.
+
+The phased plan below is retained for rationale only. Do not reintroduce the
+historical ServiceRegistry, `OMNIGENT_SPINE_*`, or dual-path feature flags.
 
 This document is the **ordered, parity-gated build plan** for the five phases that
 together turn `omnigent/server/app.py` from a hand-wired god-factory into a thin

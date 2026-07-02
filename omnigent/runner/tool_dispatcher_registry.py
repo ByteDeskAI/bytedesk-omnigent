@@ -210,6 +210,13 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         SessionQueryDispatcher,
         SessionSendDispatcher,
     )
+    from omnigent.runner.service_dispatchers import (
+        AgentDispatcher,
+        FileDispatcher,
+        PolicyDispatcher,
+        RestDispatcher,
+        SkillAcquisitionDispatcher,
+    )
 
     communication_provider = CommunicationServiceProvider.for_runner_tools(
         inbox_handler=td._execute_async_inbox_tool,
@@ -251,42 +258,9 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 3. REST tools.
-    async def _run_rest(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_rest_tool(
-            ctx.tool_name,
-            args,
-            ctx.server_client,
-            agent_id=ctx.agent_id,
-            conversation_id=ctx.conversation_id,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="rest",
-            match=lambda ctx, _args: ctx.tool_name in td._REST_TOOLS,
-            run=_run_rest,
-        )
-    )
-
-    # 4. File tools.
-    async def _run_file(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_file_tool(
-            ctx.tool_name,
-            args,
-            ctx.server_client,
-            conversation_id=ctx.conversation_id,
-            agent_spec=ctx.agent_spec,
-            runner_workspace=ctx.runner_workspace,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="file",
-            match=lambda ctx, _args: ctx.tool_name in td._FILE_TOOLS,
-            run=_run_file,
-        )
-    )
+    # 3-4. REST and file tools use class-backed server-client dispatchers.
+    registry.register(RestDispatcher(td._REST_TOOLS))
+    registry.register(FileDispatcher(td._FILE_TOOLS))
 
     # 5. Terminal tools.
     async def _run_terminal(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
@@ -429,57 +403,10 @@ def register_default_dispatchers(registry: DispatcherRegistry) -> None:
         )
     )
 
-    # 16. Agent-management tools.
-    async def _run_agent(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_agent_tool(
-            ctx.tool_name,
-            args,
-            server_client=ctx.server_client,
-            agent_spec=ctx.agent_spec,
-            conversation_id=ctx.conversation_id,
-            runner_workspace=ctx.runner_workspace,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="agent",
-            match=lambda ctx, _args: ctx.tool_name in td._AGENT_TOOLS,
-            run=_run_agent,
-        )
-    )
-
-    # 17. Policy tools. (Passes the raw ``ctx.arguments`` string.)
-    async def _run_policy(ctx: ToolExecutionContext, _args: dict[str, Any]) -> str:
-        return await td._execute_policy_tool(
-            ctx.tool_name,
-            ctx.arguments,
-            conversation_id=ctx.conversation_id,
-            server_client=ctx.server_client,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="policy",
-            match=lambda ctx, _args: ctx.tool_name in td._POLICY_TOOLS,
-            run=_run_policy,
-        )
-    )
-
-    # 18. Skill acquisition tools.
-    async def _run_skill_acq(ctx: ToolExecutionContext, args: dict[str, Any]) -> str:
-        return await td._execute_skill_acq_tool(
-            ctx.tool_name,
-            args,
-            ctx.server_client,
-        )
-
-    registry.register(
-        _FunctionalDispatcher(
-            name="skill_acq",
-            match=lambda ctx, _args: ctx.tool_name in td._SKILL_ACQ_TOOLS,
-            run=_run_skill_acq,
-        )
-    )
+    # 16-18. Server-backed agent, policy, and skill-acquisition tools.
+    registry.register(AgentDispatcher(td._AGENT_TOOLS))
+    registry.register(PolicyDispatcher(td._POLICY_TOOLS))
+    registry.register(SkillAcquisitionDispatcher(td._SKILL_ACQ_TOOLS))
 
     # 19. Spec-declared builtin tool (predicate branch). ``ctx.arguments`` is
     # the raw JSON string, matching the elif branch.

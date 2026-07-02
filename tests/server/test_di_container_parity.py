@@ -12,6 +12,7 @@ from omnigent.runner.control_registry import RunnerControlRegistry
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.server.app import create_app
+from omnigent.server.app_context import LEGACY_APP_STATE_KEYS, ServerAppContext
 from omnigent.server.communication_composition import ServerCommunicationServices
 from omnigent.server.container import Core
 from omnigent.server.host_registry import HostRegistry, RunnerExitReports
@@ -63,6 +64,7 @@ def test_app_builds_with_container_by_default(
 
     assert issubclass(Core, containers.DeclarativeContainer)
     assert isinstance(app.state.di_container, containers.Container)
+    assert isinstance(app.state.server_app_context, ServerAppContext)
     for name, typ in _COMPOSITION_ROOT_STATE.items():
         assert isinstance(getattr(app.state, name), typ), name
 
@@ -100,10 +102,27 @@ def test_container_singletons_back_app_state(
     app = _build_app(db_uri, tmp_path, "singletons")
 
     container = app.state.di_container
+    context = app.state.server_app_context
     assert container.runner_control_registry() is container.runner_control_registry()
     assert container.runner_router() is app.state.runner_router
     assert container.runner_control_registry() is app.state.runner_control_registry
     assert container.managed_launches() is app.state.managed_launches
+    assert context.runner_router is app.state.runner_router
+    assert context.managed_launches is app.state.managed_launches
+
+
+def test_server_context_projects_legacy_app_state_keys(
+    db_uri: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The typed server context remains source of truth for legacy state keys."""
+    monkeypatch.delenv("OMNIGENT_USE_DI_CONTAINER", raising=False)
+    app = _build_app(db_uri, tmp_path, "context_projection")
+
+    context = app.state.server_app_context
+    for key in LEGACY_APP_STATE_KEYS:
+        assert getattr(app.state, key) is getattr(context, key), key
 
 
 def test_non_app_state_services_resolve_from_container(
@@ -122,3 +141,6 @@ def test_non_app_state_services_resolve_from_container(
     assert container.runner_exit_reports() is container.runner_exit_reports()
     assert isinstance(container.communication_services(), ServerCommunicationServices)
     assert container.communication_services() is container.communication_services()
+    assert (
+        app.state.server_app_context.communication_services is container.communication_services()
+    )

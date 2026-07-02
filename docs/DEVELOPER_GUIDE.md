@@ -36,10 +36,11 @@ between them is the whole point.
 ├─────────────────────────────────────────────────────────────────┤
 │ KERNEL       boot + plugin host + DI. Domain-free; never changes  │
 │              when you add a capability.                           │
-│  omnigent/extensions.py      OmnigentExtension Protocol, discover │
-│  omnigent/pluggable/         PluggableRegistry, SEAMS, manifest   │
-│  omnigent/server/lifespan_phases.py  LifespanOrchestrator (DAG)   │
-│  omnigent/server/service_registry.py ServiceRegistry             │
+│  omnigent/kernel/extensions.py      OmnigentExtension Protocol    │
+│  omnigent/kernel/pluggable/         PluggableRegistry, SEAMS      │
+│  omnigent/kernel/lifespan_phases.py LifespanOrchestrator (DAG)    │
+│  omnigent/server/container.py       Core DI container facade      │
+│  omnigent/server/app_context.py     ServerAppContext facade       │
 │  omnigent/sdk/               the developer facade over all of it  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -87,7 +88,7 @@ pre_init  →  register  →  post_init  →  after_init
 ```
 
 This is the **Template Method** pattern: the *sequence* is fixed in the kernel
-(`install_extensions` in `omnigent/extensions.py`); each extension fills in only
+(`install_extensions` in `omnigent.kernel.extensions`); each extension fills in only
 the steps it cares about. Every stage except `register` is optional and probed
 with `hasattr` — an extension that omits a stage is simply skipped for it, never
 `getattr`-defaulted. (See `EXTENSION_FRAMEWORK_ANALYSIS.md` §4.3.)
@@ -117,7 +118,7 @@ A few specifics that trip people up:
   in the server lifespan, and are cancelled on shutdown. Use `@background` (§5).
 
 The real `install_extensions` is the authority — read it in
-`omnigent/extensions.py` (the four `# ── Stage N` blocks). The prototype's
+`omnigent/kernel/extensions.py` (the four `# ── Stage N` blocks). The prototype's
 `kernel/host.py` `boot()` shows the same staged loop in miniature.
 
 ---
@@ -142,7 +143,7 @@ class MyExtension:
 That decorator alone already makes instances satisfy the kernel Protocol:
 
 ```python
-from omnigent.extensions import OmnigentExtension
+from omnigent.sdk.types import OmnigentExtension
 assert isinstance(MyExtension(), OmnigentExtension)   # the §12.7 invariant
 ```
 
@@ -543,7 +544,7 @@ Build it and assert on the shape — the same way the shipped
 `tests/sdk/test_extension_decorator.py` does:
 
 ```python
-from omnigent.extensions import OmnigentExtension
+from omnigent.sdk.types import OmnigentExtension
 from omnigent.sdk import extension, tool, provides
 
 @extension(name="di-ext")
@@ -597,7 +598,7 @@ def test_explicit_extension_seen_by_discovery(monkeypatch):
     captured = {}
     monkeypatch.setattr("omnigent.server.app.create_app",
                         lambda **kw: captured.update(kw) or "APP")
-    import omnigent.extensions as kext
+    import omnigent.kernel.extensions as kext
     monkeypatch.setattr(kext, "discover_extensions", lambda: [])  # baseline
     Host.build().with_extension(MyExtension()).build_app()
     # the explicit extension is restored out of discovery after build_app()
@@ -716,7 +717,7 @@ What changed, and what didn't:
 | Surface | Stability | Rule |
 |---|---|---|
 | **`omnigent.sdk.*`** | **Stable (semver-anchored).** | The public API. Breaking a decorator signature, a `Host` method, or a public type re-export requires a **major** bump. Your extension depends on this and must not break under kernel refactors. |
-| `omnigent.extensions`, `omnigent.pluggable`, `omnigent.server.lifespan_phases` | **Semi-stable.** | The kernel. May churn between minors as seams are added/generalised; breaking the Protocol *shape* is a breaking change (it propagates up to the SDK), permissible between minors only with a deprecation cycle. |
+| `omnigent.kernel.extensions`, `omnigent.kernel.pluggable`, `omnigent.kernel.lifespan_phases` | **Semi-stable.** | The kernel. May churn between minors as seams are added/generalised; breaking the Protocol *shape* is a breaking change (it propagates up to the SDK), permissible between minors only with a deprecation cycle. |
 | First-party plugins (`omnigent.harnesses`, `omnigent.tools.builtins`, …) | **Internal.** | Their seam-registration APIs are not public; refactored freely as long as kernel seam contracts hold. |
 | `omnigent.runtime.*`, `omnigent.inner.*`, `omnigent.server.routes.*` | **Internal — no notice.** | May change without warning. Do not import. |
 
@@ -739,7 +740,7 @@ is to keep compiling your extension across those moves.
 - [`../prototype/`](../prototype/) — runnable, stdlib-only proof of the whole
   shape. `python3 run_demo.py`; `python3 -m unittest test_prototype`.
 - Real shipped code: [`../omnigent/sdk/`](../omnigent/sdk/) (the facade),
-  [`../omnigent/extensions.py`](../omnigent/extensions.py) (the kernel Protocol +
+  [`../omnigent/kernel/extensions.py`](../omnigent/kernel/extensions.py) (the kernel Protocol +
   `install_extensions` staging), [`../tests/sdk/`](../tests/sdk/) (the
   decorator / DI / host-builder tests this guide's snippets mirror).
 </content>
